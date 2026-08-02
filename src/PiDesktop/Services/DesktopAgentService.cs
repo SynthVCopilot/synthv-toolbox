@@ -15,9 +15,9 @@ public sealed class DesktopAgentService : IDisposable
     private readonly List<ChatMessage> _current = new();
     private readonly object _sendLock = new();
 
-    /// <summary>配置文件路径。</summary>
+    /// <summary>配置文件路径（统一数据根 ~/.SynthVcopilot）。</summary>
     public static string ConfigPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PiAgent", "config.json");
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".SynthVcopilot", "config.json");
 
     /// <summary>当前 provider 标签（anthropic/echo），用于 UI 展示。</summary>
     public string ProviderLabel { get; }
