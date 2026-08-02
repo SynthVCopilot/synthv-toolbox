@@ -1,0 +1,3 @@
+[submodule "external/pi-agent"]
+	path = external/pi-agent
+	url = https://github.com/SynthVCopilot/pi-agent.git
