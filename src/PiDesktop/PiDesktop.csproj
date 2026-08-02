@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Pi Desktop：WinUI 3 / Windows App SDK 桌面壳。
+    以 ProjectReference 直接引用 pi-agent（git submodule，位于 external/pi-agent），
+    在同进程内通过 PiAgentHost 驱动 agent —— 满足「原生 WinUI 3 内部通信」。
+    未打包(unpackaged) 运行：WindowsPackageType=None。
+  -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>PiDesktop</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <UseWinUI>true</UseWinUI>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.6.*" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.*" />
+  </ItemGroup>
+
+  <!-- pi-agent 核心：作为 submodule 引用，进程内直接调用 -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\external\pi-agent\PiAgent.Core\PiAgent.Core.csproj" />
+  </ItemGroup>
+
+</Project>

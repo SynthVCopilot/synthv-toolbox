@@ -1,0 +1,9 @@
+# .NET / WinUI 3
+bin/
+obj/
+*.user
+.vs/
+Generated Files/
+
+# Local runtime data
+*.log
