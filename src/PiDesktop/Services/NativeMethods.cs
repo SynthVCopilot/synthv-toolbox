@@ -17,14 +17,32 @@ internal static partial class NativeMethods
     [LibraryImport(Dll)]
     internal static partial IntPtr pi_agent_create();
 
+    [LibraryImport(Dll, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial IntPtr pi_agent_create_json(string configJsonUtf8);
+
+    [LibraryImport(Dll, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial IntPtr pi_config_check(string configJsonUtf8);
+
     [LibraryImport(Dll)]
     internal static partial void pi_agent_destroy(IntPtr handle);
 
     [LibraryImport(Dll, StringMarshalling = StringMarshalling.Utf8)]
     internal static partial IntPtr pi_agent_send(IntPtr handle, string inputUtf8);
 
+    [LibraryImport(Dll, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial IntPtr pi_agent_send_with_bridge(IntPtr agentHandle, IntPtr bridgeHandle, string inputUtf8);
+
     [LibraryImport(Dll)]
     internal static partial IntPtr pi_components_json();
+
+    [LibraryImport(Dll, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial IntPtr pi_bridge_connect(string bridgeRepoDirUtf8);
+
+    [LibraryImport(Dll, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial IntPtr pi_bridge_call(IntPtr handle, string toolUtf8, string argsJsonUtf8);
+
+    [LibraryImport(Dll)]
+    internal static partial void pi_bridge_destroy(IntPtr handle);
 
     [LibraryImport(Dll)]
     internal static partial void pi_string_free(IntPtr s);
