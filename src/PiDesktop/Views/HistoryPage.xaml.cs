@@ -7,10 +7,6 @@ public sealed partial class HistoryPage : Page
     public HistoryPage()
     {
         InitializeComponent();
-        Loaded += async (_, _) =>
-        {
-            var items = await App.Agent.Host.History.ListAsync();
-            ConversationsList.ItemsSource = items;
-        };
+        // 历史存储在 pi-agent (Rust) 侧；等 FFI 暴露 list/get 后接上。当前留空列表占位。
     }
 }

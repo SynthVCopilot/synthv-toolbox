@@ -3,7 +3,7 @@ using PiDesktop.Services;
 
 namespace PiDesktop;
 
-/// <summary>应用入口。持有进程内的 <see cref="DesktopAgentService"/>（包裹 PiAgentHost）。</summary>
+/// <summary>应用入口。持有进程内的 <see cref="DesktopAgentService"/>（P/Invoke pi_agent.dll，Rust）。</summary>
 public partial class App : Application
 {
     private Window? _window;
