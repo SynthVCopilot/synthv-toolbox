@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="PiDesktop.Views.AgentConfigPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer>
+        <StackPanel Margin="16" Spacing="12" MaxWidth="640" HorizontalAlignment="Left">
+            <TextBlock Text="配置 Agent" Style="{ThemeResource TitleTextBlockStyle}" />
+
+            <TextBlock Text="模型后端" Style="{ThemeResource SubtitleTextBlockStyle}" />
+            <ComboBox x:Name="ProviderBox" Header="Provider" PlaceholderText="选择后端">
+                <ComboBoxItem Content="anthropic（原生 C# 循环，直连 Claude）" />
+                <ComboBoxItem Content="codex-cli（包装 Codex CLI 子进程）" />
+                <ComboBoxItem Content="echo（占位）" />
+            </ComboBox>
+
+            <TextBlock Text="SynthV 桥" Style="{ThemeResource SubtitleTextBlockStyle}" />
+            <TextBox x:Name="BridgeDirBox" Header="synthv-agent-bridge 仓库根目录（含 dist/src/cli.js）"
+                     PlaceholderText="例如 F:\Development\synthv-agent-bridge" />
+            <Button Content="测试连接（sv_status）" Click="TestBridge_Click" />
+            <TextBlock x:Name="BridgeStatus" Opacity="0.7" TextWrapping="Wrap" />
+        </StackPanel>
+    </ScrollViewer>
+</Page>
