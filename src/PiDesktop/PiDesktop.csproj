@@ -2,8 +2,9 @@
 
   <!--
     Pi Desktop：WinUI 3 / Windows App SDK 桌面壳。
-    以 ProjectReference 直接引用 pi-agent（git submodule，位于 external/pi-agent），
-    在同进程内通过 PiAgentHost 驱动 agent —— 满足「原生 WinUI 3 内部通信」。
+    通过 P/Invoke 调用 pi-agent（Rust）编出的 C-ABI 原生 DLL「pi_agent.dll」，
+    在同进程内驱动 v3 agent —— 满足「原生 WinUI 3 内部通信」。
+    pi-agent 作为 git submodule 位于 external/pi-agent。
     未打包(unpackaged) 运行：WindowsPackageType=None。
   -->
 
@@ -22,6 +23,7 @@
     <EnableMsixTooling>true</EnableMsixTooling>
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <PiAgentDir>$(MSBuildProjectDirectory)\..\..\external\pi-agent</PiAgentDir>
   </PropertyGroup>
 
   <ItemGroup>
@@ -29,9 +31,16 @@
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.*" />
   </ItemGroup>
 
-  <!-- pi-agent 核心：作为 submodule 引用，进程内直接调用 -->
-  <ItemGroup>
-    <ProjectReference Include="..\..\external\pi-agent\PiAgent.Core\PiAgent.Core.csproj" />
-  </ItemGroup>
+  <!--
+    构建 pi-agent 的 Rust DLL 并拷进输出目录。需要 Rust 工具链（cargo）在 PATH。
+    首次会拉 crates，稍慢；之后增量很快。
+  -->
+  <Target Name="BuildPiAgentDll" BeforeTargets="Build">
+    <Exec Command="cargo build --release -p pi-agent-ffi" WorkingDirectory="$(PiAgentDir)" />
+    <Copy SourceFiles="$(PiAgentDir)\target\release\pi_agent.dll"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(PiAgentDir)\target\release\pi_agent.dll')" />
+  </Target>
 
 </Project>

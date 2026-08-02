@@ -18,14 +18,13 @@
 ```
 MainWindow (NavigationView)
   ├─ ChatPage / HistoryPage / AgentConfigPage / ComponentsPage
-  └─ App.Agent : DesktopAgentService  ── 进程内 ──▶  PiAgent.Core.PiAgentHost
-                                                        ├─ AgentLoop (IAgentProvider)
-                                                        ├─ SynthVBridge (MCP stdio → synthv-agent-bridge)
-                                                        ├─ IConversationStore
-                                                        └─ IComponentInstaller
+  └─ App.Agent : DesktopAgentService ── P/Invoke ──▶ pi_agent.dll (Rust, v3)
+                                                        ├─ pi-agent-core  (agent 循环/历史/组件)
+                                                        ├─ pi-agent-mcp   (MCP stdio → synthv-agent-bridge)
+                                                        └─ pi-agent-ffi   (C-ABI)
 ```
 
-桌面壳与 agent 的通信是**纯进程内方法调用 + 事件**，没有额外网络/IPC。
+桌面壳与 agent 的通信是**进程内 P/Invoke 直调**（不起 sidecar），满足「原生 WinUI 3 内部通信」。
 只有两类子进程由 pi-agent 内部管理：SynthV 桥 (`node dist/src/cli.js`) 与组件可执行文件 (ffmpeg 等)。
 
 ## submodule
@@ -38,10 +37,12 @@ git submodule update --init --recursive
 
 ## 构建
 
-需要 **.NET 10 SDK** 与 **Windows App SDK / WinUI 3 工作负载**：
+需要 **.NET 10 SDK** + **Windows App SDK / WinUI 3 工作负载** + **Rust 工具链 (cargo)**
+（csproj 的 `BuildPiAgentDll` target 会自动 `cargo build --release -p pi-agent-ffi` 并把
+`pi_agent.dll` 拷进输出目录）：
 
 ```bash
-dotnet workload install # 首次：确保安装 Windows App SDK 相关组件（或用 Visual Studio 打开）
+git submodule update --init --recursive
 dotnet build src/PiDesktop/PiDesktop.csproj
 ```
 

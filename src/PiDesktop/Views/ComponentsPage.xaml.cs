@@ -7,6 +7,7 @@ public sealed partial class ComponentsPage : Page
     public ComponentsPage()
     {
         InitializeComponent();
-        ComponentsList.ItemsSource = App.Agent.Host.Components; // ffmpeg / whisper / 音高模型 / Sound→MIDI
+        // 组件目录来自 pi-agent (Rust)：ffmpeg / whisper / 音高 / 人声分离 / 乐器 / 曲风 / 拍点 / Sound→MIDI
+        ComponentsList.ItemsSource = App.Agent.Components();
     }
 }

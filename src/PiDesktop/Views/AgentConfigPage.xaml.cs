@@ -9,7 +9,7 @@ public sealed partial class AgentConfigPage : Page
 
     private async void TestBridge_Click(object sender, RoutedEventArgs e)
     {
-        BridgeStatus.Text = "占位：待接入 PiAgentHost.ConnectBridgeAsync 后，这里将拉起 node dist/src/cli.js 并调用 sv_status。";
+        BridgeStatus.Text = "占位：待 pi-agent (Rust) 的 mcp 桥经 FFI 暴露后，这里将拉起 node dist/src/cli.js 并调用 sv_status。";
         await Task.CompletedTask;
     }
 }
