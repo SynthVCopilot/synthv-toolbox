@@ -11,11 +11,19 @@ public partial class App : Application
     /// <summary>全局 agent 服务：桌面壳与 pi-agent 的唯一进程内通道。</summary>
     public static DesktopAgentService Agent { get; } = new();
 
+    /// <summary>Global serialized local FFmpeg/component service for Desktop pages.</summary>
+    public static FfmpegService Ffmpeg { get; } = new();
+
     public App() => InitializeComponent();
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         _window = new MainWindow();
+        _window.Closed += (_, _) =>
+        {
+            Ffmpeg.Dispose();
+            Agent.Dispose();
+        };
         _window.Activate();
     }
 }
