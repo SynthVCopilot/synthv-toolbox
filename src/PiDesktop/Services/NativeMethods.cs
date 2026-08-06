@@ -35,6 +35,24 @@ internal static partial class NativeMethods
     [LibraryImport(Dll)]
     internal static partial IntPtr pi_components_json();
 
+    [LibraryImport(Dll)]
+    internal static partial IntPtr pi_components_status_json();
+
+    [LibraryImport(Dll, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial IntPtr pi_component_action_start(string componentIdUtf8, string actionUtf8);
+
+    [LibraryImport(Dll, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial IntPtr pi_ffmpeg_job_start(string requestJsonUtf8);
+
+    [LibraryImport(Dll)]
+    internal static partial IntPtr pi_job_status_json(IntPtr job);
+
+    [LibraryImport(Dll)]
+    internal static partial void pi_job_cancel(IntPtr job);
+
+    [LibraryImport(Dll)]
+    internal static partial void pi_job_destroy(IntPtr job);
+
     [LibraryImport(Dll, StringMarshalling = StringMarshalling.Utf8)]
     internal static partial IntPtr pi_bridge_connect(string bridgeRepoDirUtf8);
 

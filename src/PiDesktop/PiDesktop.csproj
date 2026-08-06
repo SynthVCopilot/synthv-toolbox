@@ -20,6 +20,8 @@
     <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == '' and '$(Platform)' == 'x64'">win-x64</RuntimeIdentifier>
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == '' and '$(Platform)' == 'ARM64'">win-arm64</RuntimeIdentifier>
+    <PiAgentTargetTriple Condition="'$(PiAgentTargetTriple)' == '' and '$(Platform)' == 'x64'">x86_64-pc-windows-msvc</PiAgentTargetTriple>
+    <PiAgentTargetTriple Condition="'$(PiAgentTargetTriple)' == '' and '$(Platform)' == 'ARM64'">aarch64-pc-windows-msvc</PiAgentTargetTriple>
     <UseWinUI>true</UseWinUI>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -42,11 +44,17 @@
     首次会拉 crates，稍慢；之后增量很快。
   -->
   <Target Name="BuildPiAgentDll" BeforeTargets="Build">
-    <Exec Command="cargo build --release -p pi-agent-ffi" WorkingDirectory="$(PiAgentDir)" />
-    <Copy SourceFiles="$(PiAgentDir)\target\release\pi_agent.dll"
+    <Error Condition="'$(PiAgentTargetTriple)' == ''" Text="PiDesktop supports only x64 and ARM64 Platform/RuntimeIdentifier values." />
+    <Error Condition="'$(Platform)' == 'x64' and '$(RuntimeIdentifier)' != 'win-x64'"
+           Text="Platform x64 requires RuntimeIdentifier win-x64." />
+    <Error Condition="'$(Platform)' == 'ARM64' and '$(RuntimeIdentifier)' != 'win-arm64'"
+           Text="Platform ARM64 requires RuntimeIdentifier win-arm64." />
+    <Exec Command="cargo build --release --target $(PiAgentTargetTriple) -p pi-agent-ffi" WorkingDirectory="$(PiAgentDir)" />
+    <Error Condition="!Exists('$(PiAgentDir)\target\$(PiAgentTargetTriple)\release\pi_agent.dll')"
+           Text="cargo completed without the expected $(PiAgentTargetTriple) pi_agent.dll." />
+    <Copy SourceFiles="$(PiAgentDir)\target\$(PiAgentTargetTriple)\release\pi_agent.dll"
           DestinationFolder="$(OutDir)"
-          SkipUnchangedFiles="true"
-          Condition="Exists('$(PiAgentDir)\target\release\pi_agent.dll')" />
+          SkipUnchangedFiles="true" />
   </Target>
 
 </Project>

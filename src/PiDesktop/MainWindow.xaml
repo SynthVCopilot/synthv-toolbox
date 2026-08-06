@@ -7,7 +7,21 @@
     Title="Pi Agent">
 
     <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <InfoBar x:Name="GlobalJobBar" Grid.Row="0" Margin="8,8,8,0"
+                 IsOpen="False" IsClosable="False" Severity="Informational"
+                 Title="本地任务正在运行">
+            <InfoBar.ActionButton>
+                <Button x:Name="GlobalCancelButton" Content="取消任务" Click="GlobalCancelButton_Click" />
+            </InfoBar.ActionButton>
+        </InfoBar>
+
         <muxc:NavigationView
+            Grid.Row="1"
             x:Name="Nav"
             PaneDisplayMode="LeftCompact"
             IsBackButtonVisible="Collapsed"
@@ -15,6 +29,11 @@
             SelectionChanged="Nav_SelectionChanged">
             <muxc:NavigationView.MenuItems>
                 <muxc:NavigationViewItem Content="对话" Tag="chat" Icon="Message" />
+                <muxc:NavigationViewItem Content="音频准备" Tag="audio">
+                    <muxc:NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8D6;" />
+                    </muxc:NavigationViewItem.Icon>
+                </muxc:NavigationViewItem>
                 <muxc:NavigationViewItem Content="历史" Tag="history" Icon="Clock" />
                 <muxc:NavigationViewItem Content="配置 Agent" Tag="config" Icon="Setting" />
                 <muxc:NavigationViewItem Content="组件" Tag="components" Icon="Download" />

@@ -2,29 +2,86 @@
 <Page
     x:Class="PiDesktop.Views.ComponentsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <Grid Margin="16" RowSpacing="12">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-        </Grid.RowDefinitions>
-        <TextBlock Grid.Row="0" Text="组件" Style="{ThemeResource TitleTextBlockStyle}" />
-        <ListView x:Name="ComponentsList" Grid.Row="1">
-            <ListView.ItemTemplate>
-                <DataTemplate>
-                    <Grid Padding="4" ColumnSpacing="12">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    NavigationCacheMode="Required"
+    Loaded="Page_Loaded">
+
+    <ScrollViewer>
+        <StackPanel Margin="20" Spacing="16" MaxWidth="920" HorizontalAlignment="Left">
+            <StackPanel Spacing="4">
+                <TextBlock Text="组件" Style="{ThemeResource TitleTextBlockStyle}" />
+                <TextBlock Text="管理 Pi Desktop 自己使用的本地组件。不会修改系统 PATH，也不会影响 SynthV 的实时编辑。"
+                           TextWrapping="Wrap" Opacity="0.72" />
+            </StackPanel>
+
+            <InfoBar x:Name="ComponentInfoBar" IsOpen="False" IsClosable="True" />
+
+            <Border Padding="18" CornerRadius="10"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                <StackPanel Spacing="10">
+                    <Grid ColumnSpacing="12">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0">
-                            <TextBlock Text="{Binding DisplayName}" />
-                            <TextBlock Text="{Binding Description}" Opacity="0.6" FontSize="12" TextWrapping="Wrap" />
+                        <StackPanel>
+                            <TextBlock Text="FFmpeg" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                            <TextBlock Text="用于音频检测、PCM WAV 准备和 EBU R128 响度处理。所有任务都在本机运行。"
+                                       TextWrapping="Wrap" Opacity="0.72" />
                         </StackPanel>
-                        <Button Grid.Column="1" Content="安装" />
+                        <Button Grid.Column="1" Content="刷新" Click="RefreshButton_Click" VerticalAlignment="Top" />
                     </Grid>
-                </DataTemplate>
-            </ListView.ItemTemplate>
-        </ListView>
-    </Grid>
+
+                    <TextBlock x:Name="FfmpegStatusText" Text="正在检查…" TextWrapping="Wrap" />
+                    <ProgressBar x:Name="ActionProgress" Minimum="0" Maximum="100" Visibility="Collapsed" />
+                    <TextBlock x:Name="ActionStatusText" Visibility="Collapsed" TextWrapping="Wrap" />
+
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="InstallButton" Content="安装" Click="InstallButton_Click"
+                                Style="{ThemeResource AccentButtonStyle}" Visibility="Collapsed" />
+                        <Button x:Name="UpdateButton" Content="更新" Click="UpdateButton_Click"
+                                Style="{ThemeResource AccentButtonStyle}" Visibility="Collapsed" />
+                        <Button x:Name="UninstallButton" Content="卸载私有副本" Click="UninstallButton_Click"
+                                Visibility="Collapsed" />
+                        <Button x:Name="CancelButton" Content="取消任务" Click="CancelButton_Click"
+                                Visibility="Collapsed" />
+                    </StackPanel>
+
+                    <Expander Header="高级信息">
+                        <TextBlock x:Name="FfmpegDetailsText" TextWrapping="Wrap" IsTextSelectionEnabled="True" Opacity="0.72" />
+                    </Expander>
+
+                    <Button Content="打开音频准备" Click="OpenAudioPreparationButton_Click" HorizontalAlignment="Left" />
+                </StackPanel>
+            </Border>
+
+            <Border Padding="18" CornerRadius="10"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="后续组件" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                    <TextBlock Text="以下能力仍在规划中；当前页面不会下载占位模型或执行无效安装。"
+                               TextWrapping="Wrap" Opacity="0.72" />
+                    <ItemsControl x:Name="PlannedComponentsList">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Padding="0,8" ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding DisplayName}" />
+                                        <TextBlock Text="{Binding Description}" Opacity="0.62" FontSize="12" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Content="计划中" IsEnabled="False" VerticalAlignment="Center" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
 </Page>

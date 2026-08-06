@@ -20,6 +20,9 @@ public sealed partial class ChatPage : Page
 
     private async void SendButton_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e) => await SendAsync();
 
+    private void OpenAudioPreparationButton_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e) =>
+        MainWindow.Instance?.NavigateTo("audio");
+
     private async void InputBox_KeyDown(object sender, KeyRoutedEventArgs e)
     {
         var ctrl = Microsoft.UI.Input.InputKeyboardSource

@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="PiDesktop.Views.AudioPreparationPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    NavigationCacheMode="Required"
+    Loaded="Page_Loaded">
+
+    <ScrollViewer>
+        <StackPanel Margin="20" Spacing="16" MaxWidth="920" HorizontalAlignment="Left">
+            <StackPanel Spacing="4">
+                <TextBlock Text="音频准备" Style="{ThemeResource TitleTextBlockStyle}" />
+                <TextBlock Text="检测、转换和试听本地音频。源文件不会被修改，SynthV 中的实时编辑也不会受到影响。"
+                           TextWrapping="Wrap" Opacity="0.72" />
+            </StackPanel>
+
+            <InfoBar x:Name="PageInfoBar" IsOpen="False" IsClosable="True" />
+
+            <Border x:Name="SetupCard" Padding="18" CornerRadius="10"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="启用本地音频处理" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                    <TextBlock Text="需要本地 FFmpeg 组件。它只在本机处理音频，不上传文件，也不会修改系统 PATH。"
+                               TextWrapping="Wrap" Opacity="0.72" />
+                    <TextBlock x:Name="ComponentStatusText" Text="正在检查…" TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="InstallButton" Content="安装本地组件" Click="InstallButton_Click"
+                                Style="{ThemeResource AccentButtonStyle}" />
+                        <Button x:Name="RefreshComponentButton" Content="刷新状态" Click="RefreshComponentButton_Click" />
+                        <Button x:Name="SetupCancelButton" Content="取消" Click="CancelJob_Click" Visibility="Collapsed" />
+                    </StackPanel>
+                    <ProgressBar x:Name="SetupProgress" Minimum="0" Maximum="100" Visibility="Collapsed" />
+                    <Expander Header="高级信息">
+                        <TextBlock x:Name="ComponentDetailsText" TextWrapping="Wrap" Opacity="0.7" />
+                    </Expander>
+                </StackPanel>
+            </Border>
+
+            <Border x:Name="InputCard" Padding="18" CornerRadius="10" AllowDrop="True"
+                    DragOver="InputCard_DragOver" Drop="InputCard_Drop"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="1. 选择音频" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                    <TextBlock Text="选择一个本地音频或包含音频的视频，也可以把单个文件拖到这里。"
+                               TextWrapping="Wrap" Opacity="0.72" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="ChooseFileButton" Content="选择文件" Click="ChooseFileButton_Click"
+                                Style="{ThemeResource AccentButtonStyle}" />
+                        <Button x:Name="AnalyzeAgainButton" Content="重新检测" Click="AnalyzeAgainButton_Click"
+                                Visibility="Collapsed" />
+                    </StackPanel>
+                    <TextBlock x:Name="SelectedFileText" Text="尚未选择文件" TextWrapping="Wrap" />
+                    <Grid x:Name="ProbeDetailsGrid" Visibility="Collapsed" ColumnSpacing="24" RowSpacing="5">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="时长" Opacity="0.62" />
+                        <TextBlock Grid.Row="0" Grid.Column="1" x:Name="DurationText" />
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="格式" Opacity="0.62" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" x:Name="FormatText" />
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="采样率" Opacity="0.62" />
+                        <TextBlock Grid.Row="2" Grid.Column="1" x:Name="SampleRateText" />
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="声道" Opacity="0.62" />
+                        <TextBlock Grid.Row="3" Grid.Column="1" x:Name="ChannelsText" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <Border x:Name="TaskCard" Padding="18" CornerRadius="10" IsEnabled="False"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="2. 选择任务" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                    <RadioButtons x:Name="TaskSelector" SelectionChanged="TaskSelector_SelectionChanged"
+                                  SelectedIndex="0" MaxColumns="2">
+                        <x:String>为 SynthV 准备音频</x:String>
+                        <x:String>检查 / 平衡响度</x:String>
+                    </RadioButtons>
+
+                    <StackPanel x:Name="PreparePanel" Spacing="10">
+                        <TextBlock Text="生成新的 PCM WAV；默认保持原采样率和声道，不裁剪。"
+                                   TextWrapping="Wrap" Opacity="0.72" />
+                        <Expander Header="高级设置">
+                            <StackPanel Spacing="10" Padding="0,8,0,0">
+                                <ComboBox x:Name="SampleRateBox" Header="采样率" SelectedIndex="0"
+                                          SelectionChanged="PrepareSettings_Changed">
+                                    <ComboBoxItem Content="保持原采样率" Tag="keep" />
+                                    <ComboBoxItem Content="44.1 kHz" Tag="44100" />
+                                    <ComboBoxItem Content="48 kHz" Tag="48000" />
+                                    <ComboBoxItem Content="96 kHz" Tag="96000" />
+                                </ComboBox>
+                                <ComboBox x:Name="ChannelsBox" Header="声道" SelectedIndex="0"
+                                          SelectionChanged="PrepareSettings_Changed">
+                                    <ComboBoxItem Content="保持原声道" Tag="keep" />
+                                    <ComboBoxItem Content="单声道" Tag="1" />
+                                    <ComboBoxItem Content="立体声" Tag="2" />
+                                </ComboBox>
+                                <ComboBox x:Name="SampleFormatBox" Header="采样格式" SelectedIndex="1"
+                                          SelectionChanged="PrepareSettings_Changed">
+                                    <ComboBoxItem Content="16-bit PCM" Tag="s16" />
+                                    <ComboBoxItem Content="24-bit PCM（推荐）" Tag="s24" />
+                                    <ComboBoxItem Content="32-bit float PCM" Tag="f32" />
+                                </ComboBox>
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <NumberBox x:Name="StartSecondsBox" Grid.Column="0" Header="从第几秒开始（可选）"
+                                               Minimum="0" SpinButtonPlacementMode="Compact"
+                                               ValueChanged="PrepareNumber_ValueChanged" />
+                                    <NumberBox x:Name="DurationSecondsBox" Grid.Column="1" Header="保留多少秒（可选）"
+                                               Minimum="0.001" SpinButtonPlacementMode="Compact"
+                                               ValueChanged="PrepareNumber_ValueChanged" />
+                                </Grid>
+                            </StackPanel>
+                        </Expander>
+                        <TextBlock x:Name="PrepareSummaryText" TextWrapping="Wrap" />
+                        <Button x:Name="PrepareButton" Content="查看计划并开始" Click="PrepareButton_Click"
+                                HorizontalAlignment="Left" Style="{ThemeResource AccentButtonStyle}" />
+                    </StackPanel>
+
+                    <StackPanel x:Name="LoudnessPanel" Spacing="10" Visibility="Collapsed">
+                        <TextBlock Text="先测量，不会修改文件。只有你确认后才会生成平衡响度的新文件。"
+                                   TextWrapping="Wrap" Opacity="0.72" />
+                        <Button x:Name="AnalyzeLoudnessButton" Content="检查响度" Click="AnalyzeLoudnessButton_Click"
+                                HorizontalAlignment="Left" />
+                        <Border x:Name="LoudnessResultCard" Padding="12" CornerRadius="8" Visibility="Collapsed"
+                                Background="{ThemeResource SubtleFillColorSecondaryBrush}">
+                            <StackPanel Spacing="6">
+                                <TextBlock x:Name="LoudnessSummaryText" TextWrapping="Wrap" />
+                                <TextBlock x:Name="LoudnessNumbersText" TextWrapping="Wrap" Opacity="0.72" />
+                            </StackPanel>
+                        </Border>
+                        <Expander Header="平衡响度设置">
+                            <StackPanel Spacing="10" Padding="0,8,0,0">
+                                <TextBlock Text="通用试听预设，不是 SynthV 强制标准。" Opacity="0.72" />
+                                <NumberBox x:Name="TargetLufsBox" Header="目标响度（LUFS）" Value="-16"
+                                           Minimum="-70" Maximum="-5" SpinButtonPlacementMode="Compact" />
+                                <NumberBox x:Name="TruePeakBox" Header="最大真峰值（dBTP）" Value="-1.5"
+                                           Minimum="-9" Maximum="0" SpinButtonPlacementMode="Compact" />
+                                <NumberBox x:Name="TargetLraBox" Header="目标动态范围（LRA）" Value="11"
+                                           Minimum="1" Maximum="50" SpinButtonPlacementMode="Compact" />
+                            </StackPanel>
+                        </Expander>
+                        <Button x:Name="NormalizeButton" Content="查看计划并平衡响度"
+                                Click="NormalizeButton_Click" HorizontalAlignment="Left"
+                                Style="{ThemeResource AccentButtonStyle}" IsEnabled="False" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <Border x:Name="ProgressCard" Padding="18" CornerRadius="10" Visibility="Collapsed"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="正在处理" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                    <TextBlock x:Name="JobStatusText" TextWrapping="Wrap" />
+                    <ProgressBar x:Name="JobProgress" Minimum="0" Maximum="100" />
+                    <Button Content="取消" Click="CancelJob_Click" HorizontalAlignment="Left" />
+                </StackPanel>
+            </Border>
+
+            <Border x:Name="ResultCard" Padding="18" CornerRadius="10" Visibility="Collapsed"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="3. 处理结果" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                    <TextBlock x:Name="ResultSummaryText" TextWrapping="Wrap" />
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="6">
+                            <TextBlock Text="原始音频" FontWeight="SemiBold" />
+                            <MediaPlayerElement x:Name="OriginalPlayer" AreTransportControlsEnabled="True"
+                                                AutoPlay="False" Height="72" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Spacing="6">
+                            <TextBlock Text="处理结果" FontWeight="SemiBold" />
+                            <MediaPlayerElement x:Name="ResultPlayer" AreTransportControlsEnabled="True"
+                                                AutoPlay="False" Height="72" />
+                        </StackPanel>
+                    </Grid>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="打开文件位置" Click="OpenLocationButton_Click" />
+                        <Button Content="复制路径" Click="CopyPathButton_Click" />
+                        <Button Content="另存为" Click="SaveAsButton_Click"
+                                Style="{ThemeResource AccentButtonStyle}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</Page>
