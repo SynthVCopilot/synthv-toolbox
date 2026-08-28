@@ -1,9 +1,10 @@
-# .NET / WinUI 3
-bin/
-obj/
-*.user
-.vs/
-Generated Files/
-
 # Local runtime data
 *.log
+.DS_Store
+
+# Tauri / web frontend
+node_modules/
+dist/
+src/PiDesktop.Tauri/src-tauri/target/
+src/PiDesktop.Tauri/src-tauri/gen/
+release-assets/

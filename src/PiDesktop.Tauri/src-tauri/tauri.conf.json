@@ -1,0 +1,53 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SynthV Toolbox",
+  "version": "0.1.0",
+  "identifier": "com.synthvcopilot.toolbox",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "SynthV Toolbox",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 640,
+        "center": true,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../../../external/synthv-agent-bridge/dist": "synthv-agent-bridge/dist",
+      "../../../external/synthv-agent-bridge/scripts": "synthv-agent-bridge/scripts",
+      "../../../external/synthv-agent-bridge/synthv": "synthv-agent-bridge/synthv",
+      "../../../external/synthv-agent-bridge/node_modules": "synthv-agent-bridge/node_modules",
+      "../../../external/synthv-agent-bridge/package.json": "synthv-agent-bridge/package.json",
+      "../../../external/synthv-agent-bridge/package-lock.json": "synthv-agent-bridge/package-lock.json",
+      "../../../external/synthv-agent-bridge/LICENSE": "synthv-agent-bridge/LICENSE",
+      "../../../external/pi-agent/components": "components"
+    },
+    "category": "Music",
+    "shortDescription": "Cross-platform Synthesizer V creative toolbox",
+    "longDescription": "A Windows and macOS toolbox for audio, MIDI, Synthesizer V projects, optional AI copilot capabilities, and external MCP tools."
+  }
+}

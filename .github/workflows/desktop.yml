@@ -1,0 +1,179 @@
+name: Desktop
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - "src/PiDesktop.Tauri/**"
+      - "external/pi-agent"
+      - "external/synthv-agent-bridge"
+      - ".github/workflows/desktop.yml"
+  pull_request:
+    paths:
+      - "src/PiDesktop.Tauri/**"
+      - "external/pi-agent"
+      - "external/synthv-agent-bridge"
+      - ".github/workflows/desktop.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            rust_targets: x86_64-pc-windows-msvc
+            bundles: nsis
+          - name: macOS Universal
+            os: macos-14
+            target: universal-apple-darwin
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+            bundles: app,dmg
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22.19.0"
+          cache: npm
+          cache-dependency-path: |
+            src/PiDesktop.Tauri/package-lock.json
+            external/synthv-agent-bridge/package-lock.json
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - name: Apply version from release tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node .github/scripts/set-version.mjs "${{ github.ref_name }}"
+
+      - name: Check Python component sources
+        run: python -m py_compile external/pi-agent/components/pi-audio/pi_audio.py external/pi-agent/components/cvrs/cvrs.py
+
+      - name: Build bundled SynthV Bridge
+        working-directory: external/synthv-agent-bridge
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+          npm prune --omit=dev --no-audit --no-fund
+
+      - name: Install desktop dependencies
+        working-directory: src/PiDesktop.Tauri
+        run: npm ci --no-audit --no-fund
+
+      - name: Check frontend production build
+        working-directory: src/PiDesktop.Tauri
+        run: npm run build
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src/PiDesktop.Tauri/src-tauri/Cargo.toml -- --check
+
+      - name: Test Rust core
+        run: cargo test --manifest-path src/PiDesktop.Tauri/src-tauri/Cargo.toml
+
+      - name: Lint Rust core
+        run: cargo clippy --manifest-path src/PiDesktop.Tauri/src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Build desktop bundle
+        working-directory: src/PiDesktop.Tauri
+        run: npm run tauri build -- --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      - name: Collect Windows release assets
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "release-assets" | Out-Null
+          Copy-Item -Path "src/PiDesktop.Tauri/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe" -Destination "release-assets"
+
+      - name: Collect macOS release assets
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          cp src/PiDesktop.Tauri/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg release-assets/
+          app_path="$(find src/PiDesktop.Tauri/src-tauri/target/${{ matrix.target }}/release/bundle/macos -maxdepth 1 -name '*.app' -print -quit)"
+          test -n "$app_path"
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "release-assets/SynthV.Toolbox_${GITHUB_REF_NAME#v}_universal.app.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: synthv-toolbox-${{ matrix.target }}
+          if-no-files-found: error
+          path: release-assets/*
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: synthv-toolbox-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Build release notes from commits since the previous tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous_tag="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          if [[ -n "$previous_tag" ]]; then
+            range="$previous_tag..$GITHUB_REF_NAME"
+          else
+            range="$GITHUB_REF_NAME"
+          fi
+          {
+            echo "## 更新内容"
+            echo
+            git log "$range" --pretty=format:'- %s ([`%h`](https://github.com/${{ github.repository }}/commit/%H))'
+            echo
+            if [[ -n "$previous_tag" ]]; then
+              echo
+              echo "**完整比较**：https://github.com/${{ github.repository }}/compare/${previous_tag}...${GITHUB_REF_NAME}"
+            fi
+          } > release-notes.md
+
+      - name: Publish release and attach installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' assets < <(find release-assets -maxdepth 1 -type f -print0)
+          test "${#assets[@]}" -ge 3
+          options=(--verify-tag --title "SynthV Toolbox ${GITHUB_REF_NAME}" --notes-file release-notes.md)
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            options+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" "${options[@]}"
