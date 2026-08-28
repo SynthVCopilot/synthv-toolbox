@@ -1,54 +1,108 @@
-# pi-desktop
+# SynthV Toolbox
 
-> SynthVCopilot 的 **WinUI 3 桌面应用**（C# / .NET 10）。提供 GUI 对话与历史、
-> 配置 agent、安装各组件的能力。以 git submodule 引用
-> [`pi-agent`](https://github.com/SynthVCopilot/pi-agent)，在**同进程内**驱动 agent。
+SynthV Toolbox 是以 **Rust + Tauri** 构建的 Synthesizer V 创作工具箱，支持 Windows 与 macOS。应用既可以作为完全本地、无需模型的超级工具箱运行，也可以启用 AI 模式，获得 Copilot、智能增强和外部 MCP 工具接入。
 
-## 功能
+> 本仓库只维护新版 Tauri 应用，不再包含 C# / WinUI 旧版。
 
-| 页面 | 能力 |
-|---|---|
-| 对话 | 与 Pi Agent 的 GUI 对话 |
-| 历史 | 会话历史列表（`IConversationStore`） |
-| 配置 Agent | 选模型后端、指向 synthv-agent-bridge 仓库、测试 `sv_status` |
-| 组件 | 安装 ffmpeg、本地 whisper、游戏音高识别模型、Sound→(含词)MIDI，及直接导入 MIDI/MusicXML |
+## 两种运行模式
 
-## 架构
+首次启动会要求选择模式，之后可在设置中随时切换。模式限制同时由界面与 Rust 后端执行，不能通过直接调用前端命令绕过。
 
+| 能力 | 纯工具箱模式 | AI 模式 |
+|---|---:|---:|
+| 音频基础分析、基础 Game → MIDI、SV 工程工具 | ✓ | ✓ |
+| SynthV Bridge、本地组件管理 | ✓ | ✓ |
+| Game → MIDI 多参数寻优与高级自动纠正 | — | ✓ |
+| 高级置信度检查、PANNs/音符统计 | — | ✓ |
+| 使用已配置模型复核工作流结果 | — | ✓ |
+| Copilot、会话历史、SynthV 工具编排 | 不显示入口 | ✓ |
+| 外部 stdio MCP 接入 | 不显示入口 | ✓ |
+| 模型运行时和模型网络请求 | 不启动 | 按需启动 |
+
+纯工具箱模式下，Game → MIDI 固定使用 `0.08s` 配对容差，不执行多参数寻优、自动音符纠正、高级置信度检查或模型复核。AI 模式允许调整容差，并对多个候选参数评分，执行保守的八度偏移修正、重复音符合并与碎片清理；结果中会保留修正计数和置信度明细。
+
+## 已实现功能
+
+- **Game → MIDI**：用时间轴对齐的有词/演唱版与无词/伴奏版做音符差分，输出可导入的单音 MIDI。
+- **音频分析**：输出 BPM、调性估计、能量弧、打击占比和频谱趋势；AI 模式可增加音符统计、乐器/风格倾向和人声判断。
+- **SV 工程工具**：只读探测 `.svp` 版本、时代和轨道结构；在不修改源文件的前提下生成带静音参考音频轨的工程副本。
+- **SynthV Bridge**：探测 Synthesizer V、安装/诊断内置 Bridge，并通过私有 stdio MCP 连接；不监听网络端口。
+- **Copilot**：可持久化会话，通过已启用的 SynthV Bridge 与外部 MCP 工具工作。
+- **外部 MCP**：配置、启用、测试和移除受信任的 stdio MCP 服务器。
+- **SV2 账号槽位（Windows）**：保存完整官方数据根的本地槽位，事务化切换默认环境并启动 SV2；不读取或伪造凭据/session 内容。
+- **实验性并发隔离（Windows）**：在用户显式准备隔离副本且本机提供 Sandboxie-Plus 1.17.6 / 5.72.6 或更高版本时，为每个槽位分配独立的文件、注册表与 IPC 命名空间，并允许多个槽位并发启动。
+
+账号槽位和并发隔离是 Windows 专属能力；音频、MIDI、工程、Bridge、Copilot 与 MCP 工作流同时支持 Windows 和 macOS。
+
+并发隔离不会拦截网络，也不会读取或伪造账号凭据，SV2 仍通过官方服务完成持续验证。第一次点击“准备并发副本”会把该槽位的完整不透明数据复制到工具箱保管区；此后隔离实例的本地变化不会自动合并回普通槽位。同账号或工程能否跨实例同步取决于 Dreamtonics 官方服务。Sandboxie-Plus 未安装时，顺序槽位切换仍可独立使用。
+
+实验性并发入口当前只启动 SV2 standalone，不会把已经运行的 DAW 宿主或插件实例移入隔离空间。
+
+## 安全边界
+
+- 纯工具箱模式不会暴露 AI/MCP 设置，也不会启动模型请求。
+- 模型令牌仅写入当前用户的本机配置，不返回前端。
+- 外部 MCP 只能由用户显式添加和启用；它可以启动本地进程，因此只应配置可信命令。
+- MIDI 和工程副本统一写入 `~/.SynthVcopilot/output/`，输出参数只接受文件名并拒绝路径穿透。
+- Bridge 安装器只写入用户指定的 SynthV `scripts` 目录。
+- 本地组件只有在应用包中包含可信源码时才能安装；不会静默下载未知二进制。
+- 并发隔离只使用受支持版本的本机 Sandboxie-Plus，拒绝未知 reparse point，不修改 SV2 二进制或官方校验流程，也不提供自动回写/合并登录缓存。
+
+## 仓库结构
+
+```text
+src/PiDesktop.Tauri/          TypeScript/Vite UI + Rust/Tauri 后端
+external/pi-agent/            Rust agent 核心与音频/CVRS 组件（submodule）
+external/synthv-agent-bridge/ SynthV Bridge（submodule）
+.github/workflows/desktop.yml Windows、macOS、tag Release 构建
 ```
-MainWindow (NavigationView)
-  ├─ ChatPage / HistoryPage / AgentConfigPage / ComponentsPage
-  └─ App.Agent : DesktopAgentService ── P/Invoke ──▶ pi_agent.dll (Rust, v3)
-                                                        ├─ pi-agent-core  (agent 循环/历史/组件)
-                                                        ├─ pi-agent-mcp   (MCP stdio → synthv-agent-bridge)
-                                                        └─ pi-agent-ffi   (C-ABI)
-```
 
-桌面壳与 agent 的通信是**进程内 P/Invoke 直调**（不起 sidecar），满足「原生 WinUI 3 内部通信」。
-只有两类子进程由 pi-agent 内部管理：SynthV 桥 (`node dist/src/cli.js`) 与组件可执行文件 (ffmpeg 等)。
+## 本地开发
 
-## submodule
+需要 Rust stable、Node.js `22.19+`、npm，以及对应平台的 [Tauri 系统依赖](https://v2.tauri.app/start/prerequisites/)。安装 `pi-audio` 时还需要 Python 3.11；macOS 构建需要 Xcode Command Line Tools。
 
 ```bash
 git submodule update --init --recursive
+
+cd external/synthv-agent-bridge
+npm ci
+npm run build
+npm prune --omit=dev
+
+cd ../../src/PiDesktop.Tauri
+npm ci
+npm run tauri dev
 ```
 
-`pi-agent` 位于 `external/pi-agent`，由 `src/PiDesktop/PiDesktop.csproj` 以 ProjectReference 引用。
-
-## 构建
-
-需要 **.NET 10 SDK** + **Windows App SDK / WinUI 3 工作负载** + **Rust 工具链 (cargo)**
-（csproj 的 `BuildPiAgentDll` target 会自动 `cargo build --release -p pi-agent-ffi` 并把
-`pi_agent.dll` 拷进输出目录）：
+本地验证：
 
 ```bash
-git submodule update --init --recursive
-dotnet build src/PiDesktop/PiDesktop.csproj
+npm run build --prefix src/PiDesktop.Tauri
+cargo fmt --manifest-path src/PiDesktop.Tauri/src-tauri/Cargo.toml -- --check
+cargo test --manifest-path src/PiDesktop.Tauri/src-tauri/Cargo.toml
+cargo clippy --manifest-path src/PiDesktop.Tauri/src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
-未打包(unpackaged) 运行，`WindowsPackageType=None`、`WindowsAppSDKSelfContained=true`。
+## GitHub Actions 与发布
 
-## 状态
+`Desktop` 工作流在 `main`、Pull Request 和手动触发时执行以下验证：
 
-骨架阶段：四个页面与进程内 agent 通道已就位，默认用占位回显后端 (`echo`)。
-真实模型后端、桥连接测试、组件安装器与 Sound→MIDI 管线为后续填充。
+1. 检出两个 submodule，构建并裁剪内置 SynthV Bridge。
+2. 检查 Python 组件、TypeScript 生产构建、Rust 格式、测试和 Clippy。
+3. 在 GitHub 托管 runner 上生成 Windows x64 NSIS 安装器与 macOS Universal `.dmg` / `.app.zip`。
+4. 把各平台安装包保存为 Actions artifacts。
+
+推送符合语义版本的 tag 会自动发布，例如：
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+tag 会注入 npm、Cargo 与 Tauri 包版本。两个平台均构建成功后，工作流会从上一个 tag 到当前 tag 汇总每一条 commit 作为“更新内容”，创建同名 GitHub Release，并附加 Windows 与 macOS 安装包。带后缀的 tag（如 `v0.2.0-beta.1`）会发布为 prerelease。
+
+当前 CI 产物未进行 Apple Developer ID notarization 或 Windows 代码签名；正式分发前应在仓库 Secrets 中接入对应签名身份。
+
+## License
+
+[Apache-2.0](LICENSE)
