@@ -101,7 +101,7 @@ export interface Sv2ProfilesState {
   concurrentDefaults: Sv2ConcurrentDefaults;
 }
 
-export type Sv2RemoteUseStatus = "detected" | "unknown";
+export type Sv2RemoteUseStatus = "clear" | "detected" | "unknown";
 
 export interface Sv2AccountPrecheck {
   supported: boolean;

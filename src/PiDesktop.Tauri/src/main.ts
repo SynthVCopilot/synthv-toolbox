@@ -11,6 +11,7 @@ import type {
   OperationResult,
   Sv2AccountPrecheck,
   Sv2IsolationPreference,
+  Sv2ProfileSlot,
   Sv2SessionProtection,
   Sv2ProfilesState,
   WorkflowResult,
@@ -177,12 +178,16 @@ function scheduleDownloadPoll(): void {
 }
 
 function scheduleAccountPrecheck(): void {
-  if (page !== "toolbox" || accountPrecheckTimer !== undefined || (app?.platform !== "windows" && app?.platform !== "preview")) return;
+  if (!(["accounts", "toolbox"] as Page[]).includes(page) || accountPrecheckTimer !== undefined || (app?.platform !== "windows" && app?.platform !== "preview")) return;
   accountPrecheckTimer = window.setTimeout(async () => {
     accountPrecheckTimer = undefined;
-    if (page !== "toolbox") return;
+    if (!(["accounts", "toolbox"] as Page[]).includes(page)) return;
     try {
-      accountPrecheck = await api.sv2AccountPrecheck();
+      if (page === "accounts") {
+        [profiles, accountPrecheck] = await Promise.all([api.sv2ProfileState(), api.sv2AccountPrecheck()]);
+      } else {
+        accountPrecheck = await api.sv2AccountPrecheck();
+      }
       render();
     } catch (reason) {
       error = formatError(reason);
@@ -389,6 +394,7 @@ function renderAccounts(): string {
     const initial = Array.from(slot.displayName)[0] ?? "S";
     const color = /^#[0-9a-f]{6}$/i.test(slot.color) ? slot.color : "#6D5CE7";
     const identity = [slot.username, slot.email].filter(Boolean);
+    const useState = accountUseStateForSlot(slot);
     const concurrentRunning = slot.concurrent.runningPids.length > 0;
     const concurrentNeedsAttention = !slot.concurrent.ready && slot.concurrent.detail !== "尚未准备隔离副本。";
     const concurrentState = concurrentRunning ? "running" : slot.concurrent.ready ? "ready" : concurrentNeedsAttention ? "attention" : "pending";
@@ -412,7 +418,7 @@ function renderAccounts(): string {
       <small class="isolation-content-note">关闭隔离会通过 Sandboxie <code>OpenFilePath</code> 直接使用宿主的对应目录；账号会话、WebView2、注册表和 IPC 仍保持隔离。</small>
     </form>`;
     return `<article class="profile-card ${slot.isActive ? "active" : ""}" style="--profile-color:${color}">
-      <div class="profile-card-head"><span class="profile-avatar">${escapeHtml(initial)}</span><div><span class="eyebrow">账号槽位</span><h2>${escapeHtml(slot.displayName)}</h2>${identity.length ? `<span class="profile-identity">${identity.map(escapeHtml).join(" · ")}</span>` : '<span class="profile-identity empty">尚未填写用户名或邮箱</span>'}</div>${slot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
+      <div class="profile-card-head"><span class="profile-avatar">${escapeHtml(initial)}</span><div><span class="eyebrow">账号槽位</span><div class="profile-title-line"><h2>${escapeHtml(slot.displayName)}</h2>${accountUseDot(useState)}</div>${identity.length ? `<span class="profile-identity">${identity.map(escapeHtml).join(" · ")}</span>` : '<span class="profile-identity empty">尚未填写用户名或邮箱</span>'}</div>${slot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
       <div class="profile-meta"><span class="${slot.sessionCached ? "cached" : ""}">${slot.sessionCached ? `${icon("check", 14)} 登录缓存已存在` : `${icon("plug", 14)} 首次启动需要登录`}</span>${sessionProtectionBadge(slot.sessionProtection)}<span>${icon("refresh", 14)} 最近使用：${escapeHtml(lastUsed)}</span></div>
       <section class="profile-launch-block ordinary"><div class="profile-launch-heading"><div><span>普通启动</span><strong>${slot.isActive ? "使用当前默认环境" : "切换到此账号环境"}</strong></div>${slot.isActive ? '<span class="profile-route-badge">默认路由</span>' : ""}</div><p>${slot.isActive ? "桌面快捷方式和 .svp 文件也会继续使用此槽位。" : "会先安全切换默认槽位，再启动 SV2；现有普通实例需要先退出。"}</p><div class="profile-actions"><button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button>${slot.isActive ? "" : `<button class="secondary" data-profile-activate="${slot.id}">设为默认</button>`}<button class="icon-plain profile-folder" data-profile-folder="${slot.id}" title="打开普通数据目录" aria-label="打开 ${escapeHtml(slot.displayName)} 的普通数据目录">${icon("folder", 18)}</button></div></section>
       <section class="profile-launch-block isolation ${slot.concurrent.ready ? "ready" : ""}"><div class="profile-launch-heading"><div><span>隔离启动</span><strong>独立运行此账号</strong></div><span class="profile-isolation-status ${concurrentState}">${concurrentRunning ? icon("plug", 12) : ""}${concurrentStateLabel}</span></div><p>${escapeHtml(concurrentDescription)}</p>${slot.concurrent.ready ? `<div class="session-guard-inline">${sessionProtectionBadge(slot.concurrentSessionProtection, "隔离环境 · ")}</div>` : ""}${isolationContentForm}<div class="profile-concurrent-actions">${concurrentControls}</div>${slot.concurrent.ready ? `<code title="隔离箱名称：${escapeHtml(slot.concurrent.boxName)}">${escapeHtml(slot.concurrent.boxName)}</code>` : ""}</section>
@@ -421,7 +427,7 @@ function renderAccounts(): string {
   }).join("");
   const importPanel = profiles.canImportCurrent ? `<section class="panel profile-setup"><div class="panel-heading"><span class="feature-icon emerald">${icon("folder", 24)}</span><div><h2>导入当前 SV2 环境</h2><p>现有官方数据目录尚未纳入槽位；导入不会移动账号文件。</p></div></div><form id="profile-import-form" class="profile-create-form"><input id="profile-import-name" maxlength="64" required placeholder="例如 主账号" /><button class="primary">导入为第一个槽位</button></form></section>` : "";
   const createPanel = `<section class="panel profile-setup"><div class="panel-heading"><span class="feature-icon blue">${icon("plus", 24)}</span><div><h2>添加账号槽位</h2><p>创建一个空环境；首次启动后，在 SV2 的 Dreamtonics 官方登录页面完成登录。</p></div></div><form id="profile-create-form" class="profile-create-form"><input id="profile-create-name" maxlength="64" required placeholder="例如 制作账号" /><button class="secondary">创建空槽位</button></form></section>`;
-  return `<div class="profile-intro"><div><span class="eyebrow">SV2 ACCOUNT LAUNCHER</span><h2>像游戏启动器一样，选账号再启动</h2><p>普通启动负责默认账号切换；隔离启动负责多账号并发。用户名和邮箱是工具箱自己的可编辑标签，登录数据仍按原样、不透明地保存。</p><div class="profile-summary"><span>${profiles.slots.length} 个账号槽位</span><span>${preparedCount} 个隔离实例已准备</span>${runningSlots.length ? `<span class="running">${icon("plug", 13)} ${runningSlots.length} 个正在运行</span>` : ""}</div></div><button class="secondary" data-profile-refresh>${icon("refresh", 16)} 刷新状态</button></div>
+  return `<div class="profile-intro"><div><span class="eyebrow">SV2 ACCOUNT LAUNCHER</span><h2>像游戏启动器一样，选账号再启动</h2><p>普通启动负责默认账号切换；隔离启动负责多账号并发。用户名和邮箱是工具箱自己的可编辑标签，登录数据仍按原样、不透明地保存。</p><div class="profile-summary"><span>${profiles.slots.length} 个账号槽位</span><span>${preparedCount} 个隔离实例已准备</span>${runningSlots.length ? `<span class="running">${icon("plug", 13)} ${runningSlots.length} 个正在运行</span>` : ""}</div><div class="account-use-legend" aria-label="账号占用状态图例"><span>${accountUseDot({ tone: "clear", label: "已确认无人使用" })}确定无人使用</span><span>${accountUseDot({ tone: "unknown", label: "占用状态未知" })}未知</span><span>${accountUseDot({ tone: "in-use", label: "已确认使用中" })}确认使用中</span></div></div><button class="secondary" data-profile-refresh>${icon("refresh", 16)} 刷新状态</button></div>
     ${launchModes}
     ${blockerPanel}
     <div class="profile-grid">${cards || '<div class="empty-inline">还没有账号槽位。请导入当前环境或创建一个空槽位。</div>'}</div>
@@ -464,20 +470,60 @@ function sessionProtectionBadge(protection: Sv2SessionProtection, prefix = ""): 
   return `<span class="session-protection${emphasis}" title="${escapeHtml(protection.detail)}">${icon(protection.status === "recoveryPending" ? "refresh" : "check", 14)} ${prefix}${labels[protection.status]}</span>`;
 }
 
+type AccountUseTone = "clear" | "unknown" | "in-use";
+
+interface AccountUseState {
+  tone: AccountUseTone;
+  label: string;
+}
+
+function accountUseStateFromPrecheck(check: Sv2AccountPrecheck): AccountUseState {
+  if (check.localUse || check.remoteUse === "detected") {
+    return {
+      tone: "in-use",
+      label: check.localUse ? "已确认本机正在使用" : "已确认存在其他设备占用迹象",
+    };
+  }
+  if (check.remoteUse === "clear") return { tone: "clear", label: "已确认无人使用" };
+  return { tone: "unknown", label: "占用状态未知：无法实时确认其他设备" };
+}
+
+function accountUseStateForSlot(slot: Sv2ProfileSlot): AccountUseState {
+  const recoveryPending = slot.sessionProtection.status === "recoveryPending"
+    || slot.concurrentSessionProtection.status === "recoveryPending";
+  if (slot.concurrent.runningPids.length || recoveryPending || (slot.isActive && Boolean(profiles?.blockers.length))) {
+    return {
+      tone: "in-use",
+      label: recoveryPending ? "已确认存在其他设备占用迹象" : "已确认本机正在使用",
+    };
+  }
+  if (accountPrecheck?.slotId === slot.id) return accountUseStateFromPrecheck(accountPrecheck);
+  return { tone: "unknown", label: "占用状态未知：此槽位尚无实时远端结果" };
+}
+
+function accountUseDot(state: AccountUseState): string {
+  return `<span class="account-use-dot ${state.tone}" role="img" aria-label="${escapeHtml(state.label)}" title="${escapeHtml(state.label)}"></span>`;
+}
+
 function renderAccountPrecheck(): string {
   if (!app || (app.platform !== "windows" && app.platform !== "preview")) return "";
   if (!accountPrecheck) {
     return `<section class="account-precheck panel loading"><span class="feature-icon blue">${icon("refresh", 22)}</span><div><span class="eyebrow">ACCOUNT USE PRECHECK</span><h2>正在预检当前账号占用</h2><p>检查本机普通实例、插件、Sandboxie 实例和受保护会话是否失效。</p></div></section>`;
   }
   const check = accountPrecheck;
-  const stateClass = check.recoveryPending ? "conflict" : check.localUse ? "in-use" : "clear";
+  const useState = accountUseStateFromPrecheck(check);
+  const stateClass = useState.tone;
   const localDetail = check.localProcesses.length
     ? check.localProcesses.map((process) => `${escapeHtml(process.name)}${process.pid ? ` · PID ${process.pid}` : ""}`).join("；")
     : check.concurrentPids.length ? `Sandboxie PID：${check.concurrentPids.join(", ")}` : "未发现本机进程";
-  const remoteLabel = check.remoteUse === "detected" ? "已检测到远端占用迹象" : "远端状态等待 SV2 验证";
+  const remoteLabel = check.remoteUse === "detected"
+    ? "已检测到远端占用迹象"
+    : check.remoteUse === "clear" ? "已确认远端未占用" : "远端状态等待 SV2 验证";
+  const stateIcon = useState.tone === "in-use" ? "plug" : useState.tone === "clear" ? "check" : "refresh";
+  const stateAccent = useState.tone === "in-use" ? "red" : useState.tone === "clear" ? "emerald" : "orange";
   return `<section class="account-precheck panel ${stateClass}">
-    <span class="feature-icon ${check.recoveryPending ? "orange" : check.localUse ? "violet" : "emerald"}">${icon(check.recoveryPending ? "refresh" : check.localUse ? "plug" : "check", 22)}</span>
-    <div class="account-precheck-main"><span class="eyebrow">ACCOUNT USE PRECHECK</span><h2>账号占用锁 · ${escapeHtml(check.displayName || "未设置账号")}</h2><p><strong>${escapeHtml(check.summary)}</strong> ${escapeHtml(check.detail)}</p><div class="precheck-facts"><span>${icon("users", 14)} ${localDetail}</span><span class="${check.remoteUse === "detected" ? "remote-detected" : ""}">${icon("plug", 14)} ${remoteLabel}</span><span>${icon("refresh", 14)} ${new Date(check.checkedAtUtc).toLocaleTimeString("zh-CN")}</span></div></div>
+    <span class="feature-icon ${stateAccent}">${icon(stateIcon, 22)}</span>
+    <div class="account-precheck-main"><span class="eyebrow">ACCOUNT USE PRECHECK</span><div class="precheck-title-line"><h2>账号占用锁 · ${escapeHtml(check.displayName || "未设置账号")}</h2>${accountUseDot(useState)}</div><p><strong>${escapeHtml(check.summary)}</strong> ${escapeHtml(check.detail)}</p><div class="precheck-facts"><span>${icon("users", 14)} ${localDetail}</span><span class="${check.remoteUse === "detected" ? "remote-detected" : check.remoteUse === "clear" ? "remote-clear" : ""}">${icon("plug", 14)} ${remoteLabel}</span><span>${icon("refresh", 14)} ${new Date(check.checkedAtUtc).toLocaleTimeString("zh-CN")}</span></div></div>
     <button class="secondary compact" data-account-precheck>${icon("refresh", 15)} 重新预检</button>
   </section>`;
 }
@@ -788,7 +834,7 @@ document.addEventListener("click", (event) => {
     notice = "";
     error = "";
     if (page === "copilot") void run(async () => { conversations = await api.listConversations(); });
-    else if (page === "accounts") void run(async () => { profiles = await api.sv2ProfileState(); });
+    else if (page === "accounts") void run(async () => { [profiles, accountPrecheck] = await Promise.all([api.sv2ProfileState(), api.sv2AccountPrecheck()]); });
     else if (page === "toolbox" && (app?.platform === "windows" || app?.platform === "preview")) void run(async () => { accountPrecheck = await api.sv2AccountPrecheck(); });
     else render();
     return;
