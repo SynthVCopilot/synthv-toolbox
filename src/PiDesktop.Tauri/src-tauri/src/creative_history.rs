@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
@@ -9,6 +10,14 @@ use uuid::Uuid;
 
 const MAX_HISTORY_ITEMS: usize = 200;
 const MAX_RESULT_BYTES: usize = 256 * 1024;
+const MAX_REPORT_BYTES: usize = 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkflowReportFormat {
+    Markdown,
+    Json,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -304,6 +313,104 @@ pub fn restore_checkpoint_copy(id: &str, output_name: &str) -> Result<String, St
     Ok(output.to_string_lossy().into_owned())
 }
 
+pub fn export_workflow_report(
+    kind: &str,
+    summary: &str,
+    data: Value,
+    format: WorkflowReportFormat,
+) -> Result<String, String> {
+    let kind = validate_kind(kind.trim().to_string())?;
+    let serialized = serde_json::to_vec(&data).map_err(|error| error.to_string())?;
+    if serialized.len() > MAX_REPORT_BYTES {
+        return Err("工作流结果超过 1 MiB 报告导出限制。".to_string());
+    }
+    let exported_at = Utc::now();
+    let document = render_workflow_report(
+        &kind,
+        &limit_text(summary.trim().to_string(), 2_000),
+        &data,
+        format,
+        &exported_at.to_rfc3339(),
+    )?;
+    let extension = match format {
+        WorkflowReportFormat::Markdown => "md",
+        WorkflowReportFormat::Json => "json",
+    };
+    let report_dir = crate::agent::output_dir().join("workflow-reports");
+    fs::create_dir_all(&report_dir).map_err(|error| format!("无法创建报告输出目录：{error}"))?;
+    let unique = Uuid::new_v4().simple().to_string();
+    let file_name = format!(
+        "{}-{}-{}.{}",
+        exported_at.format("%Y%m%d-%H%M%S"),
+        kind,
+        &unique[..8],
+        extension
+    );
+    let output = report_dir.join(file_name);
+    let temporary = output.with_extension(format!("{extension}.tmp"));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|error| format!("无法创建工作流报告：{error}"))?;
+    if let Err(error) = file.write_all(document.as_bytes()) {
+        drop(file);
+        let _ = fs::remove_file(&temporary);
+        return Err(format!("无法写入工作流报告：{error}"));
+    }
+    drop(file);
+    if let Err(error) = fs::rename(&temporary, &output) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!("无法提交工作流报告：{error}"));
+    }
+    Ok(output.to_string_lossy().into_owned())
+}
+
+fn render_workflow_report(
+    kind: &str,
+    summary: &str,
+    data: &Value,
+    format: WorkflowReportFormat,
+    exported_at_utc: &str,
+) -> Result<String, String> {
+    match format {
+        WorkflowReportFormat::Json => serde_json::to_string_pretty(&json!({
+            "kind": kind,
+            "summary": summary,
+            "exportedAtUtc": exported_at_utc,
+            "data": data,
+        }))
+        .map_err(|error| error.to_string()),
+        WorkflowReportFormat::Markdown => {
+            let pretty = serde_json::to_string_pretty(data).map_err(|error| error.to_string())?;
+            let indented = pretty
+                .lines()
+                .map(|line| format!("    {line}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            Ok(format!(
+                "# 工作流报告\n\n- 类型：`{kind}`\n- 导出时间：`{exported_at_utc}`\n\n## 摘要\n\n{}\n\n## 结构化数据\n\n{indented}\n",
+                escape_markdown(summary)
+            ))
+        }
+    }
+}
+
+fn escape_markdown(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\r' | '\n' => escaped.push(' '),
+            '\\' | '`' | '*' | '_' | '[' | ']' | '#' | '<' | '>' => {
+                escaped.push('\\');
+                escaped.push(character);
+            }
+            _ => escaped.push(character),
+        }
+    }
+    escaped
+}
+
 fn history_dir() -> PathBuf {
     crate::agent::data_root().join("creative-history")
 }
@@ -427,5 +534,35 @@ mod tests {
             validate_kind("project-doctor".to_string()).unwrap(),
             "project-doctor"
         );
+    }
+
+    #[test]
+    fn markdown_report_is_readable_and_escapes_summary_markup() {
+        let report = render_workflow_report(
+            "project-doctor",
+            "发现 #1 个 *风险*",
+            &json!({ "issues": [{ "severity": "warning" }] }),
+            WorkflowReportFormat::Markdown,
+            "2026-08-29T12:00:00Z",
+        )
+        .unwrap();
+        assert!(report.contains("发现 \\#1 个 \\*风险\\*"));
+        assert!(report.contains("    {"));
+        assert!(report.contains("project-doctor"));
+    }
+
+    #[test]
+    fn json_report_wraps_metadata_and_data() {
+        let report = render_workflow_report(
+            "render-quality-check",
+            "复检通过",
+            &json!({ "ok": true }),
+            WorkflowReportFormat::Json,
+            "2026-08-29T12:00:00Z",
+        )
+        .unwrap();
+        let value: Value = serde_json::from_str(&report).unwrap();
+        assert_eq!(value["kind"], "render-quality-check");
+        assert_eq!(value["data"]["ok"], true);
     }
 }

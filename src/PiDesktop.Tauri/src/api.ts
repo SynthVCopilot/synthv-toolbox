@@ -405,6 +405,11 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     snapshotPath: "~/.SynthVcopilot/project-checkpoints/preview/project.svp", sourceSha256: "preview", sourceSize: 0, createdAtUtc: new Date().toISOString(),
   } as T;
   if (command === "restore_project_checkpoint") return { succeeded: true, summary: "检查点已恢复为新副本。", detail: "预览模式" } as T;
+  if (command === "export_workflow_report") return {
+    succeeded: true,
+    summary: "工作流报告已导出。",
+    detail: `预览路径：workflow-reports/preview-report.${args?.format === "json" ? "json" : "md"}`,
+  } as T;
   if (command === "sv2_sync_categories") return [
     { id: "userDictionaries", label: "用户词典", description: "仅同步用户词典文件；不包含账号或登录数据。", relativeRoots: ["dicts"] },
     { id: "scripts", label: "脚本", description: "同步用户安装或编写的脚本。", relativeRoots: ["scripts"] },
@@ -529,6 +534,8 @@ export const api = {
   listProjectCheckpoints: (limit = 50) => call<ProjectCheckpoint[]>("list_project_checkpoints", { limit }),
   restoreProjectCheckpoint: (id: string, outputName: string) =>
     call<OperationResult>("restore_project_checkpoint", { id, outputName }),
+  exportWorkflowReport: (kind: string, summary: string, data: Record<string, unknown>, format: "markdown" | "json") =>
+    call<OperationResult>("export_workflow_report", { kind, summary, data, format }),
   runProjectDoctor: (projectPath: string) =>
     call<WorkflowResult>("run_project_doctor", { projectPath }),
   runPronunciationDiagnostics: (projectPath?: string, lyrics?: string) =>

@@ -137,6 +137,7 @@ pub fn run() {
             commands::create_project_checkpoint,
             commands::list_project_checkpoints,
             commands::restore_project_checkpoint,
+            commands::export_workflow_report,
             commands::run_project_doctor,
             commands::run_pronunciation_diagnostics,
             commands::run_render_review,

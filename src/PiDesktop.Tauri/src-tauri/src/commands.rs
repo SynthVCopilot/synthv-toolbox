@@ -17,7 +17,9 @@ use crate::config::{
     load_model_settings, model_config_path, model_summary, save_model_settings as persist_model,
     save_settings, validate_mcp_server, AppMode, McpServerConfig, ModelSummary,
 };
-use crate::creative_history::{self, CreativeHistoryEntry, ProjectCheckpoint, WorkflowRecipe};
+use crate::creative_history::{
+    self, CreativeHistoryEntry, ProjectCheckpoint, WorkflowRecipe, WorkflowReportFormat,
+};
 use crate::creative_tools::{
     self, ProjectDoctorRequest, PronunciationRequest, RenderReviewExpectations, RenderReviewRequest,
 };
@@ -612,6 +614,25 @@ pub async fn restore_project_checkpoint(
             succeeded(
                 "检查点已恢复为新的工程副本。",
                 format!("输出：{path}；原工程和检查点均未修改。"),
+            )
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn export_workflow_report(
+    kind: String,
+    summary: String,
+    data: Value,
+    format: WorkflowReportFormat,
+) -> Result<OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        creative_history::export_workflow_report(&kind, &summary, data, format).map(|path| {
+            succeeded(
+                "工作流报告已导出。",
+                format!("报告保存在受管理输出目录：{path}"),
             )
         })
     })
