@@ -130,11 +130,16 @@ jobs:
           path: release-assets
           merge-multiple: true
 
-      - name: Build release notes from commits since the previous tag
+      - name: Build release notes from commits since the previous published release
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          previous_tag="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          # Failed tag builds do not count as shipped versions. Base the changelog
+          # on the latest published release so the next successful tag retains all
+          # commits users have not received yet.
+          previous_tag="$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName // ""')"
           if [[ -n "$previous_tag" ]]; then
             range="$previous_tag..$GITHUB_REF_NAME"
           else
