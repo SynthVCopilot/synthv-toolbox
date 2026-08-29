@@ -291,7 +291,7 @@ fn run_bridge_script(bridge_dir: &Path, script: &str, scripts_path: &str) -> Ope
     let Some(node) = find_node() else {
         return failed(
             "未找到 Node.js 22.19 或更高版本。",
-            "可设置 PI_AGENT_NODE 指向 node 可执行文件。",
+            "可设置 SYNTHV_TOOLBOX_NODE 指向 node 可执行文件。",
         );
     };
     let mut command = quiet_command(&node);
@@ -310,7 +310,7 @@ fn run_bridge_script(bridge_dir: &Path, script: &str, scripts_path: &str) -> Ope
 
 pub fn find_node() -> Option<String> {
     let mut candidates = Vec::new();
-    if let Ok(configured) = std::env::var("PI_AGENT_NODE") {
+    if let Ok(configured) = std::env::var("SYNTHV_TOOLBOX_NODE") {
         candidates.push(configured);
     }
     #[cfg(target_os = "macos")]

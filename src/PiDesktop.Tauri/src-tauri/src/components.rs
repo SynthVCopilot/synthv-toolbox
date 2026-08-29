@@ -3,11 +3,11 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-use pi_agent_core::{default_catalog, ComponentSpec};
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use crate::agent::{data_root, default_catalog, ComponentSpec};
 use crate::config::model_config_path;
 use crate::sv2_concurrent::detect_provider as detect_sandboxie;
 use crate::synthv::{failed, quiet_command, succeeded, OperationResult};
@@ -67,7 +67,7 @@ fn component_info(component: ComponentSpec, resource_root: &Path) -> ComponentIn
         status: if installed {
             "已就绪".to_string()
         } else if installable {
-            "可通过 aria2 下载".to_string()
+            "可从应用内组件安装".to_string()
         } else {
             "需要系统安装".to_string()
         },
@@ -97,19 +97,11 @@ where
             }
         }
         "pi-audio" | "cvrs" => {
-            let source = if std::env::var("SYNTHV_TOOLBOX_COMPONENT_SOURCE")
-                .is_ok_and(|value| value.eq_ignore_ascii_case("bundled"))
-            {
-                progress("downloading", 50, "开发模式：使用应用包内的组件源码。");
-                Ok(components_dir.join(id))
-            } else {
-                download_component_source(id, resource_root, &mut progress)
-            };
-            let source = match source {
-                Ok(source) => source,
-                Err(error) => return failed("组件下载失败。", error),
-            };
-            progress("installing", 68, "源码校验完成，正在创建本地运行环境。");
+            let source = components_dir.join(id);
+            if !source.is_dir() {
+                return failed("应用内组件源码缺失。", source.to_string_lossy());
+            }
+            progress("installing", 50, "正在从应用内源码创建本地运行环境。");
             match id {
                 "pi-audio" => install_python_component(id, "pi_audio.py", "audio", true, &source),
                 "cvrs" => install_python_component(id, "cvrs.py", "cvrs", false, &source),
@@ -182,7 +174,6 @@ where
     );
     let payload = ComponentPayload {
         name: SANDBOXIE_INSTALLER_NAME,
-        relative_url: "",
         sha256: SANDBOXIE_INSTALLER_SHA256,
     };
     if let Err(error) = download_with_aria2(&aria2, SANDBOXIE_INSTALLER_URL, &directory, &payload) {
@@ -230,7 +221,7 @@ pub fn open_component_download(id: &str) -> OperationResult {
 }
 
 fn sandboxie_download_directory() -> PathBuf {
-    pi_agent_core::data_root()
+    data_root()
         .join("downloads")
         .join("sandboxie")
         .join(SANDBOXIE_VERSION)
@@ -250,14 +241,14 @@ fn install_python_component(
     if !source.join(script_name).is_file() {
         return failed("组件源码不完整。", source.to_string_lossy());
     }
-    let target = pi_agent_core::data_root().join("components").join(id);
+    let target = data_root().join("components").join(id);
     if let Err(error) = copy_directory(source, &target) {
         return failed("复制组件失败。", error.to_string());
     }
     let Some(python) = find_python() else {
         return failed(
             "未找到 Python 3.11。",
-            "请安装 Python 3.11，并确保 python3 或 python 可以启动。也可设置 PI_AGENT_PYTHON。",
+            "请安装 Python 3.11，并确保 python3 或 python 可以启动。也可设置 SYNTHV_TOOLBOX_PYTHON。",
         );
     };
     let venv = target.join("venv");
@@ -315,74 +306,9 @@ fn install_python_component(
     )
 }
 
-const PI_AGENT_COMPONENT_REVISION: &str = "f4d56296d17c30077248fe9f73a13af47a329f62";
-
 struct ComponentPayload {
     name: &'static str,
-    relative_url: &'static str,
     sha256: &'static str,
-}
-
-const PI_AUDIO_PAYLOADS: &[ComponentPayload] = &[
-    ComponentPayload {
-        name: "pi_audio.py",
-        relative_url: "components/pi-audio/pi_audio.py",
-        sha256: "0e00ccd56c928475a69f39981c1f66298fc15d5249e9e7b6efa673b4ca2a4097",
-    },
-    ComponentPayload {
-        name: "requirements.txt",
-        relative_url: "components/pi-audio/requirements.txt",
-        sha256: "4014ba330a2db128da28ec3782339c474df5fb1f4f0ab70842960cf5c650883e",
-    },
-];
-
-const CVRS_PAYLOADS: &[ComponentPayload] = &[ComponentPayload {
-    name: "cvrs.py",
-    relative_url: "components/cvrs/cvrs.py",
-    sha256: "71383517bdfc4394315592cf97ab2243d6fff89f0caa24ceb2ca560671354f1e",
-}];
-
-fn download_component_source<F>(
-    id: &str,
-    resource_root: &Path,
-    progress: &mut F,
-) -> Result<PathBuf, String>
-where
-    F: FnMut(&str, u8, &str),
-{
-    let payloads = match id {
-        "pi-audio" => PI_AUDIO_PAYLOADS,
-        "cvrs" => CVRS_PAYLOADS,
-        _ => return Err("该组件没有受信任的 aria2 下载清单。".to_string()),
-    };
-    let aria2 = find_aria2(resource_root).ok_or_else(|| {
-        "未找到 aria2c。请安装 aria2（Windows 可使用 winget/choco，macOS 可使用 Homebrew），或设置 SYNTHV_TOOLBOX_ARIA2 指向 aria2c。".to_string()
-    })?;
-    let cache = pi_agent_core::data_root()
-        .join("downloads")
-        .join(id)
-        .join(PI_AGENT_COMPONENT_REVISION);
-    fs::create_dir_all(&cache).map_err(|error| format!("无法创建组件下载缓存：{error}"))?;
-    for (index, payload) in payloads.iter().enumerate() {
-        let start = 8 + ((index * 48) / payloads.len()) as u8;
-        progress(
-            "downloading",
-            start,
-            &format!("aria2 正在下载 {}。", payload.name),
-        );
-        let url = format!(
-            "https://raw.githubusercontent.com/SynthVCopilot/pi-agent/{PI_AGENT_COMPONENT_REVISION}/{}",
-            payload.relative_url
-        );
-        download_with_aria2(&aria2, &url, &cache, payload)?;
-        let complete = 8 + (((index + 1) * 48) / payloads.len()) as u8;
-        progress(
-            "downloading",
-            complete,
-            &format!("{} 已通过 SHA-256 校验。", payload.name),
-        );
-    }
-    Ok(cache)
 }
 
 fn find_aria2(resource_root: &Path) -> Option<PathBuf> {
@@ -523,7 +449,7 @@ fn save_component_config(key: &str, python: &Path, script: &Path) -> Result<(), 
 
 fn find_python() -> Option<String> {
     let mut candidates = Vec::new();
-    if let Ok(configured) = std::env::var("PI_AGENT_PYTHON") {
+    if let Ok(configured) = std::env::var("SYNTHV_TOOLBOX_PYTHON") {
         candidates.push(configured);
     }
     candidates.extend(["python3".to_string(), "python".to_string()]);

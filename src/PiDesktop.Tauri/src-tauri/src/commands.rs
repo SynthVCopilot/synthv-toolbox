@@ -2,32 +2,60 @@ use std::fs;
 use std::path::Path;
 
 use chrono::Utc;
-use pi_agent_core::{
-    AgentLoop, ChatMessage, Conversation, ConversationStore, JsonConversationStore, NoTools, Role,
-};
-use pi_agent_provider::PiConfig;
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use tauri::State;
 use tokio::runtime::Handle;
 use uuid::Uuid;
 
+use crate::agent::{
+    AgentLoop, AnthropicConfig, AnthropicProvider, ChatMessage, Conversation, ConversationStore,
+    JsonConversationStore, NoTools, Role,
+};
 use crate::components::{component_list, open_component_download, ComponentInfo};
 use crate::config::{
     load_model_settings, model_config_path, model_summary, save_model_settings as persist_model,
     save_settings, validate_mcp_server, AppMode, McpServerConfig, ModelSummary,
 };
+use crate::creative_history::{self, CreativeHistoryEntry, ProjectCheckpoint, WorkflowRecipe};
+use crate::creative_tools::{
+    self, ProjectDoctorRequest, PronunciationRequest, RenderReviewExpectations, RenderReviewRequest,
+};
 use crate::downloads::ComponentDownload;
 use crate::mcp::McpToolExecutor;
 use crate::state::{AgentSession, AppState};
 use crate::sv2_concurrent::Sv2IsolationPreference;
-use crate::sv2_profiles::{Sv2AccountPrecheck, Sv2ProfilesState};
+use crate::sv2_profiles::{Sv2AccountPrecheck, Sv2AccountUsageSnapshot, Sv2ProfilesState};
+use crate::sv2_sync::{Sv2SyncCategory, Sv2SyncCategoryId, Sv2SyncManifest, Sv2SyncResult};
+use crate::svp_launch_router::{
+    open_svp_default_apps_settings as open_svp_default_apps_settings_impl,
+    register_svp_open_with_candidate, svp_association_view, SvpAssociationView, SvpLaunchMode,
+    SvpRoutePlan,
+};
 use crate::synthv::{
     bridge_is_bundled, diagnose_bridge as diagnose_bridge_impl, failed, find_node,
     install_bridge as install_bridge_impl, normalized_path_string, scan_installations, succeeded,
     OperationResult, SynthVInstallation,
 };
 use crate::workflows::{self, WorkflowResult};
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchWorkflowItem {
+    input_path: String,
+    status: String,
+    result: Option<WorkflowResult>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchWorkflowResult {
+    recipe_id: String,
+    completed: usize,
+    failed: usize,
+    items: Vec<BatchWorkflowItem>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +74,8 @@ pub struct BootstrapState {
     downloads: Vec<ComponentDownload>,
     mcp_servers: Vec<McpServerConfig>,
     concurrent_disclaimer_accepted: bool,
+    smart_svp_launch_enabled: bool,
+    svp_association: SvpAssociationView,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -142,6 +172,54 @@ pub async fn sv2_account_precheck(
 }
 
 #[tauri::command]
+pub async fn sv2_account_usage_snapshot(
+    state: State<'_, AppState>,
+) -> Result<Sv2AccountUsageSnapshot, String> {
+    let profiles = state.sv2_profiles.clone();
+    tauri::async_runtime::spawn_blocking(move || profiles.account_usage_snapshot())
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub fn sv2_sync_categories(state: State<'_, AppState>) -> Vec<Sv2SyncCategory> {
+    state.sv2_profiles.sync_categories()
+}
+
+#[tauri::command]
+pub async fn preview_sv2_selective_sync(
+    source_slot_id: String,
+    target_slot_id: String,
+    categories: Vec<Sv2SyncCategoryId>,
+    overwrite: bool,
+    state: State<'_, AppState>,
+) -> Result<Sv2SyncManifest, String> {
+    let profiles = state.sv2_profiles.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        profiles.preview_selective_sync(source_slot_id, target_slot_id, categories, overwrite)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn execute_sv2_selective_sync(
+    source_slot_id: String,
+    target_slot_id: String,
+    categories: Vec<Sv2SyncCategoryId>,
+    approved: Sv2SyncManifest,
+    token: String,
+    state: State<'_, AppState>,
+) -> Result<Sv2SyncResult, String> {
+    let profiles = state.sv2_profiles.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        profiles.execute_selective_sync(source_slot_id, target_slot_id, categories, approved, token)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 pub async fn import_current_sv2_profile(
     display_name: String,
     state: State<'_, AppState>,
@@ -186,6 +264,84 @@ pub async fn update_sv2_profile_identity(
     tauri::async_runtime::spawn_blocking(move || profiles.update_identity(slot_id, username, email))
         .await
         .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn update_sv2_profile_voice_licenses(
+    slot_id: String,
+    voices: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<Sv2ProfilesState, String> {
+    let profiles = state.sv2_profiles.clone();
+    tauri::async_runtime::spawn_blocking(move || profiles.update_voice_licenses(slot_id, voices))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn preview_svp_route(
+    project_path: String,
+    state: State<'_, AppState>,
+) -> Result<SvpRoutePlan, String> {
+    let profiles = state.sv2_profiles.clone();
+    tauri::async_runtime::spawn_blocking(move || profiles.preview_svp_route(project_path))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn launch_svp_route(
+    slot_id: String,
+    project_path: String,
+    mode: SvpLaunchMode,
+    state: State<'_, AppState>,
+) -> Result<OperationResult, String> {
+    if mode == SvpLaunchMode::Concurrent
+        && !state.settings.read().await.concurrent_disclaimer_accepted
+    {
+        return Err(
+            "首次使用并发隔离前，必须确认这种运行方式尚未被 Dreamtonics 官方承认。".to_string(),
+        );
+    }
+    let profiles = state.sv2_profiles.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        profiles.launch_svp_route(slot_id, project_path, mode)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn set_svp_launch_routing(
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<BootstrapState, String> {
+    {
+        let mut settings = state.settings.write().await;
+        if enabled {
+            let executable = std::env::current_exe()
+                .map_err(|error| format!("无法定位 SynthV Toolbox 可执行文件：{error}"))?;
+            let view = register_svp_open_with_candidate(
+                &executable,
+                settings.original_svp_prog_id.as_deref(),
+            )?;
+            if view.original_prog_id.is_some() {
+                settings.original_svp_prog_id = view.original_prog_id;
+            }
+        }
+        settings.smart_svp_launch_enabled = enabled;
+        save_settings(&settings)?;
+    }
+    build_bootstrap(&state).await
+}
+
+#[tauri::command]
+pub fn open_svp_default_apps_settings() -> Result<OperationResult, String> {
+    open_svp_default_apps_settings_impl()?;
+    Ok(succeeded(
+        "已打开 Windows 默认应用设置。",
+        "请由你本人把 .svp 的默认应用选择为 SynthV Toolbox；工具箱不会修改 UserChoice。",
+    ))
 }
 
 #[tauri::command]
@@ -364,7 +520,7 @@ pub async fn connect_bridge(state: State<'_, AppState>) -> Result<OperationResul
     let Some(node) = find_node() else {
         return Ok(failed(
             "未找到 Node.js。",
-            "可设置 PI_AGENT_NODE 指向 Node.js 22.19+。",
+            "可设置 SYNTHV_TOOLBOX_NODE 指向 Node.js 22.19+。",
         ));
     };
     match state
@@ -410,6 +566,369 @@ pub async fn open_downloaded_component(id: String) -> Result<OperationResult, St
 }
 
 #[tauri::command]
+pub fn list_workflow_recipes() -> Vec<WorkflowRecipe> {
+    creative_history::builtin_recipes()
+}
+
+#[tauri::command]
+pub async fn list_creative_history(
+    limit: Option<usize>,
+) -> Result<Vec<CreativeHistoryEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || creative_history::list(limit.unwrap_or(50)))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn create_project_checkpoint(
+    project_path: String,
+    label: String,
+) -> Result<ProjectCheckpoint, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        creative_history::create_checkpoint(&project_path, &label)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn list_project_checkpoints(
+    limit: Option<usize>,
+) -> Result<Vec<ProjectCheckpoint>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        creative_history::list_checkpoints(limit.unwrap_or(50))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn restore_project_checkpoint(
+    id: String,
+    output_name: String,
+) -> Result<OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        creative_history::restore_checkpoint_copy(&id, &output_name).map(|path| {
+            succeeded(
+                "检查点已恢复为新的工程副本。",
+                format!("输出：{path}；原工程和检查点均未修改。"),
+            )
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn run_project_doctor(project_path: String) -> Result<WorkflowResult, String> {
+    let parameters = json!({ "projectPath": project_path });
+    let request = ProjectDoctorRequest { project_path };
+    let report =
+        tauri::async_runtime::spawn_blocking(move || creative_tools::diagnose_project(request))
+            .await
+            .map_err(|error| error.to_string())??;
+    let result = WorkflowResult {
+        kind: "project-doctor".to_string(),
+        summary: report.summary.clone(),
+        output_path: None,
+        data: serde_json::to_value(report).map_err(|error| error.to_string())?,
+    };
+    Ok(record_workflow_result("工程医生", parameters, result))
+}
+
+#[tauri::command]
+pub async fn run_pronunciation_diagnostics(
+    project_path: Option<String>,
+    lyrics: Option<String>,
+) -> Result<WorkflowResult, String> {
+    let parameters = json!({
+        "projectPath": project_path,
+        "lyricsProvided": lyrics.as_ref().is_some_and(|value| !value.trim().is_empty())
+    });
+    let request = PronunciationRequest {
+        project_path,
+        lyrics,
+    };
+    let report = tauri::async_runtime::spawn_blocking(move || {
+        creative_tools::diagnose_pronunciation(request)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    let result = WorkflowResult {
+        kind: "pronunciation-check".to_string(),
+        summary: report.summary.clone(),
+        output_path: None,
+        data: serde_json::to_value(report).map_err(|error| error.to_string())?,
+    };
+    Ok(record_workflow_result("发音诊断", parameters, result))
+}
+
+#[tauri::command]
+pub async fn run_render_review(
+    audio_path: String,
+    expected_duration_sec: Option<f64>,
+    expected_bpm: Option<f64>,
+    require_notes: bool,
+    advanced: bool,
+    state: State<'_, AppState>,
+) -> Result<WorkflowResult, String> {
+    if advanced || require_notes {
+        require_ai(&state).await?;
+    }
+    let resource_dir = state.resource_dir.clone();
+    let path_for_probe = audio_path.clone();
+    let probe = tauri::async_runtime::spawn_blocking(move || {
+        workflows::audio_probe(path_for_probe, advanced || require_notes, &resource_dir)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    let review_request = RenderReviewRequest {
+        probe_json: probe.data.to_string(),
+        expectations: RenderReviewExpectations {
+            expected_duration_sec,
+            expected_bpm,
+            require_notes,
+        },
+    };
+    let report =
+        tauri::async_runtime::spawn_blocking(move || creative_tools::review_render(review_request))
+            .await
+            .map_err(|error| error.to_string())??;
+    let result = WorkflowResult {
+        kind: "render-quality-check".to_string(),
+        summary: report.summary.clone(),
+        output_path: None,
+        data: json!({ "probe": probe.data, "report": report }),
+    };
+    Ok(record_workflow_result(
+        "渲染质量复检",
+        json!({
+            "audioPath": audio_path,
+            "expectedDurationSec": expected_duration_sec,
+            "expectedBpm": expected_bpm,
+            "requireNotes": require_notes,
+            "advanced": advanced
+        }),
+        result,
+    ))
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn run_audio_to_project(
+    vocal_path: String,
+    instrumental_path: String,
+    output_name: String,
+    tolerance: f64,
+    advanced: bool,
+    import_to_synthv: bool,
+    rights_confirmed: bool,
+    track_index: u32,
+    group_name: String,
+    state: State<'_, AppState>,
+) -> Result<WorkflowResult, String> {
+    let mode = state.settings.read().await.mode;
+    if mode != AppMode::Ai && (advanced || (tolerance - 0.08).abs() > f64::EPSILON) {
+        return Err("纯工具箱模式仅提供固定参数的基础音频到工程流程。".to_string());
+    }
+    if import_to_synthv && !rights_confirmed {
+        return Err("导入 SynthV 前必须确认你有权使用该本地音频及生成的 MIDI。".to_string());
+    }
+    let resource_dir = state.resource_dir.clone();
+    let vocal_for_run = vocal_path.clone();
+    let instrumental_for_run = instrumental_path.clone();
+    let output_for_run = output_name.clone();
+    let mut result = tauri::async_runtime::spawn_blocking(move || {
+        workflows::game_to_midi(
+            vocal_for_run,
+            instrumental_for_run,
+            output_for_run,
+            tolerance,
+            advanced,
+            &resource_dir,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    result.kind = "audio-to-project".to_string();
+    let bridge_result = if import_to_synthv {
+        let midi_path = result
+            .output_path
+            .clone()
+            .ok_or_else(|| "音频提取完成，但没有返回可导入的 MIDI 路径。".to_string())?;
+        Some(
+            crate::bridge_workflows::import_monophonic_midi(
+                &state.mcp,
+                &midi_path,
+                track_index,
+                &group_name,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    let original = result.data;
+    result.data = json!({
+        "stages": [
+            { "id": "pairDiff", "status": "completed", "label": "配对音频差分与单音提取" },
+            { "id": "midi", "status": "completed", "label": "受管理 MIDI 输出" },
+            { "id": "lyrics", "status": "deferred", "label": "歌词转写将在 Whisper 组件启用后提供" },
+            { "id": "synthvImport", "status": if import_to_synthv { "completed" } else { "ready" }, "label": "SynthV Bridge 导入" }
+        ],
+        "extraction": original,
+        "bridge": bridge_result
+    });
+    result.summary = if import_to_synthv {
+        "音频旋律已提取为 MIDI，并通过 Bridge 导入当前 SynthV 工程。".to_string()
+    } else {
+        "音频旋律已提取为受管理 MIDI；连接 Bridge 后可继续导入当前工程。".to_string()
+    };
+    Ok(record_workflow_result(
+        "音频到 SynthV 工程",
+        json!({
+            "vocalPath": vocal_path,
+            "instrumentalPath": instrumental_path,
+            "outputName": output_name,
+            "tolerance": tolerance,
+            "advanced": advanced,
+            "importToSynthv": import_to_synthv,
+            "trackIndex": track_index,
+            "groupName": group_name
+        }),
+        result,
+    ))
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn run_retake_workbench(
+    track_index: u32,
+    group_index: u32,
+    note_index: u32,
+    operation: String,
+    take_id: Option<u32>,
+    new_duration: bool,
+    new_pitch: bool,
+    new_timbre: bool,
+    activate: bool,
+    state: State<'_, AppState>,
+) -> Result<WorkflowResult, String> {
+    let request = crate::bridge_workflows::RetakeRequest {
+        track_index,
+        group_index,
+        note_index,
+        operation: operation.clone(),
+        take_id,
+        new_duration,
+        new_pitch,
+        new_timbre,
+        activate,
+    };
+    let data = crate::bridge_workflows::retake_workbench(&state.mcp, request).await?;
+    let result = WorkflowResult {
+        kind: "retake-workbench".to_string(),
+        summary: if operation == "refresh" {
+            "已读取该音符的 Retake 候选。".to_string()
+        } else {
+            format!("Retake 操作“{operation}”已由 SynthV 验证完成。")
+        },
+        output_path: None,
+        data,
+    };
+    Ok(record_workflow_result(
+        "Retake A/B 工作台",
+        json!({
+            "trackIndex": track_index,
+            "groupIndex": group_index,
+            "noteIndex": note_index,
+            "operation": operation,
+            "takeId": take_id,
+            "newDuration": new_duration,
+            "newPitch": new_pitch,
+            "newTimbre": new_timbre,
+            "activate": activate
+        }),
+        result,
+    ))
+}
+
+#[tauri::command]
+pub async fn run_batch_workflow(
+    recipe_id: String,
+    input_paths: Vec<String>,
+    options: Value,
+    state: State<'_, AppState>,
+) -> Result<BatchWorkflowResult, String> {
+    if input_paths.is_empty() || input_paths.len() > 100 {
+        return Err("批处理一次需要 1–100 个输入文件。".to_string());
+    }
+    if !matches!(
+        recipe_id.as_str(),
+        "project-doctor"
+            | "pronunciation-check"
+            | "render-quality-check"
+            | "project-probe"
+            | "project-no-params"
+    ) {
+        return Err("该工作流暂不支持批处理。".to_string());
+    }
+    if recipe_id == "render-quality-check"
+        && options
+            .get("requireNotes")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    {
+        require_ai(&state).await?;
+    }
+    let resource_dir = state.resource_dir.clone();
+    let components_dir = state.components_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut items = Vec::with_capacity(input_paths.len());
+        for input_path in input_paths {
+            let outcome = run_batch_item(
+                &recipe_id,
+                &input_path,
+                &options,
+                &resource_dir,
+                &components_dir,
+            );
+            match outcome {
+                Ok(result) => {
+                    let result = record_workflow_result(
+                        &format!("批处理 · {}", batch_recipe_title(&recipe_id)),
+                        json!({ "inputPath": input_path, "options": options }),
+                        result,
+                    );
+                    items.push(BatchWorkflowItem {
+                        input_path,
+                        status: "completed".to_string(),
+                        result: Some(result),
+                        error: None,
+                    });
+                }
+                Err(error) => items.push(BatchWorkflowItem {
+                    input_path,
+                    status: "failed".to_string(),
+                    result: None,
+                    error: Some(error),
+                }),
+            }
+        }
+        let completed = items.iter().filter(|item| item.result.is_some()).count();
+        let failed = items.len() - completed;
+        Ok(BatchWorkflowResult {
+            recipe_id,
+            completed,
+            failed,
+            items,
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 pub async fn run_audio_probe(
     audio_path: String,
     advanced: bool,
@@ -419,11 +938,17 @@ pub async fn run_audio_probe(
         require_ai(&state).await?;
     }
     let resource_dir = state.resource_dir.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        workflows::audio_probe(audio_path, advanced, &resource_dir)
+    let path_for_run = audio_path.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        workflows::audio_probe(path_for_run, advanced, &resource_dir)
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())??;
+    Ok(record_workflow_result(
+        "音频结构分析",
+        json!({ "audioPath": audio_path, "advanced": advanced }),
+        result,
+    ))
 }
 
 #[tauri::command]
@@ -443,18 +968,32 @@ pub async fn run_game_to_midi(
         );
     }
     let resource_dir = state.resource_dir.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let run_vocal = vocal_path.clone();
+    let run_instrumental = instrumental_path.clone();
+    let run_output = output_name.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
         workflows::game_to_midi(
-            vocal_path,
-            instrumental_path,
-            output_name,
+            run_vocal,
+            run_instrumental,
+            run_output,
             tolerance,
             advanced,
             &resource_dir,
         )
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())??;
+    Ok(record_workflow_result(
+        "演唱音频到 MIDI",
+        json!({
+            "vocalPath": vocal_path,
+            "instrumentalPath": instrumental_path,
+            "outputName": output_name,
+            "tolerance": tolerance,
+            "advanced": advanced
+        }),
+        result,
+    ))
 }
 
 #[tauri::command]
@@ -463,11 +1002,18 @@ pub async fn run_project_probe(
     state: State<'_, AppState>,
 ) -> Result<WorkflowResult, String> {
     let resource_dir = state.resource_dir.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        workflows::project_probe(project_path, &resource_dir)
+    let components_dir = state.components_dir.clone();
+    let path_for_run = project_path.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        workflows::project_probe(path_for_run, &resource_dir, &components_dir)
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())??;
+    Ok(record_workflow_result(
+        "SynthV 工程结构探测",
+        json!({ "projectPath": project_path }),
+        result,
+    ))
 }
 
 #[tauri::command]
@@ -480,18 +1026,102 @@ pub async fn add_project_reference(
     state: State<'_, AppState>,
 ) -> Result<WorkflowResult, String> {
     let resource_dir = state.resource_dir.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let components_dir = state.components_dir.clone();
+    let run_project = project_path.clone();
+    let run_audio = audio_path.clone();
+    let run_track_name = track_name.clone();
+    let run_output = output_name.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
         workflows::add_project_reference(
-            project_path,
-            audio_path,
-            track_name,
+            run_project,
+            run_audio,
+            run_track_name,
             begin_seconds,
-            output_name,
+            run_output,
             &resource_dir,
+            &components_dir,
         )
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())??;
+    Ok(record_workflow_result(
+        "SynthV 参考轨安全副本",
+        json!({
+            "projectPath": project_path,
+            "audioPath": audio_path,
+            "trackName": track_name,
+            "beginSeconds": begin_seconds,
+            "outputName": output_name
+        }),
+        result,
+    ))
+}
+
+#[tauri::command]
+pub async fn export_project_without_parameters(
+    project_path: String,
+    output_name: String,
+    state: State<'_, AppState>,
+) -> Result<WorkflowResult, String> {
+    let resource_dir = state.resource_dir.clone();
+    let components_dir = state.components_dir.clone();
+    let run_project = project_path.clone();
+    let run_output = output_name.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        workflows::export_project_without_parameters(
+            run_project,
+            run_output,
+            &resource_dir,
+            &components_dir,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    Ok(record_workflow_result(
+        "SynthV 无参工程副本",
+        json!({ "projectPath": project_path, "outputName": output_name }),
+        result,
+    ))
+}
+
+#[tauri::command]
+pub async fn export_project_lyrics(
+    project_path: String,
+    track_index: u32,
+    line_gap_seconds: f64,
+    output_name: String,
+    word_output_name: String,
+    state: State<'_, AppState>,
+) -> Result<WorkflowResult, String> {
+    let resource_dir = state.resource_dir.clone();
+    let components_dir = state.components_dir.clone();
+    let run_project = project_path.clone();
+    let run_output = output_name.clone();
+    let run_word_output = word_output_name.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        workflows::export_project_lyrics(
+            run_project,
+            track_index,
+            line_gap_seconds,
+            run_output,
+            run_word_output,
+            &resource_dir,
+            &components_dir,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    Ok(record_workflow_result(
+        "SynthV 歌词导出",
+        json!({
+            "projectPath": project_path,
+            "trackIndex": track_index,
+            "lineGapSeconds": line_gap_seconds,
+            "outputName": output_name,
+            "wordOutputName": word_output_name
+        }),
+        result,
+    ))
 }
 
 #[tauri::command]
@@ -503,7 +1133,17 @@ pub async fn review_workflow(
     require_ai(&state).await?;
     if !matches!(
         kind.as_str(),
-        "game-midi" | "audio-insight" | "project-probe" | "project-reference"
+        "game-midi"
+            | "audio-insight"
+            | "project-probe"
+            | "project-reference"
+            | "project-no-params"
+            | "project-lyrics"
+            | "audio-to-project"
+            | "project-doctor"
+            | "pronunciation-check"
+            | "render-quality-check"
+            | "retake-workbench"
     ) {
         return Err("工作流类型不受支持。".to_string());
     }
@@ -516,17 +1156,11 @@ pub async fn review_workflow(
         return Err("模型访问令牌尚未配置。".to_string());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let config_json = json!({
-            "provider": "anthropic",
-            "anthropic": {
-                "base_url": model.base_url,
-                "model": model.model,
-                "auth_token": model.auth_token,
-            }
-        })
-        .to_string();
-        let config = PiConfig::from_json(&config_json).map_err(|error| error.to_string())?;
-        let provider = config.build_provider().map_err(|error| error.to_string())?;
+        let provider = AnthropicProvider::new(AnthropicConfig::new(
+            model.base_url,
+            model.auth_token,
+            model.model,
+        ));
         let mut messages = vec![ChatMessage {
             role: Role::System,
             content: "你是 SynthV Toolbox 的工作流复核器。只根据结构化结果判断可靠性、异常和下一步；不得声称已修改文件。用简洁中文输出：结论、风险、建议参数。".to_string(),
@@ -534,7 +1168,7 @@ pub async fn review_workflow(
             tool_call_id: None,
         }];
         let prompt = format!("工作流类型：{kind}\n请复核以下 JSON：\n{payload}");
-        let added = AgentLoop::new(provider.as_ref(), &NoTools)
+        let added = AgentLoop::new(&provider, &NoTools)
             .run_turn(&mut messages, &prompt)
             .map_err(|error| error.to_string())?;
         added
@@ -617,7 +1251,7 @@ pub async fn list_conversations(
 ) -> Result<Vec<ConversationSummary>, String> {
     require_ai(&state).await?;
     tauri::async_runtime::spawn_blocking(move || {
-        JsonConversationStore::new(pi_agent_core::history_dir())
+        JsonConversationStore::new(crate::agent::history_dir())
             .list()
             .map(|items| {
                 items
@@ -665,7 +1299,7 @@ pub async fn open_conversation(
     validate_conversation_id(&id)?;
     let requested = id.clone();
     let conversation = tauri::async_runtime::spawn_blocking(move || {
-        JsonConversationStore::new(pi_agent_core::history_dir())
+        JsonConversationStore::new(crate::agent::history_dir())
             .get(&requested)
             .map_err(|error| error.to_string())?
             .ok_or_else(|| "找不到该会话。".to_string())
@@ -708,24 +1342,18 @@ pub async fn send_message(
     let runtime = Handle::current();
     let session = state.agent.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let config_json = json!({
-            "provider": "anthropic",
-            "anthropic": {
-                "base_url": model.base_url,
-                "model": model.model,
-                "auth_token": model.auth_token,
-            }
-        })
-        .to_string();
-        let config = PiConfig::from_json(&config_json).map_err(|error| error.to_string())?;
-        let provider = config.build_provider().map_err(|error| error.to_string())?;
+        let provider = AnthropicProvider::new(AnthropicConfig::new(
+            model.base_url,
+            model.auth_token,
+            model.model,
+        ));
         let mut session = session.lock().map_err(|_| "会话状态锁已损坏".to_string())?;
         ensure_session(&mut session);
         let added = if bindings.is_empty() {
-            AgentLoop::new(provider.as_ref(), &NoTools).run_turn(&mut session.messages, &input)
+            AgentLoop::new(&provider, &NoTools).run_turn(&mut session.messages, &input)
         } else {
             let executor = McpToolExecutor::new(bindings, runtime);
-            AgentLoop::new(provider.as_ref(), &executor).run_turn(&mut session.messages, &input)
+            AgentLoop::new(&provider, &executor).run_turn(&mut session.messages, &input)
         }
         .map_err(|error| error.to_string())?;
         if session.title == "新对话" {
@@ -739,6 +1367,124 @@ pub async fn send_message(
     .map_err(|error| error.to_string())?
 }
 
+fn record_workflow_result(
+    title: &str,
+    parameters: Value,
+    mut result: WorkflowResult,
+) -> WorkflowResult {
+    if let Err(error) = creative_history::record(
+        result.kind.clone(),
+        title,
+        result.summary.clone(),
+        result.output_path.clone(),
+        parameters,
+        result.data.clone(),
+    ) {
+        if let Some(object) = result.data.as_object_mut() {
+            object.insert("historyWarning".to_string(), Value::String(error));
+        }
+    }
+    result
+}
+
+fn batch_recipe_title(recipe_id: &str) -> &'static str {
+    match recipe_id {
+        "project-doctor" => "工程医生",
+        "pronunciation-check" => "发音诊断",
+        "render-quality-check" => "渲染复检",
+        "project-probe" => "工程结构清单",
+        "project-no-params" => "无参交付副本",
+        _ => "工作流",
+    }
+}
+
+fn run_batch_item(
+    recipe_id: &str,
+    input_path: &str,
+    options: &Value,
+    resource_dir: &Path,
+    components_dir: &Path,
+) -> Result<WorkflowResult, String> {
+    match recipe_id {
+        "project-doctor" => {
+            let report = creative_tools::diagnose_project(ProjectDoctorRequest {
+                project_path: input_path.to_string(),
+            })?;
+            Ok(WorkflowResult {
+                kind: recipe_id.to_string(),
+                summary: report.summary.clone(),
+                output_path: None,
+                data: serde_json::to_value(report).map_err(|error| error.to_string())?,
+            })
+        }
+        "pronunciation-check" => {
+            let report = creative_tools::diagnose_pronunciation(PronunciationRequest {
+                project_path: Some(input_path.to_string()),
+                lyrics: None,
+            })?;
+            Ok(WorkflowResult {
+                kind: recipe_id.to_string(),
+                summary: report.summary.clone(),
+                output_path: None,
+                data: serde_json::to_value(report).map_err(|error| error.to_string())?,
+            })
+        }
+        "render-quality-check" => {
+            let require_notes = options
+                .get("requireNotes")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let probe =
+                workflows::audio_probe(input_path.to_string(), require_notes, resource_dir)?;
+            let report = creative_tools::review_render(RenderReviewRequest {
+                probe_json: probe.data.to_string(),
+                expectations: RenderReviewExpectations {
+                    expected_duration_sec: options
+                        .get("expectedDurationSec")
+                        .and_then(Value::as_f64),
+                    expected_bpm: options.get("expectedBpm").and_then(Value::as_f64),
+                    require_notes,
+                },
+            })?;
+            Ok(WorkflowResult {
+                kind: recipe_id.to_string(),
+                summary: report.summary.clone(),
+                output_path: None,
+                data: json!({ "probe": probe.data, "report": report }),
+            })
+        }
+        "project-probe" => {
+            workflows::project_probe(input_path.to_string(), resource_dir, components_dir)
+        }
+        "project-no-params" => {
+            let suffix = options
+                .get("suffix")
+                .and_then(Value::as_str)
+                .unwrap_or("_no_params");
+            if suffix.is_empty()
+                || suffix.len() > 40
+                || !suffix
+                    .chars()
+                    .all(|character| character.is_alphanumeric() || matches!(character, '-' | '_'))
+            {
+                return Err("批处理输出后缀只能包含字母、数字、横线和下划线。".to_string());
+            }
+            let stem = Path::new(input_path)
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "无法从工程路径生成输出文件名。".to_string())?;
+            workflows::export_project_without_parameters(
+                input_path.to_string(),
+                format!("{stem}{suffix}.svp"),
+                resource_dir,
+                components_dir,
+            )
+        }
+        _ => Err("该工作流暂不支持批处理。".to_string()),
+    }
+}
+
 async fn require_ai(state: &State<'_, AppState>) -> Result<(), String> {
     if state.settings.read().await.mode != AppMode::Ai {
         return Err("此能力只在 AI 模式下可用。请先在设置中切换模式。".to_string());
@@ -748,6 +1494,14 @@ async fn require_ai(state: &State<'_, AppState>) -> Result<(), String> {
 
 async fn build_bootstrap(state: &State<'_, AppState>) -> Result<BootstrapState, String> {
     let settings = state.settings.read().await.clone();
+    let svp_association = svp_association_view(settings.original_svp_prog_id.as_deref())
+        .unwrap_or_else(|detail| SvpAssociationView {
+            supported: cfg!(windows),
+            registered: false,
+            is_default: false,
+            original_prog_id: settings.original_svp_prog_id.clone(),
+            detail,
+        });
     Ok(BootstrapState {
         onboarding_completed: settings.onboarding_completed,
         mode: settings.mode,
@@ -766,6 +1520,8 @@ async fn build_bootstrap(state: &State<'_, AppState>) -> Result<BootstrapState, 
         downloads: state.downloads.snapshot(),
         mcp_servers: settings.mcp_servers,
         concurrent_disclaimer_accepted: settings.concurrent_disclaimer_accepted,
+        smart_svp_launch_enabled: settings.smart_svp_launch_enabled,
+        svp_association,
     })
 }
 
@@ -827,7 +1583,7 @@ fn validate_conversation_id(id: &str) -> Result<(), String> {
 
 fn save_conversation(conversation: &Conversation) -> Result<(), String> {
     validate_conversation_id(&conversation.id)?;
-    let directory = pi_agent_core::history_dir();
+    let directory = crate::agent::history_dir();
     fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
     let target = directory.join(format!("{}.json", conversation.id));
     let temporary = directory.join(format!("{}.json.tmp", conversation.id));

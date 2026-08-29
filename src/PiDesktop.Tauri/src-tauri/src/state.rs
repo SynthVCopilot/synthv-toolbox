@@ -1,9 +1,10 @@
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
-use pi_agent_core::ChatMessage;
 use tokio::sync::RwLock;
 
+use crate::agent::ChatMessage;
 use crate::config::{load_settings, ToolboxSettings};
 use crate::downloads::ComponentDownloadManager;
 use crate::mcp::McpManager;
@@ -26,10 +27,16 @@ pub struct AppState {
     pub components_dir: PathBuf,
     pub downloads: Arc<ComponentDownloadManager>,
     pub sv2_profiles: Arc<Sv2ProfileService>,
+    pub svp_passthrough_only: AtomicBool,
 }
 
 impl AppState {
-    pub fn new(resource_dir: PathBuf, bridge_dir: PathBuf, components_dir: PathBuf) -> Self {
+    pub fn new(
+        resource_dir: PathBuf,
+        bridge_dir: PathBuf,
+        components_dir: PathBuf,
+        svp_passthrough_only: bool,
+    ) -> Self {
         Self {
             settings: Arc::new(RwLock::new(load_settings())),
             agent: Arc::new(Mutex::new(AgentSession::default())),
@@ -39,6 +46,7 @@ impl AppState {
             components_dir,
             downloads: Arc::new(ComponentDownloadManager::default()),
             sv2_profiles: Arc::new(Sv2ProfileService::new()),
+            svp_passthrough_only: AtomicBool::new(svp_passthrough_only),
         }
     }
 }

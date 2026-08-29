@@ -1,7 +1,7 @@
 {
   "name": "synthv-toolbox",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
@@ -10,10 +10,12 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@tauri-apps/api": "2.11.1"
+    "@tauri-apps/api": "2.11.1",
+    "vue": "^3.5.42"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.4",
+    "@vitejs/plugin-vue": "^6.0.8",
     "typescript": "7.0.2",
     "vite": "8.2.2"
   }

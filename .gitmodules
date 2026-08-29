@@ -1,6 +1,3 @@
-[submodule "external/pi-agent"]
-	path = external/pi-agent
-	url = https://github.com/SynthVCopilot/pi-agent.git
 [submodule "external/synthv-agent-bridge"]
 	path = external/synthv-agent-bridge
 	url = https://github.com/SynthVCopilot/synthv-agent-bridge.git

@@ -19,6 +19,11 @@ use crate::sv2_concurrent::{
 use crate::sv2_session_guard::{
     SessionLaunchPreparation, Sv2SessionEnvironment, Sv2SessionGuardStore, Sv2SessionProtectionView,
 };
+use crate::sv2_sync::{self, Sv2SyncCategory, Sv2SyncCategoryId, Sv2SyncManifest, Sv2SyncResult};
+use crate::svp_launch_router::{
+    build_route_plan, inspect_voice_inventory, validate_confirmed_voice_names,
+    Sv2VoiceInventoryView, SvpLaunchMode, SvpRoutePlan,
+};
 use crate::synthv::{find_sv2_executable, succeeded, OperationResult};
 
 const SCHEMA_VERSION: u32 = 1;
@@ -42,6 +47,8 @@ struct SlotRecord {
     username: String,
     #[serde(default)]
     email: String,
+    #[serde(default)]
+    manually_confirmed_voices: Vec<String>,
     color: String,
     created_at_utc: String,
     #[serde(default)]
@@ -116,6 +123,7 @@ pub struct Sv2ProfileSlotView {
     pub session_protection: Sv2SessionProtectionView,
     pub concurrent_session_protection: Sv2SessionProtectionView,
     pub concurrent: Sv2ConcurrentSlotView,
+    pub voice_inventory: Sv2VoiceInventoryView,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -167,6 +175,13 @@ pub struct Sv2AccountPrecheck {
     pub recovery_pending: bool,
     pub summary: String,
     pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Sv2AccountUsageSnapshot {
+    pub profiles: Sv2ProfilesState,
+    pub precheck: Sv2AccountPrecheck,
 }
 
 #[derive(Debug, Clone)]
@@ -271,20 +286,75 @@ impl Sv2ProfileService {
     }
 
     pub fn account_precheck(&self) -> Result<Sv2AccountPrecheck, String> {
+        self.account_usage_snapshot()
+            .map(|snapshot| snapshot.precheck)
+    }
+
+    pub fn account_usage_snapshot(&self) -> Result<Sv2AccountUsageSnapshot, String> {
         let _gate = self
             .gate
             .lock()
             .map_err(|_| "SV2 槽位状态锁已损坏。".to_string())?;
         let Ok(paths) = &self.paths else {
-            return Ok(unsupported_precheck(
-                self.paths.as_ref().err().cloned().unwrap_or_default(),
-            ));
+            let detail = self.paths.as_ref().err().cloned().unwrap_or_default();
+            return Ok(Sv2AccountUsageSnapshot {
+                profiles: unsupported_state(detail.clone()),
+                precheck: unsupported_precheck(detail),
+            });
         };
         let _file_lock = acquire_switch_lock(paths)?;
         recover_if_needed(paths)?;
         let manifest = load_manifest(paths)?;
-        let state = build_state(paths, &manifest, false, String::new())?;
-        Ok(build_account_precheck(&state))
+        let profiles = build_state(paths, &manifest, false, String::new())?;
+        let precheck = build_account_precheck(&profiles);
+        Ok(Sv2AccountUsageSnapshot { profiles, precheck })
+    }
+
+    pub fn sync_categories(&self) -> Vec<Sv2SyncCategory> {
+        sv2_sync::categories()
+    }
+
+    pub fn preview_selective_sync(
+        &self,
+        source_slot_id: String,
+        target_slot_id: String,
+        categories: Vec<Sv2SyncCategoryId>,
+        overwrite: bool,
+    ) -> Result<Sv2SyncManifest, String> {
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| "SV2 槽位状态锁已损坏。".to_string())?;
+        let paths = self.paths.as_ref().map_err(Clone::clone)?;
+        let _file_lock = acquire_switch_lock(paths)?;
+        recover_if_needed(paths)?;
+        reject_blockers(paths)?;
+        let manifest = load_manifest(paths)?;
+        let (source, target) =
+            resolve_sync_roots(paths, &manifest, &source_slot_id, &target_slot_id)?;
+        sv2_sync::dry_run(&source, &target, &categories, overwrite)
+    }
+
+    pub fn execute_selective_sync(
+        &self,
+        source_slot_id: String,
+        target_slot_id: String,
+        categories: Vec<Sv2SyncCategoryId>,
+        approved: Sv2SyncManifest,
+        token: String,
+    ) -> Result<Sv2SyncResult, String> {
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| "SV2 槽位状态锁已损坏。".to_string())?;
+        let paths = self.paths.as_ref().map_err(Clone::clone)?;
+        let _file_lock = acquire_switch_lock(paths)?;
+        recover_if_needed(paths)?;
+        reject_blockers(paths)?;
+        let manifest = load_manifest(paths)?;
+        let (source, target) =
+            resolve_sync_roots(paths, &manifest, &source_slot_id, &target_slot_id)?;
+        sv2_sync::execute(&source, &target, &categories, &approved, &token)
     }
 
     pub fn import_current(&self, display_name: String) -> Result<Sv2ProfilesState, String> {
@@ -316,6 +386,7 @@ impl Sv2ProfileService {
             display_name,
             username: String::new(),
             email: String::new(),
+            manually_confirmed_voices: Vec::new(),
             color: SLOT_COLORS[0].to_string(),
             created_at_utc: now.clone(),
             last_activated_at_utc: Some(now),
@@ -359,6 +430,7 @@ impl Sv2ProfileService {
             display_name,
             username: String::new(),
             email: String::new(),
+            manually_confirmed_voices: Vec::new(),
             color: SLOT_COLORS[manifest.slots.len() % SLOT_COLORS.len()].to_string(),
             created_at_utc: Utc::now().to_rfc3339(),
             last_activated_at_utc: None,
@@ -424,6 +496,48 @@ impl Sv2ProfileService {
         slot.email = email;
         save_manifest(paths, &manifest)?;
         build_state(paths, &manifest, false, String::new())
+    }
+
+    pub fn update_voice_licenses(
+        &self,
+        slot_id: String,
+        voices: Vec<String>,
+    ) -> Result<Sv2ProfilesState, String> {
+        validate_slot_id(&slot_id)?;
+        let voices = validate_confirmed_voice_names(voices)?;
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| "SV2 槽位状态锁已损坏。".to_string())?;
+        let paths = self.paths.as_ref().map_err(Clone::clone)?;
+        let _file_lock = acquire_switch_lock(paths)?;
+        recover_if_needed(paths)?;
+        let mut manifest = load_manifest(paths)?;
+        let slot = manifest
+            .slots
+            .iter_mut()
+            .find(|slot| slot.id == slot_id)
+            .ok_or_else(|| "找不到该 SV2 槽位。".to_string())?;
+        slot.manually_confirmed_voices = voices;
+        save_manifest(paths, &manifest)?;
+        build_state(paths, &manifest, false, String::new())
+    }
+
+    pub fn preview_svp_route(&self, project_path: String) -> Result<SvpRoutePlan, String> {
+        let snapshot = self.account_usage_snapshot()?;
+        build_route_plan(&project_path, &snapshot.profiles)
+    }
+
+    pub fn launch_svp_route(
+        &self,
+        slot_id: String,
+        project_path: String,
+        mode: SvpLaunchMode,
+    ) -> Result<OperationResult, String> {
+        match mode {
+            SvpLaunchMode::Normal => self.launch_slot(slot_id, Some(project_path)),
+            SvpLaunchMode::Concurrent => self.launch_concurrent_slot(slot_id, Some(project_path)),
+        }
     }
 
     pub fn update_concurrent_defaults(
@@ -729,6 +843,55 @@ impl Sv2ProfileService {
     }
 }
 
+fn resolve_sync_roots(
+    paths: &SlotPaths,
+    manifest: &SlotManifest,
+    source_slot_id: &str,
+    target_slot_id: &str,
+) -> Result<(PathBuf, PathBuf), String> {
+    validate_slot_id(source_slot_id)?;
+    validate_slot_id(target_slot_id)?;
+    if source_slot_id == target_slot_id {
+        return Err("选择性同步的源账号和目标账号不能相同。".to_string());
+    }
+    let source_slot = manifest
+        .slots
+        .iter()
+        .find(|slot| slot.id == source_slot_id)
+        .ok_or_else(|| "找不到同步源账号槽位。".to_string())?;
+    let target_slot = manifest
+        .slots
+        .iter()
+        .find(|slot| slot.id == target_slot_id)
+        .ok_or_else(|| "找不到同步目标账号槽位。".to_string())?;
+    if let Ok(provider) = detect_concurrent_provider() {
+        for slot in [source_slot, target_slot] {
+            let content = slot
+                .concurrent_content
+                .resolve(manifest.concurrent_defaults);
+            let view = concurrent_slot_view(&paths.vault, &slot.id, Some(&provider), content);
+            if !view.running_pids.is_empty() {
+                return Err(format!(
+                    "账号“{}”的隔离实例正在运行；请关闭后再同步资源。",
+                    slot.display_name
+                ));
+            }
+        }
+    }
+    let root_for = |slot_id: &str| {
+        if manifest.active_slot_id.as_deref() == Some(slot_id) {
+            paths.canonical.clone()
+        } else {
+            paths.parked(slot_id)
+        }
+    };
+    let source = root_for(source_slot_id);
+    let target = root_for(target_slot_id);
+    verify_marker(&source, source_slot_id)?;
+    verify_marker(&target, target_slot_id)?;
+    Ok((source, target))
+}
+
 fn unsupported_state(detail: String) -> Sv2ProfilesState {
     Sv2ProfilesState {
         supported: false,
@@ -919,6 +1082,10 @@ fn build_state(
                 session_protection,
                 concurrent_session_protection,
                 concurrent,
+                voice_inventory: inspect_voice_inventory(
+                    &data_path,
+                    &slot.manually_confirmed_voices,
+                ),
             }
         })
         .collect();
@@ -1766,6 +1933,7 @@ mod tests {
                 display_name: name.to_string(),
                 username: String::new(),
                 email: String::new(),
+                manually_confirmed_voices: Vec::new(),
                 color: SLOT_COLORS[0].to_string(),
                 created_at_utc: Utc::now().to_rfc3339(),
                 last_activated_at_utc: None,
@@ -1788,6 +1956,7 @@ mod tests {
             display_name: name.to_string(),
             username: String::new(),
             email: String::new(),
+            manually_confirmed_voices: Vec::new(),
             color: SLOT_COLORS[1].to_string(),
             created_at_utc: Utc::now().to_rfc3339(),
             last_activated_at_utc: None,
@@ -1957,12 +2126,50 @@ mod tests {
             .unwrap();
         fs::remove_file(paths.canonical.join("license/session")).unwrap();
 
-        let state = build_state(&paths, &manifest, false, String::new()).unwrap();
-        let precheck = build_account_precheck(&state);
+        let service = Sv2ProfileService {
+            paths: Ok(paths),
+            gate: Mutex::new(()),
+        };
+        let snapshot = service.account_usage_snapshot().unwrap();
+        let precheck = snapshot.precheck;
 
         assert!(precheck.recovery_pending);
         assert_eq!(precheck.remote_use, Sv2RemoteUseStatus::Detected);
         assert_eq!(precheck.slot_id.as_deref(), Some(slot_id.as_str()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn usage_snapshot_keeps_profile_and_precheck_evidence_consistent() {
+        let (root, paths) = fixture();
+        let manifest = import_fixture(&paths, "A");
+        let active_slot_id = manifest.active_slot_id.clone().unwrap();
+        let service = Sv2ProfileService {
+            paths: Ok(paths),
+            gate: Mutex::new(()),
+        };
+
+        let snapshot = service.account_usage_snapshot().unwrap();
+        let active_slot = snapshot
+            .profiles
+            .slots
+            .iter()
+            .find(|slot| slot.is_active)
+            .unwrap();
+
+        assert_eq!(
+            snapshot.profiles.active_slot_id,
+            Some(active_slot_id.clone())
+        );
+        assert_eq!(snapshot.precheck.slot_id, Some(active_slot_id));
+        assert_eq!(
+            snapshot.precheck.local_processes,
+            snapshot.profiles.blockers
+        );
+        assert_eq!(
+            snapshot.precheck.concurrent_pids,
+            active_slot.concurrent.running_pids
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

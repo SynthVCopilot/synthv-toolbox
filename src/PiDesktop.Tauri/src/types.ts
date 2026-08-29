@@ -70,6 +70,15 @@ export interface Sv2SessionProtection {
   detail: string;
 }
 
+export type Sv2VoiceInventoryStatus = "manual" | "localEvidence" | "unknown";
+
+export interface Sv2VoiceInventory {
+  status: Sv2VoiceInventoryStatus;
+  manuallyConfirmedVoices: string[];
+  installedOpaqueCount: number;
+  detail: string;
+}
+
 export interface Sv2ProfileSlot {
   id: string;
   displayName: string;
@@ -84,6 +93,7 @@ export interface Sv2ProfileSlot {
   sessionProtection: Sv2SessionProtection;
   concurrentSessionProtection: Sv2SessionProtection;
   concurrent: Sv2ConcurrentSlot;
+  voiceInventory: Sv2VoiceInventory;
 }
 
 export interface Sv2ProfilesState {
@@ -115,6 +125,48 @@ export interface Sv2AccountPrecheck {
   sessionCached: boolean;
   recoveryPending: boolean;
   summary: string;
+  detail: string;
+}
+
+export interface Sv2AccountUsageSnapshot {
+  profiles: Sv2ProfilesState;
+  precheck: Sv2AccountPrecheck;
+}
+
+export type SvpLaunchMode = "normal" | "concurrent";
+
+export interface SvpVoiceRequirement {
+  name: string;
+  version?: number | null;
+  backendType: string;
+}
+
+export interface SvpRouteCandidate {
+  slotId: string;
+  displayName: string;
+  idle: boolean;
+  launchMode?: SvpLaunchMode | null;
+  matchedVoices: string[];
+  missingOrUnknownVoices: string[];
+  exactAuthorizationMatch: boolean;
+  reason: string;
+}
+
+export interface SvpRoutePlan {
+  projectPath: string;
+  requiredVoices: SvpVoiceRequirement[];
+  candidates: SvpRouteCandidate[];
+  selectedSlotId?: string | null;
+  selectedLaunchMode?: SvpLaunchMode | null;
+  requiresConfirmation: boolean;
+  summary: string;
+  detail: string;
+}
+
+export interface SvpAssociationState {
+  supported: boolean;
+  registered: boolean;
+  isDefault: boolean;
   detail: string;
 }
 
@@ -156,6 +208,8 @@ export interface BootstrapState {
   downloads: ComponentDownload[];
   mcpServers: McpServerConfig[];
   concurrentDisclaimerAccepted: boolean;
+  smartSvpLaunchEnabled: boolean;
+  svpAssociation: SvpAssociationState;
 }
 
 export interface ConversationSummary {
@@ -188,4 +242,86 @@ export interface WorkflowResult {
   outputPath?: string;
   data: Record<string, unknown>;
   aiReview?: string;
+}
+
+export interface WorkflowRecipe {
+  id: string;
+  title: string;
+  description: string;
+  kind: string;
+  inputKind: string;
+  supportsBatch: boolean;
+  requiresBridge: boolean;
+  requiresAi: boolean;
+  defaultParameters: Record<string, unknown>;
+}
+
+export interface CreativeHistoryEntry {
+  id: string;
+  kind: string;
+  title: string;
+  summary: string;
+  createdAtUtc: string;
+  outputPath?: string;
+  parameters: Record<string, unknown>;
+  result: Record<string, unknown>;
+}
+
+export interface ProjectCheckpoint {
+  id: string;
+  label: string;
+  sourcePath: string;
+  snapshotPath: string;
+  sourceSha256: string;
+  sourceSize: number;
+  createdAtUtc: string;
+}
+
+export interface BatchWorkflowItem {
+  inputPath: string;
+  status: "completed" | "failed";
+  result?: WorkflowResult;
+  error?: string;
+}
+
+export interface BatchWorkflowResult {
+  recipeId: string;
+  completed: number;
+  failed: number;
+  items: BatchWorkflowItem[];
+}
+
+export type Sv2SyncCategoryId = "userDictionaries" | "scripts" | "presets" | "safeSettings";
+export type Sv2SyncAction = "copy" | "update" | "conflict" | "skip";
+
+export interface Sv2SyncCategory {
+  id: Sv2SyncCategoryId;
+  label: string;
+  description: string;
+  relativeRoots: string[];
+}
+
+export interface Sv2SyncEntry {
+  category: Sv2SyncCategoryId;
+  relativePath: string;
+  action: Sv2SyncAction;
+  sourceSize: number;
+  sourceSha256: string;
+  targetSize?: number;
+  targetSha256?: string;
+}
+
+export interface Sv2SyncManifest {
+  version: number;
+  overwrite: boolean;
+  rootScope: string;
+  entries: Sv2SyncEntry[];
+  token: string;
+}
+
+export interface Sv2SyncResult {
+  copied: number;
+  updated: number;
+  skipped: number;
+  conflicts: number;
 }

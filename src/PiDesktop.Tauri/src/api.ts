@@ -1,17 +1,28 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type {
   AppMode,
+  BatchWorkflowResult,
   BootstrapState,
   ChatMessage,
   ComponentDownload,
+  CreativeHistoryEntry,
   ConversationSnapshot,
   ConversationSummary,
   McpServerConfig,
   OperationResult,
+  ProjectCheckpoint,
   Sv2AccountPrecheck,
+  Sv2AccountUsageSnapshot,
   Sv2IsolationPreference,
   Sv2ProfilesState,
+  Sv2SyncCategory,
+  Sv2SyncCategoryId,
+  Sv2SyncManifest,
+  Sv2SyncResult,
+  SvpLaunchMode,
+  SvpRoutePlan,
   SynthVInstallation,
+  WorkflowRecipe,
   WorkflowResult,
 } from "./types";
 
@@ -19,6 +30,7 @@ const preview = import.meta.env.DEV && !isTauri();
 let previewMode: AppMode = "toolbox";
 let previewOnboarding = false;
 let previewConcurrentDisclaimerAccepted = false;
+let previewSmartSvpLaunchEnabled = false;
 let previewDownloads: ComponentDownload[] = [];
 let previewProfiles: Sv2ProfilesState = {
   supported: true,
@@ -67,6 +79,12 @@ let previewProfiles: Sv2ProfilesState = {
       snapshotAvailable: false,
       detail: "登录缓存存在；工具箱启动 SV2 时会先建立不透明保护快照。",
     },
+    voiceInventory: {
+      status: "manual",
+      manuallyConfirmedVoices: ["Mai 2", "SOLARIA"],
+      installedOpaqueCount: 4,
+      detail: "已手工确认 2 个声库；本地另检测到 4 个不透明安装项。Dreamtonics 官方授权仍以 SV2 启动验证为准。",
+    },
     concurrent: {
       ready: true,
       boxName: "SV2TB111111111111411181111111",
@@ -100,6 +118,12 @@ let previewProfiles: Sv2ProfilesState = {
       snapshotAvailable: false,
       detail: "当前没有登录缓存；首次登录完成后，后续工具箱启动会自动保护该会话。",
     },
+    voiceInventory: {
+      status: "localEvidence",
+      manuallyConfirmedVoices: [],
+      installedOpaqueCount: 3,
+      detail: "检测到 3 个本地声库安装项，但本地文件不公开产品映射，无法据此确认账号授权。",
+    },
     concurrent: {
       ready: false,
       boxName: "SV2TB222222222222422282222222",
@@ -120,7 +144,7 @@ const previewState = (): BootstrapState => ({
   onboardingCompleted: previewOnboarding,
   mode: previewMode,
   platform: "preview",
-  appVersion: "0.1.0",
+  appVersion: "0.1.1",
   configPath: "~/.SynthVcopilot/config.json",
   model: previewMode === "ai" ? { baseUrl: "https://api.anthropic.com", model: "", tokenConfigured: false } : undefined,
   scriptsPath: "/Library/Application Support/Dreamtonics/Synthesizer V Studio 2/scripts",
@@ -134,13 +158,42 @@ const previewState = (): BootstrapState => ({
   components: [
     { id: "ffmpeg", displayName: "FFmpeg", description: "音视频转码与抽取；所有音频流程的基础。", audience: "AI 与人工", installed: true, downloaded: false, installable: true, status: "已就绪" },
     { id: "pi-audio", displayName: "pi-audio 音频探针", description: "特征指纹、BPM、乐器与风格倾向。", audience: "AI 与人工", installed: false, downloaded: false, installable: true, status: "可通过 aria2 下载" },
-    { id: "cvrs", displayName: "CVRS", description: "跨版本工程探测与安全参考轨。", audience: "AI 与人工", installed: true, downloaded: false, installable: true, status: "已就绪" },
+    { id: "cvrs", displayName: "CVRS 工程工具", description: "工程探测、安全副本、无参导出与 LRC。", audience: "AI 与人工", installed: true, downloaded: false, installable: true, status: "已就绪" },
     { id: "sandboxie", displayName: "Sandboxie Plus 1.18.2", description: "SynthV Toolbox 并发隔离提供方；下载官方安装包后由用户交互安装。", audience: "Windows 并发隔离", installed: false, downloaded: false, installable: true, status: "可通过 aria2 下载官方 x64 安装包" },
   ],
   downloads: previewDownloads,
   mcpServers: previewMode === "ai" ? [{ id: "demo", name: "Demo tools", command: "node", args: ["server.mjs"], enabled: true }] : [],
   concurrentDisclaimerAccepted: previewConcurrentDisclaimerAccepted,
+  smartSvpLaunchEnabled: previewSmartSvpLaunchEnabled,
+  svpAssociation: {
+    supported: true,
+    registered: previewSmartSvpLaunchEnabled,
+    isDefault: false,
+    detail: previewSmartSvpLaunchEnabled
+      ? "已注册为 .svp 可选打开方式；请在 Windows 默认应用中选择 SynthV Toolbox。"
+      : "智能启动默认关闭，不会改变当前 .svp 打开方式。",
+  },
 });
+
+function previewAccountPrecheck(): Sv2AccountPrecheck {
+  const slot = previewProfiles.slots.find((item) => item.isActive);
+  const recoveryPending = slot?.sessionProtection.status === "recoveryPending"
+    || slot?.concurrentSessionProtection.status === "recoveryPending";
+  return {
+    supported: true,
+    checkedAtUtc: new Date().toISOString(),
+    slotId: slot?.id,
+    displayName: slot?.displayName ?? "",
+    localUse: previewProfiles.blockers.length > 0 || Boolean(slot?.concurrent.runningPids.length),
+    localProcesses: previewProfiles.blockers,
+    concurrentPids: slot?.concurrent.runningPids ?? [],
+    remoteUse: recoveryPending ? "detected" : "unknown",
+    sessionCached: Boolean(slot?.sessionCached),
+    recoveryPending,
+    summary: recoveryPending ? "检测到其他设备占用留下的会话失效迹象。" : "本机未发现当前账号正在使用。",
+    detail: recoveryPending ? "受保护启动后 license/session 消失；若没有新会话，工具箱会在下次启动该槽位前恢复原快照。" : "工具箱未接入 Dreamtonics 官方实时远端占用查询；其他设备状态只能在 SV2 启动验证后确认。",
+  };
+}
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (!preview) return invoke<T>(command, args);
@@ -149,29 +202,23 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     previewMode = args?.mode as AppMode;
     previewOnboarding = true;
   }
+  if (command === "set_svp_launch_routing") {
+    previewSmartSvpLaunchEnabled = Boolean(args?.enabled);
+    return previewState() as T;
+  }
+  if (command === "open_svp_default_apps_settings") {
+    return { succeeded: true, summary: "已打开 Windows 默认应用设置。", detail: "请为 .svp 选择 SynthV Toolbox。" } as T;
+  }
   if (command === "bootstrap" || command === "complete_onboarding" || command === "set_mode" || command.endsWith("settings") || command.endsWith("server") || command === "save_scripts_path" || command === "delete_mcp_server") {
     return previewState() as T;
   }
   if (command === "scan_synthv") return previewState().installations as T;
   if (command === "sv2_profile_state") return previewProfiles as T;
+  if (command === "sv2_account_usage_snapshot") {
+    return { profiles: previewProfiles, precheck: previewAccountPrecheck() } as Sv2AccountUsageSnapshot as T;
+  }
   if (command === "sv2_account_precheck") {
-    const slot = previewProfiles.slots.find((item) => item.isActive);
-    const recoveryPending = slot?.sessionProtection.status === "recoveryPending"
-      || slot?.concurrentSessionProtection.status === "recoveryPending";
-    return {
-      supported: true,
-      checkedAtUtc: new Date().toISOString(),
-      slotId: slot?.id,
-      displayName: slot?.displayName ?? "",
-      localUse: previewProfiles.blockers.length > 0 || Boolean(slot?.concurrent.runningPids.length),
-      localProcesses: previewProfiles.blockers,
-      concurrentPids: slot?.concurrent.runningPids ?? [],
-      remoteUse: recoveryPending ? "detected" : "unknown",
-      sessionCached: Boolean(slot?.sessionCached),
-      recoveryPending,
-      summary: recoveryPending ? "检测到其他设备占用留下的会话失效迹象。" : "本机未发现当前账号正在使用。",
-      detail: recoveryPending ? "受保护启动后 license/session 消失；若没有新会话，工具箱会在下次启动该槽位前恢复原快照。" : "工具箱未接入 Dreamtonics 官方实时远端占用查询；其他设备状态只能在 SV2 启动验证后确认。",
-    } as Sv2AccountPrecheck as T;
+    return previewAccountPrecheck() as T;
   }
   if (command === "import_current_sv2_profile" || command === "create_sv2_profile") {
     const id = crypto.randomUUID();
@@ -194,6 +241,12 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
         status: "signInRequired",
         snapshotAvailable: false,
         detail: "当前没有登录缓存；首次登录完成后，后续工具箱启动会自动保护该会话。",
+      },
+      voiceInventory: {
+        status: "unknown",
+        manuallyConfirmedVoices: [],
+        installedOpaqueCount: 0,
+        detail: "未发现可安全映射的账号声库授权；不会把商店目录或可下载状态当作已授权。",
       },
       concurrent: {
         ready: false,
@@ -222,6 +275,20 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     if (slot) {
       slot.username = String(args?.username ?? "");
       slot.email = String(args?.email ?? "");
+    }
+    return previewProfiles as T;
+  }
+  if (command === "update_sv2_profile_voice_licenses") {
+    const slot = previewProfiles.slots.find((item) => item.id === args?.slotId);
+    if (slot) {
+      const voices = ((args?.voices as string[] | undefined) ?? []).map((voice) => voice.trim()).filter(Boolean);
+      slot.voiceInventory.manuallyConfirmedVoices = [...new Set(voices)];
+      slot.voiceInventory.status = voices.length ? "manual" : slot.voiceInventory.installedOpaqueCount ? "localEvidence" : "unknown";
+      slot.voiceInventory.detail = voices.length
+        ? `已手工确认 ${voices.length} 个声库；Dreamtonics 官方授权仍以 SV2 启动验证为准。`
+        : slot.voiceInventory.installedOpaqueCount
+          ? `检测到 ${slot.voiceInventory.installedOpaqueCount} 个本地声库安装项，但无法据此确认账号授权。`
+          : "未发现可安全映射的账号声库授权。";
     }
     return previewProfiles as T;
   }
@@ -281,6 +348,34 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     previewConcurrentDisclaimerAccepted = true;
     return previewState() as T;
   }
+  if (command === "preview_svp_route") {
+    const projectPath = String(args?.projectPath ?? "C:\\Projects\\demo.svp");
+    return {
+      projectPath,
+      requiredVoices: [
+        { name: "Mai 2", version: 104, backendType: "sv2" },
+        { name: "SOLARIA", version: 101, backendType: "sv2" },
+      ],
+      candidates: previewProfiles.slots.map((slot, index) => ({
+        slotId: slot.id,
+        displayName: slot.displayName,
+        idle: index > 0,
+        launchMode: index > 0 ? "concurrent" as const : undefined,
+        matchedVoices: slot.voiceInventory.manuallyConfirmedVoices.filter((voice) => ["Mai 2", "SOLARIA"].includes(voice)),
+        missingOrUnknownVoices: slot.voiceInventory.manuallyConfirmedVoices.length ? [] : ["Mai 2", "SOLARIA"],
+        exactAuthorizationMatch: slot.voiceInventory.manuallyConfirmedVoices.length === 2,
+        reason: index > 0 ? "账号授权不完整或未知，需要人工确认。" : "账号当前正在使用或存在远端冲突证据。",
+      })),
+      selectedSlotId: previewProfiles.slots[1]?.id,
+      selectedLaunchMode: "concurrent",
+      requiresConfirmation: true,
+      summary: "需要确认用于打开工程的账号。",
+      detail: "工程声库与账号授权没有完整的权威匹配结果；最终授权由 SV2 官方验证。",
+    } as SvpRoutePlan as T;
+  }
+  if (command === "launch_svp_route") {
+    return { succeeded: true, summary: "已按所选账号打开 .svp 工程。", detail: "预览模式" } as T;
+  }
   if (command === "queue_component_install") {
     const componentId = String(args?.id ?? "");
     const componentName = previewState().components.find((item) => item.id === componentId)?.displayName ?? componentId;
@@ -299,14 +394,46 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   }
   if (command === "component_downloads") return previewDownloads as T;
   if (command === "open_downloaded_component") return { succeeded: true, summary: "已打开 Sandboxie 安装包位置。", detail: "预览模式" } as T;
+  if (command === "list_workflow_recipes") return [
+    { id: "project-doctor", title: "工程医生", description: "只读检查工程风险。", kind: "project-doctor", inputKind: "svp", supportsBatch: true, requiresBridge: false, requiresAi: false, defaultParameters: {} },
+    { id: "pronunciation-check", title: "发音诊断", description: "检查歌词和音素风险。", kind: "pronunciation-check", inputKind: "svpOrText", supportsBatch: true, requiresBridge: false, requiresAi: false, defaultParameters: {} },
+    { id: "render-quality-check", title: "渲染复检", description: "检查渲染交付风险。", kind: "render-quality-check", inputKind: "audio", supportsBatch: true, requiresBridge: false, requiresAi: false, defaultParameters: {} },
+  ] as T;
+  if (command === "list_creative_history" || command === "list_project_checkpoints") return [] as T;
+  if (command === "create_project_checkpoint") return {
+    id: crypto.randomUUID(), label: String(args?.label ?? "检查点"), sourcePath: String(args?.projectPath ?? ""),
+    snapshotPath: "~/.SynthVcopilot/project-checkpoints/preview/project.svp", sourceSha256: "preview", sourceSize: 0, createdAtUtc: new Date().toISOString(),
+  } as T;
+  if (command === "restore_project_checkpoint") return { succeeded: true, summary: "检查点已恢复为新副本。", detail: "预览模式" } as T;
+  if (command === "sv2_sync_categories") return [
+    { id: "userDictionaries", label: "用户词典", description: "仅同步用户词典文件；不包含账号或登录数据。", relativeRoots: ["dicts"] },
+    { id: "scripts", label: "脚本", description: "同步用户安装或编写的脚本。", relativeRoots: ["scripts"] },
+    { id: "presets", label: "预设", description: "同步用户预设子目录。", relativeRoots: ["presets"] },
+    { id: "safeSettings", label: "安全设置", description: "仅同步明确允许的非账号设置子目录。", relativeRoots: ["settings/shortcuts", "settings/theme", "settings/ui"] },
+  ] as T;
+  if (command === "preview_sv2_selective_sync") return {
+    version: 1, overwrite: Boolean(args?.overwrite), rootScope: "preview-root-scope", token: "preview-token",
+    entries: [{ category: "userDictionaries", relativePath: "dicts/user.json", action: "copy", sourceSize: 128, sourceSha256: "preview" }],
+  } as T;
+  if (command === "execute_sv2_selective_sync") return { copied: 1, updated: 0, skipped: 0, conflicts: 0 } as T;
+  if (command === "run_batch_workflow") return {
+    recipeId: String(args?.recipeId ?? "project-doctor"), completed: (args?.inputPaths as unknown[] | undefined)?.length ?? 0, failed: 0,
+    items: ((args?.inputPaths as string[] | undefined) ?? []).map((inputPath) => ({ inputPath, status: "completed", result: { kind: String(args?.recipeId ?? "batch"), summary: "预览批处理完成。", data: { preview: true } } })),
+  } as T;
   if (command === "list_conversations") return [] as T;
   if (command === "new_conversation") return { id: "preview", title: "新对话", messages: [] } as T;
   if (command === "open_conversation") return { id: "preview", title: "预览对话", messages: [] } as T;
   if (command === "send_message") return [{ role: "assistant", content: "这是本地视觉预览回复。" }] as T;
-  if (command.startsWith("run_") || command === "add_project_reference") return {
+  if (command.startsWith("run_") || ["add_project_reference", "export_project_without_parameters", "export_project_lyrics"].includes(command)) return {
     kind: command.replace(/^run_/, "").replaceAll("_", "-"),
     summary: "预览工作流已完成。",
-    outputPath: command === "run_game_to_midi" ? "~/.SynthVcopilot/output/game-vocal.mid" : undefined,
+    outputPath: command === "run_game_to_midi"
+      ? "~/.SynthVcopilot/output/game-vocal.mid"
+      : command === "export_project_without_parameters"
+        ? `~/.SynthVcopilot/output/${String(args?.outputName ?? "project_no_params.svp")}`
+        : command === "export_project_lyrics"
+          ? `~/.SynthVcopilot/output/${String(args?.outputName ?? "project.lrc")}`
+          : undefined,
     data: { preview: true, command, parameters: args ?? {} },
   } as T;
   if (command === "review_workflow") return "结论：结果结构完整。\n风险：预览模式未执行真实组件。\n建议参数：发布构建中按实际素材复核。" as T;
@@ -322,6 +449,12 @@ export const api = {
   scanSynthV: () => call<SynthVInstallation[]>("scan_synthv"),
   sv2ProfileState: () => call<Sv2ProfilesState>("sv2_profile_state"),
   sv2AccountPrecheck: () => call<Sv2AccountPrecheck>("sv2_account_precheck"),
+  sv2AccountUsageSnapshot: () => call<Sv2AccountUsageSnapshot>("sv2_account_usage_snapshot"),
+  sv2SyncCategories: () => call<Sv2SyncCategory[]>("sv2_sync_categories"),
+  previewSv2SelectiveSync: (sourceSlotId: string, targetSlotId: string, categories: Sv2SyncCategoryId[], overwrite: boolean) =>
+    call<Sv2SyncManifest>("preview_sv2_selective_sync", { sourceSlotId, targetSlotId, categories, overwrite }),
+  executeSv2SelectiveSync: (sourceSlotId: string, targetSlotId: string, categories: Sv2SyncCategoryId[], approved: Sv2SyncManifest) =>
+    call<Sv2SyncResult>("execute_sv2_selective_sync", { sourceSlotId, targetSlotId, categories, approved, token: approved.token }),
   importCurrentSv2Profile: (displayName: string) =>
     call<Sv2ProfilesState>("import_current_sv2_profile", { displayName }),
   createSv2Profile: (displayName: string) =>
@@ -330,6 +463,8 @@ export const api = {
     call<Sv2ProfilesState>("rename_sv2_profile", { slotId, displayName }),
   updateSv2ProfileIdentity: (slotId: string, username: string, email: string) =>
     call<Sv2ProfilesState>("update_sv2_profile_identity", { slotId, username, email }),
+  updateSv2ProfileVoiceLicenses: (slotId: string, voices: string[]) =>
+    call<Sv2ProfilesState>("update_sv2_profile_voice_licenses", { slotId, voices }),
   updateSv2ConcurrentDefaults: (appSettings: boolean, voiceLibraries: boolean) =>
     call<Sv2ProfilesState>("update_sv2_concurrent_defaults", { appSettings, voiceLibraries }),
   updateSv2ConcurrentContent: (slotId: string, appSettings: Sv2IsolationPreference, voiceLibraries: Sv2IsolationPreference) =>
@@ -346,6 +481,14 @@ export const api = {
     call<Sv2ProfilesState>("prepare_sv2_concurrent_profile", { slotId }),
   launchSv2ConcurrentProfile: (slotId: string, projectPath?: string) =>
     call<OperationResult>("launch_sv2_concurrent_profile", { slotId, projectPath: projectPath || null }),
+  previewSvpRoute: (projectPath: string) =>
+    call<SvpRoutePlan>("preview_svp_route", { projectPath }),
+  launchSvpRoute: (slotId: string, projectPath: string, mode: SvpLaunchMode) =>
+    call<OperationResult>("launch_svp_route", { slotId, projectPath, mode }),
+  setSvpLaunchRouting: (enabled: boolean) =>
+    call<BootstrapState>("set_svp_launch_routing", { enabled }),
+  openSvpDefaultAppsSettings: () =>
+    call<OperationResult>("open_svp_default_apps_settings"),
   acceptSv2ConcurrentDisclaimer: () =>
     call<BootstrapState>("accept_sv2_concurrent_disclaimer"),
   openSv2ConcurrentFolder: (slotId: string) =>
@@ -357,6 +500,25 @@ export const api = {
   componentDownloads: () => call<ComponentDownload[]>("component_downloads"),
   queueComponentInstall: (id: string) => call<ComponentDownload[]>("queue_component_install", { id }),
   openDownloadedComponent: (id: string) => call<OperationResult>("open_downloaded_component", { id }),
+  listWorkflowRecipes: () => call<WorkflowRecipe[]>("list_workflow_recipes"),
+  listCreativeHistory: (limit = 50) => call<CreativeHistoryEntry[]>("list_creative_history", { limit }),
+  createProjectCheckpoint: (projectPath: string, label: string) =>
+    call<ProjectCheckpoint>("create_project_checkpoint", { projectPath, label }),
+  listProjectCheckpoints: (limit = 50) => call<ProjectCheckpoint[]>("list_project_checkpoints", { limit }),
+  restoreProjectCheckpoint: (id: string, outputName: string) =>
+    call<OperationResult>("restore_project_checkpoint", { id, outputName }),
+  runProjectDoctor: (projectPath: string) =>
+    call<WorkflowResult>("run_project_doctor", { projectPath }),
+  runPronunciationDiagnostics: (projectPath?: string, lyrics?: string) =>
+    call<WorkflowResult>("run_pronunciation_diagnostics", { projectPath: projectPath || null, lyrics: lyrics || null }),
+  runRenderReview: (audioPath: string, expectedDurationSec?: number, expectedBpm?: number, requireNotes = false, advanced = false) =>
+    call<WorkflowResult>("run_render_review", { audioPath, expectedDurationSec: expectedDurationSec ?? null, expectedBpm: expectedBpm ?? null, requireNotes, advanced }),
+  runAudioToProject: (vocalPath: string, instrumentalPath: string, outputName: string, tolerance: number, advanced: boolean, importToSynthv: boolean, rightsConfirmed: boolean, trackIndex: number, groupName: string) =>
+    call<WorkflowResult>("run_audio_to_project", { vocalPath, instrumentalPath, outputName, tolerance, advanced, importToSynthv, rightsConfirmed, trackIndex, groupName }),
+  runRetakeWorkbench: (trackIndex: number, groupIndex: number, noteIndex: number, operation: string, takeId: number | undefined, newDuration: boolean, newPitch: boolean, newTimbre: boolean, activate: boolean) =>
+    call<WorkflowResult>("run_retake_workbench", { trackIndex, groupIndex, noteIndex, operation, takeId: takeId ?? null, newDuration, newPitch, newTimbre, activate }),
+  runBatchWorkflow: (recipeId: string, inputPaths: string[], options: Record<string, unknown>) =>
+    call<BatchWorkflowResult>("run_batch_workflow", { recipeId, inputPaths, options }),
   runAudioProbe: (audioPath: string, advanced: boolean) =>
     call<WorkflowResult>("run_audio_probe", { audioPath, advanced }),
   runGameToMidi: (vocalPath: string, instrumentalPath: string, outputName: string, tolerance: number, advanced: boolean) =>
@@ -365,6 +527,10 @@ export const api = {
     call<WorkflowResult>("run_project_probe", { projectPath }),
   addProjectReference: (projectPath: string, audioPath: string, trackName: string, beginSeconds: number, outputName: string) =>
     call<WorkflowResult>("add_project_reference", { projectPath, audioPath, trackName, beginSeconds, outputName }),
+  exportProjectWithoutParameters: (projectPath: string, outputName: string) =>
+    call<WorkflowResult>("export_project_without_parameters", { projectPath, outputName }),
+  exportProjectLyrics: (projectPath: string, trackIndex: number, lineGapSeconds: number, outputName: string, wordOutputName: string) =>
+    call<WorkflowResult>("export_project_lyrics", { projectPath, trackIndex, lineGapSeconds, outputName, wordOutputName }),
   reviewWorkflow: (kind: string, data: Record<string, unknown>) =>
     call<string>("review_workflow", { kind, data }),
   listConversations: () => call<ConversationSummary[]>("list_conversations"),
