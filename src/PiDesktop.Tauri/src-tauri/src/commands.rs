@@ -21,7 +21,7 @@ use crate::downloads::ComponentDownload;
 use crate::mcp::McpToolExecutor;
 use crate::state::{AgentSession, AppState};
 use crate::sv2_concurrent::Sv2IsolationPreference;
-use crate::sv2_profiles::Sv2ProfilesState;
+use crate::sv2_profiles::{Sv2AccountPrecheck, Sv2ProfilesState};
 use crate::synthv::{
     bridge_is_bundled, diagnose_bridge as diagnose_bridge_impl, failed, find_node,
     install_bridge as install_bridge_impl, normalized_path_string, scan_installations, succeeded,
@@ -127,6 +127,16 @@ pub fn scan_synthv() -> Vec<SynthVInstallation> {
 pub async fn sv2_profile_state(state: State<'_, AppState>) -> Result<Sv2ProfilesState, String> {
     let profiles = state.sv2_profiles.clone();
     tauri::async_runtime::spawn_blocking(move || profiles.state())
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn sv2_account_precheck(
+    state: State<'_, AppState>,
+) -> Result<Sv2AccountPrecheck, String> {
+    let profiles = state.sv2_profiles.clone();
+    tauri::async_runtime::spawn_blocking(move || profiles.account_precheck())
         .await
         .map_err(|error| error.to_string())?
 }

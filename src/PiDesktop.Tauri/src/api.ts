@@ -8,6 +8,7 @@ import type {
   ConversationSummary,
   McpServerConfig,
   OperationResult,
+  Sv2AccountPrecheck,
   Sv2IsolationPreference,
   Sv2ProfilesState,
   SynthVInstallation,
@@ -55,6 +56,17 @@ let previewProfiles: Sv2ProfilesState = {
     isActive: true,
     sessionCached: true,
     dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2",
+    sessionProtection: {
+      status: "recoveryPending",
+      snapshotAvailable: true,
+      lastDetectedAtUtc: new Date().toISOString(),
+      detail: "检测到受保护启动后的登录态消失。不会覆盖后来生成的新会话；下次由工具箱启动此槽位前将尝试原样恢复。",
+    },
+    concurrentSessionProtection: {
+      status: "ready",
+      snapshotAvailable: false,
+      detail: "登录缓存存在；工具箱启动 SV2 时会先建立不透明保护快照。",
+    },
     concurrent: {
       ready: true,
       boxName: "SV2TB111111111111411181111111",
@@ -78,6 +90,16 @@ let previewProfiles: Sv2ProfilesState = {
     isActive: false,
     sessionCached: true,
     dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\slots\\22222222-2222-4222-8222-222222222222",
+    sessionProtection: {
+      status: "ready",
+      snapshotAvailable: false,
+      detail: "登录缓存存在；工具箱启动 SV2 时会先建立不透明保护快照。",
+    },
+    concurrentSessionProtection: {
+      status: "signInRequired",
+      snapshotAvailable: false,
+      detail: "当前没有登录缓存；首次登录完成后，后续工具箱启动会自动保护该会话。",
+    },
     concurrent: {
       ready: false,
       boxName: "SV2TB222222222222422282222222",
@@ -132,6 +154,25 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   }
   if (command === "scan_synthv") return previewState().installations as T;
   if (command === "sv2_profile_state") return previewProfiles as T;
+  if (command === "sv2_account_precheck") {
+    const slot = previewProfiles.slots.find((item) => item.isActive);
+    const recoveryPending = slot?.sessionProtection.status === "recoveryPending"
+      || slot?.concurrentSessionProtection.status === "recoveryPending";
+    return {
+      supported: true,
+      checkedAtUtc: new Date().toISOString(),
+      slotId: slot?.id,
+      displayName: slot?.displayName ?? "",
+      localUse: previewProfiles.blockers.length > 0 || Boolean(slot?.concurrent.runningPids.length),
+      localProcesses: previewProfiles.blockers,
+      concurrentPids: slot?.concurrent.runningPids ?? [],
+      remoteUse: recoveryPending ? "detected" : "unknown",
+      sessionCached: Boolean(slot?.sessionCached),
+      recoveryPending,
+      summary: recoveryPending ? "检测到其他设备占用留下的会话失效迹象。" : "本机未发现当前账号正在使用。",
+      detail: recoveryPending ? "受保护启动后 license/session 消失；若没有新会话，工具箱会在下次启动该槽位前恢复原快照。" : "工具箱未接入 Dreamtonics 官方实时远端占用查询；其他设备状态只能在 SV2 启动验证后确认。",
+    } as Sv2AccountPrecheck as T;
+  }
   if (command === "import_current_sv2_profile" || command === "create_sv2_profile") {
     const id = crypto.randomUUID();
     previewProfiles.slots.push({
@@ -144,6 +185,16 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       isActive: false,
       sessionCached: false,
       dataPath: `${previewProfiles.vaultPath}\\slots\\${id}`,
+      sessionProtection: {
+        status: "signInRequired",
+        snapshotAvailable: false,
+        detail: "当前没有登录缓存；首次登录完成后，后续工具箱启动会自动保护该会话。",
+      },
+      concurrentSessionProtection: {
+        status: "signInRequired",
+        snapshotAvailable: false,
+        detail: "当前没有登录缓存；首次登录完成后，后续工具箱启动会自动保护该会话。",
+      },
       concurrent: {
         ready: false,
         boxName: `SV2TB${id.replaceAll("-", "").slice(0, 24)}`,
@@ -270,6 +321,7 @@ export const api = {
     call<BootstrapState>("save_model_settings", { baseUrl, model, token: token || null }),
   scanSynthV: () => call<SynthVInstallation[]>("scan_synthv"),
   sv2ProfileState: () => call<Sv2ProfilesState>("sv2_profile_state"),
+  sv2AccountPrecheck: () => call<Sv2AccountPrecheck>("sv2_account_precheck"),
   importCurrentSv2Profile: (displayName: string) =>
     call<Sv2ProfilesState>("import_current_sv2_profile", { displayName }),
   createSv2Profile: (displayName: string) =>

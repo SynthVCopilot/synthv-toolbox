@@ -9,7 +9,9 @@ import type {
   ConversationSummary,
   McpServerConfig,
   OperationResult,
+  Sv2AccountPrecheck,
   Sv2IsolationPreference,
+  Sv2SessionProtection,
   Sv2ProfilesState,
   WorkflowResult,
 } from "./types";
@@ -81,12 +83,14 @@ let error = "";
 let conversations: ConversationSummary[] = [];
 let conversation: ConversationSnapshot | undefined;
 let profiles: Sv2ProfilesState | undefined;
+let accountPrecheck: Sv2AccountPrecheck | undefined;
 let activeWorkflow: Feature["id"] | undefined;
 let workflowResult: WorkflowResult | undefined;
 let pendingBlockedSwitchSlot: string | undefined;
 let pendingConcurrentLaunchSlot: string | undefined;
 let pendingConcurrentPrepare = false;
 let downloadPollTimer: number | undefined;
+let accountPrecheckTimer: number | undefined;
 
 const pageMeta: Record<Page, { title: string; subtitle: string }> = {
   home: { title: "概览", subtitle: "查看环境状态与常用能力" },
@@ -172,6 +176,21 @@ function scheduleDownloadPoll(): void {
   }, 700);
 }
 
+function scheduleAccountPrecheck(): void {
+  if (page !== "toolbox" || accountPrecheckTimer !== undefined || (app?.platform !== "windows" && app?.platform !== "preview")) return;
+  accountPrecheckTimer = window.setTimeout(async () => {
+    accountPrecheckTimer = undefined;
+    if (page !== "toolbox") return;
+    try {
+      accountPrecheck = await api.sv2AccountPrecheck();
+      render();
+    } catch (reason) {
+      error = formatError(reason);
+      render();
+    }
+  }, 3000);
+}
+
 function modePill(): string {
   if (!app) return "";
   return app.mode === "ai"
@@ -237,6 +256,7 @@ function render(): void {
     ${pendingBlockedSwitchSlot ? renderBlockedSwitchDialog() : pendingConcurrentLaunchSlot ? renderConcurrentDisclaimer() : ""}`;
   wireForms();
   scheduleDownloadPoll();
+  scheduleAccountPrecheck();
 }
 
 function renderConcurrentDisclaimer(): string {
@@ -393,9 +413,9 @@ function renderAccounts(): string {
     </form>`;
     return `<article class="profile-card ${slot.isActive ? "active" : ""}" style="--profile-color:${color}">
       <div class="profile-card-head"><span class="profile-avatar">${escapeHtml(initial)}</span><div><span class="eyebrow">账号槽位</span><h2>${escapeHtml(slot.displayName)}</h2>${identity.length ? `<span class="profile-identity">${identity.map(escapeHtml).join(" · ")}</span>` : '<span class="profile-identity empty">尚未填写用户名或邮箱</span>'}</div>${slot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
-      <div class="profile-meta"><span class="${slot.sessionCached ? "cached" : ""}">${slot.sessionCached ? `${icon("check", 14)} 登录缓存已存在` : `${icon("plug", 14)} 首次启动需要登录`}</span><span>${icon("refresh", 14)} 最近使用：${escapeHtml(lastUsed)}</span></div>
+      <div class="profile-meta"><span class="${slot.sessionCached ? "cached" : ""}">${slot.sessionCached ? `${icon("check", 14)} 登录缓存已存在` : `${icon("plug", 14)} 首次启动需要登录`}</span>${sessionProtectionBadge(slot.sessionProtection)}<span>${icon("refresh", 14)} 最近使用：${escapeHtml(lastUsed)}</span></div>
       <section class="profile-launch-block ordinary"><div class="profile-launch-heading"><div><span>普通启动</span><strong>${slot.isActive ? "使用当前默认环境" : "切换到此账号环境"}</strong></div>${slot.isActive ? '<span class="profile-route-badge">默认路由</span>' : ""}</div><p>${slot.isActive ? "桌面快捷方式和 .svp 文件也会继续使用此槽位。" : "会先安全切换默认槽位，再启动 SV2；现有普通实例需要先退出。"}</p><div class="profile-actions"><button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button>${slot.isActive ? "" : `<button class="secondary" data-profile-activate="${slot.id}">设为默认</button>`}<button class="icon-plain profile-folder" data-profile-folder="${slot.id}" title="打开普通数据目录" aria-label="打开 ${escapeHtml(slot.displayName)} 的普通数据目录">${icon("folder", 18)}</button></div></section>
-      <section class="profile-launch-block isolation ${slot.concurrent.ready ? "ready" : ""}"><div class="profile-launch-heading"><div><span>隔离启动</span><strong>独立运行此账号</strong></div><span class="profile-isolation-status ${concurrentState}">${concurrentRunning ? icon("plug", 12) : ""}${concurrentStateLabel}</span></div><p>${escapeHtml(concurrentDescription)}</p>${isolationContentForm}<div class="profile-concurrent-actions">${concurrentControls}</div>${slot.concurrent.ready ? `<code title="隔离箱名称：${escapeHtml(slot.concurrent.boxName)}">${escapeHtml(slot.concurrent.boxName)}</code>` : ""}</section>
+      <section class="profile-launch-block isolation ${slot.concurrent.ready ? "ready" : ""}"><div class="profile-launch-heading"><div><span>隔离启动</span><strong>独立运行此账号</strong></div><span class="profile-isolation-status ${concurrentState}">${concurrentRunning ? icon("plug", 12) : ""}${concurrentStateLabel}</span></div><p>${escapeHtml(concurrentDescription)}</p>${slot.concurrent.ready ? `<div class="session-guard-inline">${sessionProtectionBadge(slot.concurrentSessionProtection, "隔离环境 · ")}</div>` : ""}${isolationContentForm}<div class="profile-concurrent-actions">${concurrentControls}</div>${slot.concurrent.ready ? `<code title="隔离箱名称：${escapeHtml(slot.concurrent.boxName)}">${escapeHtml(slot.concurrent.boxName)}</code>` : ""}</section>
       <details class="profile-details"><summary>管理账号标签与存储位置 ${icon("arrow", 14)}</summary><div class="profile-details-body"><form class="profile-identity-form" data-profile-identity-form="${slot.id}"><label>用户名<input name="username" value="${escapeHtml(slot.username)}" maxlength="100" placeholder="用于区分账号的用户名" /></label><label>邮箱<input name="email" type="email" value="${escapeHtml(slot.email)}" maxlength="254" placeholder="name@example.com" /></label><button class="secondary">保存账号标签</button><small>这些标签由工具箱单独保存；不会读取或修改 SV2 的密码、Cookie 或 session。</small></form><form class="profile-rename" data-profile-rename-form="${slot.id}"><label>槽位显示名称<input value="${escapeHtml(slot.displayName)}" maxlength="64" required /></label><button class="secondary">保存</button></form><dl class="profile-storage-list"><div><dt>普通数据</dt><dd><code title="${escapeHtml(slot.dataPath)}">${escapeHtml(slot.dataPath)}</code></dd></div>${slot.concurrent.ready ? `<div><dt>隔离数据</dt><dd><code title="${escapeHtml(slot.concurrent.dataPath)}">${escapeHtml(slot.concurrent.dataPath)}</code></dd></div>` : ""}</dl></div></details>
     </article>`;
   }).join("");
@@ -431,10 +451,41 @@ function renderHome(): string {
     </section>`;
 }
 
+function sessionProtectionBadge(protection: Sv2SessionProtection, prefix = ""): string {
+  const labels: Record<Sv2SessionProtection["status"], string> = {
+    signInRequired: "登录后启用保护",
+    ready: "登录态保护就绪",
+    monitoring: "正在监测登录态",
+    recoveryPending: "登录态等待恢复",
+    restored: "登录态已自动恢复",
+    attention: "登录态保护需处理",
+  };
+  const emphasis = ["recoveryPending", "attention"].includes(protection.status) ? " attention" : protection.status === "monitoring" ? " monitoring" : "";
+  return `<span class="session-protection${emphasis}" title="${escapeHtml(protection.detail)}">${icon(protection.status === "recoveryPending" ? "refresh" : "check", 14)} ${prefix}${labels[protection.status]}</span>`;
+}
+
+function renderAccountPrecheck(): string {
+  if (!app || (app.platform !== "windows" && app.platform !== "preview")) return "";
+  if (!accountPrecheck) {
+    return `<section class="account-precheck panel loading"><span class="feature-icon blue">${icon("refresh", 22)}</span><div><span class="eyebrow">ACCOUNT USE PRECHECK</span><h2>正在预检当前账号占用</h2><p>检查本机普通实例、插件、Sandboxie 实例和受保护会话是否失效。</p></div></section>`;
+  }
+  const check = accountPrecheck;
+  const stateClass = check.recoveryPending ? "conflict" : check.localUse ? "in-use" : "clear";
+  const localDetail = check.localProcesses.length
+    ? check.localProcesses.map((process) => `${escapeHtml(process.name)}${process.pid ? ` · PID ${process.pid}` : ""}`).join("；")
+    : check.concurrentPids.length ? `Sandboxie PID：${check.concurrentPids.join(", ")}` : "未发现本机进程";
+  const remoteLabel = check.remoteUse === "detected" ? "已检测到远端占用迹象" : "远端状态等待 SV2 验证";
+  return `<section class="account-precheck panel ${stateClass}">
+    <span class="feature-icon ${check.recoveryPending ? "orange" : check.localUse ? "violet" : "emerald"}">${icon(check.recoveryPending ? "refresh" : check.localUse ? "plug" : "check", 22)}</span>
+    <div class="account-precheck-main"><span class="eyebrow">ACCOUNT USE PRECHECK</span><h2>账号占用锁 · ${escapeHtml(check.displayName || "未设置账号")}</h2><p><strong>${escapeHtml(check.summary)}</strong> ${escapeHtml(check.detail)}</p><div class="precheck-facts"><span>${icon("users", 14)} ${localDetail}</span><span class="${check.remoteUse === "detected" ? "remote-detected" : ""}">${icon("plug", 14)} ${remoteLabel}</span><span>${icon("refresh", 14)} ${new Date(check.checkedAtUtc).toLocaleTimeString("zh-CN")}</span></div></div>
+    <button class="secondary compact" data-account-precheck>${icon("refresh", 15)} 重新预检</button>
+  </section>`;
+}
+
 function renderToolbox(): string {
   if (!app) return "";
   const current = app;
-  return `${activeWorkflow ? renderWorkflowPanel(activeWorkflow) : ""}<div class="section-heading"><div><h2>创作能力</h2><p>基础流程在两种模式下都可用；带 ${icon("sparkles", 14)} 的能力由后端限定为 AI 模式。</p></div></div>
+  return `${renderAccountPrecheck()}${activeWorkflow ? renderWorkflowPanel(activeWorkflow) : ""}<div class="section-heading"><div><h2>创作能力</h2><p>基础流程在两种模式下都可用；带 ${icon("sparkles", 14)} 的能力由后端限定为 AI 模式。</p></div></div>
     <div class="feature-grid">${features.map((feature) => `<article class="feature-card">
       <div class="feature-card-head"><span class="feature-icon ${feature.accent}">${icon(feature.icon, 25)}</span><span class="availability">基础可用</span></div>
       <h3>${feature.title}</h3><p>${feature.description}</p>
@@ -738,6 +789,7 @@ document.addEventListener("click", (event) => {
     error = "";
     if (page === "copilot") void run(async () => { conversations = await api.listConversations(); });
     else if (page === "accounts") void run(async () => { profiles = await api.sv2ProfileState(); });
+    else if (page === "toolbox" && (app?.platform === "windows" || app?.platform === "preview")) void run(async () => { accountPrecheck = await api.sv2AccountPrecheck(); });
     else render();
     return;
   }
@@ -752,7 +804,8 @@ document.addEventListener("click", (event) => {
     activeWorkflow = target.dataset.feature;
     workflowResult = undefined;
     notice = "";
-    render();
+    if (app?.platform === "windows" || app?.platform === "preview") void run(async () => { accountPrecheck = await api.sv2AccountPrecheck(); });
+    else render();
     return;
   }
   if (target.hasAttribute("data-close-workflow")) { activeWorkflow = undefined; workflowResult = undefined; render(); return; }
@@ -761,6 +814,7 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (target.hasAttribute("data-scan")) { void run(async () => { if (app) app.installations = await api.scanSynthV(); notice = "探测完成。"; }); return; }
+  if (target.hasAttribute("data-account-precheck")) { void run(async () => { accountPrecheck = await api.sv2AccountPrecheck(); notice = "当前账号占用预检已刷新。"; }); return; }
   if (target.hasAttribute("data-profile-refresh")) { void run(async () => { profiles = await api.sv2ProfileState(); notice = "账号槽位状态已刷新。"; }); return; }
   if (target.dataset.profileLaunch) {
     const slotId = target.dataset.profileLaunch;

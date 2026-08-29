@@ -6,6 +6,7 @@ mod mcp;
 mod state;
 mod sv2_concurrent;
 mod sv2_profiles;
+mod sv2_session_guard;
 mod synthv;
 mod workflows;
 
@@ -47,6 +48,7 @@ pub fn run() {
             commands::save_model_settings,
             commands::scan_synthv,
             commands::sv2_profile_state,
+            commands::sv2_account_precheck,
             commands::import_current_sv2_profile,
             commands::create_sv2_profile,
             commands::rename_sv2_profile,
