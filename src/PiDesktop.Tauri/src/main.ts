@@ -89,7 +89,7 @@ let downloadPollTimer: number | undefined;
 
 const pageMeta: Record<Page, { title: string; subtitle: string }> = {
   home: { title: "概览", subtitle: "查看环境状态与常用能力" },
-  accounts: { title: "SV2 账号", subtitle: "普通切换与隔离并发，集中管理账号环境" },
+  accounts: { title: "SV2 账号", subtitle: "普通切换与并发隔离，集中管理账号环境" },
   toolbox: { title: "超级工具箱", subtitle: "从音频到 SynthV 工程的一站式工作流" },
   copilot: { title: "Copilot", subtitle: "让 AI 在受控工具边界内协助工作" },
   components: { title: "组件中心", subtitle: "管理本地模型与运行组件" },
@@ -232,10 +232,10 @@ function renderConcurrentDisclaimer(): string {
   return `<div class="dialog-backdrop" role="presentation">
     <section class="fluent-dialog" role="alertdialog" aria-modal="true" aria-labelledby="concurrent-warning-title">
       <span class="dialog-icon">${icon("boxes", 24)}</span>
-      <div><span class="eyebrow">首次使用提示</span><h2 id="concurrent-warning-title">隔离并发不是官方支持的运行方式</h2></div>
-      <p>工具箱会通过 Sandboxie 启动“${escapeHtml(slot?.displayName ?? "此槽位")}”的独立 SV2 实例。这是实验性兼容方案，不代表 Dreamtonics 对多实例登录、设备计数、云工程同步或账号策略提供支持。</p>
-      <ul><li>开始前保存工程，并确认重要账号数据已有备份。</li><li>当前只支持启动 standalone，不会把已有 DAW 插件移入隔离环境。</li><li>Sandbox 名称会以普通 <code>/box:名称</code> 传递，不添加 <code>#</code>。</li></ul>
-      <div class="dialog-actions"><button class="secondary" data-cancel-concurrent>取消</button><button class="primary" data-accept-concurrent>理解风险并启动</button></div>
+      <div><span class="eyebrow">首次使用风险告知</span><h2 id="concurrent-warning-title">并发隔离未被 Dreamtonics 官方承认</h2></div>
+      <p>并发隔离已作为 SynthV Toolbox 的正式能力提供。本技术方案基于 Sandboxie 实现，会启动“${escapeHtml(slot?.displayName ?? "此槽位")}”的独立 SV2 实例，但 Dreamtonics 尚未公开承认或保证这种多实例使用方式。</p>
+      <ul><li>并发隔离来自 SynthV Toolbox 与 Sandboxie 的进程树虚拟化，不是 Dreamtonics 原生多实例功能。</li><li>工具箱不修改 SV2 二进制、不绕过账户限制，也不拦截官方联网验证；这不等于 Dreamtonics 已确认其符合全部账号政策或服务条款。</li><li>截至当前版本，开发组没有收到因使用本功能而被官方警告或处理的记录；Dreamtonics 仍可能把它认定为不当或违规使用并采取措施。</li><li>启用即表示你已知晓上述情况、自担使用风险，并在适用法律允许的最大范围内不追究 SynthV Toolbox 开发组的直接或连带责任。</li><li>当前只启动 standalone；Sandbox 名称使用普通 <code>/box:名称</code>，不添加 <code>#</code>。</li></ul>
+      <div class="dialog-actions"><button class="secondary" data-cancel-concurrent>取消</button><button class="primary" data-accept-concurrent>已知晓风险，继续启动</button></div>
     </section>
   </div>`;
 }
@@ -337,11 +337,11 @@ function renderAccounts(): string {
       <div class="launch-mode-facts"><span>${icon("check", 14)} 可继续使用原有启动方式</span><span>${icon("refresh", 14)} 切换前需退出普通实例</span></div>
     </article>
     <article class="launch-mode-card isolation-mode ${concurrentProviderAvailable ? "ready" : "unavailable"}">
-      <div class="launch-mode-head"><span class="feature-icon violet">${icon("boxes", 22)}</span><div><span class="eyebrow">实验功能</span><h3>隔离并发</h3></div><span class="launch-mode-state ${concurrentProviderAvailable ? "online" : ""}">${concurrentProviderAvailable ? `${icon("check", 13)} 隔离核心就绪` : "需要 Sandboxie"}</span></div>
+      <div class="launch-mode-head"><span class="feature-icon violet">${icon("boxes", 22)}</span><div><span class="eyebrow">并发能力</span><h3>并发隔离</h3></div><span class="launch-mode-state ${concurrentProviderAvailable ? "online" : ""}">${concurrentProviderAvailable ? `${icon("check", 13)} 隔离核心就绪` : "需要 Sandboxie"}</span></div>
       ${concurrentProviderAvailable
         ? `<p>通过 ${escapeHtml(providerLabel)} 为每个槽位创建独立的文件、注册表和 IPC 环境，可与普通实例或其他隔离槽位同时运行。</p><div class="provider-integration"><strong>${icon("boxes", 15)} ${escapeHtml(providerLabel)}</strong><span>${preparedCount} 个已准备</span><span>${runningSlots.length} 个运行中${runningProcessCount ? ` · ${runningProcessCount} 个相关进程` : ""}</span>${providerPath}</div>`
         : `<p>${escapeHtml(profiles.concurrentProvider.detail)}</p><div class="provider-integration unavailable"><strong>普通账号切换仍可使用</strong><span>安装受支持版本后，重启工具箱即可自动集成。</span></div>`}
-      <small>工具箱不代理或修改网络；持续验证、账号与工程同步仍由 SV2 和 Dreamtonics 官方服务处理。</small>
+      <small>本技术方案基于 Sandboxie 实现，不是 Dreamtonics 原生多实例功能。工具箱不代理或修改网络；持续验证、账号与工程同步仍由 SV2 和 Dreamtonics 官方服务处理。</small>
     </article>
   </section>`;
   const concurrentProviderDetail = profiles.concurrentProvider.detail;
