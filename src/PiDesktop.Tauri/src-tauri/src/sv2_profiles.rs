@@ -13,7 +13,8 @@ use crate::sv2_concurrent::concurrent_folder;
 use crate::sv2_concurrent::{
     detect_provider as detect_concurrent_provider, launch_slot as launch_concurrent,
     prepare_slot as prepare_concurrent, provider_view as concurrent_provider_view,
-    slot_view as concurrent_slot_view, Sv2ConcurrentProviderView, Sv2ConcurrentSlotView,
+    slot_view as concurrent_slot_view, Sv2ConcurrentContentPreferences, Sv2ConcurrentDefaults,
+    Sv2ConcurrentProviderView, Sv2ConcurrentSlotView, Sv2IsolationPreference,
 };
 use crate::synthv::{find_sv2_executable, succeeded, OperationResult};
 
@@ -42,6 +43,8 @@ struct SlotRecord {
     created_at_utc: String,
     #[serde(default)]
     last_activated_at_utc: Option<String>,
+    #[serde(default)]
+    concurrent_content: Sv2ConcurrentContentPreferences,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +56,8 @@ struct SlotManifest {
     active_slot_id: Option<String>,
     #[serde(default)]
     slots: Vec<SlotRecord>,
+    #[serde(default)]
+    concurrent_defaults: Sv2ConcurrentDefaults,
 }
 
 impl Default for SlotManifest {
@@ -61,6 +66,7 @@ impl Default for SlotManifest {
             schema_version: SCHEMA_VERSION,
             active_slot_id: None,
             slots: Vec::new(),
+            concurrent_defaults: Sv2ConcurrentDefaults::default(),
         }
     }
 }
@@ -129,6 +135,7 @@ pub struct Sv2ProfilesState {
     pub slots: Vec<Sv2ProfileSlotView>,
     pub blockers: Vec<Sv2ProcessBlocker>,
     pub concurrent_provider: Sv2ConcurrentProviderView,
+    pub concurrent_defaults: Sv2ConcurrentDefaults,
 }
 
 #[derive(Debug, Clone)]
@@ -264,6 +271,7 @@ impl Sv2ProfileService {
             color: SLOT_COLORS[0].to_string(),
             created_at_utc: now.clone(),
             last_activated_at_utc: Some(now),
+            concurrent_content: Sv2ConcurrentContentPreferences::default(),
         });
         manifest.active_slot_id = Some(id);
         if let Err(error) = save_manifest(paths, &manifest) {
@@ -306,6 +314,7 @@ impl Sv2ProfileService {
             color: SLOT_COLORS[manifest.slots.len() % SLOT_COLORS.len()].to_string(),
             created_at_utc: Utc::now().to_rfc3339(),
             last_activated_at_utc: None,
+            concurrent_content: Sv2ConcurrentContentPreferences::default(),
         };
         manifest.slots.push(record);
         if let Err(error) = save_manifest(paths, &manifest) {
@@ -365,6 +374,55 @@ impl Sv2ProfileService {
             .ok_or_else(|| "找不到该 SV2 槽位。".to_string())?;
         slot.username = username;
         slot.email = email;
+        save_manifest(paths, &manifest)?;
+        build_state(paths, &manifest, false, String::new())
+    }
+
+    pub fn update_concurrent_defaults(
+        &self,
+        app_settings: bool,
+        voice_libraries: bool,
+    ) -> Result<Sv2ProfilesState, String> {
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| "SV2 槽位状态锁已损坏。".to_string())?;
+        let paths = self.paths.as_ref().map_err(Clone::clone)?;
+        let _file_lock = acquire_switch_lock(paths)?;
+        recover_if_needed(paths)?;
+        let mut manifest = load_manifest(paths)?;
+        manifest.concurrent_defaults = Sv2ConcurrentDefaults {
+            app_settings,
+            voice_libraries,
+        };
+        save_manifest(paths, &manifest)?;
+        build_state(paths, &manifest, false, String::new())
+    }
+
+    pub fn update_concurrent_content(
+        &self,
+        slot_id: String,
+        app_settings: Sv2IsolationPreference,
+        voice_libraries: Sv2IsolationPreference,
+    ) -> Result<Sv2ProfilesState, String> {
+        validate_slot_id(&slot_id)?;
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| "SV2 槽位状态锁已损坏。".to_string())?;
+        let paths = self.paths.as_ref().map_err(Clone::clone)?;
+        let _file_lock = acquire_switch_lock(paths)?;
+        recover_if_needed(paths)?;
+        let mut manifest = load_manifest(paths)?;
+        let slot = manifest
+            .slots
+            .iter_mut()
+            .find(|slot| slot.id == slot_id)
+            .ok_or_else(|| "找不到该 SV2 槽位。".to_string())?;
+        slot.concurrent_content = Sv2ConcurrentContentPreferences {
+            app_settings,
+            voice_libraries,
+        };
         save_manifest(paths, &manifest)?;
         build_state(paths, &manifest, false, String::new())
     }
@@ -496,9 +554,14 @@ impl Sv2ProfileService {
         let _file_lock = acquire_switch_lock(paths)?;
         recover_if_needed(paths)?;
         let manifest = load_manifest(paths)?;
-        if !manifest.slots.iter().any(|slot| slot.id == slot_id) {
-            return Err("找不到该 SV2 槽位。".to_string());
-        }
+        let slot = manifest
+            .slots
+            .iter()
+            .find(|slot| slot.id == slot_id)
+            .ok_or_else(|| "找不到该 SV2 槽位。".to_string())?;
+        let content = slot
+            .concurrent_content
+            .resolve(manifest.concurrent_defaults);
         let is_active = manifest.active_slot_id.as_deref() == Some(slot_id.as_str());
         if is_active {
             reject_blockers(paths)?;
@@ -510,7 +573,14 @@ impl Sv2ProfileService {
         };
         verify_marker(&source, &slot_id)?;
         let provider = detect_concurrent_provider()?;
-        prepare_concurrent(&provider, &paths.vault, &source, &slot_id)?;
+        prepare_concurrent(
+            &provider,
+            &paths.vault,
+            &source,
+            &paths.canonical,
+            &slot_id,
+            content,
+        )?;
         build_state(paths, &manifest, false, String::new())
     }
 
@@ -534,9 +604,14 @@ impl Sv2ProfileService {
         let _file_lock = acquire_switch_lock(paths)?;
         recover_if_needed(paths)?;
         let manifest = load_manifest(paths)?;
-        if !manifest.slots.iter().any(|slot| slot.id == slot_id) {
-            return Err("找不到该 SV2 槽位。".to_string());
-        }
+        let slot = manifest
+            .slots
+            .iter()
+            .find(|slot| slot.id == slot_id)
+            .ok_or_else(|| "找不到该 SV2 槽位。".to_string())?;
+        let content = slot
+            .concurrent_content
+            .resolve(manifest.concurrent_defaults);
         let provider = detect_concurrent_provider()?;
         launch_concurrent(
             &provider,
@@ -544,6 +619,8 @@ impl Sv2ProfileService {
             &slot_id,
             &executable,
             project.as_deref(),
+            &paths.canonical,
+            content,
         )
     }
 
@@ -591,6 +668,7 @@ fn unsupported_state(detail: String) -> Sv2ProfilesState {
         slots: Vec::new(),
         blockers: Vec::new(),
         concurrent_provider: concurrent_provider_view(&Err(detail)),
+        concurrent_defaults: Sv2ConcurrentDefaults::default(),
     }
 }
 
@@ -651,7 +729,13 @@ fn build_state(
                 is_active,
                 session_cached: data_path.join("license/session").is_file(),
                 data_path: data_path.to_string_lossy().into_owned(),
-                concurrent: concurrent_slot_view(&paths.vault, &slot.id, provider.as_ref().ok()),
+                concurrent: concurrent_slot_view(
+                    &paths.vault,
+                    &slot.id,
+                    provider.as_ref().ok(),
+                    slot.concurrent_content
+                        .resolve(manifest.concurrent_defaults),
+                ),
             }
         })
         .collect();
@@ -670,6 +754,7 @@ fn build_state(
         slots,
         blockers: detect_blockers(paths),
         concurrent_provider: concurrent_provider_view(&provider),
+        concurrent_defaults: manifest.concurrent_defaults,
     })
 }
 
@@ -1501,7 +1586,9 @@ mod tests {
                 color: SLOT_COLORS[0].to_string(),
                 created_at_utc: Utc::now().to_rfc3339(),
                 last_activated_at_utc: None,
+                concurrent_content: Sv2ConcurrentContentPreferences::default(),
             }],
+            concurrent_defaults: Sv2ConcurrentDefaults::default(),
         };
         save_manifest(paths, &manifest).unwrap();
         manifest
@@ -1521,6 +1608,7 @@ mod tests {
             color: SLOT_COLORS[1].to_string(),
             created_at_utc: Utc::now().to_rfc3339(),
             last_activated_at_utc: None,
+            concurrent_content: Sv2ConcurrentContentPreferences::default(),
         });
         save_manifest(paths, manifest).unwrap();
         id

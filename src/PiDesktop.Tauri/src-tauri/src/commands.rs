@@ -12,7 +12,7 @@ use tauri::State;
 use tokio::runtime::Handle;
 use uuid::Uuid;
 
-use crate::components::{component_list, ComponentInfo};
+use crate::components::{component_list, open_component_download, ComponentInfo};
 use crate::config::{
     load_model_settings, model_config_path, model_summary, save_model_settings as persist_model,
     save_settings, validate_mcp_server, AppMode, McpServerConfig, ModelSummary,
@@ -20,6 +20,7 @@ use crate::config::{
 use crate::downloads::ComponentDownload;
 use crate::mcp::McpToolExecutor;
 use crate::state::{AgentSession, AppState};
+use crate::sv2_concurrent::Sv2IsolationPreference;
 use crate::sv2_profiles::Sv2ProfilesState;
 use crate::synthv::{
     bridge_is_bundled, diagnose_bridge as diagnose_bridge_impl, failed, find_node,
@@ -175,6 +176,35 @@ pub async fn update_sv2_profile_identity(
     tauri::async_runtime::spawn_blocking(move || profiles.update_identity(slot_id, username, email))
         .await
         .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn update_sv2_concurrent_defaults(
+    app_settings: bool,
+    voice_libraries: bool,
+    state: State<'_, AppState>,
+) -> Result<Sv2ProfilesState, String> {
+    let profiles = state.sv2_profiles.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        profiles.update_concurrent_defaults(app_settings, voice_libraries)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn update_sv2_concurrent_content(
+    slot_id: String,
+    app_settings: Sv2IsolationPreference,
+    voice_libraries: Sv2IsolationPreference,
+    state: State<'_, AppState>,
+) -> Result<Sv2ProfilesState, String> {
+    let profiles = state.sv2_profiles.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        profiles.update_concurrent_content(slot_id, app_settings, voice_libraries)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -360,6 +390,13 @@ pub fn queue_component_install(
         });
     }
     Ok(snapshot)
+}
+
+#[tauri::command]
+pub async fn open_downloaded_component(id: String) -> Result<OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || open_component_download(&id))
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

@@ -32,6 +32,69 @@ pub struct Sv2ConcurrentSlotView {
     pub data_path: String,
     pub running_pids: Vec<u32>,
     pub detail: String,
+    pub content: Sv2ConcurrentContentView,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Sv2IsolationPreference {
+    #[default]
+    Global,
+    On,
+    Off,
+}
+
+impl Sv2IsolationPreference {
+    pub fn resolve(self, global_default: bool) -> bool {
+        match self {
+            Self::Global => global_default,
+            Self::On => true,
+            Self::Off => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Sv2ConcurrentDefaults {
+    pub app_settings: bool,
+    pub voice_libraries: bool,
+}
+
+impl Default for Sv2ConcurrentDefaults {
+    fn default() -> Self {
+        Self {
+            app_settings: true,
+            voice_libraries: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Sv2ConcurrentContentPreferences {
+    pub app_settings: Sv2IsolationPreference,
+    pub voice_libraries: Sv2IsolationPreference,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Sv2ConcurrentContentView {
+    pub app_settings: Sv2IsolationPreference,
+    pub voice_libraries: Sv2IsolationPreference,
+    pub effective_app_settings: bool,
+    pub effective_voice_libraries: bool,
+}
+
+impl Sv2ConcurrentContentPreferences {
+    pub fn resolve(self, defaults: Sv2ConcurrentDefaults) -> Sv2ConcurrentContentView {
+        Sv2ConcurrentContentView {
+            app_settings: self.app_settings,
+            voice_libraries: self.voice_libraries,
+            effective_app_settings: self.app_settings.resolve(defaults.app_settings),
+            effective_voice_libraries: self.voice_libraries.resolve(defaults.voice_libraries),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -124,6 +187,7 @@ pub fn slot_view(
     vault: &Path,
     slot_id: &str,
     provider: Option<&SandboxieProvider>,
+    content: Sv2ConcurrentContentView,
 ) -> Sv2ConcurrentSlotView {
     let box_name = box_name(slot_id).unwrap_or_else(|_| "invalid".to_string());
     let box_root = box_root(vault, slot_id);
@@ -150,6 +214,7 @@ pub fn slot_view(
         data_path: data_path.to_string_lossy().into_owned(),
         running_pids,
         detail,
+        content,
     }
 }
 
@@ -157,7 +222,9 @@ pub fn prepare_slot(
     provider: &SandboxieProvider,
     vault: &Path,
     source: &Path,
+    shared_data_root: &Path,
     slot_id: &str,
+    content: Sv2ConcurrentContentView,
 ) -> Result<(), String> {
     let name = box_name(slot_id)?;
     let concurrent_root = vault.join("concurrent");
@@ -174,7 +241,7 @@ pub fn prepare_slot(
 
     if final_root.exists() {
         validate_prepared(&final_root, slot_id, &name)?;
-        configure_box(provider, &name, &final_root)?;
+        configure_box(provider, &name, &final_root, shared_data_root, content)?;
         return Ok(());
     }
 
@@ -194,7 +261,7 @@ pub fn prepare_slot(
         )?;
         fs::rename(&staging, &final_root)
             .map_err(|error| format!("无法提交并发槽位副本：{error}"))?;
-        configure_box(provider, &name, &final_root)
+        configure_box(provider, &name, &final_root, shared_data_root, content)
     })();
     if result.is_err() {
         cleanup_staging(&staging, &slot_root);
@@ -208,11 +275,13 @@ pub fn launch_slot(
     slot_id: &str,
     executable: &Path,
     project: Option<&Path>,
+    shared_data_root: &Path,
+    content: Sv2ConcurrentContentView,
 ) -> Result<OperationResult, String> {
     let name = box_name(slot_id)?;
     let root = box_root(vault, slot_id);
     validate_prepared(&root, slot_id, &name)?;
-    configure_box(provider, &name, &root)?;
+    configure_box(provider, &name, &root, shared_data_root, content)?;
     let pids = list_pids(provider, &name)?;
     if !pids.is_empty() {
         return Err(format!(
@@ -256,7 +325,13 @@ pub fn concurrent_folder(vault: &Path, slot_id: &str) -> Result<PathBuf, String>
     Ok(virtual_data_root(&root))
 }
 
-fn configure_box(provider: &SandboxieProvider, box_name: &str, root: &Path) -> Result<(), String> {
+fn configure_box(
+    provider: &SandboxieProvider,
+    box_name: &str,
+    root: &Path,
+    shared_data_root: &Path,
+    content: Sv2ConcurrentContentView,
+) -> Result<(), String> {
     let root_value = root.to_string_lossy().into_owned();
     if root_value
         .chars()
@@ -289,6 +364,7 @@ fn configure_box(provider: &SandboxieProvider, box_name: &str, root: &Path) -> R
             &format!("无法配置 Sandboxie 设置 {setting}"),
         )?;
     }
+    configure_shared_content(provider, box_name, shared_data_root, content)?;
     run_checked(
         quiet_command(&provider.start).arg("/silent").arg("/reload"),
         "无法让 Sandboxie 重新载入配置",
@@ -323,6 +399,59 @@ fn configure_box(provider: &SandboxieProvider, box_name: &str, root: &Path) -> R
         ));
     }
     Ok(())
+}
+
+fn configure_shared_content(
+    provider: &SandboxieProvider,
+    box_name: &str,
+    shared_data_root: &Path,
+    content: Sv2ConcurrentContentView,
+) -> Result<(), String> {
+    reject_reparse_point(shared_data_root)?;
+    let mut shared_paths = Vec::new();
+    if !content.effective_app_settings {
+        let settings = shared_data_root.join("settings");
+        reject_reparse_point(&settings)?;
+        shared_paths.push(sandbox_directory_rule(&settings)?);
+    }
+    if !content.effective_voice_libraries {
+        let databases = shared_data_root.join("databases");
+        reject_reparse_point(&databases)?;
+        shared_paths.push(sandbox_directory_rule(&databases)?);
+    }
+
+    let mut clear = quiet_command(&provider.sbie_ini);
+    clear.arg("set").arg(box_name).arg("OpenFilePath");
+    run_checked(&mut clear, "无法清除 Sandboxie 共享内容规则")?;
+
+    for path in &shared_paths {
+        run_checked(
+            quiet_command(&provider.sbie_ini)
+                .arg("append")
+                .arg(box_name)
+                .arg("OpenFilePath")
+                .arg(path),
+            "无法配置 Sandboxie 共享内容规则",
+        )?;
+    }
+    Ok(())
+}
+
+fn sandbox_directory_rule(path: &Path) -> Result<String, String> {
+    if !path.is_absolute() {
+        return Err("Sandboxie 共享内容路径必须是绝对路径。".to_string());
+    }
+    let mut value = path.to_string_lossy().into_owned();
+    if value
+        .chars()
+        .any(|character| character == '\r' || character == '\n' || character == '\0')
+    {
+        return Err("Sandboxie 共享内容路径包含不允许的控制字符。".to_string());
+    }
+    if !value.ends_with(['\\', '/']) {
+        value.push(std::path::MAIN_SEPARATOR);
+    }
+    Ok(value)
 }
 
 fn list_pids(provider: &SandboxieProvider, box_name: &str) -> Result<Vec<u32>, String> {
@@ -648,6 +777,32 @@ mod tests {
     fn pid_output_ignores_the_leading_count() {
         assert_eq!(parse_pid_list("3\r\n42\r\n7\r\n42\r\n"), vec![7, 42]);
         assert_eq!(parse_pid_list("0\r\n"), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn content_preferences_resolve_against_global_defaults() {
+        let defaults = Sv2ConcurrentDefaults {
+            app_settings: true,
+            voice_libraries: false,
+        };
+        let inherited = Sv2ConcurrentContentPreferences::default().resolve(defaults);
+        assert!(inherited.effective_app_settings);
+        assert!(!inherited.effective_voice_libraries);
+
+        let overridden = Sv2ConcurrentContentPreferences {
+            app_settings: Sv2IsolationPreference::Off,
+            voice_libraries: Sv2IsolationPreference::On,
+        }
+        .resolve(defaults);
+        assert!(!overridden.effective_app_settings);
+        assert!(overridden.effective_voice_libraries);
+    }
+
+    #[test]
+    fn shared_content_rules_are_scoped_to_a_directory() {
+        let rule = sandbox_directory_rule(&std::env::temp_dir().join("sv2-settings")).unwrap();
+        assert!(rule.ends_with(std::path::MAIN_SEPARATOR));
+        assert!(!rule.contains(['\r', '\n', '\0']));
     }
 
     #[test]
