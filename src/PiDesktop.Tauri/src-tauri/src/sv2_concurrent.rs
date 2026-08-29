@@ -248,6 +248,7 @@ pub fn launch_slot(
     ))
 }
 
+#[cfg(windows)]
 pub fn concurrent_folder(vault: &Path, slot_id: &str) -> Result<PathBuf, String> {
     let name = box_name(slot_id)?;
     let root = box_root(vault, slot_id);
