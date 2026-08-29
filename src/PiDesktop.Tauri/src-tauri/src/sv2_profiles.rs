@@ -835,7 +835,7 @@ fn terminate_blockers(paths: &SlotPaths) -> Result<(), String> {
     #[cfg(not(windows))]
     {
         let _ = paths;
-        return Err("强制切换当前仅支持 Windows。".to_string());
+        Err("强制切换当前仅支持 Windows。".to_string())
     }
 
     #[cfg(windows)]
