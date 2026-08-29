@@ -70,7 +70,7 @@ Toolbox 未运行时，或智能启动开关关闭时，`.svp` 会透传给启�
 - 外部 MCP 只能由用户显式添加和启用；它可以启动本地进程，因此只应配置可信命令。
 - MIDI、工程副本和 LRC 统一写入 `~/.SynthVcopilot/output/`，输出参数只接受文件名并拒绝路径穿透。
 - Bridge 安装器只写入用户指定的 SynthV `scripts` 目录。
-- Python 组件源码随 Toolbox 一起发布，安装时只在本机创建隔离环境并安装组件声明的依赖；aria2 只用于获取官方 Sandboxie GitHub Release 中固定版本的 x64 安装包，Rust 后端在使用前复核 SHA-256。Sandboxie 仅下载到本机并打开所在位置，工具箱不会静默安装其内核驱动。
+- 远程组件只能进入串行下载队列；aria2 只获取公开 `pi-agent` 的固定提交，或官方 Sandboxie GitHub Release 中固定版本的 x64 安装包，Rust 后端在使用前逐文件复核 SHA-256，未知或未固定版本的组件会被拒绝。Sandboxie 仅下载到本机并打开所在位置，工具箱不会静默安装其内核驱动。
 - 并发隔离只使用受支持版本的本机 Sandboxie Plus / Classic，拒绝未知 reparse point，不修改 SV2 二进制或官方校验流程；登录态恢复只回写同一槽位、SHA-256 校验通过且目标仍为空的短期快照，不做跨槽位或运行中合并。
 - 强制槽位切换只结束后端重新检测到的 SV2 占用 PID，不接受前端提供的任意 PID；若仍存在无 PID 的单实例锁或文件占用，切换会停止而不会移动槽位目录。
 
@@ -86,7 +86,7 @@ external/synthv-agent-bridge/ SynthV Bridge（submodule）
 
 ## 本地开发
 
-需要 Rust stable、Node.js `22.19+`、npm，以及对应平台的 [Tauri 系统依赖](https://v2.tauri.app/start/prerequisites/)。下载 Sandboxie 安装包时需要 aria2，也可以通过 `SYNTHV_TOOLBOX_ARIA2` 指定 `aria2c` 路径。安装 `pi-audio` 时还需要 Python 3.11；macOS 构建需要 Xcode Command Line Tools。
+需要 Rust stable、Node.js `22.19+`、npm、aria2，以及对应平台的 [Tauri 系统依赖](https://v2.tauri.app/start/prerequisites/)。也可以通过 `SYNTHV_TOOLBOX_ARIA2` 指定 `aria2c` 路径。安装 `pi-audio` 时还需要 Python 3.11；macOS 构建需要 Xcode Command Line Tools。
 
 ```bash
 git submodule update --init --recursive
