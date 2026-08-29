@@ -60,6 +60,16 @@ export interface Sv2ConcurrentSlot {
   content: Sv2ConcurrentContent;
 }
 
+export type Sv2SessionProtectionStatus = "signInRequired" | "ready" | "monitoring" | "recoveryPending" | "restored" | "attention";
+
+export interface Sv2SessionProtection {
+  status: Sv2SessionProtectionStatus;
+  snapshotAvailable: boolean;
+  lastDetectedAtUtc?: string;
+  lastRestoredAtUtc?: string;
+  detail: string;
+}
+
 export interface Sv2ProfileSlot {
   id: string;
   displayName: string;
@@ -71,6 +81,8 @@ export interface Sv2ProfileSlot {
   isActive: boolean;
   sessionCached: boolean;
   dataPath: string;
+  sessionProtection: Sv2SessionProtection;
+  concurrentSessionProtection: Sv2SessionProtection;
   concurrent: Sv2ConcurrentSlot;
 }
 
@@ -87,6 +99,23 @@ export interface Sv2ProfilesState {
   blockers: Sv2ProcessBlocker[];
   concurrentProvider: Sv2ConcurrentProvider;
   concurrentDefaults: Sv2ConcurrentDefaults;
+}
+
+export type Sv2RemoteUseStatus = "detected" | "unknown";
+
+export interface Sv2AccountPrecheck {
+  supported: boolean;
+  checkedAtUtc: string;
+  slotId?: string;
+  displayName: string;
+  localUse: boolean;
+  localProcesses: Sv2ProcessBlocker[];
+  concurrentPids: number[];
+  remoteUse: Sv2RemoteUseStatus;
+  sessionCached: boolean;
+  recoveryPending: boolean;
+  summary: string;
+  detail: string;
 }
 
 export interface ComponentInfo {

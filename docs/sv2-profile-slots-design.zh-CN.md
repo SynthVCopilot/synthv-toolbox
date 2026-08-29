@@ -8,7 +8,7 @@
 
 工具箱提供类似游戏启动器的“账号档案”体验：用户选择一个槽位，工具箱将该槽位设为当前默认环境并启动 SV2。用户直接从开始菜单、资源管理器或 `.svp` 文件启动 SV2 时，也自然使用最近激活的默认槽位。
 
-第一版不解析、复制或修改 `license\session`，而是把整个 SV2 用户数据根视为不可分割的槽位：
+槽位事务不解析或单独切换 `license\session`，而是把整个 SV2 用户数据根视为不可分割的槽位：
 
 ```text
 %APPDATA%\Dreamtonics\Synthesizer V Studio 2
@@ -44,6 +44,7 @@ Synthesizer V Studio 2\
 2. 切换前必须确认 standalone、DAW 插件和相关 WebView2 子进程均已退出。
 3. 槽位切换只解决快速顺序切换，不声称支持两个 standalone 并发。
 4. 任何在线会话过期都交还 SV2 的官方登录流程处理。
+5. 工具箱不得调用未公开的 Dreamtonics 接口查询或延长会话；账号占用预检只能报告本机进程证据，或 SV2 启动验证后留下的 session 失效证据。
 
 Windows 对全局和会话级命名对象的区别见 [Kernel object namespaces](https://learn.microsoft.com/en-us/windows/win32/termserv/kernel-object-namespaces)。
 
@@ -64,6 +65,7 @@ Windows 对全局和会话级命名对象的区别见 [Kernel object namespaces]
 - 状态：`当前默认`、`登录缓存已存在`、`首次启动需要登录`、`未准备`、`已准备`、`运行中`、`需要处理`；
 - 最近使用时间；
 - 会话缓存是否存在，仅作为诊断信息，不宣称账号仍在线有效；
+- 登录态保护状态：`保护就绪`、`正在监测`、`等待恢复`、`已自动恢复` 或 `需要处理`；
 - 普通启动按钮：`普通启动` 或 `切换并启动`；
 - 隔离启动按钮：`准备隔离实例` 或 `启动隔离实例`；
 - 全局隔离内容默认值：分别控制应用设置和声库数据是否隔离；
@@ -121,6 +123,19 @@ Windows 对全局和会话级命名对象的区别见 [Kernel object namespaces]
 
 用户从“切换并启动”触发普通切换且存在占用时，界面不得只显示错误文本，而应弹出结构化进程列表。选择“强制切换并启动”表示用户授权结束列表中的进程树；后端必须重新检测 PID，使用独立命令参数结束进程，并在占用与单实例锁全部消失后才进入槽位事务。选择“以并发模式运行”不得关闭现有进程；若目标隔离副本尚未准备，应先准备副本，并继续遵守首次非官方行为确认。
 
+### 3.5 账号占用锁与登录态恢复
+
+SV2 在发现同一账号仍由其他设备占用时，会由官方界面询问是否强制结束另一设备的会话。用户取消而不强制时，SV2 可能移除本机 `license/session`。工具箱不拦截对话框、不模拟用户选择，也不解析 session；普通启动和隔离启动采用同一套保护状态机：
+
+1. 启动前只在 session 已存在时建立原样字节快照，并保存 SHA-256、槽位 UUID、环境类型和启动时间；
+2. 启动后的前 10 分钟为冲突识别窗口。session 在窗口内消失且快照仍匹配时，标记 `RecoveryPending`；超过窗口才消失则视为用户主动退出或普通过期，不自动恢复；
+3. 下次由工具箱启动同一槽位前，如果 session 仍不存在且没有占用进程，回写校验通过的快照；
+4. 如果 SV2 已生成任何新的非空 session，立即丢弃旧快照，绝不覆盖；正常退出且 session 保留时也清理短期快照；
+5. 普通槽位和对应 Sandboxie 隔离副本使用不同的保护记录，禁止跨环境恢复或合并；
+6. 恢复只尝试还原本地缓存，最终是否有效仍由 SV2 与 Dreamtonics 服务权威判断。
+
+“超级工具箱”页面进入后每 3 秒刷新当前默认账号预检：本机普通/插件/WebView2/Sandboxie 占用可以确定；`RecoveryPending` 可以确定一次远端冲突留下的失效迹象；没有这两类证据时远端状态必须显示为 `Unknown`，不能声称“无人使用”。
+
 ## 4. 文件布局
 
 ```text
@@ -136,7 +151,10 @@ Windows 对全局和会话级命名对象的区别见 [Kernel object namespaces]
 └─ sv2-slots\
    ├─ manifest.json
    ├─ switch.journal.json
-   └─ switch.lock
+   ├─ switch.lock
+   └─ session-recovery\<slot-id>\
+      ├─ normal.json / concurrent.json
+      └─ normal.session / concurrent.session   # 仅监测或待恢复时存在
 ```
 
 约束：
@@ -186,6 +204,8 @@ Windows 对全局和会话级命名对象的区别见 [Kernel object namespaces]
 - 登录回调 URL；
 - 从缓存推断出的邮箱。
 
+`session-recovery` 是唯一允许保存 session 原始字节的位置。它位于当前 Windows 用户的 LocalAppData 中，文件名只由槽位 UUID 和固定环境名组成；快照不进入日志、清单、前端、仓库或云同步目录，正常结束或发现新 session 后立即删除。
+
 ## 6. 状态机
 
 ### 6.1 系统状态
@@ -208,6 +228,8 @@ Idle ──选择其他槽位──► Preflight
 - `New`：槽位存在，但没有 `license\session`；启动后由用户首次登录。
 - `Missing`：清单有记录，但活动路径和保管区都找不到该槽位。
 - `RecoveryRequired`：目录实况、标记、清单或事务日志不一致。
+- `SessionMonitoring`：本次工具箱启动已有短期保护快照。
+- `SessionRecoveryPending`：启动窗口内 session 消失，等待下一次工具箱启动恢复。
 
 UI 不把“存在 session 文件”显示为“已登录”，因为在线状态只能由 SV2/服务端权威判断。
 
@@ -283,9 +305,10 @@ Restart Manager 不是唯一判断依据。还要检查：
 
 1. 如果目标不是当前槽位，执行完整切换事务。
 2. 再次确认清单和根标记一致。
-3. 通过 `ProcessStartInfo` 直接启动检测到的 `synthv-studio.exe`。
-4. 如果传入工程路径，使用 `ArgumentList` 添加绝对 `.svp` 路径。
-5. 不使用 shell 拼接命令，不把槽位信息放入 SV2 命令行。
+3. 恢复同一槽位仍待处理且 SHA-256 匹配的 session，再为本次启动建立短期保护快照。
+4. 通过 Rust `Command` 直接启动检测到的 `synthv-studio.exe`。
+5. 如果传入工程路径，使用独立参数添加绝对 `.svp` 路径。
+6. 不使用 shell 拼接命令，不把槽位信息放入 SV2 命令行。
 
 现有 `SynthVDetectionService` 必须补充实际文件名：
 
@@ -295,9 +318,9 @@ synthv-studio.exe
 
 如果当前槽位已经运行：
 
-- 选择同一槽位时显示“正在运行”，可提供“切换到窗口”；
+- 选择同一槽位时显示“正在运行”；
 - 选择其他槽位时显示阻塞程序并要求用户自行保存、关闭；
-- 工具箱不发送强制结束进程命令。
+- 用户在结构化弹窗中明确选择“强制切换”时，后端重新扫描并结束检测到的进程树；否则不结束进程。
 
 ## 9. 文件拦截与并发评估
 
@@ -363,6 +386,7 @@ synthv-studio.exe
 ```text
 src/PiDesktop.Tauri/src-tauri/src/sv2_profiles.rs
 src/PiDesktop.Tauri/src-tauri/src/sv2_concurrent.rs
+src/PiDesktop.Tauri/src-tauri/src/sv2_session_guard.rs
 ```
 
 已修改：
@@ -413,6 +437,7 @@ src/PiDesktop.Tauri/src/styles.css
 - 将普通切换占用提示改为弹窗，提供强制结束已检测进程树或转入并发模式的选择；
 - 后端支持带 `.svp` 工程启动；
 - 展示 standalone、DAW 插件、文件句柄和单实例锁阻塞提示。
+- 在工具箱页展示当前账号占用预检，并自动刷新本机占用与远端冲突证据。
 
 ### Phase 4：受控验证（自动化部分已实现，真实账号往返需人工执行）
 
@@ -434,6 +459,14 @@ src/PiDesktop.Tauri/src/styles.css
 - 已在 Sandboxie Classic 5.73.2 + SV2 2.2.1 上验证：普通 SV2 保持运行时，第二个 boxed SV2 主窗口可响应，WebView2 进程树正常，网络连接保持建立；测试结束后可正常关闭并清理 box。
 - 上述测试未确认 Dreamtonics 的并发登录、设备计数、账号同步或云工程政策；这些行为必须在用户自己的合法账号上人工确认。
 
+### Phase 6：账号占用锁（代码与自动化检查已实现，真实双设备取消流程需人工验证）
+
+- 普通与隔离启动前分别建立不透明 session 快照和 SHA-256；
+- 启动窗口内 session 消失时标记待恢复，窗口外视为主动退出；
+- 下次启动前仅在目标为空时恢复，同槽位新 session 永远优先；
+- 工具箱页面持续预检本机进程和会话失效证据，不调用未公开的远端接口；
+- 自动化覆盖 session 丢失恢复、新 session 不覆盖、正常退出清理和窗口外主动退出。
+
 ## 13. 必测不变量
 
 1. 空闲状态下 canonical 必须存在且只属于一个槽位。
@@ -448,3 +481,5 @@ src/PiDesktop.Tauri/src/styles.css
 10. 并发配置写入后必须回读并确认 `FileRootPath` 指向该槽位的受管目录。
 11. 普通槽位与并发副本之间不得做运行中合并；官方联网验证保持由 SV2 自身负责。
 12. 强制切换不得接收前端指定的 PID；结束进程后必须重新扫描占用，仍有占用时不得开始目录事务。
+13. 登录态恢复快照必须与槽位 UUID、普通/隔离环境及 SHA-256 全部匹配，目标已有非空 session 时不得覆盖。
+14. 工具箱不得把缺乏证据的远端占用显示为“无人使用”；只能显示 `Unknown` 并让 SV2 完成官方验证。

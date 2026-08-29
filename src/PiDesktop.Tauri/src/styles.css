@@ -337,6 +337,10 @@ button.full { width: 100%; }
 .profile-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 7px 14px; margin: 16px 0 13px; color: var(--muted); font-size: 11px; }
 .profile-meta span { display: flex; align-items: center; gap: 5px; }
 .profile-meta .cached { color: var(--success); }
+.session-protection { color: var(--success); }
+.session-protection.monitoring { color: var(--primary); }
+.session-protection.attention { color: var(--warning); }
+.session-guard-inline { display: flex; margin: -2px 0 9px; font-size: 10px; }
 .profile-launch-block { padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-subtle); }
 .profile-launch-block + .profile-launch-block { margin-top: 8px; }
 .profile-launch-block.isolation { border-style: dashed; }
@@ -404,6 +408,17 @@ button.full { width: 100%; }
 .feature-icon.blue { color: #005fb8; background: rgba(0,120,212,.1); }
 .feature-icon.emerald { color: #0f7b45; background: rgba(15,123,69,.1); }
 .feature-icon.orange { color: #9d5d00; background: rgba(157,93,0,.11); }
+.account-precheck { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 13px; margin-bottom: 18px; padding: 16px 17px; border-radius: 8px; }
+.account-precheck.clear { border-color: color-mix(in srgb,var(--success) 24%,var(--line)); background: color-mix(in srgb,var(--success) 4%,var(--surface)); }
+.account-precheck.in-use { border-color: color-mix(in srgb,var(--primary) 25%,var(--line)); background: color-mix(in srgb,var(--primary) 5%,var(--surface)); }
+.account-precheck.conflict { border-color: color-mix(in srgb,var(--warning) 34%,var(--line)); background: color-mix(in srgb,var(--warning) 7%,var(--surface)); }
+.account-precheck-main { min-width: 0; }
+.account-precheck h2 { margin: 3px 0 5px; font-size: 16px; }
+.account-precheck p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.account-precheck p strong { color: inherit; font-weight: 600; }
+.precheck-facts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.precheck-facts span { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; overflow: hidden; padding: 4px 7px; border-radius: 5px; color: var(--muted); background: var(--surface-subtle); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.precheck-facts .remote-detected { color: var(--warning); background: color-mix(in srgb,var(--warning) 10%,transparent); }
 .segmented { display: flex; padding: 2px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-subtle); }
 .segmented button { padding: 6px 11px; border: 0; border-radius: 5px; color: var(--muted); background: transparent; font-size: 12px; cursor: pointer; }
 .segmented button:hover { background: var(--control-pressed); }
@@ -655,6 +670,8 @@ button.full { width: 100%; }
   .isolation-content-form > button { grid-column: 1 / -1; }
   .profile-identity-form { grid-template-columns: 1fr; }
   .profile-identity-form small { grid-column: 1; }
+  .account-precheck { grid-template-columns: auto minmax(0,1fr); align-items: start; }
+  .account-precheck > button { grid-column: 1 / -1; justify-self: stretch; }
   .workflow-form { grid-template-columns: 1fr; }
   .workflow-form > * { grid-column: 1; }
   .workflow-pair { grid-template-columns: 1fr; }
