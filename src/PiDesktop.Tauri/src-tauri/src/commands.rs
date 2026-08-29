@@ -201,6 +201,18 @@ pub async fn launch_sv2_profile(
 }
 
 #[tauri::command]
+pub async fn force_launch_sv2_profile(
+    slot_id: String,
+    project_path: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<OperationResult, String> {
+    let profiles = state.sv2_profiles.clone();
+    tauri::async_runtime::spawn_blocking(move || profiles.force_launch_slot(slot_id, project_path))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 pub async fn open_sv2_profile_folder(
     slot_id: String,
     state: State<'_, AppState>,

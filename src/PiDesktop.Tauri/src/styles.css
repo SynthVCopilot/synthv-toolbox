@@ -200,7 +200,7 @@ button:disabled { cursor: default; opacity: .55; }
 }
 .hero-panel p { max-width: 660px; margin: 0; color: var(--muted); font-size: 14px; line-height: 1.65; }
 .hero-actions, .button-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
-button.primary, button.secondary, .card-action {
+button.primary, button.secondary, button.danger-action, .card-action {
   min-height: 34px;
   display: inline-flex;
   align-items: center;
@@ -220,6 +220,9 @@ button.primary:active { background: var(--primary-pressed); transform: scale(.98
 button.secondary { border-color: var(--line-strong); border-bottom-color: rgba(0,0,0,.22); background: var(--control); }
 button.secondary:hover { background: var(--control-hover); }
 button.secondary:active { background: var(--control-pressed); transform: scale(.985); }
+button.danger-action { border-bottom-color: rgba(0,0,0,.28); color: #fff; background: #c42b1c; }
+button.danger-action:hover { background: #a4261d; }
+button.danger-action:active { background: #8f2219; transform: scale(.985); }
 .hero-panel button.primary { color: #fff; background: var(--primary); }
 .hero-panel button.primary:hover { background: var(--primary-hover); }
 .hero-panel button.secondary { border-color: var(--line-strong); color: inherit; background: var(--control); }
@@ -549,12 +552,22 @@ button.full { width: 100%; }
 .dialog-backdrop { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center; padding: 24px; background: rgba(0,0,0,.34); backdrop-filter: blur(3px); }
 .fluent-dialog { width: min(520px,100%); display: grid; grid-template-columns: auto minmax(0,1fr); gap: 13px; padding: 24px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface-solid); box-shadow: 0 16px 42px rgba(0,0,0,.22); }
 .dialog-icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 7px; color: var(--warning); background: color-mix(in srgb,var(--warning) 12%,transparent); }
+.dialog-icon.danger { color: var(--danger); background: color-mix(in srgb,var(--danger) 12%,transparent); }
 .fluent-dialog h2 { margin: 4px 0 0; font-size: 20px; font-weight: 600; }
-.fluent-dialog > p, .fluent-dialog > ul, .dialog-actions { grid-column: 1 / -1; }
+.fluent-dialog > p, .fluent-dialog > ul, .dialog-process-list, .dialog-actions { grid-column: 1 / -1; }
 .fluent-dialog > p { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 1.65; }
 .fluent-dialog > ul { margin: 0; padding-left: 20px; color: var(--muted); font-size: 12px; line-height: 1.75; }
 .fluent-dialog code { padding: 1px 4px; border-radius: 3px; background: var(--surface-subtle); }
-.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.switch-dialog { width: min(620px,100%); }
+.dialog-process-list { display: grid; gap: 1px; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--line); }
+.dialog-process-list > div { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 12px; background: var(--surface-solid); }
+.dialog-process-list span { min-width: 0; display: grid; gap: 2px; }
+.dialog-process-list strong, .dialog-process-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dialog-process-list strong { font-size: 12px; font-weight: 600; }
+.dialog-process-list small { color: var(--muted); font-size: 11px; }
+.dialog-process-list code { flex: 0 0 auto; color: var(--danger); font-size: 11px; }
+.fluent-dialog > p.dialog-choice-note { margin-top: -2px; padding: 9px 11px; border-radius: 5px; background: var(--surface-subtle); font-size: 12px; }
+.dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 
 .onboarding {
   position: relative;

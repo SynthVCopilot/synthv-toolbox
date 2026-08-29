@@ -27,7 +27,10 @@ let previewProfiles: Sv2ProfilesState = {
   canImportCurrent: false,
   recoveryRequired: false,
   recoveryDetail: "",
-  blockers: [],
+  blockers: [
+    { pid: 45036, name: "Microsoft Edge WebView2", reason: "正在使用当前 SV2 槽位文件" },
+    { pid: 20348, name: "synthv-studio.exe", reason: "SV2 standalone 正在运行" },
+  ],
   concurrentProvider: {
     available: true,
     name: "Sandboxie Classic",
@@ -53,6 +56,23 @@ let previewProfiles: Sv2ProfilesState = {
       dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\concurrent\\11111111-1111-4111-8111-111111111111\\box\\user\\current\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2",
       runningPids: [],
       detail: "隔离副本已准备；本地变化不会自动覆盖普通槽位。",
+    },
+  }, {
+    id: "22222222-2222-4222-8222-222222222222",
+    displayName: "备用账号",
+    username: "Vocal Editor",
+    email: "editor@example.com",
+    color: "#3478C9",
+    createdAtUtc: new Date().toISOString(),
+    isActive: false,
+    sessionCached: true,
+    dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\slots\\22222222-2222-4222-8222-222222222222",
+    concurrent: {
+      ready: false,
+      boxName: "SV2TB222222222222422282222222",
+      dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\concurrent\\22222222-2222-4222-8222-222222222222\\box\\user\\current\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2",
+      runningPids: [],
+      detail: "尚未准备隔离副本。",
     },
   }],
 };
@@ -135,6 +155,16 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     previewProfiles.slots.forEach((slot) => { slot.isActive = slot.id === previewProfiles.activeSlotId; });
     return previewProfiles as T;
   }
+  if (command === "launch_sv2_profile" || command === "force_launch_sv2_profile") {
+    previewProfiles.activeSlotId = String(args?.slotId ?? "");
+    previewProfiles.slots.forEach((slot) => { slot.isActive = slot.id === previewProfiles.activeSlotId; });
+    if (command === "force_launch_sv2_profile") previewProfiles.blockers = [];
+    return {
+      succeeded: true,
+      summary: command === "force_launch_sv2_profile" ? "已结束占用进程、切换槽位并启动 SV2。" : "已切换槽位并启动 SV2。",
+      detail: "预览模式",
+    } as T;
+  }
   if (command === "prepare_sv2_concurrent_profile") {
     const slot = previewProfiles.slots.find((item) => item.id === args?.slotId);
     if (slot) {
@@ -197,6 +227,8 @@ export const api = {
     call<Sv2ProfilesState>("activate_sv2_profile", { slotId }),
   launchSv2Profile: (slotId: string, projectPath?: string) =>
     call<OperationResult>("launch_sv2_profile", { slotId, projectPath: projectPath || null }),
+  forceLaunchSv2Profile: (slotId: string, projectPath?: string) =>
+    call<OperationResult>("force_launch_sv2_profile", { slotId, projectPath: projectPath || null }),
   openSv2ProfileFolder: (slotId: string) =>
     call<OperationResult>("open_sv2_profile_folder", { slotId }),
   prepareSv2ConcurrentProfile: (slotId: string) =>
