@@ -41,6 +41,10 @@ pub struct ToolboxSettings {
     pub mcp_servers: Vec<McpServerConfig>,
     #[serde(default)]
     pub concurrent_disclaimer_accepted: bool,
+    #[serde(default)]
+    pub smart_svp_launch_enabled: bool,
+    #[serde(default)]
+    pub original_svp_prog_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +71,8 @@ impl Default for ToolboxSettings {
             scripts_path: None,
             mcp_servers: Vec::new(),
             concurrent_disclaimer_accepted: false,
+            smart_svp_launch_enabled: false,
+            original_svp_prog_id: None,
         }
     }
 }
@@ -80,11 +86,11 @@ fn schema_version() -> u32 {
 }
 
 pub fn settings_path() -> PathBuf {
-    pi_agent_core::data_root().join("toolbox.json")
+    crate::agent::data_root().join("toolbox.json")
 }
 
 pub fn model_config_path() -> PathBuf {
-    pi_agent_core::config_path()
+    crate::agent::config_path()
 }
 
 pub fn load_settings() -> ToolboxSettings {
@@ -200,6 +206,8 @@ mod tests {
         assert!(!settings.onboarding_completed);
         assert!(settings.mcp_servers.is_empty());
         assert!(!settings.concurrent_disclaimer_accepted);
+        assert!(!settings.smart_svp_launch_enabled);
+        assert!(settings.original_svp_prog_id.is_none());
     }
 
     #[test]

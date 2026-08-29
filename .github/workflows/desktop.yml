@@ -2,20 +2,7 @@ name: Desktop
 
 on:
   push:
-    branches: [main]
     tags: ["v*"]
-    paths:
-      - "src/PiDesktop.Tauri/**"
-      - "external/pi-agent"
-      - "external/synthv-agent-bridge"
-      - ".github/workflows/desktop.yml"
-  pull_request:
-    paths:
-      - "src/PiDesktop.Tauri/**"
-      - "external/pi-agent"
-      - "external/synthv-agent-bridge"
-      - ".github/workflows/desktop.yml"
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -70,7 +57,7 @@ jobs:
         run: node .github/scripts/set-version.mjs "${{ github.ref_name }}"
 
       - name: Check Python component sources
-        run: python -m py_compile external/pi-agent/components/pi-audio/pi_audio.py external/pi-agent/components/cvrs/cvrs.py
+        run: python -m py_compile src/PiDesktop.Tauri/src-tauri/components/pi-audio/pi_audio.py src/PiDesktop.Tauri/src-tauri/components/cvrs/cvrs.py
 
       - name: Build bundled SynthV Bridge
         working-directory: external/synthv-agent-bridge

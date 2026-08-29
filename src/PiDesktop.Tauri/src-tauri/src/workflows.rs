@@ -22,7 +22,7 @@ pub fn audio_probe(
     resource_dir: &Path,
 ) -> Result<WorkflowResult, String> {
     let audio = validate_input(&audio_path, "音频", AUDIO_EXTENSIONS)?;
-    let runtime = python_component("audio")?;
+    let runtime = python_component("audio", None)?;
     let mut args = vec!["probe".to_string(), audio.to_string_lossy().into_owned()];
     if advanced {
         args.extend(["--notes".to_string(), "--panns".to_string()]);
@@ -55,7 +55,7 @@ pub fn game_to_midi(
     if !(0.02..=0.25).contains(&tolerance) {
         return Err("匹配容差必须在 0.02–0.25 秒之间。".to_string());
     }
-    let runtime = python_component("audio")?;
+    let runtime = python_component("audio", None)?;
     let mut args = vec![
         "pair-diff".to_string(),
         vocal.to_string_lossy().into_owned(),
@@ -90,9 +90,13 @@ pub fn game_to_midi(
     })
 }
 
-pub fn project_probe(project_path: String, resource_dir: &Path) -> Result<WorkflowResult, String> {
+pub fn project_probe(
+    project_path: String,
+    resource_dir: &Path,
+    components_dir: &Path,
+) -> Result<WorkflowResult, String> {
     let project = validate_input(&project_path, "SynthV 工程", &["svp"])?;
-    let runtime = python_component("cvrs")?;
+    let runtime = python_component("cvrs", Some(components_dir))?;
     let args = vec!["probe".to_string(), project.to_string_lossy().into_owned()];
     let data = run_python(&runtime, &args, "SV 工程探测", resource_dir)?;
     let era = data.get("era").and_then(Value::as_str).unwrap_or("unknown");
@@ -115,6 +119,7 @@ pub fn add_project_reference(
     begin_seconds: f64,
     output_name: String,
     resource_dir: &Path,
+    components_dir: &Path,
 ) -> Result<WorkflowResult, String> {
     let project = validate_input(&project_path, "SynthV 工程", &["svp"])?;
     let audio = validate_input(&audio_path, "参考音频", AUDIO_EXTENSIONS)?;
@@ -126,7 +131,7 @@ pub fn add_project_reference(
     if name.is_empty() || name.chars().count() > 100 {
         return Err("参考轨名称不能为空且不能超过 100 个字符。".to_string());
     }
-    let runtime = python_component("cvrs")?;
+    let runtime = python_component("cvrs", Some(components_dir))?;
     let args = vec![
         "add-ref".to_string(),
         project.to_string_lossy().into_owned(),
@@ -149,6 +154,98 @@ pub fn add_project_reference(
     })
 }
 
+pub fn export_project_without_parameters(
+    project_path: String,
+    output_name: String,
+    resource_dir: &Path,
+    components_dir: &Path,
+) -> Result<WorkflowResult, String> {
+    let project = validate_input(&project_path, "SynthV 工程", &["svp"])?;
+    let output = validate_output_name(&output_name, "svp")?;
+    let runtime = python_component("cvrs", Some(components_dir))?;
+    let args = vec![
+        "strip-params".to_string(),
+        project.to_string_lossy().into_owned(),
+        "--out".to_string(),
+        output,
+    ];
+    let data = run_python(&runtime, &args, "导出无参工程", resource_dir)?;
+    let output_path = data.get("out").and_then(Value::as_str).map(str::to_string);
+    let cleared_points = data
+        .pointer("/cleared/parameterPoints")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let cleared_controls = data
+        .pointer("/cleared/pitchControls")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    Ok(WorkflowResult {
+        kind: "project-no-params".to_string(),
+        summary: format!(
+            "无参工程副本已生成：清空 {cleared_points} 个自动化点和 {cleared_controls} 个 Smart Pitch 控制；源工程未修改。"
+        ),
+        output_path,
+        data,
+    })
+}
+
+pub fn export_project_lyrics(
+    project_path: String,
+    track_index: u32,
+    line_gap_seconds: f64,
+    output_name: String,
+    word_output_name: String,
+    resource_dir: &Path,
+    components_dir: &Path,
+) -> Result<WorkflowResult, String> {
+    let project = validate_input(&project_path, "SynthV 工程", &["svp"])?;
+    if track_index == 0 || track_index > 10_000 {
+        return Err("歌词轨道编号必须是从 1 开始的有效整数。".to_string());
+    }
+    if !line_gap_seconds.is_finite() || !(0.0..=10.0).contains(&line_gap_seconds) {
+        return Err("分句空隙必须在 0–10 秒之间。".to_string());
+    }
+    let output = validate_output_name(&output_name, "lrc")?;
+    let word_output = validate_output_name(&word_output_name, "lrc")?;
+    if output.eq_ignore_ascii_case(&word_output) {
+        return Err("普通 LRC 与逐字 LRC 不能使用同一个输出文件名。".to_string());
+    }
+    let runtime = python_component("cvrs", Some(components_dir))?;
+    let args = vec![
+        "export-lrc".to_string(),
+        project.to_string_lossy().into_owned(),
+        "--track-index".to_string(),
+        track_index.to_string(),
+        "--line-gap-seconds".to_string(),
+        format!("{line_gap_seconds:.3}"),
+        "--out".to_string(),
+        output,
+        "--word-out".to_string(),
+        word_output,
+    ];
+    let data = run_python(&runtime, &args, "生成 LRC", resource_dir)?;
+    let output_path = data
+        .get("lrcOut")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let line_count = data
+        .get("lineCount")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let timed_unit_count = data
+        .get("timedUnitCount")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    Ok(WorkflowResult {
+        kind: "project-lyrics".to_string(),
+        summary: format!(
+            "普通 LRC 与逐字 LRC 已生成：{line_count} 行、{timed_unit_count} 个歌词时间单元；源工程未修改。"
+        ),
+        output_path,
+        data,
+    })
+}
+
 const AUDIO_EXTENSIONS: &[&str] = &["wav", "flac", "mp3", "m4a", "aac", "ogg", "opus"];
 
 struct PythonRuntime {
@@ -156,7 +253,7 @@ struct PythonRuntime {
     script: PathBuf,
 }
 
-fn python_component(key: &str) -> Result<PythonRuntime, String> {
+fn python_component(key: &str, components_dir: Option<&Path>) -> Result<PythonRuntime, String> {
     let value: Value = serde_json::from_str(
         &fs::read_to_string(model_config_path())
             .map_err(|_| format!("组件尚未安装。请先在组件中心安装 {}。", component_name(key)))?,
@@ -171,11 +268,16 @@ fn python_component(key: &str) -> Result<PythonRuntime, String> {
         .map(PathBuf::from)
         .filter(|path| path.is_file())
         .ok_or_else(|| "组件 Python 运行时已丢失，请重新安装组件。".to_string())?;
-    let script = section
+    let configured_script = section
         .get("script")
         .and_then(Value::as_str)
         .map(PathBuf::from)
-        .filter(|path| path.is_file())
+        .filter(|path| path.is_file());
+    let bundled_script = components_dir
+        .map(|directory| directory.join(key).join(format!("{key}.py")))
+        .filter(|path| path.is_file());
+    let script = bundled_script
+        .or(configured_script)
         .ok_or_else(|| "组件脚本已丢失，请重新安装组件。".to_string())?;
     Ok(PythonRuntime { python, script })
 }
@@ -308,5 +410,9 @@ mod tests {
         );
         assert!(validate_output_name("../voice.mid", "mid").is_err());
         assert!(validate_output_name("folder/voice.mid", "mid").is_err());
+        assert_eq!(
+            validate_output_name("song.word.lrc", "lrc").unwrap(),
+            "song.word.lrc"
+        );
     }
 }

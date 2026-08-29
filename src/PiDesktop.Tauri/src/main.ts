@@ -1,80 +1,46 @@
 import "./styles.css";
+import { isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
 import { icon } from "./icons";
+import { featureCatalog, type FeatureCatalogItem } from "./featureCatalog";
+import { mountShell, type ShellController } from "./vue/shell";
 import type {
   AppMode,
   BootstrapState,
   ChatMessage,
   ConversationSnapshot,
   ConversationSummary,
+  CreativeHistoryEntry,
   McpServerConfig,
   OperationResult,
+  ProjectCheckpoint,
   Sv2AccountPrecheck,
   Sv2IsolationPreference,
   Sv2ProfileSlot,
   Sv2SessionProtection,
   Sv2ProfilesState,
+  Sv2SyncCategory,
+  Sv2SyncCategoryId,
+  Sv2SyncManifest,
+  SvpLaunchMode,
+  SvpRouteCandidate,
+  SvpRoutePlan,
+  WorkflowRecipe,
   WorkflowResult,
 } from "./types";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 if (!root) throw new Error("Missing #app root");
 
+const ACCOUNT_USAGE_REFRESH_INTERVAL_MS = 30_000;
+const ACCOUNT_USAGE_MIN_SCHEDULE_DELAY_MS = 250;
+
 type Page = "home" | "accounts" | "toolbox" | "copilot" | "components" | "bridge" | "mcp" | "settings";
+type AccountManagerSection = "profile" | "isolation" | "add";
 
-interface Feature {
-  id: string;
-  title: string;
-  description: string;
-  icon: Parameters<typeof icon>[0];
-  accent: string;
-  base: string[];
-  ai: string[];
-  requirements: string[];
-}
-
-const features: Feature[] = [
-  {
-    id: "game-midi",
-    title: "Game → MIDI",
-    description: "对齐有词/演唱版与无词/伴奏版，提取单音音高和节奏并生成可导入的 MIDI。",
-    icon: "audio",
-    accent: "violet",
-    base: ["基础音高轮廓", "确定性量化", "MIDI 导出"],
-    ai: ["高级自动纠正", "置信度复核", "参数微调建议"],
-    requirements: ["FFmpeg", "pi-audio"],
-  },
-  {
-    id: "audio-insight",
-    title: "音频分析",
-    description: "提取 BPM、拍点、能量、调性与乐器倾向，为编曲和调声提供可靠事实。",
-    icon: "sparkles",
-    accent: "blue",
-    base: ["BPM / 拍点", "能量曲线", "基础特征报告"],
-    ai: ["风格归纳", "异常段落解释", "上下文建议"],
-    requirements: ["FFmpeg", "pi-audio"],
-  },
-  {
-    id: "project-tools",
-    title: "SV 工程工具",
-    description: "探测工程版本、轨道结构，并安全生成带参考音频轨的工程副本。",
-    icon: "file",
-    accent: "emerald",
-    base: ["工程探测", "跨版本参考轨", "安全副本输出"],
-    ai: ["工程风险解释", "变更方案生成", "批量操作复核"],
-    requirements: ["CVRS"],
-  },
-  {
-    id: "bridge-tools",
-    title: "SynthV Bridge",
-    description: "连接 Synthesizer V Studio，在严格工具边界内读取状态、编辑工程和执行审阅。",
-    icon: "bridge",
-    accent: "orange",
-    base: ["安装与诊断", "连接状态", "人工工具操作"],
-    ai: ["Copilot 工具调用", "多步任务编排", "结果自检"],
-    requirements: ["Node.js", "SynthV Bridge"],
-  },
-];
+type Feature = FeatureCatalogItem;
+const features: Feature[] = featureCatalog;
 
 let app: BootstrapState | undefined;
 let page: Page = "home";
@@ -87,11 +53,33 @@ let profiles: Sv2ProfilesState | undefined;
 let accountPrecheck: Sv2AccountPrecheck | undefined;
 let activeWorkflow: Feature["id"] | undefined;
 let workflowResult: WorkflowResult | undefined;
+let workflowRecipes: WorkflowRecipe[] = [];
+let creativeHistory: CreativeHistoryEntry[] = [];
+let projectCheckpoints: ProjectCheckpoint[] = [];
+let syncCategories: Sv2SyncCategory[] = [];
+let syncManifest: Sv2SyncManifest | undefined;
+let syncSourceSlotId = "";
+let syncTargetSlotId = "";
+let syncSelectedCategories: Sv2SyncCategoryId[] = [];
+let syncOverwrite = false;
 let pendingBlockedSwitchSlot: string | undefined;
 let pendingConcurrentLaunchSlot: string | undefined;
 let pendingConcurrentPrepare = false;
+let pendingConcurrentRoute: { slotId: string; projectPath: string; mode: SvpLaunchMode } | undefined;
+let pendingSvpRoute: SvpRoutePlan | undefined;
 let downloadPollTimer: number | undefined;
 let accountPrecheckTimer: number | undefined;
+let accountUsageLastAttemptAt = 0;
+let accountUsageRefreshInFlight: Promise<void> | undefined;
+let sidebarCollapsed = (() => {
+  try { return localStorage.getItem("pi.sidebar.collapsed") === "true"; }
+  catch { return false; }
+})();
+let accountManagerOpen = false;
+let accountManagerSection: AccountManagerSection = "profile";
+let managedProfileSlotId: string | undefined;
+let shellController: ShellController | undefined;
+let lastWiredMarkup = "";
 
 const pageMeta: Record<Page, { title: string; subtitle: string }> = {
   home: { title: "概览", subtitle: "查看环境状态与常用能力" },
@@ -177,24 +165,69 @@ function scheduleDownloadPoll(): void {
   }, 700);
 }
 
+function isAccountUsagePage(): boolean {
+  return (["accounts", "toolbox"] as Page[]).includes(page);
+}
+
+function clearAccountUsageSchedule(): void {
+  if (accountPrecheckTimer === undefined) return;
+  window.clearTimeout(accountPrecheckTimer);
+  accountPrecheckTimer = undefined;
+}
+
+async function refreshAccountUsage(): Promise<void> {
+  if (accountUsageRefreshInFlight) return accountUsageRefreshInFlight;
+  accountUsageLastAttemptAt = Date.now();
+  const request = (async () => {
+    const snapshot = await api.sv2AccountUsageSnapshot();
+    profiles = snapshot.profiles;
+    accountPrecheck = snapshot.precheck;
+  })();
+  accountUsageRefreshInFlight = request;
+  try {
+    await request;
+  } finally {
+    if (accountUsageRefreshInFlight === request) accountUsageRefreshInFlight = undefined;
+  }
+}
+
 function scheduleAccountPrecheck(): void {
-  if (!(["accounts", "toolbox"] as Page[]).includes(page) || accountPrecheckTimer !== undefined || (app?.platform !== "windows" && app?.platform !== "preview")) return;
+  if (!isAccountUsagePage() || busy || document.hidden || accountPrecheckTimer !== undefined || accountUsageRefreshInFlight || (app?.platform !== "windows" && app?.platform !== "preview")) return;
+  const elapsed = Date.now() - accountUsageLastAttemptAt;
+  const delay = Math.max(ACCOUNT_USAGE_MIN_SCHEDULE_DELAY_MS, ACCOUNT_USAGE_REFRESH_INTERVAL_MS - elapsed);
   accountPrecheckTimer = window.setTimeout(async () => {
     accountPrecheckTimer = undefined;
-    if (!(["accounts", "toolbox"] as Page[]).includes(page)) return;
+    if (!isAccountUsagePage() || document.hidden) return;
     try {
-      if (page === "accounts") {
-        [profiles, accountPrecheck] = await Promise.all([api.sv2ProfileState(), api.sv2AccountPrecheck()]);
-      } else {
-        accountPrecheck = await api.sv2AccountPrecheck();
-      }
+      await refreshAccountUsage();
       render();
     } catch (reason) {
       error = formatError(reason);
       render();
     }
-  }, 3000);
+  }, delay);
 }
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    clearAccountUsageSchedule();
+    return;
+  }
+  if (!isAccountUsagePage() || busy || (app?.platform !== "windows" && app?.platform !== "preview")) return;
+  if (Date.now() - accountUsageLastAttemptAt < ACCOUNT_USAGE_REFRESH_INTERVAL_MS) {
+    scheduleAccountPrecheck();
+    return;
+  }
+  void (async () => {
+    try {
+      await refreshAccountUsage();
+      render();
+    } catch (reason) {
+      error = formatError(reason);
+      render();
+    }
+  })();
+});
 
 function modePill(): string {
   if (!app) return "";
@@ -204,9 +237,34 @@ function modePill(): string {
 }
 
 function navItem(target: Page, label: string, glyph: Parameters<typeof icon>[0]): string {
-  return `<button class="nav-item ${page === target ? "active" : ""}" data-page="${target}">
+  return `<button class="nav-item ${page === target ? "active" : ""}" data-page="${target}" title="${label}" aria-label="${label}" ${page === target ? 'aria-current="page"' : ""}>
     ${icon(glyph, 19)}<span>${label}</span>
   </button>`;
+}
+
+function renderSidebar(): string {
+  if (!app) return "";
+  return `<div class="brand" data-page="home" title="返回概览">
+      <div class="brand-mark small">π</div>
+      <div><strong>SynthV Toolbox</strong><span>Creative utility suite</span></div>
+    </div>
+    <nav class="nav" aria-label="主导航">
+      <span class="nav-label">工作区</span>
+      ${navItem("home", "概览", "home")}
+      ${app.platform === "windows" || app.platform === "preview" ? navItem("accounts", "SV2 账号", "users") : ""}
+      ${navItem("toolbox", "超级工具箱", "toolbox")}
+      ${app.mode === "ai" ? navItem("copilot", "Copilot", "bot") : ""}
+      <span class="nav-label">系统</span>
+      ${navItem("components", "组件中心", "boxes")}
+      ${navItem("bridge", "SynthV Bridge", "bridge")}
+      ${app.mode === "ai" ? navItem("mcp", "外部 MCP", "server") : ""}
+    </nav>
+    <div class="sidebar-footer">
+      ${modePill()}
+      ${navItem("settings", "设置", "settings")}
+      <button class="nav-item sidebar-toggle" data-toggle-sidebar title="${sidebarCollapsed ? "展开侧栏" : "收起侧栏"}" aria-label="${sidebarCollapsed ? "展开侧栏" : "收起侧栏"}" aria-expanded="${!sidebarCollapsed}">${icon("arrow", 18)}<span>${sidebarCollapsed ? "展开侧栏" : "收起侧栏"}</span></button>
+      <span class="version">v${escapeHtml(app.appVersion)} · ${escapeHtml(app.platform)}</span>
+    </div>`;
 }
 
 function render(): void {
@@ -218,48 +276,30 @@ function render(): void {
   }
   if (app.mode !== "ai" && (page === "copilot" || page === "mcp")) page = "home";
   const meta = pageMeta[page];
-  root.innerHTML = `
-    <div class="app-shell">
-      <aside class="sidebar">
-        <div class="brand" data-page="home">
-          <div class="brand-mark small">π</div>
-          <div><strong>SynthV Toolbox</strong><span>Creative utility suite</span></div>
-        </div>
-        <nav class="nav" aria-label="主导航">
-          <span class="nav-label">工作区</span>
-          ${navItem("home", "概览", "home")}
-          ${app.platform === "windows" || app.platform === "preview" ? navItem("accounts", "SV2 账号", "users") : ""}
-          ${navItem("toolbox", "超级工具箱", "toolbox")}
-          ${app.mode === "ai" ? navItem("copilot", "Copilot", "bot") : ""}
-          <span class="nav-label">系统</span>
-          ${navItem("components", "组件中心", "boxes")}
-          ${navItem("bridge", "SynthV Bridge", "bridge")}
-          ${app.mode === "ai" ? navItem("mcp", "外部 MCP", "server") : ""}
-        </nav>
-        <div class="sidebar-footer">
-          ${modePill()}
-          ${navItem("settings", "设置", "settings")}
-          <span class="version">v${escapeHtml(app.appVersion)} · ${escapeHtml(app.platform)}</span>
-        </div>
-      </aside>
-      <main class="main">
-        <header class="topbar" data-tauri-drag-region>
-          <div><h1>${meta.title}</h1><p>${meta.subtitle}</p></div>
-          <div class="top-actions">
-            <span class="status-dot ${app.bridgeConnected ? "online" : ""}"></span>
-            <span class="muted">Bridge ${app.bridgeConnected ? "已连接" : "未连接"}</span>
-          </div>
-        </header>
-        <section class="content ${page === "copilot" ? "content-flush" : ""}">
-          ${notice ? `<div class="toast success">${icon("check", 18)}<pre>${escapeHtml(notice)}</pre></div>` : ""}
-          ${error ? `<div class="toast error"><pre>${escapeHtml(error)}</pre></div>` : ""}
-          ${renderPage()}
-        </section>
-      </main>
-      ${busy ? '<div class="busy-overlay" aria-label="处理中"><span class="spinner"></span></div>' : ""}
-    </div>
-    ${pendingBlockedSwitchSlot ? renderBlockedSwitchDialog() : pendingConcurrentLaunchSlot ? renderConcurrentDisclaimer() : ""}`;
-  wireForms();
+  const pageHtml = renderPage();
+  const noticeHtml = notice ? `<div class="toast success">${icon("check", 18)}<pre>${escapeHtml(notice)}</pre></div>` : "";
+  const errorHtml = error ? `<div class="toast error"><pre>${escapeHtml(error)}</pre></div>` : "";
+  const overlayHtml = `${busy ? '<div class="busy-overlay" aria-label="处理中"><span class="spinner"></span></div>' : ""}
+    ${pendingBlockedSwitchSlot ? renderBlockedSwitchDialog() : pendingConcurrentLaunchSlot ? renderConcurrentDisclaimer() : pendingSvpRoute ? renderSvpRouteDialog() : accountManagerOpen && page === "accounts" ? renderAccountManager() : ""}`;
+  const nextShellState = {
+    page,
+    sidebarCollapsed,
+    sidebarHtml: renderSidebar(),
+    title: meta.title,
+    subtitle: meta.subtitle,
+    bridgeConnected: app.bridgeConnected,
+    pageHtml,
+    noticeHtml,
+    errorHtml,
+    overlayHtml,
+  };
+  if (shellController) shellController.update(nextShellState);
+  else shellController = mountShell(root, nextShellState);
+  const wiredMarkup = `${pageHtml}\u0000${overlayHtml}`;
+  if (wiredMarkup !== lastWiredMarkup) {
+    lastWiredMarkup = wiredMarkup;
+    shellController.afterUpdate(wireForms);
+  }
   scheduleDownloadPoll();
   scheduleAccountPrecheck();
 }
@@ -294,6 +334,45 @@ function renderBlockedSwitchDialog(): string {
       <div class="dialog-actions"><button class="secondary" data-cancel-profile-switch>取消</button><button class="secondary" data-run-blocked-concurrent ${canRunConcurrent ? "" : "disabled"}>${concurrentLabel}</button><button class="danger-action" data-force-profile-switch>强制切换并启动</button></div>
     </section>
   </div>`;
+}
+
+function renderSvpRouteDialog(): string {
+  if (!pendingSvpRoute) return "";
+  const plan = pendingSvpRoute;
+  const fileName = plan.projectPath.split(/[\\/]/).pop() || plan.projectPath;
+  const requirements = plan.requiredVoices.length
+    ? plan.requiredVoices.map((voice) => `<span title="${escapeHtml([voice.backendType, voice.version].filter(Boolean).join(" · "))}">${icon("audio", 14)} ${escapeHtml(voice.name)}${voice.version ? ` <small>v${voice.version}</small>` : ""}</span>`).join("")
+    : '<span class="muted">工程中没有可识别的演唱声库要求</span>';
+  const candidates = plan.candidates.map((candidate) => renderSvpRouteCandidate(candidate, plan)).join("");
+  return `<div class="dialog-backdrop" role="presentation">
+    <section class="fluent-dialog svp-route-dialog" role="dialog" aria-modal="true" aria-labelledby="svp-route-title">
+      <span class="dialog-icon route">${icon("file", 24)}</span>
+      <div><span class="eyebrow">SMART SVP ROUTING</span><h2 id="svp-route-title">选择用于打开工程的账号</h2><p class="dialog-subtitle" title="${escapeHtml(plan.projectPath)}">${escapeHtml(fileName)}</p></div>
+      <div class="svp-route-summary"><strong>${escapeHtml(plan.summary)}</strong><p>${escapeHtml(plan.detail)}</p></div>
+      <div class="svp-route-requirements"><span>工程所需声库</span><div>${requirements}</div></div>
+      ${plan.requiresConfirmation ? `<div class="route-confirmation-note">${icon("shield", 17)}<span><strong>需要你的确认</strong><small>没有权威授权匹配时，工具箱不会静默选择账号。授权结果最终由 SV2 官方服务验证。</small></span></div>` : ""}
+      <div class="svp-route-candidates">${candidates || '<div class="empty-inline">没有可用账号。请关闭正在运行的 SV2，或先准备隔离槽位。</div>'}</div>
+      <div class="dialog-actions"><button class="secondary" data-cancel-svp-route>取消打开</button></div>
+    </section>
+  </div>`;
+}
+
+function renderSvpRouteCandidate(candidate: SvpRouteCandidate, plan: SvpRoutePlan): string {
+  const selectable = candidate.idle && Boolean(candidate.launchMode);
+  const selected = candidate.slotId === plan.selectedSlotId && candidate.launchMode === plan.selectedLaunchMode;
+  const modeLabel = candidate.launchMode === "concurrent" ? "Sandboxie 并发" : candidate.launchMode === "normal" ? "普通切换" : "不可启动";
+  const matchLabel = candidate.exactAuthorizationMatch
+    ? `${icon("check", 14)} 已匹配全部确认声库`
+    : candidate.matchedVoices.length
+      ? `已匹配 ${candidate.matchedVoices.length}，另有 ${candidate.missingOrUnknownVoices.length} 个未知`
+      : "授权未知，需人工确认";
+  const actionLabel = plan.requiresConfirmation || !candidate.exactAuthorizationMatch ? "确认使用此账号" : "使用此账号打开";
+  return `<article class="svp-route-candidate ${selected ? "recommended" : ""} ${selectable ? "" : "disabled"}">
+    <div class="route-candidate-heading"><span class="profile-avatar compact">${escapeHtml(Array.from(candidate.displayName)[0] ?? "S")}</span><div><strong>${escapeHtml(candidate.displayName)}</strong><small>${escapeHtml(modeLabel)}${selected ? " · 推荐" : ""}</small></div><span class="route-match ${candidate.exactAuthorizationMatch ? "exact" : "unknown"}">${matchLabel}</span></div>
+    <p>${escapeHtml(candidate.reason)}</p>
+    ${candidate.missingOrUnknownVoices.length ? `<div class="route-missing" title="未匹配或未知">${candidate.missingOrUnknownVoices.map((voice) => `<span>${escapeHtml(voice)}</span>`).join("")}</div>` : ""}
+    <button class="${selected ? "primary" : "secondary"}" data-launch-svp-route="${escapeHtml(candidate.slotId)}" data-svp-route-mode="${escapeHtml(candidate.launchMode ?? "normal")}" ${selectable ? "" : "disabled"}>${candidate.launchMode === "concurrent" ? icon("boxes", 16) : icon("play", 16)} ${actionLabel}</button>
+  </article>`;
 }
 
 async function launchConcurrentSlot(slotId: string, prepare: boolean): Promise<void> {
@@ -354,7 +433,6 @@ function renderAccounts(): string {
     return `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("users", 24)}</span><div><h2>当前平台不支持账号槽位</h2><p>${escapeHtml(profiles.recoveryDetail)}</p></div></section>`;
   }
   const blockerPanel = profiles.blockers.length ? `<div class="warning-card profile-blockers"><span>${icon("plug", 23)}</span><div><strong>普通槽位暂时不能切换</strong><p>请先关闭下列普通 SV2 / 插件进程；已经准备好的隔离实例仍可单独启动。<br />${profiles.blockers.map((blocker) => `${escapeHtml(blocker.name)}${blocker.pid ? ` (PID ${blocker.pid})` : ""}：${escapeHtml(blocker.reason)}`).join("<br />")}</p></div></div>` : "";
-  const concurrentProviderAvailable = profiles.concurrentProvider.available;
   if (profiles.recoveryRequired) {
     return `${blockerPanel}<div class="warning-card recovery-card"><span>${icon("refresh", 23)}</span><div><strong>槽位需要人工恢复</strong><p>${escapeHtml(profiles.recoveryDetail)}</p><p>工具箱没有删除或覆盖任何目录。请先备份下方路径，再检查目录实况。</p></div><button class="secondary" data-profile-refresh>${icon("refresh", 16)} 重新检查</button></div>
       <section class="panel"><dl class="detail-list"><div><dt>官方路径</dt><dd><code>${escapeHtml(profiles.canonicalPath)}</code></dd></div><div><dt>保管区</dt><dd><code>${escapeHtml(profiles.vaultPath)}</code></dd></div></dl></section>`;
@@ -362,33 +440,9 @@ function renderAccounts(): string {
   const activeSlot = profiles.slots.find((slot) => slot.isActive);
   const preparedCount = profiles.slots.filter((slot) => slot.concurrent.ready).length;
   const runningSlots = profiles.slots.filter((slot) => slot.concurrent.runningPids.length > 0);
-  const runningProcessCount = runningSlots.reduce((total, slot) => total + slot.concurrent.runningPids.length, 0);
-  const providerLabel = [profiles.concurrentProvider.name, profiles.concurrentProvider.version].filter(Boolean).join(" ");
-  const providerPath = profiles.concurrentProvider.installPath
-    ? `<span class="provider-path" title="${escapeHtml(profiles.concurrentProvider.installPath)}">${icon("folder", 14)} ${escapeHtml(profiles.concurrentProvider.installPath)}</span>`
-    : "";
-  const launchModes = `<section class="launch-mode-grid" aria-label="启动方式">
-    <article class="launch-mode-card default-mode">
-      <div class="launch-mode-head"><span class="feature-icon blue">${icon("play", 22)}</span><div><span class="eyebrow">默认方式</span><h3>普通启动</h3></div><span class="launch-mode-state">${activeSlot ? `${escapeHtml(activeSlot.displayName)} · 当前默认` : "等待设置默认槽位"}</span></div>
-      <p>适合日常使用。一次只挂载一个账号环境；从桌面快捷方式启动或双击 .svp 时，也会使用当前默认槽位。</p>
-      <div class="launch-mode-facts"><span>${icon("check", 14)} 可继续使用原有启动方式</span><span>${icon("refresh", 14)} 切换前需退出普通实例</span></div>
-    </article>
-    <article class="launch-mode-card isolation-mode ${concurrentProviderAvailable ? "ready" : "unavailable"}">
-      <div class="launch-mode-head"><span class="feature-icon violet">${icon("boxes", 22)}</span><div><span class="eyebrow">并发能力</span><h3>并发隔离</h3></div><span class="launch-mode-state ${concurrentProviderAvailable ? "online" : ""}">${concurrentProviderAvailable ? `${icon("check", 13)} 隔离核心就绪` : "需要 Sandboxie"}</span></div>
-      ${concurrentProviderAvailable
-        ? `<p>通过 ${escapeHtml(providerLabel)} 为每个槽位创建独立的文件、注册表和 IPC 环境，可与普通实例或其他隔离槽位同时运行。</p><div class="provider-integration"><strong>${icon("boxes", 15)} ${escapeHtml(providerLabel)}</strong><span>${preparedCount} 个已准备</span><span>${runningSlots.length} 个运行中${runningProcessCount ? ` · ${runningProcessCount} 个相关进程` : ""}</span>${providerPath}</div>`
-        : `<p>${escapeHtml(profiles.concurrentProvider.detail)}</p><div class="provider-integration unavailable"><strong>普通账号切换仍可使用</strong><span>安装受支持版本后，重启工具箱即可自动集成。</span></div>`}
-      <form id="concurrent-defaults-form" class="isolation-defaults-form">
-        <div><strong>全局隔离默认值</strong><small>账户选择“跟随全局”时使用；修改后于下次隔离启动生效。</small></div>
-        <label class="fluent-switch"><input name="appSettings" type="checkbox" ${profiles.concurrentDefaults.appSettings ? "checked" : ""} /><span></span>应用设置</label>
-        <label class="fluent-switch"><input name="voiceLibraries" type="checkbox" ${profiles.concurrentDefaults.voiceLibraries ? "checked" : ""} /><span></span>声库数据</label>
-        <button class="secondary" type="submit">保存默认值</button>
-      </form>
-      <small>本技术方案基于 Sandboxie 实现，不是 Dreamtonics 原生多实例功能。工具箱不代理或修改网络；持续验证、账号与工程同步仍由 SV2 和 Dreamtonics 官方服务处理。</small>
-    </article>
-  </section>`;
-  const concurrentProviderDetail = profiles.concurrentProvider.detail;
-  const concurrentDefaults = profiles.concurrentDefaults;
+  const concurrentProviderAvailable = profiles.concurrentProvider.available;
+  const providerLabel = [profiles.concurrentProvider.name, profiles.concurrentProvider.version].filter(Boolean).join(" ") || "Sandboxie";
+  const providerDetail = profiles.concurrentProvider.detail;
   const cards = profiles.slots.map((slot) => {
     const lastUsed = slot.lastActivatedAtUtc ? new Date(slot.lastActivatedAtUtc).toLocaleString("zh-CN") : "尚未启动";
     const initial = Array.from(slot.displayName)[0] ?? "S";
@@ -396,43 +450,63 @@ function renderAccounts(): string {
     const identity = [slot.username, slot.email].filter(Boolean);
     const useState = accountUseStateForSlot(slot);
     const concurrentRunning = slot.concurrent.runningPids.length > 0;
-    const concurrentNeedsAttention = !slot.concurrent.ready && slot.concurrent.detail !== "尚未准备隔离副本。";
-    const concurrentState = concurrentRunning ? "running" : slot.concurrent.ready ? "ready" : concurrentNeedsAttention ? "attention" : "pending";
-    const concurrentStateLabel = concurrentRunning ? "运行中" : slot.concurrent.ready ? "已准备" : concurrentNeedsAttention ? "需要处理" : "未准备";
-    const concurrentDescription = concurrentRunning
-      ? `SV2 正在此隔离环境中运行（${slot.concurrent.runningPids.length} 个相关进程）。`
-      : slot.concurrent.ready
-        ? "独立副本已就绪，可与普通实例或其他隔离槽位同时运行。其本地变化不会自动覆盖普通槽位。"
-        : concurrentNeedsAttention
-          ? slot.concurrent.detail
-          : "首次使用时，从此槽位建立一份独立副本；之后两套本地数据各自保存。";
-    const concurrentControls = slot.concurrent.ready
-      ? `<button class="secondary concurrent-launch" data-profile-concurrent-launch="${slot.id}" ${concurrentProviderAvailable && !concurrentRunning ? "" : `disabled title="${concurrentRunning ? "该隔离实例已经在运行" : "Sandboxie 隔离核心不可用"}"`}>${icon("boxes", 16)} ${concurrentRunning ? "隔离实例正在运行" : "启动隔离实例"}</button><button class="icon-plain" data-profile-concurrent-folder="${slot.id}" title="打开隔离数据目录" aria-label="打开 ${escapeHtml(slot.displayName)} 的隔离数据目录">${icon("folder", 17)}</button>`
-      : `<button class="secondary concurrent-prepare" data-profile-concurrent-prepare="${slot.id}" ${concurrentProviderAvailable ? "" : `disabled title="${escapeHtml(concurrentProviderDetail)}"`}>${icon("download", 16)} 准备隔离实例</button>`;
-    const content = slot.concurrent.content;
-    const isolationContentForm = `<form class="isolation-content-form" data-profile-isolation-form="${slot.id}">
-      <div class="isolation-content-heading"><strong>隔离内容</strong><span>下次隔离启动生效</span></div>
-      <label>应用设置<select name="appSettings">${isolationPreferenceOptions(content.appSettings, concurrentDefaults.appSettings)}</select><small class="effective-state ${content.effectiveAppSettings ? "isolated" : "shared"}">${content.effectiveAppSettings ? "实际：独立" : "实际：共享宿主"}</small></label>
-      <label>声库数据<select name="voiceLibraries">${isolationPreferenceOptions(content.voiceLibraries, concurrentDefaults.voiceLibraries)}</select><small class="effective-state ${content.effectiveVoiceLibraries ? "isolated" : "shared"}">${content.effectiveVoiceLibraries ? "实际：独立" : "实际：共享宿主"}</small></label>
-      <button class="secondary" type="submit">保存隔离内容</button>
-      <small class="isolation-content-note">关闭隔离会通过 Sandboxie <code>OpenFilePath</code> 直接使用宿主的对应目录；账号会话、WebView2、注册表和 IPC 仍保持隔离。</small>
-    </form>`;
-    return `<article class="profile-card ${slot.isActive ? "active" : ""}" style="--profile-color:${color}">
-      <div class="profile-card-head"><span class="profile-avatar">${escapeHtml(initial)}</span><div><span class="eyebrow">账号槽位</span><div class="profile-title-line"><h2>${escapeHtml(slot.displayName)}</h2>${accountUseDot(useState)}</div>${identity.length ? `<span class="profile-identity">${identity.map(escapeHtml).join(" · ")}</span>` : '<span class="profile-identity empty">尚未填写用户名或邮箱</span>'}</div>${slot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
-      <div class="profile-meta"><span class="${slot.sessionCached ? "cached" : ""}">${slot.sessionCached ? `${icon("check", 14)} 登录缓存已存在` : `${icon("plug", 14)} 首次启动需要登录`}</span>${sessionProtectionBadge(slot.sessionProtection)}<span>${icon("refresh", 14)} 最近使用：${escapeHtml(lastUsed)}</span></div>
-      <section class="profile-launch-block ordinary"><div class="profile-launch-heading"><div><span>普通启动</span><strong>${slot.isActive ? "使用当前默认环境" : "切换到此账号环境"}</strong></div>${slot.isActive ? '<span class="profile-route-badge">默认路由</span>' : ""}</div><p>${slot.isActive ? "桌面快捷方式和 .svp 文件也会继续使用此槽位。" : "会先安全切换默认槽位，再启动 SV2；现有普通实例需要先退出。"}</p><div class="profile-actions"><button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button>${slot.isActive ? "" : `<button class="secondary" data-profile-activate="${slot.id}">设为默认</button>`}<button class="icon-plain profile-folder" data-profile-folder="${slot.id}" title="打开普通数据目录" aria-label="打开 ${escapeHtml(slot.displayName)} 的普通数据目录">${icon("folder", 18)}</button></div></section>
-      <section class="profile-launch-block isolation ${slot.concurrent.ready ? "ready" : ""}"><div class="profile-launch-heading"><div><span>隔离启动</span><strong>独立运行此账号</strong></div><span class="profile-isolation-status ${concurrentState}">${concurrentRunning ? icon("plug", 12) : ""}${concurrentStateLabel}</span></div><p>${escapeHtml(concurrentDescription)}</p>${slot.concurrent.ready ? `<div class="session-guard-inline">${sessionProtectionBadge(slot.concurrentSessionProtection, "隔离环境 · ")}</div>` : ""}${isolationContentForm}<div class="profile-concurrent-actions">${concurrentControls}</div>${slot.concurrent.ready ? `<code title="隔离箱名称：${escapeHtml(slot.concurrent.boxName)}">${escapeHtml(slot.concurrent.boxName)}</code>` : ""}</section>
-      <details class="profile-details"><summary>管理账号标签与存储位置 ${icon("arrow", 14)}</summary><div class="profile-details-body"><form class="profile-identity-form" data-profile-identity-form="${slot.id}"><label>用户名<input name="username" value="${escapeHtml(slot.username)}" maxlength="100" placeholder="用于区分账号的用户名" /></label><label>邮箱<input name="email" type="email" value="${escapeHtml(slot.email)}" maxlength="254" placeholder="name@example.com" /></label><button class="secondary">保存账号标签</button><small>这些标签由工具箱单独保存；不会读取或修改 SV2 的密码、Cookie 或 session。</small></form><form class="profile-rename" data-profile-rename-form="${slot.id}"><label>槽位显示名称<input value="${escapeHtml(slot.displayName)}" maxlength="64" required /></label><button class="secondary">保存</button></form><dl class="profile-storage-list"><div><dt>普通数据</dt><dd><code title="${escapeHtml(slot.dataPath)}">${escapeHtml(slot.dataPath)}</code></dd></div>${slot.concurrent.ready ? `<div><dt>隔离数据</dt><dd><code title="${escapeHtml(slot.concurrent.dataPath)}">${escapeHtml(slot.concurrent.dataPath)}</code></dd></div>` : ""}</dl></div></details>
+    const isolatedLabel = concurrentRunning ? "隔离运行中" : slot.concurrent.ready ? "隔离启动" : "准备隔离";
+    const isolatedDisabled = concurrentRunning || !concurrentProviderAvailable;
+    return `<article class="account-launch-card ${slot.isActive ? "active" : ""}" style="--profile-color:${color}">
+      <div class="account-card-main"><span class="profile-avatar compact">${escapeHtml(initial)}</span><div class="account-card-identity"><div class="profile-title-line"><h2>${escapeHtml(slot.displayName)}</h2>${accountUseDot(useState)}${slot.isActive ? '<span class="profile-active-badge">默认</span>' : ""}</div>${identity.length ? `<span class="profile-identity">${identity.map(escapeHtml).join(" · ")}</span>` : '<span class="profile-identity empty">未设置账号标签</span>'}</div><button class="icon-plain" data-manage-slot="${slot.id}" title="管理账号" aria-label="管理 ${escapeHtml(slot.displayName)}">${icon("settings", 18)}</button></div>
+      <div class="account-card-facts"><span class="${slot.sessionCached ? "cached" : ""}">${slot.sessionCached ? `${icon("check", 13)} 已缓存登录` : `${icon("plug", 13)} 需要登录`}</span>${sessionProtectionBadge(slot.sessionProtection)}${voiceInventoryBadge(slot)}<span>${icon("refresh", 13)} ${escapeHtml(lastUsed)}</span>${concurrentRunning ? `<span class="running">${icon("plug", 13)} ${slot.concurrent.runningPids.length} 个隔离进程</span>` : ""}</div>
+      <div class="account-launch-actions"><button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button>${slot.concurrent.ready ? `<button class="secondary" data-profile-concurrent-launch="${slot.id}" ${isolatedDisabled ? `disabled title="${concurrentRunning ? "该隔离实例已在运行" : escapeHtml(providerDetail)}"` : ""}>${icon("boxes", 16)} ${isolatedLabel}</button>` : `<button class="secondary" data-profile-concurrent-prepare="${slot.id}" ${concurrentProviderAvailable ? "" : `disabled title="${escapeHtml(providerDetail)}"`}>${icon("download", 16)} ${isolatedLabel}</button>`}</div>
     </article>`;
   }).join("");
-  const importPanel = profiles.canImportCurrent ? `<section class="panel profile-setup"><div class="panel-heading"><span class="feature-icon emerald">${icon("folder", 24)}</span><div><h2>导入当前 SV2 环境</h2><p>现有官方数据目录尚未纳入槽位；导入不会移动账号文件。</p></div></div><form id="profile-import-form" class="profile-create-form"><input id="profile-import-name" maxlength="64" required placeholder="例如 主账号" /><button class="primary">导入为第一个槽位</button></form></section>` : "";
-  const createPanel = `<section class="panel profile-setup"><div class="panel-heading"><span class="feature-icon blue">${icon("plus", 24)}</span><div><h2>添加账号槽位</h2><p>创建一个空环境；首次启动后，在 SV2 的 Dreamtonics 官方登录页面完成登录。</p></div></div><form id="profile-create-form" class="profile-create-form"><input id="profile-create-name" maxlength="64" required placeholder="例如 制作账号" /><button class="secondary">创建空槽位</button></form></section>`;
-  return `<div class="profile-intro"><div><span class="eyebrow">SV2 ACCOUNT LAUNCHER</span><h2>像游戏启动器一样，选账号再启动</h2><p>普通启动负责默认账号切换；隔离启动负责多账号并发。用户名和邮箱是工具箱自己的可编辑标签，登录数据仍按原样、不透明地保存。</p><div class="profile-summary"><span>${profiles.slots.length} 个账号槽位</span><span>${preparedCount} 个隔离实例已准备</span>${runningSlots.length ? `<span class="running">${icon("plug", 13)} ${runningSlots.length} 个正在运行</span>` : ""}</div><div class="account-use-legend" aria-label="账号占用状态图例"><span>${accountUseDot({ tone: "clear", label: "已确认无人使用" })}确定无人使用</span><span>${accountUseDot({ tone: "unknown", label: "占用状态未知" })}未知</span><span>${accountUseDot({ tone: "in-use", label: "已确认使用中" })}确认使用中</span></div></div><button class="secondary" data-profile-refresh>${icon("refresh", 16)} 刷新状态</button></div>
-    ${launchModes}
+  return `<section class="account-hub panel"><div><span class="eyebrow">SV2 ACCOUNT LAUNCHER</span><h2>选择账号并启动</h2><p>普通启动切换默认环境；隔离启动允许多个账号独立运行。</p></div><div class="account-hub-actions"><div class="profile-summary"><span>${profiles.slots.length} 个账号</span><span>${preparedCount} 个隔离就绪</span>${runningSlots.length ? `<span class="running">${icon("plug", 13)} ${runningSlots.length} 个运行中</span>` : ""}</div><div class="button-row"><button class="secondary compact" data-profile-refresh title="刷新状态">${icon("refresh", 16)} 刷新</button><button class="secondary compact" data-account-manager="profile">${icon("settings", 16)} 管理</button><button class="primary compact" data-account-manager="add">${icon("plus", 16)} 添加账号</button></div></div></section>
+    <div class="account-provider-strip ${concurrentProviderAvailable ? "ready" : "unavailable"}"><span>${icon("boxes", 16)}</span><strong>并发隔离</strong><span>${concurrentProviderAvailable ? `${escapeHtml(providerLabel)} 已就绪` : "当前不可用"}</span><button class="icon-plain" data-account-manager="isolation" aria-label="管理并发隔离" title="管理并发隔离">${icon("settings", 16)}</button></div>
     ${blockerPanel}
-    <div class="profile-grid">${cards || '<div class="empty-inline">还没有账号槽位。请导入当前环境或创建一个空槽位。</div>'}</div>
-    <div class="profile-setup-grid">${importPanel}${createPanel}</div>
-    <section class="panel profile-safety"><span>${icon("check", 18)}</span><div><strong>不伪造登录，也不绕过联网验证</strong><p>每个槽位默认按原样保存 license、WebView2、设置、数据库、缓存和脚本；用户可只将应用设置或声库数据改为共享宿主。普通切换只在相关进程退出后进行，官方网络连接保持不变。</p></div></section>`;
+    <div class="account-launch-grid">${cards || `<button class="empty-account-card" data-account-manager="add">${icon("plus", 22)}<strong>添加第一个账号</strong><span>导入当前环境或创建空槽位</span></button>`}</div>
+    ${activeSlot ? `<p class="account-default-note">桌面快捷方式和 .svp 文件当前使用“${escapeHtml(activeSlot.displayName)}”。账号资料、目录与隔离策略已收进「管理」。</p>` : ""}`;
+}
+
+function voiceInventoryBadge(slot: Sv2ProfileSlot): string {
+  const inventory = slot.voiceInventory;
+  if (inventory.status === "manual") {
+    return `<span class="voice-inventory confirmed" title="${escapeHtml(inventory.detail)}">${icon("audio", 13)} ${inventory.manuallyConfirmedVoices.length} 个确认声库</span>`;
+  }
+  if (inventory.status === "localEvidence") {
+    return `<span class="voice-inventory evidence" title="${escapeHtml(inventory.detail)}">${icon("audio", 13)} ${inventory.installedOpaqueCount} 个本地安装证据</span>`;
+  }
+  return `<span class="voice-inventory unknown" title="${escapeHtml(inventory.detail)}">${icon("audio", 13)} 授权未知</span>`;
+}
+
+function renderAccountManager(): string {
+  if (!profiles) return "";
+  const managedSlot = profiles.slots.find((slot) => slot.id === managedProfileSlotId)
+    ?? profiles.slots.find((slot) => slot.isActive)
+    ?? profiles.slots[0];
+  if (managedSlot) managedProfileSlotId = managedSlot.id;
+  const selector = profiles.slots.length ? `<div class="account-mini-list" aria-label="选择账号">${profiles.slots.map((slot) => {
+    const initial = Array.from(slot.displayName)[0] ?? "S";
+    const color = /^#[0-9a-f]{6}$/i.test(slot.color) ? slot.color : "#6D5CE7";
+    return `<button class="account-mini-item ${slot.id === managedSlot?.id ? "active" : ""}" data-select-managed-slot="${slot.id}" style="--profile-color:${color}"><span>${escapeHtml(initial)}</span><strong>${escapeHtml(slot.displayName)}</strong>${slot.isActive ? '<small>默认</small>' : ""}</button>`;
+  }).join("")}</div>` : "";
+  let body = "";
+  if (accountManagerSection === "profile") {
+    body = managedSlot ? `${selector}<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(managedSlot.displayName)}</h3><p>这里只保存便于识别的标签，不读取密码、Cookie 或 session。</p></div>${managedSlot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
+      <form class="profile-identity-form compact-form" data-profile-identity-form="${managedSlot.id}"><label>用户名<input name="username" value="${escapeHtml(managedSlot.username)}" maxlength="100" placeholder="用于区分账号" /></label><label>邮箱<input name="email" type="email" value="${escapeHtml(managedSlot.email)}" maxlength="254" placeholder="name@example.com" /></label><button class="secondary">保存标签</button></form>
+      <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>槽位显示名称<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" required /></label><button class="secondary">重命名</button></form>
+      <form class="voice-license-form" data-profile-voice-form="${managedSlot.id}"><div class="voice-license-heading"><div><strong>手工确认可用声库</strong><small>每行一个完整产品名称，仅记录你确认属于此账号的授权。</small></div><span class="inventory-status ${managedSlot.voiceInventory.status}">${managedSlot.voiceInventory.status === "manual" ? "用户已确认" : managedSlot.voiceInventory.status === "localEvidence" ? "仅本地证据" : "未知"}</span></div><textarea name="voices" rows="4" maxlength="16384" placeholder="例如：&#10;Mai 2&#10;SOLARIA">${escapeHtml(managedSlot.voiceInventory.manuallyConfirmedVoices.join("\n"))}</textarea><div class="voice-evidence-note">${icon("shield", 16)}<span><strong>本地安装不等于账号授权</strong><small>${escapeHtml(managedSlot.voiceInventory.detail)}${managedSlot.voiceInventory.installedOpaqueCount ? ` 当前检测到 ${managedSlot.voiceInventory.installedOpaqueCount} 个不透明安装项。` : ""}</small></span></div><button class="secondary" type="submit">保存确认记录</button></form>
+      <div class="manager-action-row">${managedSlot.isActive ? "" : `<button class="secondary" data-profile-activate="${managedSlot.id}">${icon("check", 15)} 设为默认账号</button>`}<button class="secondary" data-profile-folder="${managedSlot.id}">${icon("folder", 15)} 打开普通数据目录</button>${managedSlot.concurrent.ready ? `<button class="secondary" data-profile-concurrent-folder="${managedSlot.id}">${icon("folder", 15)} 打开隔离目录</button>` : ""}</div>
+      <dl class="profile-storage-list compact"><div><dt>普通数据</dt><dd><code title="${escapeHtml(managedSlot.dataPath)}">${escapeHtml(managedSlot.dataPath)}</code></dd></div>${managedSlot.concurrent.ready ? `<div><dt>隔离数据</dt><dd><code title="${escapeHtml(managedSlot.concurrent.dataPath)}">${escapeHtml(managedSlot.concurrent.dataPath)}</code></dd></div>` : ""}</dl></div>` : '<div class="empty-inline">尚无账号，请先添加一个槽位。</div>';
+  } else if (accountManagerSection === "isolation") {
+    const content = managedSlot?.concurrent.content;
+    const defaults = profiles.concurrentDefaults;
+    const providerLabel = [profiles.concurrentProvider.name, profiles.concurrentProvider.version].filter(Boolean).join(" ") || "Sandboxie";
+    body = `<div class="manager-provider ${profiles.concurrentProvider.available ? "ready" : "unavailable"}"><span class="feature-icon violet">${icon("boxes", 20)}</span><div><strong>${escapeHtml(providerLabel)}</strong><p>${escapeHtml(profiles.concurrentProvider.detail)}</p></div><span class="availability">${profiles.concurrentProvider.available ? "已就绪" : "不可用"}</span></div>
+      <form id="concurrent-defaults-form" class="isolation-defaults-form manager-defaults"><div><strong>全局隔离默认值</strong><small>单账号选择“跟随全局”时使用。</small></div><label class="fluent-switch"><input name="appSettings" type="checkbox" ${defaults.appSettings ? "checked" : ""} /><span></span>应用设置</label><label class="fluent-switch"><input name="voiceLibraries" type="checkbox" ${defaults.voiceLibraries ? "checked" : ""} /><span></span>声库数据</label><button class="secondary" type="submit">保存默认值</button></form>
+      ${managedSlot && content ? `${selector}<form class="isolation-content-form manager-isolation-form" data-profile-isolation-form="${managedSlot.id}"><div class="isolation-content-heading"><strong>${escapeHtml(managedSlot.displayName)} · 隔离内容</strong><span>下次隔离启动生效</span></div><label>应用设置<select name="appSettings">${isolationPreferenceOptions(content.appSettings, defaults.appSettings)}</select><small class="effective-state ${content.effectiveAppSettings ? "isolated" : "shared"}">${content.effectiveAppSettings ? "实际：独立" : "实际：共享宿主"}</small></label><label>声库数据<select name="voiceLibraries">${isolationPreferenceOptions(content.voiceLibraries, defaults.voiceLibraries)}</select><small class="effective-state ${content.effectiveVoiceLibraries ? "isolated" : "shared"}">${content.effectiveVoiceLibraries ? "实际：独立" : "实际：共享宿主"}</small></label><button class="secondary" type="submit">保存账号策略</button><small class="isolation-content-note">账号会话、WebView2、注册表和 IPC 始终保持隔离。</small></form>` : ""}
+      <details class="manager-note"><summary>隔离模式说明</summary><p>本方案基于 Sandboxie，并非 Dreamtonics 原生多实例功能。工具箱不修改 SV2 二进制，也不代理或绕过官方网络验证。</p></details>`;
+  } else {
+    body = `<div class="account-add-grid">${profiles.canImportCurrent ? `<section><span class="feature-icon emerald">${icon("folder", 20)}</span><h3>导入当前环境</h3><p>把现有官方数据目录纳入槽位，不移动账号文件。</p><form id="profile-import-form" class="profile-create-form"><input id="profile-import-name" maxlength="64" required placeholder="例如 主账号" /><button class="primary">导入</button></form></section>` : ""}<section><span class="feature-icon blue">${icon("plus", 20)}</span><h3>创建空槽位</h3><p>首次启动后，在 SV2 官方登录页面完成登录。</p><form id="profile-create-form" class="profile-create-form"><input id="profile-create-name" maxlength="64" required placeholder="例如 制作账号" /><button class="secondary">创建</button></form></section></div><div class="manager-safety">${icon("check", 17)}<span><strong>账号数据保持原样</strong><small>工具箱不会伪造登录或绕过联网验证。</small></span></div>`;
+  }
+  return `<div class="dialog-backdrop account-manager-backdrop" role="presentation"><section class="account-manager-dialog" role="dialog" aria-modal="true" aria-labelledby="account-manager-title"><header><div><span class="eyebrow">SV2 ACCOUNT MANAGER</span><h2 id="account-manager-title">账号管理</h2></div><button class="icon-plain" data-close-account-manager title="关闭" aria-label="关闭账号管理">×</button></header><div class="segmented manager-tabs" role="tablist"><button class="${accountManagerSection === "profile" ? "active" : ""}" data-account-manager-section="profile">账号资料</button><button class="${accountManagerSection === "isolation" ? "active" : ""}" data-account-manager-section="isolation">并发隔离</button><button class="${accountManagerSection === "add" ? "active" : ""}" data-account-manager-section="add">添加账号</button></div><div class="account-manager-body">${body}</div></section></div>`;
 }
 
 function renderHome(): string {
@@ -561,8 +635,48 @@ function renderWorkflowPanel(id: string): string {
       <button class="primary">${icon(ai ? "sparkles" : "play", 16)} 开始分析</button>
     </form>`;
   } else if (id === "project-tools") {
-    form = `<div class="workflow-split"><form id="project-probe-form" class="workflow-form"><h3>只读工程探测</h3><label>.svp 工程路径<input id="project-probe-path" required placeholder="目标 .svp 文件" /></label><button class="primary">${icon("file", 16)} 探测版本与轨道</button></form>
-      <form id="project-reference-form" class="workflow-form"><h3>生成参考轨副本</h3><label>目标 .svp 工程路径<input id="project-ref-path" required /></label><label>参考音频路径<input id="project-ref-audio" required /></label><div class="workflow-pair"><label>参考轨名称<input id="project-ref-name" required value="CVRS Reference" /></label><label>起始秒数<input id="project-ref-begin" type="number" min="0" max="86400" step="0.01" value="0" /></label></div><label>输出工程文件名<input id="project-ref-output" required value="project_cvrs.svp" /></label><button class="secondary">${icon("plus", 16)} 生成安全副本</button></form></div>`;
+    form = `<div class="mode-limit">请先在 SynthV 中保存工程；这里读取磁盘上的 .svp，不包含尚未保存的内存修改。所有输出统一写入 ~/.SynthVcopilot/output/，源工程不会被覆盖。</div>
+      <div class="workflow-split">
+        <form id="project-probe-form" class="workflow-form"><h3>只读工程探测</h3><label>.svp 工程路径<input id="project-probe-path" required placeholder="目标 .svp 文件" /></label><button class="primary">${icon("file", 16)} 探测版本与轨道</button></form>
+        <form id="project-no-params-form" class="workflow-form"><h3>导出无参工程</h3><label>已保存的 .svp 工程路径<input id="project-no-params-path" required placeholder="源工程不会被修改" /></label><label>输出工程文件名<input id="project-no-params-output" required value="project_no_params.svp" /></label><button class="secondary">${icon("file", 16)} 生成无参副本</button></form>
+        <form id="project-lyrics-form" class="workflow-form"><h3>生成 LRC / 逐字 LRC</h3><label>已保存的 .svp 工程路径<input id="project-lyrics-path" required /></label><div class="workflow-pair"><label>歌词轨道编号<input id="project-lyrics-track" type="number" min="1" max="10000" step="1" value="1" required /></label><label>分句空隙（秒）<input id="project-lyrics-gap" type="number" min="0" max="10" step="0.1" value="0.8" required /></label></div><label>普通 LRC 文件名<input id="project-lyrics-output" required value="project.lrc" /></label><label>逐字 LRC 文件名<input id="project-word-lyrics-output" required value="project.word.lrc" /></label><button class="secondary">${icon("file", 16)} 同时生成两种 LRC</button></form>
+        <form id="project-reference-form" class="workflow-form"><h3>生成参考轨副本</h3><label>目标 .svp 工程路径<input id="project-ref-path" required /></label><label>参考音频路径<input id="project-ref-audio" required /></label><div class="workflow-pair"><label>参考轨名称<input id="project-ref-name" required value="CVRS Reference" /></label><label>起始秒数<input id="project-ref-begin" type="number" min="0" max="86400" step="0.01" value="0" /></label></div><label>输出工程文件名<input id="project-ref-output" required value="project_cvrs.svp" /></label><button class="secondary">${icon("plus", 16)} 生成安全副本</button></form>
+      </div>`;
+  } else if (id === "audio-to-project") {
+    form = `<div class="mode-limit">第一版使用时间轴一致的演唱版与伴奏版提取单音旋律。未连接 Bridge 时仍会保留 MIDI 检查点；含词转写会在 Whisper 组件进入可信安装清单后启用。</div>
+      <form id="audio-to-project-form" class="workflow-form workflow-wide">
+        <div class="workflow-pair"><label>演唱版音频路径<input id="pipeline-vocal" required placeholder="包含目标演唱的音频" /></label><label>伴奏版音频路径<input id="pipeline-inst" required placeholder="同版本、同时间轴的伴奏" /></label></div>
+        <div class="workflow-pair"><label>输出 MIDI 文件名<input id="pipeline-output" required value="audio_to_project.mid" /></label><label>SynthV 音符组名称<input id="pipeline-group-name" required value="Toolbox Audio Import" maxlength="200" /></label></div>
+        <div class="workflow-pair"><label>目标轨道编号<input id="pipeline-track" type="number" min="1" max="10000" value="1" required /></label>${ai ? `<label>匹配容差（秒）<input id="pipeline-tolerance" type="number" min="0.02" max="0.25" step="0.01" value="0.08" /></label>` : '<input id="pipeline-tolerance" type="hidden" value="0.08" />'}</div>
+        ${ai ? `<label class="checkbox workflow-check"><input id="pipeline-advanced" type="checkbox" checked /> 启用多参数寻优与低置信音符纠正</label>` : ""}
+        <label class="checkbox workflow-check"><input id="pipeline-import" type="checkbox" ${app.bridgeConnected ? "" : "disabled"} /> 提取完成后通过 Bridge 导入当前 SynthV 工程${app.bridgeConnected ? "" : "（Bridge 未连接）"}</label>
+        <label class="checkbox workflow-check"><input id="pipeline-rights" type="checkbox" /> 我确认有权使用这些本地素材及生成的 MIDI（仅导入时需要）</label>
+        <button class="primary">${icon("pipeline", 16)} 运行音频到工程流程</button>
+      </form>`;
+  } else if (id === "project-doctor") {
+    form = `<div class="mode-limit">完全离线、只读检查已保存的 .svp；不会调用模型或修改工程。</div><form id="project-doctor-form" class="workflow-form workflow-wide"><label>.svp 工程路径<input id="doctor-project" required placeholder="选择需要体检的工程" /></label><button class="primary">${icon("doctor", 16)} 开始只读体检</button></form>`;
+  } else if (id === "checkpoints") {
+    const history = creativeHistory.length ? creativeHistory.map((item) => `<article class="timeline-item"><span class="status-dot online"></span><div><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.summary)}</small><code>${escapeHtml(new Date(item.createdAtUtc).toLocaleString("zh-CN"))}${item.outputPath ? ` · ${escapeHtml(item.outputPath)}` : ""}</code></div></article>`).join("") : '<div class="empty-inline">还没有创作工作流记录。</div>';
+    const checkpoints = projectCheckpoints.length ? projectCheckpoints.map((item) => `<article class="checkpoint-item"><span class="feature-icon blue">${icon("shield", 17)}</span><div><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.sourcePath)}</small><code>SHA-256 ${escapeHtml(item.sourceSha256.slice(0, 16))}… · ${new Date(item.createdAtUtc).toLocaleString("zh-CN")}</code></div><button class="secondary compact" data-restore-checkpoint="${escapeHtml(item.id)}">恢复副本</button></article>`).join("") : '<div class="empty-inline">还没有工程检查点。</div>';
+    form = `<div class="workflow-split"><form id="checkpoint-form" class="workflow-form"><h3>创建工程检查点</h3><label>.svp 工程路径<input id="checkpoint-project" required /></label><label>检查点名称<input id="checkpoint-label" required maxlength="100" value="调声前" /></label><button class="primary">${icon("shield", 16)} 创建哈希检查点</button></form><section class="workflow-form"><h3>工程检查点</h3><div class="checkpoint-list">${checkpoints}</div></section></div><section class="workflow-history"><div class="section-heading"><div><h3>工作流历史</h3><p>记录输入参数、组件结果和输出位置；大结果会自动截断历史副本。</p></div><button class="secondary compact" data-refresh-history>${icon("refresh", 15)} 刷新</button></div><div class="timeline-list">${history}</div></section>`;
+  } else if (id === "batch-recipes") {
+    const recipes = workflowRecipes.filter((recipe) => recipe.supportsBatch);
+    form = `<div class="mode-limit">每行一个输入路径，一次最多 100 项。任务串行执行，单项失败不会中断其余文件。</div><form id="batch-workflow-form" class="workflow-form workflow-wide"><label>批处理配方<select id="batch-recipe">${recipes.map((recipe) => `<option value="${escapeHtml(recipe.id)}">${escapeHtml(recipe.title)} · ${escapeHtml(recipe.description)}</option>`).join("")}</select></label><label>输入文件路径（每行一个）<textarea id="batch-inputs" rows="8" required placeholder="C:\Projects\song-a.svp&#10;C:\Projects\song-b.svp"></textarea></label><label>可选 JSON 参数<textarea id="batch-options" rows="3" placeholder='例如 {"suffix":"_delivery"}'>{}</textarea></label><button class="primary">${icon("batch", 16)} 加入批处理并执行</button></form>`;
+  } else if (id === "selective-sync") {
+    const slotOptions = profiles?.slots.map((slot) => `<option value="${escapeHtml(slot.id)}" ${slot.id === syncSourceSlotId ? "selected" : ""}>${escapeHtml(slot.displayName)}${slot.isActive ? "（当前默认）" : ""}</option>`).join("") ?? "";
+    const targetOptions = profiles?.slots.map((slot) => `<option value="${escapeHtml(slot.id)}" ${slot.id === syncTargetSlotId ? "selected" : ""}>${escapeHtml(slot.displayName)}${slot.isActive ? "（当前默认）" : ""}</option>`).join("") ?? "";
+    const categoryOptions = syncCategories.map((category) => `<label class="sync-category"><input type="checkbox" name="sync-category" value="${category.id}" ${syncSelectedCategories.includes(category.id) ? "checked" : ""} /><span><strong>${escapeHtml(category.label)}</strong><small>${escapeHtml(category.description)}</small></span></label>`).join("");
+    const preview = syncManifest ? `<section class="sync-preview"><div class="section-heading"><div><h3>写入前清单</h3><p>${syncManifest.entries.length} 个文件；令牌会在执行前重新校验。</p></div><span class="availability">${syncManifest.overwrite ? "允许更新" : "冲突不覆盖"}</span></div><div class="sync-entry-list">${syncManifest.entries.map((entry) => `<div><span class="sync-action ${entry.action}">${entry.action}</span><code>${escapeHtml(entry.relativePath)}</code><small>${entry.sourceSize} bytes</small></div>`).join("") || '<div class="empty-inline">所选类别没有可同步文件。</div>'}</div></section>` : "";
+    form = profiles && profiles.slots.length >= 2 ? `<div class="mode-limit">只同步白名单中的词典、脚本、预设和安全设置；license、session、WebView2、Cookie 与声库数据库始终排除。同步前必须关闭相关普通/隔离实例。</div><form id="selective-sync-form" class="workflow-form workflow-wide"><div class="workflow-pair"><label>源账号<select id="sync-source">${slotOptions}</select></label><label>目标账号<select id="sync-target">${targetOptions}</select></label></div><div class="sync-category-grid">${categoryOptions}</div><label class="checkbox workflow-check"><input id="sync-overwrite" type="checkbox" ${syncOverwrite ? "checked" : ""} /> 目标不同文件显示为 Update 并允许覆盖；关闭时标记 Conflict 且不写入</label><div class="button-row"><button class="secondary" value="preview">${icon("compare", 16)} 生成差异预览</button><button class="primary" value="execute" ${syncManifest ? "" : "disabled"}>${icon("sync", 16)} 执行已批准清单</button></div></form>${preview}` : '<div class="mode-limit">至少需要两个 SV2 账号槽位才能使用选择性同步。</div>';
+  } else if (id === "retake-compare") {
+    form = `<div class="mode-limit">在 SynthV 中确认目标音符编号。每次写入前都会重新读取 Retake 上下文；新鲜度校验失败时会直接停止，不会盲写。</div><form id="retake-form" class="workflow-form workflow-wide"><div class="workflow-pair three"><label>轨道编号<input id="retake-track" type="number" min="1" value="1" required /></label><label>音符组编号<input id="retake-group" type="number" min="1" value="1" required /></label><label>音符编号<input id="retake-note" type="number" min="1" value="1" required /></label></div><div class="workflow-pair"><label>操作<select id="retake-operation"><option value="refresh">读取候选</option><option value="generate">生成新候选</option><option value="activate">切换到 Take</option><option value="delete">删除 Take</option></select></label><label>Take ID（切换/删除）<input id="retake-id" type="number" min="0" value="0" /></label></div><div class="retake-dimensions"><label class="checkbox"><input id="retake-duration" type="checkbox" checked /> 时值</label><label class="checkbox"><input id="retake-pitch" type="checkbox" checked /> 音高</label><label class="checkbox"><input id="retake-timbre" type="checkbox" checked /> 音色/发音</label><label class="checkbox"><input id="retake-activate" type="checkbox" /> 生成后立即启用</label></div><button class="primary" ${app.bridgeConnected ? "" : "disabled"}>${icon("compare", 16)} ${app.bridgeConnected ? "执行 Retake 操作" : "请先连接 Bridge"}</button></form>`;
+  } else if (id === "pronunciation-doctor") {
+    form = `<div class="mode-limit">可检查已保存工程，也可直接粘贴歌词；两种输入只填写一种。首版聚焦空歌词、多音节拥挤、混合文字和极短音符。</div><form id="pronunciation-form" class="workflow-form workflow-wide"><label>.svp 工程路径（可选）<input id="pronunciation-project" placeholder="填写工程路径时不要再粘贴歌词" /></label><label>歌词文本（可选）<textarea id="pronunciation-lyrics" rows="8" placeholder="逐行粘贴歌词；填写歌词时不要再填写工程路径"></textarea></label><button class="primary">${icon("pronunciation", 16)} 运行发音诊断</button></form>`;
+  } else if (id === "render-review") {
+    form = `<div class="mode-limit">复用本地 pi-audio 探测结果检查静音、时长、BPM 与音高事件；不会上传渲染音频。</div><form id="render-review-form" class="workflow-form workflow-wide"><label>渲染音频路径<input id="render-audio" required /></label><div class="workflow-pair"><label>预期时长（秒，可选）<input id="render-duration" type="number" min="0.01" step="0.01" /></label><label>预期 BPM（可选）<input id="render-bpm" type="number" min="1" max="1000" step="0.01" /></label></div><label class="checkbox workflow-check"><input id="render-notes" type="checkbox" /> 要求探测到音高事件</label>${ai ? '<label class="checkbox workflow-check"><input id="render-advanced" type="checkbox" /> 启用高级音频分析</label>' : ""}<button class="primary">${icon("shield", 16)} 开始交付复检</button></form>`;
+  } else {
+    const catalogFeature = features.find((item) => item.id === id);
+    form = catalogFeature ? `<div class="mode-limit"><strong>能力入口已就绪</strong><br />${escapeHtml(catalogFeature.base.join(" · "))}。后端工作流接入后会在这里显示参数与执行结果；当前不会对工程或音频执行写入。</div>` : "";
   }
   const feature = features.find((item) => item.id === id);
   const result = workflowResult ? `<section class="workflow-result"><div class="result-head"><div><span class="availability">运行完成</span><h3>${escapeHtml(workflowResult.summary)}</h3></div>${workflowResult.outputPath ? `<code>${escapeHtml(workflowResult.outputPath)}</code>` : ""}</div><pre>${escapeHtml(JSON.stringify(workflowResult.data, null, 2))}</pre>${workflowResult.aiReview ? `<div class="ai-review"><strong>${icon("sparkles", 15)} AI 复核</strong><p>${escapeHtml(workflowResult.aiReview)}</p></div>` : ai ? `<button class="secondary" data-review-workflow>${icon("sparkles", 16)} 用已配置模型复核结果</button>` : ""}</section>` : "";
@@ -638,8 +752,18 @@ function renderMcp(): string {
 
 function renderSettings(): string {
   if (!app) return "";
+  const showSvpRouting = app.platform === "windows" || app.platform === "preview";
+  const association = app.svpAssociation;
+  const associationLabel = !association.supported
+    ? "当前平台不支持"
+    : association.isDefault
+      ? "已设为 .svp 默认打开方式"
+      : association.registered
+        ? "已注册，等待设为默认应用"
+        : "尚未注册为可选打开方式";
   return `<div class="settings-layout"><section class="panel"><div class="section-heading"><div><h2>运行模式</h2><p>切换后导航与 Rust 后端能力会同时更新。</p></div></div><div class="mode-setting"><button class="setting-choice ${app.mode === "toolbox" ? "active" : ""}" data-set-mode="toolbox"><span class="mode-icon slate">${icon("toolbox", 23)}</span><span><strong>纯工具箱</strong><small>确定性基础流程，不启动 AI</small></span>${app.mode === "toolbox" ? icon("check", 20) : ""}</button><button class="setting-choice ${app.mode === "ai" ? "active" : ""}" data-set-mode="ai"><span class="mode-icon purple">${icon("sparkles", 23)}</span><span><strong>AI 模式</strong><small>Copilot、智能增强与 MCP</small></span>${app.mode === "ai" ? icon("check", 20) : ""}</button></div></section>
     ${app.mode === "ai" ? `<section class="panel"><div class="section-heading"><div><h2>模型连接</h2><p>令牌写入本机用户配置，不会返回给前端。</p></div></div><form id="model-form" class="form-stack"><label>Anthropic 兼容 API 地址<input id="model-url" type="url" required value="${escapeHtml(app.model?.baseUrl ?? "https://api.anthropic.com")}" /></label><label>模型 ID<input id="model-id" required value="${escapeHtml(app.model?.model ?? "")}" placeholder="例如 claude-sonnet-4-5" /></label><label>访问令牌<input id="model-token" type="password" placeholder="${app.model?.tokenConfigured ? "已保存；留空则保留" : "输入访问令牌"}" /></label><button class="primary">保存模型设置</button></form></section>` : `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("bot", 24)}</span><div><h2>AI 运行时已关闭</h2><p>当前不会显示 Copilot、模型或 MCP 设置，也不会向模型端点发送请求。</p></div></section>`}
+    ${showSvpRouting ? `<section class="panel smart-route-settings"><div class="section-heading"><div><h2>智能 .svp 启动</h2><p>根据工程所需声库，从空闲账号中建议最合适的启动槽位。</p></div><label class="fluent-switch large"><input id="svp-routing-enabled" type="checkbox" ${app.smartSvpLaunchEnabled ? "checked" : ""} ${association.supported ? "" : "disabled"} aria-label="启用智能 .svp 启动" /><span></span>${app.smartSvpLaunchEnabled ? "已开启" : "已关闭"}</label></div><div class="smart-route-state ${association.isDefault ? "ready" : "pending"}"><span class="feature-icon ${association.isDefault ? "emerald" : "blue"}">${icon("file", 20)}</span><div><strong>${escapeHtml(associationLabel)}</strong><p>${escapeHtml(association.detail)}</p></div><button class="secondary compact" data-open-svp-default-apps ${association.supported ? "" : "disabled"}>打开默认应用设置</button></div><div class="smart-route-boundary">${icon("shield", 17)}<span><strong>智能路由只在工具箱已经运行时生效</strong><small>冷启动或关闭此功能时，工具箱会把工程透明转交给原始 .svp 处理程序；不会监控、终止或劫持已经启动的 SV2。声库匹配依据仅来自你的确认记录，未知时必须由你选择账号。</small></span></div></section>` : ""}
     <section class="panel"><div class="section-heading"><div><h2>数据与平台</h2><p>配置和历史使用统一的跨平台用户目录。</p></div></div><dl class="detail-list"><div><dt>平台</dt><dd>${escapeHtml(app.platform)}</dd></div><div><dt>配置</dt><dd><code>${escapeHtml(app.configPath)}</code></dd></div><div><dt>应用版本</dt><dd>${escapeHtml(app.appVersion)}</dd></div></dl></section></div>`;
 }
 
@@ -664,6 +788,21 @@ function wireForms(): void {
     const projectPath = document.querySelector<HTMLInputElement>("#project-probe-path")?.value.trim() ?? "";
     void run(async () => { workflowResult = await api.runProjectProbe(projectPath); notice = workflowResult.summary; });
   });
+  document.querySelector<HTMLFormElement>("#project-no-params-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const projectPath = document.querySelector<HTMLInputElement>("#project-no-params-path")?.value.trim() ?? "";
+    const outputName = document.querySelector<HTMLInputElement>("#project-no-params-output")?.value.trim() ?? "project_no_params.svp";
+    void run(async () => { workflowResult = await api.exportProjectWithoutParameters(projectPath, outputName); notice = workflowResult.summary; });
+  });
+  document.querySelector<HTMLFormElement>("#project-lyrics-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const projectPath = document.querySelector<HTMLInputElement>("#project-lyrics-path")?.value.trim() ?? "";
+    const trackIndex = Number(document.querySelector<HTMLInputElement>("#project-lyrics-track")?.value ?? "1");
+    const lineGapSeconds = Number(document.querySelector<HTMLInputElement>("#project-lyrics-gap")?.value ?? "0.8");
+    const outputName = document.querySelector<HTMLInputElement>("#project-lyrics-output")?.value.trim() ?? "project.lrc";
+    const wordOutputName = document.querySelector<HTMLInputElement>("#project-word-lyrics-output")?.value.trim() ?? "project.word.lrc";
+    void run(async () => { workflowResult = await api.exportProjectLyrics(projectPath, trackIndex, lineGapSeconds, outputName, wordOutputName); notice = workflowResult.summary; });
+  });
   document.querySelector<HTMLFormElement>("#project-reference-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const projectPath = document.querySelector<HTMLInputElement>("#project-ref-path")?.value.trim() ?? "";
@@ -672,6 +811,101 @@ function wireForms(): void {
     const beginSeconds = Number(document.querySelector<HTMLInputElement>("#project-ref-begin")?.value ?? "0");
     const outputName = document.querySelector<HTMLInputElement>("#project-ref-output")?.value.trim() ?? "project_cvrs.svp";
     void run(async () => { workflowResult = await api.addProjectReference(projectPath, audioPath, trackName, beginSeconds, outputName); notice = workflowResult.summary; });
+  });
+  document.querySelector<HTMLFormElement>("#audio-to-project-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const vocalPath = document.querySelector<HTMLInputElement>("#pipeline-vocal")?.value.trim() ?? "";
+    const instrumentalPath = document.querySelector<HTMLInputElement>("#pipeline-inst")?.value.trim() ?? "";
+    const outputName = document.querySelector<HTMLInputElement>("#pipeline-output")?.value.trim() ?? "audio_to_project.mid";
+    const groupName = document.querySelector<HTMLInputElement>("#pipeline-group-name")?.value.trim() ?? "Toolbox Audio Import";
+    const trackIndex = Number(document.querySelector<HTMLInputElement>("#pipeline-track")?.value ?? "1");
+    const tolerance = Number(document.querySelector<HTMLInputElement>("#pipeline-tolerance")?.value ?? "0.08");
+    const advanced = app?.mode === "ai" && (document.querySelector<HTMLInputElement>("#pipeline-advanced")?.checked ?? false);
+    const importToSynthv = document.querySelector<HTMLInputElement>("#pipeline-import")?.checked ?? false;
+    const rightsConfirmed = document.querySelector<HTMLInputElement>("#pipeline-rights")?.checked ?? false;
+    void run(async () => { workflowResult = await api.runAudioToProject(vocalPath, instrumentalPath, outputName, tolerance, advanced, importToSynthv, rightsConfirmed, trackIndex, groupName); notice = workflowResult.summary; });
+  });
+  document.querySelector<HTMLFormElement>("#project-doctor-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const projectPath = document.querySelector<HTMLInputElement>("#doctor-project")?.value.trim() ?? "";
+    void run(async () => { workflowResult = await api.runProjectDoctor(projectPath); notice = workflowResult.summary; });
+  });
+  document.querySelector<HTMLFormElement>("#checkpoint-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const projectPath = document.querySelector<HTMLInputElement>("#checkpoint-project")?.value.trim() ?? "";
+    const label = document.querySelector<HTMLInputElement>("#checkpoint-label")?.value.trim() ?? "";
+    void run(async () => {
+      const checkpoint = await api.createProjectCheckpoint(projectPath, label);
+      projectCheckpoints = await api.listProjectCheckpoints();
+      notice = `已创建检查点“${checkpoint.label}”。`;
+    });
+  });
+  document.querySelector<HTMLFormElement>("#batch-workflow-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const recipeId = document.querySelector<HTMLSelectElement>("#batch-recipe")?.value ?? "project-doctor";
+    const inputPaths = (document.querySelector<HTMLTextAreaElement>("#batch-inputs")?.value ?? "").split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+    const optionsText = document.querySelector<HTMLTextAreaElement>("#batch-options")?.value.trim() || "{}";
+    void run(async () => {
+      const options = JSON.parse(optionsText) as Record<string, unknown>;
+      const batch = await api.runBatchWorkflow(recipeId, inputPaths, options);
+      workflowResult = { kind: "batch-recipes", summary: `批处理完成 ${batch.completed} 项，失败 ${batch.failed} 项。`, data: batch as unknown as Record<string, unknown> };
+      notice = workflowResult.summary;
+    });
+  });
+  document.querySelector<HTMLFormElement>("#selective-sync-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;
+    const sourceSlotId = document.querySelector<HTMLSelectElement>("#sync-source")?.value ?? "";
+    const targetSlotId = document.querySelector<HTMLSelectElement>("#sync-target")?.value ?? "";
+    const categories = Array.from(document.querySelectorAll<HTMLInputElement>('input[name="sync-category"]:checked')).map((input) => input.value as Sv2SyncCategoryId);
+    const overwrite = document.querySelector<HTMLInputElement>("#sync-overwrite")?.checked ?? false;
+    syncSourceSlotId = sourceSlotId;
+    syncTargetSlotId = targetSlotId;
+    syncSelectedCategories = categories;
+    syncOverwrite = overwrite;
+    void run(async () => {
+      if (submitter?.value === "execute") {
+        if (!syncManifest) throw new Error("请先生成并检查同步清单。");
+        const result = await api.executeSv2SelectiveSync(sourceSlotId, targetSlotId, categories, syncManifest);
+        workflowResult = { kind: "profile-selective-sync", summary: `选择性同步完成：复制 ${result.copied}、更新 ${result.updated}、跳过 ${result.skipped}、冲突 ${result.conflicts}。`, data: result as unknown as Record<string, unknown> };
+        notice = workflowResult.summary;
+        syncManifest = undefined;
+      } else {
+        syncManifest = await api.previewSv2SelectiveSync(sourceSlotId, targetSlotId, categories, overwrite);
+        notice = `同步预览已生成：${syncManifest.entries.length} 个文件，尚未写入。`;
+      }
+    });
+  });
+  document.querySelector<HTMLFormElement>("#retake-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const trackIndex = Number(document.querySelector<HTMLInputElement>("#retake-track")?.value ?? "1");
+    const groupIndex = Number(document.querySelector<HTMLInputElement>("#retake-group")?.value ?? "1");
+    const noteIndex = Number(document.querySelector<HTMLInputElement>("#retake-note")?.value ?? "1");
+    const operation = document.querySelector<HTMLSelectElement>("#retake-operation")?.value ?? "refresh";
+    const takeIdValue = document.querySelector<HTMLInputElement>("#retake-id")?.value.trim() ?? "";
+    const takeId = takeIdValue ? Number(takeIdValue) : undefined;
+    const newDuration = document.querySelector<HTMLInputElement>("#retake-duration")?.checked ?? true;
+    const newPitch = document.querySelector<HTMLInputElement>("#retake-pitch")?.checked ?? true;
+    const newTimbre = document.querySelector<HTMLInputElement>("#retake-timbre")?.checked ?? true;
+    const activate = document.querySelector<HTMLInputElement>("#retake-activate")?.checked ?? false;
+    void run(async () => { workflowResult = await api.runRetakeWorkbench(trackIndex, groupIndex, noteIndex, operation, takeId, newDuration, newPitch, newTimbre, activate); notice = workflowResult.summary; });
+  });
+  document.querySelector<HTMLFormElement>("#pronunciation-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const projectPath = document.querySelector<HTMLInputElement>("#pronunciation-project")?.value.trim() || undefined;
+    const lyrics = document.querySelector<HTMLTextAreaElement>("#pronunciation-lyrics")?.value.trim() || undefined;
+    void run(async () => { workflowResult = await api.runPronunciationDiagnostics(projectPath, lyrics); notice = workflowResult.summary; });
+  });
+  document.querySelector<HTMLFormElement>("#render-review-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const audioPath = document.querySelector<HTMLInputElement>("#render-audio")?.value.trim() ?? "";
+    const durationValue = document.querySelector<HTMLInputElement>("#render-duration")?.value.trim() ?? "";
+    const bpmValue = document.querySelector<HTMLInputElement>("#render-bpm")?.value.trim() ?? "";
+    const expectedDurationSec = durationValue ? Number(durationValue) : undefined;
+    const expectedBpm = bpmValue ? Number(bpmValue) : undefined;
+    const requireNotes = document.querySelector<HTMLInputElement>("#render-notes")?.checked ?? false;
+    const advanced = app?.mode === "ai" && (document.querySelector<HTMLInputElement>("#render-advanced")?.checked ?? false);
+    void run(async () => { workflowResult = await api.runRenderReview(audioPath, expectedDurationSec, expectedBpm, requireNotes, advanced); notice = workflowResult.summary; });
   });
   document.querySelector<HTMLFormElement>("#profile-import-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -699,6 +933,21 @@ function wireForms(): void {
     const email = form.querySelector<HTMLInputElement>('[name="email"]')?.value.trim() ?? "";
     if (!slotId) return;
     void run(async () => { profiles = await api.updateSv2ProfileIdentity(slotId, username, email); notice = "账号用户名和邮箱标签已保存。"; });
+  }));
+  document.querySelectorAll<HTMLFormElement>("[data-profile-voice-form]").forEach((form) => form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const slotId = form.dataset.profileVoiceForm ?? "";
+    const voices = (form.querySelector<HTMLTextAreaElement>('[name="voices"]')?.value ?? "")
+      .split(/\r?\n/)
+      .map((voice) => voice.trim())
+      .filter(Boolean);
+    if (!slotId) return;
+    void run(async () => {
+      profiles = await api.updateSv2ProfileVoiceLicenses(slotId, voices);
+      notice = voices.length
+        ? `已保存 ${voices.length} 条用户确认的声库记录。`
+        : "已清除用户确认记录；本地安装证据不会被视为授权。";
+    });
   }));
   document.querySelector<HTMLFormElement>("#concurrent-defaults-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -741,6 +990,15 @@ function wireForms(): void {
     const token = document.querySelector<HTMLInputElement>("#model-token")?.value.trim();
     void run(async () => { app = await api.saveModel(baseUrl, model, token); notice = "模型设置已保存。"; });
   });
+  document.querySelector<HTMLInputElement>("#svp-routing-enabled")?.addEventListener("change", (event) => {
+    const enabled = (event.currentTarget as HTMLInputElement).checked;
+    void run(async () => {
+      app = await api.setSvpLaunchRouting(enabled);
+      notice = enabled
+        ? "智能 .svp 启动已开启。请确认 Windows 已将 SynthV Toolbox 设为 .svp 默认应用。"
+        : "智能 .svp 启动已关闭；工程会透明转交给原始处理程序。";
+    });
+  });
   document.querySelector<HTMLFormElement>("#mcp-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const name = document.querySelector<HTMLInputElement>("#mcp-name")?.value.trim() ?? "";
@@ -780,6 +1038,65 @@ async function sendPrompt(input: string): Promise<void> {
 document.addEventListener("click", (event) => {
   const target = (event.target as HTMLElement).closest<HTMLElement>("button, [data-page], [data-onboarding]");
   if (!target || target.hasAttribute("disabled")) return;
+  if (target.hasAttribute("data-toggle-sidebar")) {
+    sidebarCollapsed = !sidebarCollapsed;
+    try { localStorage.setItem("pi.sidebar.collapsed", String(sidebarCollapsed)); } catch { /* preference remains in memory */ }
+    render();
+    return;
+  }
+  if (target.hasAttribute("data-cancel-svp-route")) {
+    pendingSvpRoute = undefined;
+    render();
+    return;
+  }
+  if (target.dataset.launchSvpRoute) {
+    const plan = pendingSvpRoute;
+    const slotId = target.dataset.launchSvpRoute;
+    const mode = target.dataset.svpRouteMode as SvpLaunchMode | undefined;
+    const candidate = plan?.candidates.find((item) => item.slotId === slotId && item.launchMode === mode);
+    if (!plan || !candidate || !candidate.idle || !mode) return;
+    pendingSvpRoute = undefined;
+    if (mode === "concurrent" && !app?.concurrentDisclaimerAccepted) {
+      pendingConcurrentLaunchSlot = slotId;
+      pendingConcurrentPrepare = false;
+      pendingConcurrentRoute = { slotId, projectPath: plan.projectPath, mode };
+      render();
+      return;
+    }
+    void run(async () => {
+      setFeedback(await api.launchSvpRoute(slotId, plan.projectPath, mode));
+      profiles = await api.sv2ProfileState();
+    });
+    return;
+  }
+  if (target.hasAttribute("data-open-svp-default-apps")) {
+    void run(async () => { setFeedback(await api.openSvpDefaultAppsSettings()); });
+    return;
+  }
+  if (target.hasAttribute("data-close-account-manager")) {
+    accountManagerOpen = false;
+    render();
+    return;
+  }
+  const managerSection = (target.dataset.accountManagerSection ?? target.dataset.accountManager) as AccountManagerSection | undefined;
+  if (managerSection) {
+    accountManagerOpen = true;
+    accountManagerSection = managerSection;
+    render();
+    return;
+  }
+  if (target.dataset.manageSlot) {
+    managedProfileSlotId = target.dataset.manageSlot;
+    accountManagerSection = "profile";
+    accountManagerOpen = true;
+    render();
+    return;
+  }
+  if (target.dataset.selectManagedSlot) {
+    managedProfileSlotId = target.dataset.selectManagedSlot;
+    render();
+    return;
+  }
   if (target.hasAttribute("data-cancel-profile-switch")) {
     pendingBlockedSwitchSlot = undefined;
     render();
@@ -813,6 +1130,7 @@ document.addEventListener("click", (event) => {
   if (target.hasAttribute("data-cancel-concurrent")) {
     pendingConcurrentLaunchSlot = undefined;
     pendingConcurrentPrepare = false;
+    pendingConcurrentRoute = undefined;
     render();
     return;
   }
@@ -820,22 +1138,30 @@ document.addEventListener("click", (event) => {
     const slotId = pendingConcurrentLaunchSlot;
     if (!slotId) return;
     const prepare = pendingConcurrentPrepare;
+    const route = pendingConcurrentRoute;
     pendingConcurrentLaunchSlot = undefined;
     pendingConcurrentPrepare = false;
+    pendingConcurrentRoute = undefined;
     void run(async () => {
       app = await api.acceptSv2ConcurrentDisclaimer();
-      await launchConcurrentSlot(slotId, prepare);
+      if (route) {
+        setFeedback(await api.launchSvpRoute(route.slotId, route.projectPath, route.mode));
+        profiles = await api.sv2ProfileState();
+      } else {
+        await launchConcurrentSlot(slotId, prepare);
+      }
     });
     return;
   }
   const targetPage = target.dataset.page as Page | undefined;
   if (targetPage) {
+    clearAccountUsageSchedule();
     page = targetPage;
+    accountManagerOpen = false;
     notice = "";
     error = "";
     if (page === "copilot") void run(async () => { conversations = await api.listConversations(); });
-    else if (page === "accounts") void run(async () => { [profiles, accountPrecheck] = await Promise.all([api.sv2ProfileState(), api.sv2AccountPrecheck()]); });
-    else if (page === "toolbox" && (app?.platform === "windows" || app?.platform === "preview")) void run(async () => { accountPrecheck = await api.sv2AccountPrecheck(); });
+    else if (isAccountUsagePage() && (app?.platform === "windows" || app?.platform === "preview")) void run(refreshAccountUsage);
     else render();
     return;
   }
@@ -849,8 +1175,22 @@ document.addEventListener("click", (event) => {
     page = "toolbox";
     activeWorkflow = target.dataset.feature;
     workflowResult = undefined;
+    syncManifest = undefined;
     notice = "";
-    if (app?.platform === "windows" || app?.platform === "preview") void run(async () => { accountPrecheck = await api.sv2AccountPrecheck(); });
+    clearAccountUsageSchedule();
+    const featureId = target.dataset.feature;
+    if (featureId === "checkpoints") void run(async () => { [creativeHistory, projectCheckpoints] = await Promise.all([api.listCreativeHistory(), api.listProjectCheckpoints()]); });
+    else if (featureId === "batch-recipes") void run(async () => { workflowRecipes = await api.listWorkflowRecipes(); });
+    else if (featureId === "selective-sync") void run(async () => {
+      [syncCategories] = await Promise.all([api.sv2SyncCategories(), refreshAccountUsage()]);
+      const slots = profiles?.slots ?? [];
+      if (!slots.some((slot) => slot.id === syncSourceSlotId)) syncSourceSlotId = slots[0]?.id ?? "";
+      if (!slots.some((slot) => slot.id === syncTargetSlotId) || syncTargetSlotId === syncSourceSlotId) {
+        syncTargetSlotId = slots.find((slot) => slot.id !== syncSourceSlotId)?.id ?? "";
+      }
+      syncSelectedCategories = syncCategories.map((category) => category.id);
+    });
+    else if (app?.platform === "windows" || app?.platform === "preview") void run(refreshAccountUsage);
     else render();
     return;
   }
@@ -859,9 +1199,21 @@ document.addEventListener("click", (event) => {
     void run(async () => { if (workflowResult) workflowResult.aiReview = await api.reviewWorkflow(workflowResult.kind, workflowResult.data); });
     return;
   }
+  if (target.hasAttribute("data-refresh-history")) {
+    void run(async () => { [creativeHistory, projectCheckpoints] = await Promise.all([api.listCreativeHistory(), api.listProjectCheckpoints()]); notice = "工作流历史与工程检查点已刷新。"; });
+    return;
+  }
+  if (target.dataset.restoreCheckpoint) {
+    const id = target.dataset.restoreCheckpoint;
+    void run(async () => {
+      const outputName = `checkpoint_${id.slice(0, 8)}_${Date.now()}.svp`;
+      setFeedback(await api.restoreProjectCheckpoint(id, outputName));
+    });
+    return;
+  }
   if (target.hasAttribute("data-scan")) { void run(async () => { if (app) app.installations = await api.scanSynthV(); notice = "探测完成。"; }); return; }
-  if (target.hasAttribute("data-account-precheck")) { void run(async () => { accountPrecheck = await api.sv2AccountPrecheck(); notice = "当前账号占用预检已刷新。"; }); return; }
-  if (target.hasAttribute("data-profile-refresh")) { void run(async () => { profiles = await api.sv2ProfileState(); notice = "账号槽位状态已刷新。"; }); return; }
+  if (target.hasAttribute("data-account-precheck")) { clearAccountUsageSchedule(); void run(async () => { await refreshAccountUsage(); notice = "当前账号占用预检已刷新。"; }); return; }
+  if (target.hasAttribute("data-profile-refresh")) { clearAccountUsageSchedule(); void run(async () => { await refreshAccountUsage(); notice = "账号槽位与占用状态已刷新。"; }); return; }
   if (target.dataset.profileLaunch) {
     const slotId = target.dataset.profileLaunch;
     const slot = profiles?.slots.find((item) => item.id === slotId);
@@ -911,9 +1263,41 @@ document.addEventListener("click", (event) => {
   if (target.dataset.deleteMcp) { void run(async () => { app = await api.deleteMcpServer(target.dataset.deleteMcp ?? ""); notice = "MCP 配置已删除。"; }); }
 });
 
+function svpRoutePlanFromPayload(payload: unknown): SvpRoutePlan | undefined {
+  const wrapped = payload && typeof payload === "object" && "plan" in payload
+    ? (payload as { plan?: unknown }).plan
+    : payload;
+  if (!wrapped || typeof wrapped !== "object") return undefined;
+  const plan = wrapped as Partial<SvpRoutePlan>;
+  if (typeof plan.projectPath !== "string" || !Array.isArray(plan.requiredVoices) || !Array.isArray(plan.candidates)) return undefined;
+  return plan as SvpRoutePlan;
+}
+
+async function listenForSvpRouteRequests(): Promise<void> {
+  if (!isTauri()) return;
+  await Promise.all([listen<unknown>("svp-route-request", (event) => {
+    const plan = svpRoutePlanFromPayload(event.payload);
+    if (!plan) {
+      error = "收到的 .svp 智能路由请求格式无效。";
+      render();
+      return;
+    }
+    pendingSvpRoute = plan;
+    notice = "";
+    error = "";
+    render();
+  }), listen<unknown>("svp-route-error", (event) => {
+    pendingSvpRoute = undefined;
+    error = formatError(event.payload);
+    notice = "";
+    render();
+  })]);
+}
+
 void (async () => {
   try {
     await refresh();
+    await listenForSvpRouteRequests();
     render();
   } catch (reason) {
     root.innerHTML = `<div class="fatal"><div class="brand-mark">π</div><h1>无法启动 SynthV Toolbox</h1><pre>${escapeHtml(formatError(reason))}</pre><p>请确认应用由 Tauri 运行，而不是直接打开前端页面。</p></div>`;

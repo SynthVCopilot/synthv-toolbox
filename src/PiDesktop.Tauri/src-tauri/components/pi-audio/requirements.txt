@@ -1,0 +1,12 @@
+# pi-audio 组件依赖（Python ≤3.11 — basic-pitch/TF 生态限制，3.12+ 装不上）
+librosa
+numpy
+basic-pitch
+onnxruntime
+pretty-midi
+scipy
+setuptools<81
+
+# 可选：PANNs 判别（probe --panns 需要；CPU 即可）
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   pip install panns-inference

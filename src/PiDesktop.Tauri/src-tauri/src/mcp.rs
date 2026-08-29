@@ -2,13 +2,16 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use pi_agent_core::{PiError, ToolCall, ToolDefinition, ToolExecutor, ToolResult};
-use pi_agent_mcp::{McpServerSpec, McpStdioClient};
 use serde_json::{json, Value};
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 
+use crate::agent::{AgentError, ToolCall, ToolDefinition, ToolExecutor, ToolResult};
 use crate::config::McpServerConfig;
+
+mod client;
+
+use client::{McpServerSpec, McpStdioClient};
 
 type SharedClient = Arc<Mutex<McpStdioClient>>;
 
@@ -143,6 +146,60 @@ impl McpManager {
             })
             .collect()
     }
+
+    /// Call one of the six public SynthV Bridge tools from a dedicated Toolbox
+    /// workflow. This deliberately does not expose an arbitrary MCP command to
+    /// the frontend: callers still choose a fixed public tool and construct a
+    /// bounded action payload in Rust.
+    pub async fn call_bridge_tool(&self, name: &str, arguments: Value) -> Result<Value, String> {
+        if !matches!(
+            name,
+            "sv_status" | "sv_describe" | "sv_query" | "sv_command" | "sv_ui" | "sv_review"
+        ) {
+            return Err("专用工作流只能调用 SynthV Bridge 的公开六工具接口。".to_string());
+        }
+        let client = {
+            let servers = self.servers.lock().await;
+            servers
+                .get("synthv")
+                .map(|server| server.client.clone())
+                .ok_or_else(|| "SynthV Bridge 尚未连接。请先在 Bridge 页面连接。".to_string())?
+        };
+        let response = client
+            .lock()
+            .await
+            .call_tool(name, arguments)
+            .await
+            .map_err(|error| format!("SynthV Bridge 调用失败：{error}"))?;
+        if response
+            .get("isError")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            return Err(extract_mcp_text(&response)
+                .unwrap_or_else(|| "SynthV Bridge 返回了错误。".to_string()));
+        }
+        Ok(response)
+    }
+}
+
+pub fn extract_mcp_json(value: &Value) -> Result<Value, String> {
+    let text = extract_mcp_text(value)
+        .ok_or_else(|| "SynthV Bridge 没有返回可解析的文本结果。".to_string())?;
+    serde_json::from_str(&text).map_err(|error| format!("SynthV Bridge 结果不是有效 JSON：{error}"))
+}
+
+fn extract_mcp_text(value: &Value) -> Option<String> {
+    value
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find_map(|item| {
+            (item.get("type").and_then(Value::as_str) == Some("text"))
+                .then(|| item.get("text").and_then(Value::as_str).map(str::to_string))
+                .flatten()
+        })
 }
 
 pub struct McpToolExecutor {
@@ -164,7 +221,7 @@ impl ToolExecutor for McpToolExecutor {
             .collect()
     }
 
-    fn execute(&self, call: &ToolCall) -> Result<ToolResult, PiError> {
+    fn execute(&self, call: &ToolCall) -> Result<ToolResult, AgentError> {
         let Some(binding) = self
             .bindings
             .iter()

@@ -1,6 +1,11 @@
 # Local runtime data
 *.log
 .DS_Store
+__pycache__/
+*.pyc
+
+# Removed pi-agent submodule may remain locally to preserve uncommitted legacy work.
+/external/pi-agent/
 
 # Tauri / web frontend
 node_modules/
