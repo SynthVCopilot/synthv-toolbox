@@ -8,18 +8,22 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[cfg(windows)]
+use crate::sv2_concurrent::concurrent_folder;
 use crate::sv2_concurrent::{
-    concurrent_folder, detect_provider as detect_concurrent_provider,
-    launch_slot as launch_concurrent, prepare_slot as prepare_concurrent,
-    provider_view as concurrent_provider_view, slot_view as concurrent_slot_view,
-    Sv2ConcurrentProviderView, Sv2ConcurrentSlotView,
+    detect_provider as detect_concurrent_provider, launch_slot as launch_concurrent,
+    prepare_slot as prepare_concurrent, provider_view as concurrent_provider_view,
+    slot_view as concurrent_slot_view, Sv2ConcurrentProviderView, Sv2ConcurrentSlotView,
 };
 use crate::synthv::{find_sv2_executable, succeeded, OperationResult};
 
 const SCHEMA_VERSION: u32 = 1;
 const MARKER_FILE: &str = ".synthv-toolbox-slot.json";
+#[cfg(windows)]
 const MANIFEST_FILE: &str = "manifest.json";
+#[cfg(windows)]
 const JOURNAL_FILE: &str = "switch.journal.json";
+#[cfg(windows)]
 const LOCK_FILE: &str = "switch.lock";
 const SLOT_COLORS: [&str; 6] = [
     "#6D5CE7", "#3478C9", "#2B956C", "#C67336", "#C05278", "#637083",
@@ -441,16 +445,20 @@ impl Sv2ProfileService {
             return Err("槽位数据目录不存在。".to_string());
         }
         #[cfg(windows)]
-        Command::new("explorer.exe")
-            .arg(&path)
-            .spawn()
-            .map_err(|error| format!("无法打开槽位目录：{error}"))?;
+        {
+            Command::new("explorer.exe")
+                .arg(&path)
+                .spawn()
+                .map_err(|error| format!("无法打开槽位目录：{error}"))?;
+            Ok(succeeded("已打开槽位数据目录。", path.to_string_lossy()))
+        }
         #[cfg(not(windows))]
-        return Ok(crate::synthv::failed(
-            "SV2 账号槽位当前仅支持 Windows。",
-            "",
-        ));
-        Ok(succeeded("已打开槽位数据目录。", path.to_string_lossy()))
+        {
+            Ok(crate::synthv::failed(
+                "SV2 账号槽位当前仅支持 Windows。",
+                "",
+            ))
+        }
     }
 
     pub fn prepare_concurrent_slot(&self, slot_id: String) -> Result<Sv2ProfilesState, String> {
@@ -526,21 +534,25 @@ impl Sv2ProfileService {
         if !manifest.slots.iter().any(|slot| slot.id == slot_id) {
             return Err("找不到该 SV2 槽位。".to_string());
         }
-        let path = concurrent_folder(&paths.vault, &slot_id)?;
         #[cfg(windows)]
-        Command::new("explorer.exe")
-            .arg(&path)
-            .spawn()
-            .map_err(|error| format!("无法打开隔离副本目录：{error}"))?;
+        {
+            let path = concurrent_folder(&paths.vault, &slot_id)?;
+            Command::new("explorer.exe")
+                .arg(&path)
+                .spawn()
+                .map_err(|error| format!("无法打开隔离副本目录：{error}"))?;
+            Ok(succeeded(
+                "已打开隔离副本数据目录。",
+                path.to_string_lossy(),
+            ))
+        }
         #[cfg(not(windows))]
-        return Ok(crate::synthv::failed(
-            "实验性并发隔离当前仅支持 Windows。",
-            "",
-        ));
-        Ok(succeeded(
-            "已打开隔离副本数据目录。",
-            path.to_string_lossy(),
-        ))
+        {
+            Ok(crate::synthv::failed(
+                "实验性并发隔离当前仅支持 Windows。",
+                "",
+            ))
+        }
     }
 }
 
