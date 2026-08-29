@@ -728,10 +728,11 @@ function renderWorkflowResult(result: WorkflowResult, ai: boolean): string {
     ? `${asObject(data.probe) ? scalar : ""}${diagnostic}`
     : batch ?? scalar;
   const raw = `<details class="raw-result"><summary>${icon("file", 14)} 查看原始结构化数据</summary><pre>${escapeHtml(JSON.stringify(result.data, null, 2))}</pre></details>`;
+  const exportActions = `<div class="result-actions"><span>导出当前报告</span><button class="secondary" data-export-workflow="markdown">${icon("download", 15)} Markdown</button><button class="secondary" data-export-workflow="json">${icon("download", 15)} JSON</button></div>`;
   const review = result.aiReview
     ? `<div class="ai-review"><strong>${icon("sparkles", 15)} AI 复核</strong><p>${escapeHtml(result.aiReview)}</p></div>`
     : ai ? `<button class="secondary" data-review-workflow>${icon("sparkles", 16)} 用已配置模型复核结果</button>` : "";
-  return `<section class="workflow-result"><div class="result-head"><div><span class="availability ready">运行完成</span><h3>${escapeHtml(result.summary)}</h3></div>${result.outputPath ? `<code>${escapeHtml(result.outputPath)}</code>` : ""}</div>${structured}${raw}${review}</section>`;
+  return `<section class="workflow-result"><div class="result-head"><div><span class="availability ready">运行完成</span><h3>${escapeHtml(result.summary)}</h3></div>${result.outputPath ? `<code>${escapeHtml(result.outputPath)}</code>` : ""}</div>${structured}${raw}${exportActions}${review}</section>`;
 }
 
 function renderWorkflowPanel(id: string): string {
@@ -1315,6 +1316,15 @@ document.addEventListener("click", (event) => {
   if (target.hasAttribute("data-close-workflow")) { activeWorkflow = undefined; workflowResult = undefined; render(); return; }
   if (target.hasAttribute("data-review-workflow") && workflowResult) {
     void run(async () => { if (workflowResult) workflowResult.aiReview = await api.reviewWorkflow(workflowResult.kind, workflowResult.data); });
+    return;
+  }
+  const exportFormat = target.dataset.exportWorkflow as "markdown" | "json" | undefined;
+  if (exportFormat && workflowResult) {
+    const currentResult = workflowResult;
+    void run(async () => {
+      const exported = await api.exportWorkflowReport(currentResult.kind, currentResult.summary, currentResult.data, exportFormat);
+      notice = `${exported.summary} ${exported.detail}`;
+    });
     return;
   }
   if (target.hasAttribute("data-refresh-history")) {
