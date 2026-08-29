@@ -2,7 +2,7 @@
 
 状态：顺序槽位与并发隔离均已实现；并发隔离是可选能力
 目标版本：Synthesizer V Studio 2 Pro 2.2.1 / Windows 10、11
-范围：同一 Windows 用户、同一物理设备上的快速顺序切换，以及受约束的多进程隔离实验
+范围：同一 Windows 用户、同一物理设备上的快速顺序切换，以及受约束的正式多进程隔离能力
 
 ## 1. 决策摘要
 
@@ -66,6 +66,8 @@ Windows 对全局和会话级命名对象的区别见 [Kernel object namespaces]
 - 会话缓存是否存在，仅作为诊断信息，不宣称账号仍在线有效；
 - 普通启动按钮：`普通启动` 或 `切换并启动`；
 - 隔离启动按钮：`准备隔离实例` 或 `启动隔离实例`；
+- 全局隔离内容默认值：分别控制应用设置和声库数据是否隔离；
+- 每个账户的应用设置、声库数据均可选择“跟随全局”“开启隔离”或“关闭隔离（共享）”，并显示解析后的实际状态；
 - 普通切换遇到占用时显示进程确认弹窗，提供取消、强制切换和以并发模式运行；
 - 次按钮：`设为默认`、打开数据目录；
 - 低频的重命名和数据路径收纳到“管理槽位与存储位置”折叠区。
@@ -112,6 +114,8 @@ Windows 对全局和会话级命名对象的区别见 [Kernel object namespaces]
 ### 3.4 隔离启动
 
 用户第一次点击“准备隔离实例”时，工具箱从该槽位建立一份持久化、不透明的完整副本。之后点击“启动隔离实例”会通过对应 Sandboxie box 启动 SV2 standalone；普通槽位和隔离副本各自保存本地变化，不做运行中合并。
+
+隔离内容默认完整隔离。清单保存应用设置和声库数据两个全局布尔默认值，每个槽位保存各自的三态覆盖值：`global`、`on`、`off`。有效值为 `off` 时，工具箱对宿主官方数据根下的 `settings\` 或 `databases\` 写入该 box 的 Sandboxie `OpenFilePath` 规则，使隔离进程直接读写宿主目录；`license`、`webview2`、其他文件、注册表和 IPC 继续使用槽位自己的隔离空间。修改策略只影响下一次启动，不尝试热改正在运行的进程视图；共享目录可能承受多个实例并发写入，因此 UI 必须明确显示“共享宿主”状态。
 
 普通槽位被 SV2 / 插件占用时只阻止普通切换，不应错误阻止已经准备好的其他隔离实例启动。同一个 Sandboxie box 已运行时，界面显示“运行中”并禁用重复启动。
 
@@ -326,7 +330,7 @@ synthv-studio.exe
 %APPDATA%\Dreamtonics\Synthesizer V Studio 2.toolbox-slots\concurrent\<slot-id>\box
 ```
 
-工具箱同时为该 sandbox 配置独立 `KeyRootPath` 和 `IpcRootPath`，从而覆盖 SV2 进程树、WebView2 子进程以及命名对象，而不是只改主进程看到的文件路径。启动使用 Sandboxie `Start.exe /box:<name> /silent` 接口，box 名称前不添加 `#`；配置通过 `SbieIni.exe` 写入并回读校验 `FileRootPath`。
+工具箱同时为该 sandbox 配置独立 `KeyRootPath` 和 `IpcRootPath`，从而覆盖 SV2 进程树、WebView2 子进程以及命名对象，而不是只改主进程看到的文件路径。启动使用 Sandboxie `Start.exe /box:<name> /silent` 接口，box 名称前不添加 `#`；配置通过 `SbieIni.exe` 写入并回读校验 `FileRootPath`。选择共享的隔离内容使用 box 级 `OpenFilePath`，不会扩大为整个 SV2 数据根或其他账户目录。
 
 当前入口只并发启动 SV2 standalone。工具箱不会把已有 DAW 宿主强行移入 sandbox，因此不承诺隔离 DAW 内的 SV2 插件实例。
 

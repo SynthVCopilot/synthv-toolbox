@@ -9,6 +9,7 @@ import type {
   ConversationSummary,
   McpServerConfig,
   OperationResult,
+  Sv2IsolationPreference,
   Sv2ProfilesState,
   WorkflowResult,
 } from "./types";
@@ -110,6 +111,17 @@ function escapeHtml(value: unknown): string {
 function formatError(value: unknown): string {
   if (value instanceof Error) return value.message;
   return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function isolationPreferenceOptions(value: Sv2IsolationPreference, globalDefault: boolean): string {
+  const options: Array<[Sv2IsolationPreference, string]> = [
+    ["global", `跟随全局（${globalDefault ? "隔离" : "共享"}）`],
+    ["on", "开启隔离"],
+    ["off", "关闭隔离（共享）"],
+  ];
+  return options
+    .map(([option, label]) => `<option value="${option}" ${value === option ? "selected" : ""}>${label}</option>`)
+    .join("");
 }
 
 function setFeedback(result: OperationResult): void {
@@ -341,10 +353,17 @@ function renderAccounts(): string {
       ${concurrentProviderAvailable
         ? `<p>通过 ${escapeHtml(providerLabel)} 为每个槽位创建独立的文件、注册表和 IPC 环境，可与普通实例或其他隔离槽位同时运行。</p><div class="provider-integration"><strong>${icon("boxes", 15)} ${escapeHtml(providerLabel)}</strong><span>${preparedCount} 个已准备</span><span>${runningSlots.length} 个运行中${runningProcessCount ? ` · ${runningProcessCount} 个相关进程` : ""}</span>${providerPath}</div>`
         : `<p>${escapeHtml(profiles.concurrentProvider.detail)}</p><div class="provider-integration unavailable"><strong>普通账号切换仍可使用</strong><span>安装受支持版本后，重启工具箱即可自动集成。</span></div>`}
+      <form id="concurrent-defaults-form" class="isolation-defaults-form">
+        <div><strong>全局隔离默认值</strong><small>账户选择“跟随全局”时使用；修改后于下次隔离启动生效。</small></div>
+        <label class="fluent-switch"><input name="appSettings" type="checkbox" ${profiles.concurrentDefaults.appSettings ? "checked" : ""} /><span></span>应用设置</label>
+        <label class="fluent-switch"><input name="voiceLibraries" type="checkbox" ${profiles.concurrentDefaults.voiceLibraries ? "checked" : ""} /><span></span>声库数据</label>
+        <button class="secondary" type="submit">保存默认值</button>
+      </form>
       <small>本技术方案基于 Sandboxie 实现，不是 Dreamtonics 原生多实例功能。工具箱不代理或修改网络；持续验证、账号与工程同步仍由 SV2 和 Dreamtonics 官方服务处理。</small>
     </article>
   </section>`;
   const concurrentProviderDetail = profiles.concurrentProvider.detail;
+  const concurrentDefaults = profiles.concurrentDefaults;
   const cards = profiles.slots.map((slot) => {
     const lastUsed = slot.lastActivatedAtUtc ? new Date(slot.lastActivatedAtUtc).toLocaleString("zh-CN") : "尚未启动";
     const initial = Array.from(slot.displayName)[0] ?? "S";
@@ -364,11 +383,19 @@ function renderAccounts(): string {
     const concurrentControls = slot.concurrent.ready
       ? `<button class="secondary concurrent-launch" data-profile-concurrent-launch="${slot.id}" ${concurrentProviderAvailable && !concurrentRunning ? "" : `disabled title="${concurrentRunning ? "该隔离实例已经在运行" : "Sandboxie 隔离核心不可用"}"`}>${icon("boxes", 16)} ${concurrentRunning ? "隔离实例正在运行" : "启动隔离实例"}</button><button class="icon-plain" data-profile-concurrent-folder="${slot.id}" title="打开隔离数据目录" aria-label="打开 ${escapeHtml(slot.displayName)} 的隔离数据目录">${icon("folder", 17)}</button>`
       : `<button class="secondary concurrent-prepare" data-profile-concurrent-prepare="${slot.id}" ${concurrentProviderAvailable ? "" : `disabled title="${escapeHtml(concurrentProviderDetail)}"`}>${icon("download", 16)} 准备隔离实例</button>`;
+    const content = slot.concurrent.content;
+    const isolationContentForm = `<form class="isolation-content-form" data-profile-isolation-form="${slot.id}">
+      <div class="isolation-content-heading"><strong>隔离内容</strong><span>下次隔离启动生效</span></div>
+      <label>应用设置<select name="appSettings">${isolationPreferenceOptions(content.appSettings, concurrentDefaults.appSettings)}</select><small class="effective-state ${content.effectiveAppSettings ? "isolated" : "shared"}">${content.effectiveAppSettings ? "实际：独立" : "实际：共享宿主"}</small></label>
+      <label>声库数据<select name="voiceLibraries">${isolationPreferenceOptions(content.voiceLibraries, concurrentDefaults.voiceLibraries)}</select><small class="effective-state ${content.effectiveVoiceLibraries ? "isolated" : "shared"}">${content.effectiveVoiceLibraries ? "实际：独立" : "实际：共享宿主"}</small></label>
+      <button class="secondary" type="submit">保存隔离内容</button>
+      <small class="isolation-content-note">关闭隔离会通过 Sandboxie <code>OpenFilePath</code> 直接使用宿主的对应目录；账号会话、WebView2、注册表和 IPC 仍保持隔离。</small>
+    </form>`;
     return `<article class="profile-card ${slot.isActive ? "active" : ""}" style="--profile-color:${color}">
       <div class="profile-card-head"><span class="profile-avatar">${escapeHtml(initial)}</span><div><span class="eyebrow">账号槽位</span><h2>${escapeHtml(slot.displayName)}</h2>${identity.length ? `<span class="profile-identity">${identity.map(escapeHtml).join(" · ")}</span>` : '<span class="profile-identity empty">尚未填写用户名或邮箱</span>'}</div>${slot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
       <div class="profile-meta"><span class="${slot.sessionCached ? "cached" : ""}">${slot.sessionCached ? `${icon("check", 14)} 登录缓存已存在` : `${icon("plug", 14)} 首次启动需要登录`}</span><span>${icon("refresh", 14)} 最近使用：${escapeHtml(lastUsed)}</span></div>
       <section class="profile-launch-block ordinary"><div class="profile-launch-heading"><div><span>普通启动</span><strong>${slot.isActive ? "使用当前默认环境" : "切换到此账号环境"}</strong></div>${slot.isActive ? '<span class="profile-route-badge">默认路由</span>' : ""}</div><p>${slot.isActive ? "桌面快捷方式和 .svp 文件也会继续使用此槽位。" : "会先安全切换默认槽位，再启动 SV2；现有普通实例需要先退出。"}</p><div class="profile-actions"><button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button>${slot.isActive ? "" : `<button class="secondary" data-profile-activate="${slot.id}">设为默认</button>`}<button class="icon-plain profile-folder" data-profile-folder="${slot.id}" title="打开普通数据目录" aria-label="打开 ${escapeHtml(slot.displayName)} 的普通数据目录">${icon("folder", 18)}</button></div></section>
-      <section class="profile-launch-block isolation ${slot.concurrent.ready ? "ready" : ""}"><div class="profile-launch-heading"><div><span>隔离启动</span><strong>独立运行此账号</strong></div><span class="profile-isolation-status ${concurrentState}">${concurrentRunning ? icon("plug", 12) : ""}${concurrentStateLabel}</span></div><p>${escapeHtml(concurrentDescription)}</p><div class="profile-concurrent-actions">${concurrentControls}</div>${slot.concurrent.ready ? `<code title="隔离箱名称：${escapeHtml(slot.concurrent.boxName)}">${escapeHtml(slot.concurrent.boxName)}</code>` : ""}</section>
+      <section class="profile-launch-block isolation ${slot.concurrent.ready ? "ready" : ""}"><div class="profile-launch-heading"><div><span>隔离启动</span><strong>独立运行此账号</strong></div><span class="profile-isolation-status ${concurrentState}">${concurrentRunning ? icon("plug", 12) : ""}${concurrentStateLabel}</span></div><p>${escapeHtml(concurrentDescription)}</p>${isolationContentForm}<div class="profile-concurrent-actions">${concurrentControls}</div>${slot.concurrent.ready ? `<code title="隔离箱名称：${escapeHtml(slot.concurrent.boxName)}">${escapeHtml(slot.concurrent.boxName)}</code>` : ""}</section>
       <details class="profile-details"><summary>管理账号标签与存储位置 ${icon("arrow", 14)}</summary><div class="profile-details-body"><form class="profile-identity-form" data-profile-identity-form="${slot.id}"><label>用户名<input name="username" value="${escapeHtml(slot.username)}" maxlength="100" placeholder="用于区分账号的用户名" /></label><label>邮箱<input name="email" type="email" value="${escapeHtml(slot.email)}" maxlength="254" placeholder="name@example.com" /></label><button class="secondary">保存账号标签</button><small>这些标签由工具箱单独保存；不会读取或修改 SV2 的密码、Cookie 或 session。</small></form><form class="profile-rename" data-profile-rename-form="${slot.id}"><label>槽位显示名称<input value="${escapeHtml(slot.displayName)}" maxlength="64" required /></label><button class="secondary">保存</button></form><dl class="profile-storage-list"><div><dt>普通数据</dt><dd><code title="${escapeHtml(slot.dataPath)}">${escapeHtml(slot.dataPath)}</code></dd></div>${slot.concurrent.ready ? `<div><dt>隔离数据</dt><dd><code title="${escapeHtml(slot.concurrent.dataPath)}">${escapeHtml(slot.concurrent.dataPath)}</code></dd></div>` : ""}</dl></div></details>
     </article>`;
   }).join("");
@@ -379,7 +406,7 @@ function renderAccounts(): string {
     ${blockerPanel}
     <div class="profile-grid">${cards || '<div class="empty-inline">还没有账号槽位。请导入当前环境或创建一个空槽位。</div>'}</div>
     <div class="profile-setup-grid">${importPanel}${createPanel}</div>
-    <section class="panel profile-safety"><span>${icon("check", 18)}</span><div><strong>不伪造登录，也不绕过联网验证</strong><p>每个槽位按原样保存 license、WebView2、设置、数据库、缓存和脚本。普通切换只在相关进程退出后进行；隔离实例仅重定向本地文件、注册表和 IPC，官方网络连接保持不变。</p></div></section>`;
+    <section class="panel profile-safety"><span>${icon("check", 18)}</span><div><strong>不伪造登录，也不绕过联网验证</strong><p>每个槽位默认按原样保存 license、WebView2、设置、数据库、缓存和脚本；用户可只将应用设置或声库数据改为共享宿主。普通切换只在相关进程退出后进行，官方网络连接保持不变。</p></div></section>`;
 }
 
 function renderHome(): string {
@@ -476,8 +503,11 @@ function renderComponents(): string {
   return `${queue}<div class="section-heading"><div><h2>本地组件</h2><p>下载任务会加入队列；无固定来源与 SHA-256 的组件会拒绝安装。</p></div></div>
     <div class="component-list">${app.components.map((component) => {
       const task = app?.downloads.find((item) => item.componentId === component.id && ["queued", "downloading", "installing"].includes(item.status));
-      const label = component.installed ? "已就绪" : task ? statusLabel[task.status] : component.installable ? "加入队列" : "需系统安装";
-      return `<article class="component-row"><span class="component-status ${component.installed ? "ready" : ""}">${component.installed ? icon("check", 18) : icon("download", 18)}</span><div><h3>${escapeHtml(component.displayName)}</h3><p>${escapeHtml(component.description)}</p><div class="tags"><span>${escapeHtml(component.audience)}</span><span>${escapeHtml(component.status)}</span></div></div><button class="secondary" data-install-component="${escapeHtml(component.id)}" ${component.installed || task || !component.installable ? "disabled" : ""}>${label}</button></article>`;
+      const label = component.installed ? "已就绪" : component.downloaded ? "打开安装包位置" : task ? statusLabel[task.status] : component.installable ? "加入队列" : "当前平台不可用";
+      const action = component.downloaded
+        ? `data-open-component-download="${escapeHtml(component.id)}"`
+        : `data-install-component="${escapeHtml(component.id)}"`;
+      return `<article class="component-row"><span class="component-status ${component.installed || component.downloaded ? "ready" : ""}">${component.installed ? icon("check", 18) : icon("download", 18)}</span><div><h3>${escapeHtml(component.displayName)}</h3><p>${escapeHtml(component.description)}</p><div class="tags"><span>${escapeHtml(component.audience)}</span><span>${escapeHtml(component.status)}</span></div></div><button class="secondary" ${action} ${component.installed || task || (!component.installable && !component.downloaded) ? "disabled" : ""}>${label}</button></article>`;
     }).join("")}</div>`;
 }
 
@@ -572,6 +602,27 @@ function wireForms(): void {
     const email = form.querySelector<HTMLInputElement>('[name="email"]')?.value.trim() ?? "";
     if (!slotId) return;
     void run(async () => { profiles = await api.updateSv2ProfileIdentity(slotId, username, email); notice = "账号用户名和邮箱标签已保存。"; });
+  }));
+  document.querySelector<HTMLFormElement>("#concurrent-defaults-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    const appSettings = form.querySelector<HTMLInputElement>('[name="appSettings"]')?.checked ?? true;
+    const voiceLibraries = form.querySelector<HTMLInputElement>('[name="voiceLibraries"]')?.checked ?? true;
+    void run(async () => {
+      profiles = await api.updateSv2ConcurrentDefaults(appSettings, voiceLibraries);
+      notice = "全局隔离默认值已保存，将在各账户下次隔离启动时生效。";
+    });
+  });
+  document.querySelectorAll<HTMLFormElement>("[data-profile-isolation-form]").forEach((form) => form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const slotId = form.dataset.profileIsolationForm ?? "";
+    const appSettings = form.querySelector<HTMLSelectElement>('[name="appSettings"]')?.value as Sv2IsolationPreference;
+    const voiceLibraries = form.querySelector<HTMLSelectElement>('[name="voiceLibraries"]')?.value as Sv2IsolationPreference;
+    if (!slotId || !appSettings || !voiceLibraries) return;
+    void run(async () => {
+      profiles = await api.updateSv2ConcurrentContent(slotId, appSettings, voiceLibraries);
+      notice = "该账户的隔离内容策略已保存，将在下次隔离启动时生效。";
+    });
   }));
   document.querySelector<HTMLFormElement>("#chat-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -740,6 +791,10 @@ document.addEventListener("click", (event) => {
   if (target.dataset.scripts !== undefined) {
     const input = document.querySelector<HTMLInputElement>("#scripts-path");
     if (input && target.dataset.scripts) input.value = target.dataset.scripts;
+    return;
+  }
+  if (target.dataset.openComponentDownload) {
+    void run(async () => { setFeedback(await api.openDownloadedComponent(target.dataset.openComponentDownload ?? "")); });
     return;
   }
   if (target.dataset.installComponent) {

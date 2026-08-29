@@ -192,6 +192,7 @@ fn component_display_name(id: &str) -> Option<&'static str> {
     match id {
         "pi-audio" => Some("pi-audio"),
         "cvrs" => Some("CVRS"),
+        "sandboxie" => Some("Sandboxie Plus"),
         _ => None,
     }
 }
@@ -215,6 +216,15 @@ mod tests {
     fn unknown_component_is_rejected() {
         let queue = ComponentDownloadManager::default();
         assert!(queue.enqueue("../../unknown").is_err());
+    }
+
+    #[test]
+    fn sandboxie_installer_uses_the_same_serial_queue() {
+        let queue = ComponentDownloadManager::default();
+        let (items, start) = queue.enqueue("sandboxie").unwrap();
+        assert!(start);
+        assert_eq!(items[0].component_id, "sandboxie");
+        assert_eq!(items[0].display_name, "Sandboxie Plus");
     }
 
     #[test]

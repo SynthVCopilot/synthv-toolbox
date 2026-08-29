@@ -37,12 +37,27 @@ export interface Sv2ConcurrentProvider {
   detail: string;
 }
 
+export type Sv2IsolationPreference = "global" | "on" | "off";
+
+export interface Sv2ConcurrentDefaults {
+  appSettings: boolean;
+  voiceLibraries: boolean;
+}
+
+export interface Sv2ConcurrentContent {
+  appSettings: Sv2IsolationPreference;
+  voiceLibraries: Sv2IsolationPreference;
+  effectiveAppSettings: boolean;
+  effectiveVoiceLibraries: boolean;
+}
+
 export interface Sv2ConcurrentSlot {
   ready: boolean;
   boxName: string;
   dataPath: string;
   runningPids: number[];
   detail: string;
+  content: Sv2ConcurrentContent;
 }
 
 export interface Sv2ProfileSlot {
@@ -71,6 +86,7 @@ export interface Sv2ProfilesState {
   slots: Sv2ProfileSlot[];
   blockers: Sv2ProcessBlocker[];
   concurrentProvider: Sv2ConcurrentProvider;
+  concurrentDefaults: Sv2ConcurrentDefaults;
 }
 
 export interface ComponentInfo {
@@ -79,6 +95,7 @@ export interface ComponentInfo {
   description: string;
   audience: string;
   installed: boolean;
+  downloaded: boolean;
   installable: boolean;
   status: string;
 }

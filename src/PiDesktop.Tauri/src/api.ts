@@ -8,6 +8,7 @@ import type {
   ConversationSummary,
   McpServerConfig,
   OperationResult,
+  Sv2IsolationPreference,
   Sv2ProfilesState,
   SynthVInstallation,
   WorkflowResult,
@@ -39,6 +40,10 @@ let previewProfiles: Sv2ProfilesState = {
     installPath: "C:\\Program Files\\Sandboxie",
     detail: "隔离核心已就绪，可以为不同账号槽位运行相互独立的 SV2 实例。",
   },
+  concurrentDefaults: {
+    appSettings: true,
+    voiceLibraries: false,
+  },
   slots: [{
     id: "11111111-1111-4111-8111-111111111111",
     displayName: "主账号",
@@ -56,6 +61,12 @@ let previewProfiles: Sv2ProfilesState = {
       dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\concurrent\\11111111-1111-4111-8111-111111111111\\box\\user\\current\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2",
       runningPids: [],
       detail: "隔离副本已准备；本地变化不会自动覆盖普通槽位。",
+      content: {
+        appSettings: "global",
+        voiceLibraries: "off",
+        effectiveAppSettings: true,
+        effectiveVoiceLibraries: false,
+      },
     },
   }, {
     id: "22222222-2222-4222-8222-222222222222",
@@ -73,6 +84,12 @@ let previewProfiles: Sv2ProfilesState = {
       dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\concurrent\\22222222-2222-4222-8222-222222222222\\box\\user\\current\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2",
       runningPids: [],
       detail: "尚未准备隔离副本。",
+      content: {
+        appSettings: "on",
+        voiceLibraries: "global",
+        effectiveAppSettings: true,
+        effectiveVoiceLibraries: false,
+      },
     },
   }],
 };
@@ -93,9 +110,10 @@ const previewState = (): BootstrapState => ({
     source: "macOS 用户脚本目录",
   }],
   components: [
-    { id: "ffmpeg", displayName: "FFmpeg", description: "音视频转码与抽取；所有音频流程的基础。", audience: "AI 与人工", installed: true, installable: true, status: "已就绪" },
-    { id: "pi-audio", displayName: "pi-audio 音频探针", description: "特征指纹、BPM、乐器与风格倾向。", audience: "AI 与人工", installed: false, installable: true, status: "可通过 aria2 下载" },
-    { id: "cvrs", displayName: "CVRS", description: "跨版本工程探测与安全参考轨。", audience: "AI 与人工", installed: true, installable: true, status: "已就绪" },
+    { id: "ffmpeg", displayName: "FFmpeg", description: "音视频转码与抽取；所有音频流程的基础。", audience: "AI 与人工", installed: true, downloaded: false, installable: true, status: "已就绪" },
+    { id: "pi-audio", displayName: "pi-audio 音频探针", description: "特征指纹、BPM、乐器与风格倾向。", audience: "AI 与人工", installed: false, downloaded: false, installable: true, status: "可通过 aria2 下载" },
+    { id: "cvrs", displayName: "CVRS", description: "跨版本工程探测与安全参考轨。", audience: "AI 与人工", installed: true, downloaded: false, installable: true, status: "已就绪" },
+    { id: "sandboxie", displayName: "Sandboxie Plus 1.18.2", description: "SynthV Toolbox 并发隔离提供方；下载官方安装包后由用户交互安装。", audience: "Windows 并发隔离", installed: false, downloaded: false, installable: true, status: "可通过 aria2 下载官方 x64 安装包" },
   ],
   downloads: previewDownloads,
   mcpServers: previewMode === "ai" ? [{ id: "demo", name: "Demo tools", command: "node", args: ["server.mjs"], enabled: true }] : [],
@@ -132,6 +150,12 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
         dataPath: `${previewProfiles.vaultPath}\\concurrent\\${id}\\box\\user\\current\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2`,
         runningPids: [],
         detail: "尚未准备隔离副本。",
+        content: {
+          appSettings: "global",
+          voiceLibraries: "global",
+          effectiveAppSettings: previewProfiles.concurrentDefaults.appSettings,
+          effectiveVoiceLibraries: previewProfiles.concurrentDefaults.voiceLibraries,
+        },
       },
     });
     previewProfiles.canImportCurrent = false;
@@ -147,6 +171,35 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     if (slot) {
       slot.username = String(args?.username ?? "");
       slot.email = String(args?.email ?? "");
+    }
+    return previewProfiles as T;
+  }
+  if (command === "update_sv2_concurrent_defaults") {
+    previewProfiles.concurrentDefaults = {
+      appSettings: Boolean(args?.appSettings),
+      voiceLibraries: Boolean(args?.voiceLibraries),
+    };
+    previewProfiles.slots.forEach((slot) => {
+      slot.concurrent.content.effectiveAppSettings = slot.concurrent.content.appSettings === "global"
+        ? previewProfiles.concurrentDefaults.appSettings
+        : slot.concurrent.content.appSettings === "on";
+      slot.concurrent.content.effectiveVoiceLibraries = slot.concurrent.content.voiceLibraries === "global"
+        ? previewProfiles.concurrentDefaults.voiceLibraries
+        : slot.concurrent.content.voiceLibraries === "on";
+    });
+    return previewProfiles as T;
+  }
+  if (command === "update_sv2_concurrent_content") {
+    const slot = previewProfiles.slots.find((item) => item.id === args?.slotId);
+    if (slot) {
+      slot.concurrent.content.appSettings = args?.appSettings as Sv2IsolationPreference;
+      slot.concurrent.content.voiceLibraries = args?.voiceLibraries as Sv2IsolationPreference;
+      slot.concurrent.content.effectiveAppSettings = slot.concurrent.content.appSettings === "global"
+        ? previewProfiles.concurrentDefaults.appSettings
+        : slot.concurrent.content.appSettings === "on";
+      slot.concurrent.content.effectiveVoiceLibraries = slot.concurrent.content.voiceLibraries === "global"
+        ? previewProfiles.concurrentDefaults.voiceLibraries
+        : slot.concurrent.content.voiceLibraries === "on";
     }
     return previewProfiles as T;
   }
@@ -179,11 +232,12 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   }
   if (command === "queue_component_install") {
     const componentId = String(args?.id ?? "");
+    const componentName = previewState().components.find((item) => item.id === componentId)?.displayName ?? componentId;
     if (!previewDownloads.some((item) => item.componentId === componentId)) {
       previewDownloads.push({
         id: crypto.randomUUID(),
         componentId,
-        displayName: componentId,
+        displayName: componentName,
         status: "downloading",
         progress: 38,
         detail: "aria2 正在下载固定版本组件。",
@@ -193,6 +247,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     return previewDownloads as T;
   }
   if (command === "component_downloads") return previewDownloads as T;
+  if (command === "open_downloaded_component") return { succeeded: true, summary: "已打开 Sandboxie 安装包位置。", detail: "预览模式" } as T;
   if (command === "list_conversations") return [] as T;
   if (command === "new_conversation") return { id: "preview", title: "新对话", messages: [] } as T;
   if (command === "open_conversation") return { id: "preview", title: "预览对话", messages: [] } as T;
@@ -223,6 +278,10 @@ export const api = {
     call<Sv2ProfilesState>("rename_sv2_profile", { slotId, displayName }),
   updateSv2ProfileIdentity: (slotId: string, username: string, email: string) =>
     call<Sv2ProfilesState>("update_sv2_profile_identity", { slotId, username, email }),
+  updateSv2ConcurrentDefaults: (appSettings: boolean, voiceLibraries: boolean) =>
+    call<Sv2ProfilesState>("update_sv2_concurrent_defaults", { appSettings, voiceLibraries }),
+  updateSv2ConcurrentContent: (slotId: string, appSettings: Sv2IsolationPreference, voiceLibraries: Sv2IsolationPreference) =>
+    call<Sv2ProfilesState>("update_sv2_concurrent_content", { slotId, appSettings, voiceLibraries }),
   activateSv2Profile: (slotId: string) =>
     call<Sv2ProfilesState>("activate_sv2_profile", { slotId }),
   launchSv2Profile: (slotId: string, projectPath?: string) =>
@@ -245,6 +304,7 @@ export const api = {
   connectBridge: () => call<OperationResult>("connect_bridge"),
   componentDownloads: () => call<ComponentDownload[]>("component_downloads"),
   queueComponentInstall: (id: string) => call<ComponentDownload[]>("queue_component_install", { id }),
+  openDownloadedComponent: (id: string) => call<OperationResult>("open_downloaded_component", { id }),
   runAudioProbe: (audioPath: string, advanced: boolean) =>
     call<WorkflowResult>("run_audio_probe", { audioPath, advanced }),
   runGameToMidi: (vocalPath: string, instrumentalPath: string, outputName: string, tolerance: number, advanced: boolean) =>
