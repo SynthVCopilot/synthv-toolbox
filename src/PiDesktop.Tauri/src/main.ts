@@ -82,7 +82,9 @@ let conversation: ConversationSnapshot | undefined;
 let profiles: Sv2ProfilesState | undefined;
 let activeWorkflow: Feature["id"] | undefined;
 let workflowResult: WorkflowResult | undefined;
+let pendingBlockedSwitchSlot: string | undefined;
 let pendingConcurrentLaunchSlot: string | undefined;
+let pendingConcurrentPrepare = false;
 let downloadPollTimer: number | undefined;
 
 const pageMeta: Record<Page, { title: string; subtitle: string }> = {
@@ -220,7 +222,7 @@ function render(): void {
       </main>
       ${busy ? '<div class="busy-overlay" aria-label="处理中"><span class="spinner"></span></div>' : ""}
     </div>
-    ${pendingConcurrentLaunchSlot ? renderConcurrentDisclaimer() : ""}`;
+    ${pendingBlockedSwitchSlot ? renderBlockedSwitchDialog() : pendingConcurrentLaunchSlot ? renderConcurrentDisclaimer() : ""}`;
   wireForms();
   scheduleDownloadPoll();
 }
@@ -236,6 +238,31 @@ function renderConcurrentDisclaimer(): string {
       <div class="dialog-actions"><button class="secondary" data-cancel-concurrent>取消</button><button class="primary" data-accept-concurrent>理解风险并启动</button></div>
     </section>
   </div>`;
+}
+
+function renderBlockedSwitchDialog(): string {
+  const slot = profiles?.slots.find((item) => item.id === pendingBlockedSwitchSlot);
+  const blockers = profiles?.blockers ?? [];
+  const provider = profiles?.concurrentProvider;
+  const concurrentRunning = Boolean(slot?.concurrent.runningPids.length);
+  const canRunConcurrent = Boolean(provider?.available && !concurrentRunning);
+  const concurrentLabel = slot?.concurrent.ready ? "以并发模式运行" : "准备并发副本并运行";
+  return `<div class="dialog-backdrop" role="presentation">
+    <section class="fluent-dialog switch-dialog" role="alertdialog" aria-modal="true" aria-labelledby="blocked-switch-title">
+      <span class="dialog-icon danger">${icon("plug", 24)}</span>
+      <div><span class="eyebrow">检测到运行中的程序</span><h2 id="blocked-switch-title">无法安全切换到“${escapeHtml(slot?.displayName ?? "此槽位")}”</h2></div>
+      <p>下列程序正在使用当前 SV2 槽位。请先保存工程：强制切换会结束这些 PID 的整个进程树，未保存内容可能丢失；并发模式不会关闭当前程序。</p>
+      <div class="dialog-process-list">${blockers.map((blocker) => `<div><span><strong>${escapeHtml(blocker.name)}</strong><small>${escapeHtml(blocker.reason)}</small></span><code>${blocker.pid ? `PID ${blocker.pid}` : "无可用 PID"}</code></div>`).join("")}</div>
+      <p class="dialog-choice-note">${canRunConcurrent ? `${escapeHtml(provider?.name ?? "Sandboxie")} 已就绪；${slot?.concurrent.ready ? "将直接启动隔离实例。" : "会先复制该槽位的不透明数据副本，再启动隔离实例。"}` : concurrentRunning ? "此槽位的并发实例已经在运行。" : `并发模式不可用：${escapeHtml(provider?.detail ?? "未检测到隔离提供方。")}`}</p>
+      <div class="dialog-actions"><button class="secondary" data-cancel-profile-switch>取消</button><button class="secondary" data-run-blocked-concurrent ${canRunConcurrent ? "" : "disabled"}>${concurrentLabel}</button><button class="danger-action" data-force-profile-switch>强制切换并启动</button></div>
+    </section>
+  </div>`;
+}
+
+async function launchConcurrentSlot(slotId: string, prepare: boolean): Promise<void> {
+  if (prepare) profiles = await api.prepareSv2ConcurrentProfile(slotId);
+  setFeedback(await api.launchSv2ConcurrentProfile(slotId));
+  profiles = await api.sv2ProfileState();
 }
 
 function renderOnboarding(): void {
@@ -605,19 +632,51 @@ async function sendPrompt(input: string): Promise<void> {
 document.addEventListener("click", (event) => {
   const target = (event.target as HTMLElement).closest<HTMLElement>("button, [data-page], [data-onboarding]");
   if (!target || target.hasAttribute("disabled")) return;
+  if (target.hasAttribute("data-cancel-profile-switch")) {
+    pendingBlockedSwitchSlot = undefined;
+    render();
+    return;
+  }
+  if (target.hasAttribute("data-force-profile-switch")) {
+    const slotId = pendingBlockedSwitchSlot;
+    if (!slotId) return;
+    pendingBlockedSwitchSlot = undefined;
+    void run(async () => {
+      setFeedback(await api.forceLaunchSv2Profile(slotId));
+      profiles = await api.sv2ProfileState();
+    });
+    return;
+  }
+  if (target.hasAttribute("data-run-blocked-concurrent")) {
+    const slotId = pendingBlockedSwitchSlot;
+    const slot = profiles?.slots.find((item) => item.id === slotId);
+    if (!slotId || !slot) return;
+    const prepare = !slot.concurrent.ready;
+    pendingBlockedSwitchSlot = undefined;
+    if (!app?.concurrentDisclaimerAccepted) {
+      pendingConcurrentLaunchSlot = slotId;
+      pendingConcurrentPrepare = prepare;
+      render();
+    } else {
+      void run(async () => { await launchConcurrentSlot(slotId, prepare); });
+    }
+    return;
+  }
   if (target.hasAttribute("data-cancel-concurrent")) {
     pendingConcurrentLaunchSlot = undefined;
+    pendingConcurrentPrepare = false;
     render();
     return;
   }
   if (target.hasAttribute("data-accept-concurrent")) {
     const slotId = pendingConcurrentLaunchSlot;
     if (!slotId) return;
+    const prepare = pendingConcurrentPrepare;
+    pendingConcurrentLaunchSlot = undefined;
+    pendingConcurrentPrepare = false;
     void run(async () => {
       app = await api.acceptSv2ConcurrentDisclaimer();
-      pendingConcurrentLaunchSlot = undefined;
-      setFeedback(await api.launchSv2ConcurrentProfile(slotId));
-      profiles = await api.sv2ProfileState();
+      await launchConcurrentSlot(slotId, prepare);
     });
     return;
   }
@@ -652,7 +711,17 @@ document.addEventListener("click", (event) => {
   }
   if (target.hasAttribute("data-scan")) { void run(async () => { if (app) app.installations = await api.scanSynthV(); notice = "探测完成。"; }); return; }
   if (target.hasAttribute("data-profile-refresh")) { void run(async () => { profiles = await api.sv2ProfileState(); notice = "账号槽位状态已刷新。"; }); return; }
-  if (target.dataset.profileLaunch) { void run(async () => { setFeedback(await api.launchSv2Profile(target.dataset.profileLaunch ?? "")); profiles = await api.sv2ProfileState(); }); return; }
+  if (target.dataset.profileLaunch) {
+    const slotId = target.dataset.profileLaunch;
+    const slot = profiles?.slots.find((item) => item.id === slotId);
+    if (slot && !slot.isActive && profiles?.blockers.length) {
+      pendingBlockedSwitchSlot = slotId;
+      render();
+    } else {
+      void run(async () => { setFeedback(await api.launchSv2Profile(slotId)); profiles = await api.sv2ProfileState(); });
+    }
+    return;
+  }
   if (target.dataset.profileActivate) { void run(async () => { profiles = await api.activateSv2Profile(target.dataset.profileActivate ?? ""); notice = "默认账号槽位已切换。"; }); return; }
   if (target.dataset.profileFolder) { void run(async () => { setFeedback(await api.openSv2ProfileFolder(target.dataset.profileFolder ?? "")); }); return; }
   if (target.dataset.profileConcurrentPrepare) { void run(async () => { profiles = await api.prepareSv2ConcurrentProfile(target.dataset.profileConcurrentPrepare ?? ""); notice = "隔离副本已准备，可以并发启动。"; }); return; }
@@ -660,9 +729,10 @@ document.addEventListener("click", (event) => {
     const slotId = target.dataset.profileConcurrentLaunch;
     if (!app?.concurrentDisclaimerAccepted) {
       pendingConcurrentLaunchSlot = slotId;
+      pendingConcurrentPrepare = false;
       render();
     } else {
-      void run(async () => { setFeedback(await api.launchSv2ConcurrentProfile(slotId)); profiles = await api.sv2ProfileState(); });
+      void run(async () => { await launchConcurrentSlot(slotId, false); });
     }
     return;
   }

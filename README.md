@@ -41,6 +41,8 @@ SynthV Toolbox 是以 **Rust + Tauri** 构建的 Synthesizer V 创作工具箱�
 
 第一次启动并发实例时，应用会明确提示这是 Dreamtonics 未官方支持的实验性行为；确认结果会保存到本地设置。实验性入口当前只启动 SV2 standalone，不会把已经运行的 DAW 宿主或插件实例移入隔离空间。Sandboxie 启动参数固定为 `/box:<name>`，box 名称不添加 `#`。
 
+普通切换检测到 SV2 standalone、WebView2 或已加载插件的宿主进程时，会显示包含进程名、PID 和原因的确认弹窗。用户可以取消、通过 Sandboxie 保留当前进程并以并发模式运行目标槽位，或明确选择“强制切换并启动”；强制模式会在 Rust 后端重新扫描 PID，以 `taskkill /PID <pid> /T /F` 结束列出的进程树，确认占用消失后才移动槽位目录。
+
 本地兼容性冒烟测试已验证 Sandboxie Classic 5.73.2 可以在普通 SV2 2.2.1 已运行时启动第二个 SV2，并保持主窗口、WebView2 子进程树和网络连接正常。该结果只证明技术兼容性，不代表 Dreamtonics 对并发登录、设备计数或云同步策略的承诺。
 
 ## 安全边界
@@ -52,6 +54,7 @@ SynthV Toolbox 是以 **Rust + Tauri** 构建的 Synthesizer V 创作工具箱�
 - Bridge 安装器只写入用户指定的 SynthV `scripts` 目录。
 - 远程组件只能进入串行下载队列；aria2 只获取代码中固定的公开 `pi-agent` 提交，Rust 后端在安装前复核 SHA-256，未知或未固定版本的组件会被拒绝。
 - 并发隔离只使用受支持版本的本机 Sandboxie Plus / Classic，拒绝未知 reparse point，不修改 SV2 二进制或官方校验流程，也不提供自动回写/合并登录缓存。
+- 强制槽位切换只结束后端重新检测到的 SV2 占用 PID，不接受前端提供的任意 PID；若仍存在无 PID 的单实例锁或文件占用，切换会停止而不会移动槽位目录。
 
 ## 仓库结构
 

@@ -53,6 +53,7 @@ pub fn run() {
             commands::update_sv2_profile_identity,
             commands::activate_sv2_profile,
             commands::launch_sv2_profile,
+            commands::force_launch_sv2_profile,
             commands::open_sv2_profile_folder,
             commands::prepare_sv2_concurrent_profile,
             commands::launch_sv2_concurrent_profile,

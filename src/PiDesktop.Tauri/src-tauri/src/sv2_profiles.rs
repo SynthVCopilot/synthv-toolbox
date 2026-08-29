@@ -389,6 +389,23 @@ impl Sv2ProfileService {
         slot_id: String,
         project_path: Option<String>,
     ) -> Result<OperationResult, String> {
+        self.launch_slot_inner(slot_id, project_path, false)
+    }
+
+    pub fn force_launch_slot(
+        &self,
+        slot_id: String,
+        project_path: Option<String>,
+    ) -> Result<OperationResult, String> {
+        self.launch_slot_inner(slot_id, project_path, true)
+    }
+
+    fn launch_slot_inner(
+        &self,
+        slot_id: String,
+        project_path: Option<String>,
+        force: bool,
+    ) -> Result<OperationResult, String> {
         validate_slot_id(&slot_id)?;
         let executable = find_sv2_executable()
             .ok_or_else(|| "没有发现 Synthesizer V Studio 2 Pro 可执行文件。".to_string())?;
@@ -403,7 +420,11 @@ impl Sv2ProfileService {
         let paths = self.paths.as_ref().map_err(Clone::clone)?;
         let _file_lock = acquire_switch_lock(paths)?;
         recover_if_needed(paths)?;
-        reject_blockers(paths)?;
+        if force {
+            terminate_blockers(paths)?;
+        } else {
+            reject_blockers(paths)?;
+        }
         let mut manifest = load_manifest(paths)?;
         switch_slot(paths, &mut manifest, &slot_id)?;
 
@@ -419,7 +440,11 @@ impl Sv2ProfileService {
             .spawn()
             .map_err(|error| format!("无法启动 Synthesizer V Studio 2 Pro：{error}"))?;
         Ok(succeeded(
-            "已切换槽位并启动 Synthesizer V Studio 2 Pro。",
+            if force {
+                "已结束占用进程、切换槽位并启动 Synthesizer V Studio 2 Pro。"
+            } else {
+                "已切换槽位并启动 Synthesizer V Studio 2 Pro。"
+            },
             executable.to_string_lossy(),
         ))
     }
@@ -792,17 +817,78 @@ fn reject_blockers(paths: &SlotPaths) -> Result<(), String> {
     if blockers.is_empty() {
         return Ok(());
     }
-    let detail = blockers
+    Err(format!(
+        "请先保存并关闭所有使用 SV2 的程序，再切换账号槽位。\n{}",
+        format_blockers(&blockers)
+    ))
+}
+
+fn format_blockers(blockers: &[Sv2ProcessBlocker]) -> String {
+    blockers
         .iter()
         .map(|blocker| match blocker.pid {
             Some(pid) => format!("{} (PID {pid})：{}", blocker.name, blocker.reason),
             None => format!("{}：{}", blocker.name, blocker.reason),
         })
         .collect::<Vec<_>>()
-        .join("\n");
-    Err(format!(
-        "请先保存并关闭所有使用 SV2 的程序，再切换账号槽位。\n{detail}"
-    ))
+        .join("\n")
+}
+
+fn terminate_blockers(paths: &SlotPaths) -> Result<(), String> {
+    #[cfg(not(windows))]
+    {
+        let _ = paths;
+        return Err("强制切换当前仅支持 Windows。".to_string());
+    }
+
+    #[cfg(windows)]
+    {
+        let blockers = detect_blockers(paths);
+        if blockers.is_empty() {
+            return Ok(());
+        }
+        let mut processes = blockers
+            .iter()
+            .filter_map(|blocker| {
+                blocker.pid.map(|pid| {
+                    let priority = if blocker.reason.contains("standalone") {
+                        0
+                    } else {
+                        1
+                    };
+                    (priority, pid)
+                })
+            })
+            .collect::<Vec<_>>();
+        processes.sort_unstable();
+        let mut seen = std::collections::HashSet::new();
+        processes.retain(|(_, pid)| seen.insert(*pid));
+        if processes.is_empty() {
+            return Err(format!(
+                "没有可安全结束的进程 PID，强制切换已取消。\n{}",
+                format_blockers(&blockers)
+            ));
+        }
+        for (_, pid) in processes {
+            Command::new("taskkill.exe")
+                .arg("/PID")
+                .arg(pid.to_string())
+                .args(["/T", "/F"])
+                .output()
+                .map_err(|error| format!("无法结束 PID {pid} 的进程树：{error}"))?;
+        }
+        for _ in 0..30 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            if detect_blockers(paths).is_empty() {
+                return Ok(());
+            }
+        }
+        let remaining = detect_blockers(paths);
+        Err(format!(
+            "部分 SV2 占用在强制结束后仍存在，槽位尚未切换。\n{}",
+            format_blockers(&remaining)
+        ))
+    }
 }
 
 fn load_manifest(paths: &SlotPaths) -> Result<SlotManifest, String> {
