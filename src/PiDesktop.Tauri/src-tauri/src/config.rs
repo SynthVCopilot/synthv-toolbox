@@ -39,6 +39,8 @@ pub struct ToolboxSettings {
     pub scripts_path: Option<String>,
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+    #[serde(default)]
+    pub concurrent_disclaimer_accepted: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -64,6 +66,7 @@ impl Default for ToolboxSettings {
             mode: AppMode::Toolbox,
             scripts_path: None,
             mcp_servers: Vec::new(),
+            concurrent_disclaimer_accepted: false,
         }
     }
 }
@@ -196,6 +199,7 @@ mod tests {
         assert_eq!(settings.mode, AppMode::Toolbox);
         assert!(!settings.onboarding_completed);
         assert!(settings.mcp_servers.is_empty());
+        assert!(!settings.concurrent_disclaimer_accepted);
     }
 
     #[test]

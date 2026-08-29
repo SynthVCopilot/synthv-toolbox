@@ -17,6 +17,9 @@ const PROVIDER_ENV: &str = "SV2_TOOLBOX_SANDBOXIE_HOME";
 pub struct Sv2ConcurrentProviderView {
     pub available: bool,
     pub name: String,
+    pub edition: String,
+    pub version: String,
+    pub install_path: String,
     pub detail: String,
 }
 
@@ -73,7 +76,7 @@ pub fn detect_provider() -> Result<SandboxieProvider, String> {
                 let version = file_version(&start)?;
                 if !supported_provider_version(version) {
                     return Err(format!(
-                        "检测到 Sandboxie-Plus {}，但并发模式至少需要 1.17.6 / 5.72.6（该版本修复了关键隔离安全问题）。",
+                        "检测到 Sandboxie {}，但并发模式至少需要 Plus 1.17.6 / Classic 5.72.6（该版本修复了关键隔离安全问题）。",
                         format_version(version)
                     ));
                 }
@@ -85,7 +88,7 @@ pub fn detect_provider() -> Result<SandboxieProvider, String> {
             }
         }
         Err(format!(
-            "未检测到 Sandboxie-Plus。安装后重启工具箱，或将 {PROVIDER_ENV} 设置为包含 Start.exe 和 SbieIni.exe 的目录。"
+            "未检测到 Sandboxie Plus / Classic。安装后重启工具箱，或将 {PROVIDER_ENV} 设置为包含 Start.exe 和 SbieIni.exe 的目录。"
         ))
     }
 }
@@ -94,16 +97,23 @@ pub fn provider_view(provider: &Result<SandboxieProvider, String>) -> Sv2Concurr
     match provider {
         Ok(provider) => Sv2ConcurrentProviderView {
             available: true,
-            name: "Sandboxie-Plus".to_string(),
-            detail: format!(
-                "已检测到隔离提供方 {}：{}",
-                format_version(provider.version),
-                provider.start.parent().unwrap_or(&provider.start).display()
-            ),
+            name: provider_name(provider.version).to_string(),
+            edition: provider_edition(provider.version).to_string(),
+            version: format_version(provider.version),
+            install_path: provider
+                .start
+                .parent()
+                .unwrap_or(&provider.start)
+                .to_string_lossy()
+                .into_owned(),
+            detail: "隔离核心已就绪，可以为不同账号槽位运行相互独立的 SV2 实例。".to_string(),
         },
         Err(detail) => Sv2ConcurrentProviderView {
             available: false,
-            name: "Sandboxie-Plus".to_string(),
+            name: "Sandboxie Plus / Classic".to_string(),
+            edition: String::new(),
+            version: String::new(),
+            install_path: String::new(),
             detail: detail.clone(),
         },
     }
@@ -215,7 +225,7 @@ pub fn launch_slot(
 
     let mut command = quiet_command(&provider.start);
     command
-        .arg(format!("/box:{name}"))
+        .arg(sandbox_box_argument(&name))
         .arg("/silent")
         .arg(executable);
     if let Some(project) = project {
@@ -223,10 +233,10 @@ pub fn launch_slot(
     }
     let output = command
         .output()
-        .map_err(|error| format!("无法调用 Sandboxie-Plus：{error}"))?;
+        .map_err(|error| format!("无法调用 Sandboxie：{error}"))?;
     if !output.status.success() {
         return Err(format!(
-            "Sandboxie-Plus 启动失败（退出码 {:?}）：{}",
+            "Sandboxie 启动失败（退出码 {:?}）：{}",
             output.status.code(),
             command_detail(&output.stdout, &output.stderr)
         ));
@@ -315,7 +325,7 @@ fn configure_box(provider: &SandboxieProvider, box_name: &str, root: &Path) -> R
 
 fn list_pids(provider: &SandboxieProvider, box_name: &str) -> Result<Vec<u32>, String> {
     let output = quiet_command(&provider.start)
-        .arg(format!("/box:{box_name}"))
+        .arg(sandbox_box_argument(box_name))
         .arg("/listpids")
         .output()
         .map_err(|error| format!("无法查询隔离实例：{error}"))?;
@@ -529,8 +539,36 @@ fn supported_provider_version(version: (u16, u16, u16, u16)) -> bool {
     }
 }
 
+fn provider_edition(version: (u16, u16, u16, u16)) -> &'static str {
+    match version.0 {
+        1 => "Plus",
+        5 => "Classic",
+        _ => "Compatible",
+    }
+}
+
+fn provider_name(version: (u16, u16, u16, u16)) -> &'static str {
+    match provider_edition(version) {
+        "Plus" => "Sandboxie Plus",
+        "Classic" => "Sandboxie Classic",
+        _ => "Sandboxie",
+    }
+}
+
+fn sandbox_box_argument(box_name: &str) -> String {
+    format!("/box:{box_name}")
+}
+
 fn format_version(version: (u16, u16, u16, u16)) -> String {
-    format!("{}.{}.{}.{}", version.0, version.1, version.2, version.3)
+    let mut parts = vec![version.0, version.1, version.2, version.3];
+    while parts.len() > 3 && parts.last() == Some(&0) {
+        parts.pop();
+    }
+    parts
+        .into_iter()
+        .map(|part| part.to_string())
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 #[cfg(windows)]
@@ -550,11 +588,11 @@ fn file_version(path: &Path) -> Result<(u16, u16, u16, u16), String> {
         .collect::<Vec<_>>();
     let size = unsafe { GetFileVersionInfoSizeW(path.as_ptr(), null_mut()) };
     if size == 0 {
-        return Err("无法读取 Sandboxie-Plus 文件版本。".to_string());
+        return Err("无法读取 Sandboxie 文件版本。".to_string());
     }
     let mut data = vec![0_u8; size as usize];
     if unsafe { GetFileVersionInfoW(path.as_ptr(), 0, size, data.as_mut_ptr().cast()) } == 0 {
-        return Err("无法载入 Sandboxie-Plus 文件版本。".to_string());
+        return Err("无法载入 Sandboxie 文件版本。".to_string());
     }
     let sub_block = ['\\' as u16, 0];
     let mut value: *mut c_void = null_mut();
@@ -569,13 +607,13 @@ fn file_version(path: &Path) -> Result<(u16, u16, u16, u16), String> {
     } == 0
         || length < std::mem::size_of::<VS_FIXEDFILEINFO>() as u32
     {
-        return Err("Sandboxie-Plus 文件没有有效版本信息。".to_string());
+        return Err("Sandboxie 文件没有有效版本信息。".to_string());
     }
     let value = NonNull::new(value.cast::<VS_FIXEDFILEINFO>())
-        .ok_or_else(|| "Sandboxie-Plus 版本指针为空。".to_string())?;
+        .ok_or_else(|| "Sandboxie 版本指针为空。".to_string())?;
     let fixed = unsafe { value.as_ref() };
     if fixed.dwSignature != 0xFEEF_04BD {
-        return Err("Sandboxie-Plus 文件版本签名无效。".to_string());
+        return Err("Sandboxie 文件版本签名无效。".to_string());
     }
     Ok((
         (fixed.dwFileVersionMS >> 16) as u16,
@@ -604,6 +642,8 @@ mod tests {
             .chars()
             .all(|character| character.is_ascii_alphanumeric()));
         assert!(box_name("../../escape").is_err());
+        assert_eq!(sandbox_box_argument(&name), format!("/box:{name}"));
+        assert!(!sandbox_box_argument(&name).contains('#'));
     }
 
     #[test]
@@ -672,5 +712,14 @@ mod tests {
         assert!(supported_provider_version((1, 17, 6, 0)));
         assert!(!supported_provider_version((5, 72, 2, 0)));
         assert!(supported_provider_version((5, 72, 6, 0)));
+    }
+
+    #[test]
+    fn provider_identity_matches_the_sandboxie_version_line() {
+        assert_eq!(provider_name((1, 17, 6, 0)), "Sandboxie Plus");
+        assert_eq!(provider_edition((1, 17, 6, 0)), "Plus");
+        assert_eq!(provider_name((5, 73, 2, 0)), "Sandboxie Classic");
+        assert_eq!(provider_edition((5, 73, 2, 0)), "Classic");
+        assert_eq!(format_version((5, 73, 2, 0)), "5.73.2");
     }
 }

@@ -31,6 +31,9 @@ export interface Sv2ProcessBlocker {
 export interface Sv2ConcurrentProvider {
   available: boolean;
   name: string;
+  edition: string;
+  version: string;
+  installPath: string;
   detail: string;
 }
 
@@ -45,6 +48,8 @@ export interface Sv2ConcurrentSlot {
 export interface Sv2ProfileSlot {
   id: string;
   displayName: string;
+  username: string;
+  email: string;
   color: string;
   createdAtUtc: string;
   lastActivatedAtUtc?: string;
@@ -74,7 +79,20 @@ export interface ComponentInfo {
   description: string;
   audience: string;
   installed: boolean;
+  installable: boolean;
   status: string;
+}
+
+export type ComponentDownloadStatus = "queued" | "downloading" | "installing" | "completed" | "failed";
+
+export interface ComponentDownload {
+  id: string;
+  componentId: string;
+  displayName: string;
+  status: ComponentDownloadStatus;
+  progress: number;
+  detail: string;
+  updatedAt: string;
 }
 
 export interface BootstrapState {
@@ -89,7 +107,9 @@ export interface BootstrapState {
   bridgeConnected: boolean;
   installations: SynthVInstallation[];
   components: ComponentInfo[];
+  downloads: ComponentDownload[];
   mcpServers: McpServerConfig[];
+  concurrentDisclaimerAccepted: boolean;
 }
 
 export interface ConversationSummary {

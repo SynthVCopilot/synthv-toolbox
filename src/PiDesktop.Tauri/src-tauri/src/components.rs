@@ -1,10 +1,12 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use pi_agent_core::{default_catalog, ComponentSpec};
 use serde::Serialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use crate::config::model_config_path;
 use crate::synthv::{failed, quiet_command, succeeded, OperationResult};
@@ -17,6 +19,7 @@ pub struct ComponentInfo {
     pub description: String,
     pub audience: String,
     pub installed: bool,
+    pub installable: bool,
     pub status: String,
 }
 
@@ -37,8 +40,10 @@ fn component_info(component: ComponentSpec, resource_root: &Path) -> ComponentIn
         "cvrs" => configured_component("cvrs"),
         _ => false,
     };
+    let id = component.id;
+    let installable = installed || matches!(id.as_str(), "pi-audio" | "cvrs");
     ComponentInfo {
-        id: component.id,
+        id,
         display_name: component.display_name,
         description: component.description,
         audience: match format!("{:?}", component.audience).as_str() {
@@ -49,15 +54,27 @@ fn component_info(component: ComponentSpec, resource_root: &Path) -> ComponentIn
         installed,
         status: if installed {
             "已就绪".to_string()
+        } else if installable {
+            "可通过 aria2 下载".to_string()
         } else {
-            "未安装".to_string()
+            "需要系统安装".to_string()
         },
+        installable,
     }
 }
 
-pub fn install_component(id: &str, components_dir: &Path, resource_root: &Path) -> OperationResult {
+pub fn install_component<F>(
+    id: &str,
+    components_dir: &Path,
+    resource_root: &Path,
+    mut progress: F,
+) -> OperationResult
+where
+    F: FnMut(&str, u8, &str),
+{
     match id {
         "ffmpeg" => {
+            progress("installing", 80, "正在检查系统或应用内 FFmpeg。");
             if bundled_binary(resource_root, "ffmpeg").is_some() || command_available("ffmpeg") {
                 succeeded("FFmpeg 已可用。", "已发现应用内或系统 FFmpeg。")
             } else {
@@ -67,8 +84,26 @@ pub fn install_component(id: &str, components_dir: &Path, resource_root: &Path) 
                 )
             }
         }
-        "pi-audio" => install_python_component(id, "pi_audio.py", "audio", true, components_dir),
-        "cvrs" => install_python_component(id, "cvrs.py", "cvrs", false, components_dir),
+        "pi-audio" | "cvrs" => {
+            let source = if std::env::var("SYNTHV_TOOLBOX_COMPONENT_SOURCE")
+                .is_ok_and(|value| value.eq_ignore_ascii_case("bundled"))
+            {
+                progress("downloading", 50, "开发模式：使用应用包内的组件源码。");
+                Ok(components_dir.join(id))
+            } else {
+                download_component_source(id, resource_root, &mut progress)
+            };
+            let source = match source {
+                Ok(source) => source,
+                Err(error) => return failed("组件下载失败。", error),
+            };
+            progress("installing", 68, "源码校验完成，正在创建本地运行环境。");
+            match id {
+                "pi-audio" => install_python_component(id, "pi_audio.py", "audio", true, &source),
+                "cvrs" => install_python_component(id, "cvrs.py", "cvrs", false, &source),
+                _ => unreachable!(),
+            }
+        }
         _ => failed(
             "此组件尚无可信的跨平台安装清单。",
             "已拒绝下载；请等待包含来源、版本和 SHA-256 的发布清单。",
@@ -81,14 +116,13 @@ fn install_python_component(
     script_name: &str,
     config_key: &str,
     install_requirements: bool,
-    components_dir: &Path,
+    source: &Path,
 ) -> OperationResult {
-    let source = components_dir.join(id);
     if !source.join(script_name).is_file() {
-        return failed("应用包缺少组件源码。", source.to_string_lossy());
+        return failed("组件源码不完整。", source.to_string_lossy());
     }
     let target = pi_agent_core::data_root().join("components").join(id);
-    if let Err(error) = copy_directory(&source, &target) {
+    if let Err(error) = copy_directory(source, &target) {
         return failed("复制组件失败。", error.to_string());
     }
     let Some(python) = find_python() else {
@@ -150,6 +184,167 @@ fn install_python_component(
         format!("{} 已安装。", display_name(id)),
         format!("安装位置：{}", target.to_string_lossy()),
     )
+}
+
+const PI_AGENT_COMPONENT_REVISION: &str = "f4d56296d17c30077248fe9f73a13af47a329f62";
+
+struct ComponentPayload {
+    name: &'static str,
+    relative_url: &'static str,
+    sha256: &'static str,
+}
+
+const PI_AUDIO_PAYLOADS: &[ComponentPayload] = &[
+    ComponentPayload {
+        name: "pi_audio.py",
+        relative_url: "components/pi-audio/pi_audio.py",
+        sha256: "0e00ccd56c928475a69f39981c1f66298fc15d5249e9e7b6efa673b4ca2a4097",
+    },
+    ComponentPayload {
+        name: "requirements.txt",
+        relative_url: "components/pi-audio/requirements.txt",
+        sha256: "4014ba330a2db128da28ec3782339c474df5fb1f4f0ab70842960cf5c650883e",
+    },
+];
+
+const CVRS_PAYLOADS: &[ComponentPayload] = &[ComponentPayload {
+    name: "cvrs.py",
+    relative_url: "components/cvrs/cvrs.py",
+    sha256: "71383517bdfc4394315592cf97ab2243d6fff89f0caa24ceb2ca560671354f1e",
+}];
+
+fn download_component_source<F>(
+    id: &str,
+    resource_root: &Path,
+    progress: &mut F,
+) -> Result<PathBuf, String>
+where
+    F: FnMut(&str, u8, &str),
+{
+    let payloads = match id {
+        "pi-audio" => PI_AUDIO_PAYLOADS,
+        "cvrs" => CVRS_PAYLOADS,
+        _ => return Err("该组件没有受信任的 aria2 下载清单。".to_string()),
+    };
+    let aria2 = find_aria2(resource_root).ok_or_else(|| {
+        "未找到 aria2c。请安装 aria2（Windows 可使用 winget/choco，macOS 可使用 Homebrew），或设置 SYNTHV_TOOLBOX_ARIA2 指向 aria2c。".to_string()
+    })?;
+    let cache = pi_agent_core::data_root()
+        .join("downloads")
+        .join(id)
+        .join(PI_AGENT_COMPONENT_REVISION);
+    fs::create_dir_all(&cache).map_err(|error| format!("无法创建组件下载缓存：{error}"))?;
+    for (index, payload) in payloads.iter().enumerate() {
+        let start = 8 + ((index * 48) / payloads.len()) as u8;
+        progress(
+            "downloading",
+            start,
+            &format!("aria2 正在下载 {}。", payload.name),
+        );
+        let url = format!(
+            "https://raw.githubusercontent.com/SynthVCopilot/pi-agent/{PI_AGENT_COMPONENT_REVISION}/{}",
+            payload.relative_url
+        );
+        download_with_aria2(&aria2, &url, &cache, payload)?;
+        let complete = 8 + (((index + 1) * 48) / payloads.len()) as u8;
+        progress(
+            "downloading",
+            complete,
+            &format!("{} 已通过 SHA-256 校验。", payload.name),
+        );
+    }
+    Ok(cache)
+}
+
+fn find_aria2(resource_root: &Path) -> Option<PathBuf> {
+    if let Some(configured) = std::env::var_os("SYNTHV_TOOLBOX_ARIA2").map(PathBuf::from) {
+        if configured.is_file() {
+            return Some(configured);
+        }
+    }
+    let bundled = if cfg!(windows) {
+        resource_root.join("download-tools/windows/aria2c.exe")
+    } else {
+        resource_root.join("download-tools/macos/aria2c")
+    };
+    if bundled.is_file() {
+        return Some(bundled);
+    }
+    quiet_command("aria2c")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+        .then(|| PathBuf::from("aria2c"))
+}
+
+fn download_with_aria2(
+    aria2: &Path,
+    url: &str,
+    directory: &Path,
+    payload: &ComponentPayload,
+) -> Result<(), String> {
+    let output = quiet_command(aria2)
+        .args([
+            "--allow-overwrite=true",
+            "--auto-file-renaming=false",
+            "--check-certificate=true",
+            "--console-log-level=warn",
+            "--continue=true",
+            "--download-result=hide",
+            "--file-allocation=none",
+            "--max-connection-per-server=8",
+            "--min-split-size=1M",
+        ])
+        .arg(format!("--checksum=sha-256={}", payload.sha256))
+        .arg("--dir")
+        .arg(directory)
+        .arg("--out")
+        .arg(payload.name)
+        .arg(url)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| format!("无法启动 aria2c：{error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr)
+            .chars()
+            .take(1600)
+            .collect::<String>();
+        return Err(format!(
+            "aria2c 下载 {} 失败（退出码 {:?}）：{}",
+            payload.name,
+            output.status.code(),
+            detail.trim()
+        ));
+    }
+    verify_sha256(&directory.join(payload.name), payload.sha256)
+}
+
+fn verify_sha256(path: &Path, expected: &str) -> Result<(), String> {
+    let mut file = fs::File::open(path)
+        .map_err(|error| format!("无法读取下载文件 {}：{error}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("无法校验下载文件 {}：{error}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    let actual = format!("{:x}", hasher.finalize());
+    if actual.eq_ignore_ascii_case(expected) {
+        Ok(())
+    } else {
+        Err(format!(
+            "下载文件 {} 的 SHA-256 不匹配；已拒绝安装。",
+            path.display()
+        ))
+    }
 }
 
 fn configured_component(key: &str) -> bool {

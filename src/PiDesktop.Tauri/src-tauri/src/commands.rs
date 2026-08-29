@@ -12,20 +12,19 @@ use tauri::State;
 use tokio::runtime::Handle;
 use uuid::Uuid;
 
-use crate::components::{
-    component_list, install_component as install_component_impl, ComponentInfo,
-};
+use crate::components::{component_list, ComponentInfo};
 use crate::config::{
     load_model_settings, model_config_path, model_summary, save_model_settings as persist_model,
     save_settings, validate_mcp_server, AppMode, McpServerConfig, ModelSummary,
 };
+use crate::downloads::ComponentDownload;
 use crate::mcp::McpToolExecutor;
 use crate::state::{AgentSession, AppState};
 use crate::sv2_profiles::Sv2ProfilesState;
 use crate::synthv::{
     bridge_is_bundled, diagnose_bridge as diagnose_bridge_impl, failed, find_node,
-    install_bridge as install_bridge_impl, scan_installations, succeeded, OperationResult,
-    SynthVInstallation,
+    install_bridge as install_bridge_impl, normalized_path_string, scan_installations, succeeded,
+    OperationResult, SynthVInstallation,
 };
 use crate::workflows::{self, WorkflowResult};
 
@@ -43,7 +42,9 @@ pub struct BootstrapState {
     bridge_connected: bool,
     installations: Vec<SynthVInstallation>,
     components: Vec<ComponentInfo>,
+    downloads: Vec<ComponentDownload>,
     mcp_servers: Vec<McpServerConfig>,
+    concurrent_disclaimer_accepted: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -164,6 +165,19 @@ pub async fn rename_sv2_profile(
 }
 
 #[tauri::command]
+pub async fn update_sv2_profile_identity(
+    slot_id: String,
+    username: String,
+    email: String,
+    state: State<'_, AppState>,
+) -> Result<Sv2ProfilesState, String> {
+    let profiles = state.sv2_profiles.clone();
+    tauri::async_runtime::spawn_blocking(move || profiles.update_identity(slot_id, username, email))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 pub async fn activate_sv2_profile(
     slot_id: String,
     state: State<'_, AppState>,
@@ -214,12 +228,29 @@ pub async fn launch_sv2_concurrent_profile(
     project_path: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<OperationResult, String> {
+    if !state.settings.read().await.concurrent_disclaimer_accepted {
+        return Err(
+            "首次使用隔离并发前，必须确认它不是 Dreamtonics 官方支持的启动方式。".to_string(),
+        );
+    }
     let profiles = state.sv2_profiles.clone();
     tauri::async_runtime::spawn_blocking(move || {
         profiles.launch_concurrent_slot(slot_id, project_path)
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn accept_sv2_concurrent_disclaimer(
+    state: State<'_, AppState>,
+) -> Result<BootstrapState, String> {
+    {
+        let mut settings = state.settings.write().await;
+        settings.concurrent_disclaimer_accepted = true;
+        save_settings(&settings)?;
+    }
+    build_bootstrap(&state).await
 }
 
 #[tauri::command]
@@ -238,9 +269,11 @@ pub async fn save_scripts_path(
     scripts_path: String,
     state: State<'_, AppState>,
 ) -> Result<BootstrapState, String> {
-    if !Path::new(&scripts_path).is_dir() {
+    let scripts_path = Path::new(scripts_path.trim());
+    if !scripts_path.is_dir() {
         return Err("目标不是有效的 SynthV scripts 目录。".to_string());
     }
+    let scripts_path = normalized_path_string(scripts_path);
     {
         let mut settings = state.settings.write().await;
         settings.scripts_path = Some(scripts_path);
@@ -296,17 +329,25 @@ pub async fn connect_bridge(state: State<'_, AppState>) -> Result<OperationResul
 }
 
 #[tauri::command]
-pub async fn install_component(
+pub fn component_downloads(state: State<'_, AppState>) -> Vec<ComponentDownload> {
+    state.downloads.snapshot()
+}
+
+#[tauri::command]
+pub fn queue_component_install(
     id: String,
     state: State<'_, AppState>,
-) -> Result<OperationResult, String> {
-    let components_dir = state.components_dir.clone();
-    let resource_dir = state.resource_dir.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        install_component_impl(&id, &components_dir, &resource_dir)
-    })
-    .await
-    .map_err(|error| error.to_string())
+) -> Result<Vec<ComponentDownload>, String> {
+    let (snapshot, start_worker) = state.downloads.enqueue(&id)?;
+    if start_worker {
+        let manager = state.downloads.clone();
+        let components_dir = state.components_dir.clone();
+        let resource_dir = state.resource_dir.clone();
+        tauri::async_runtime::spawn(async move {
+            manager.run_worker(components_dir, resource_dir).await;
+        });
+    }
+    Ok(snapshot)
 }
 
 #[tauri::command]
@@ -655,12 +696,17 @@ async fn build_bootstrap(state: &State<'_, AppState>) -> Result<BootstrapState, 
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         config_path: model_config_path().to_string_lossy().into_owned(),
         model: model_summary(),
-        scripts_path: settings.scripts_path,
+        scripts_path: settings
+            .scripts_path
+            .as_deref()
+            .map(|path| normalized_path_string(Path::new(path))),
         bridge_bundled: bridge_is_bundled(&state.bridge_dir),
         bridge_connected: state.mcp.is_connected("synthv").await,
         installations: scan_installations(),
         components: component_list(&state.resource_dir),
+        downloads: state.downloads.snapshot(),
         mcp_servers: settings.mcp_servers,
+        concurrent_disclaimer_accepted: settings.concurrent_disclaimer_accepted,
     })
 }
 

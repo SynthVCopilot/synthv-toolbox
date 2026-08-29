@@ -89,7 +89,12 @@ pub fn scan_installations() -> Vec<SynthVInstallation> {
                 &mut found,
                 "Synthesizer V Studio",
                 None,
-                Some(home.join("Documents/Dreamtonics/Synthesizer V Studio/scripts")),
+                Some(
+                    home.join("Documents")
+                        .join("Dreamtonics")
+                        .join("Synthesizer V Studio")
+                        .join("scripts"),
+                ),
                 "Windows 文档脚本目录",
             );
         }
@@ -136,18 +141,25 @@ fn add_installation(
     let executable_path = install_path
         .as_deref()
         .and_then(find_executable_in)
-        .map(|path| path.to_string_lossy().into_owned());
+        .map(|path| normalized_path_string(&path));
     found.push(SynthVInstallation {
         display_name: name.to_string(),
         install_path: install_path
             .filter(|_| install_exists)
-            .map(|path| path.to_string_lossy().into_owned()),
+            .map(|path| normalized_path_string(&path)),
         executable_path,
         scripts_path: scripts_path
             .filter(|_| scripts_exists)
-            .map(|path| path.to_string_lossy().into_owned()),
+            .map(|path| normalized_path_string(&path)),
         source: source.to_string(),
     });
+}
+
+pub fn normalized_path_string(path: &Path) -> String {
+    path.components()
+        .collect::<PathBuf>()
+        .to_string_lossy()
+        .into_owned()
 }
 
 pub fn find_sv2_executable() -> Option<PathBuf> {
@@ -388,7 +400,8 @@ pub fn quiet_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
 
 #[cfg(test)]
 mod tests {
-    use super::node_version_supported;
+    use super::{node_version_supported, normalized_path_string};
+    use std::path::Path;
 
     #[test]
     fn node_version_floor_matches_the_bundled_bridge() {
@@ -396,5 +409,20 @@ mod tests {
         assert!(!node_version_supported("v22.18.9"));
         assert!(node_version_supported("v22.19.0"));
         assert!(node_version_supported("v24.0.0"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn displayed_windows_paths_use_one_separator_and_no_trailing_separator() {
+        assert_eq!(
+            normalized_path_string(Path::new(
+                "C:/Users/User/Documents/Dreamtonics/Synthesizer V Studio/scripts/"
+            )),
+            r"C:\Users\User\Documents\Dreamtonics\Synthesizer V Studio\scripts"
+        );
+        assert_eq!(
+            normalized_path_string(Path::new(r"D:\Synthesizer V Studio 2 Pro\")),
+            r"D:\Synthesizer V Studio 2 Pro"
+        );
     }
 }
