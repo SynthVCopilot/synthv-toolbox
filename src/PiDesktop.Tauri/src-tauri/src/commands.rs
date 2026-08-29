@@ -242,7 +242,7 @@ pub async fn launch_sv2_concurrent_profile(
 ) -> Result<OperationResult, String> {
     if !state.settings.read().await.concurrent_disclaimer_accepted {
         return Err(
-            "首次使用隔离并发前，必须确认它不是 Dreamtonics 官方支持的启动方式。".to_string(),
+            "首次使用并发隔离前，必须确认这种运行方式尚未被 Dreamtonics 官方承认。".to_string(),
         );
     }
     let profiles = state.sv2_profiles.clone();

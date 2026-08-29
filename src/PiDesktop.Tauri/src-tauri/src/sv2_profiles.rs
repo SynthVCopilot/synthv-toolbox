@@ -573,10 +573,7 @@ impl Sv2ProfileService {
         }
         #[cfg(not(windows))]
         {
-            Ok(crate::synthv::failed(
-                "实验性并发隔离当前仅支持 Windows。",
-                "",
-            ))
+            Ok(crate::synthv::failed("并发隔离当前仅支持 Windows。", ""))
         }
     }
 }

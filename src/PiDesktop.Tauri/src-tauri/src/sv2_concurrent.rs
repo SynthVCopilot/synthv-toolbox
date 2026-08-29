@@ -51,7 +51,7 @@ struct ConcurrentMarker {
 
 pub fn detect_provider() -> Result<SandboxieProvider, String> {
     #[cfg(not(windows))]
-    return Err("实验性并发隔离当前仅支持 Windows。".to_string());
+    return Err("并发隔离当前仅支持 Windows。".to_string());
 
     #[cfg(windows)]
     {
