@@ -3,7 +3,7 @@
 //! 所有组件的数据（模型、输出写入、配置、历史）一律放在这个根下，
 //! 并通过 [`safe_join`] 硬禁止 `..` 穿透与越根写入。
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use super::error::{AgentError, Result};
 
@@ -40,22 +40,35 @@ pub fn config_path() -> PathBuf {
 ///
 /// 拒绝：`..` 组件（穿透）、绝对路径/盘符/根前缀。允许多级子目录。
 pub fn safe_join(root: &Path, relative: &str) -> Result<PathBuf> {
-    let rel = Path::new(relative);
+    if relative.is_empty() || relative.contains('\0') {
+        return Err(AgentError::new("路径不能为空，也不能包含 NUL 字符"));
+    }
+
+    let bytes = relative.as_bytes();
+    let has_windows_drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    if relative.starts_with('/') || relative.starts_with('\\') || has_windows_drive {
+        return Err(AgentError::new(format!(
+            "禁止绝对路径，只接受根下相对路径: {relative}"
+        )));
+    }
+
     let mut out = root.to_path_buf();
-    for comp in rel.components() {
-        match comp {
-            Component::Normal(c) => out.push(c),
-            Component::CurDir => {}
-            Component::ParentDir => {
+    // 输入可能来自另一平台，因此始终同时识别 Unix 与 Windows 分隔符。
+    for segment in relative.split(['/', '\\']) {
+        match segment {
+            "" | "." => {}
+            ".." => {
                 return Err(AgentError::new(format!(
                     "路径含 '..'，禁止穿透: {relative}"
                 )))
             }
-            Component::RootDir | Component::Prefix(_) => {
+            // Windows 的备用数据流与其他盘符写法也不应穿过这个边界。
+            value if value.contains(':') => {
                 return Err(AgentError::new(format!(
                     "禁止绝对路径，只接受根下相对路径: {relative}"
                 )))
             }
+            value => out.push(value),
         }
     }
     Ok(out)
@@ -80,7 +93,11 @@ mod tests {
         assert!(safe_join(root, "../evil.mid").is_err());
         assert!(safe_join(root, "a/../../evil.mid").is_err());
         assert!(safe_join(root, "..\\evil.mid").is_err());
+        assert!(safe_join(root, "a\\..\\evil.mid").is_err());
+        assert!(safe_join(root, "a/..\\evil.mid").is_err());
         assert!(safe_join(root, "C:\\Windows\\evil.mid").is_err());
+        assert!(safe_join(root, "C:evil.mid").is_err());
+        assert!(safe_join(root, "\\\\server\\share\\evil.mid").is_err());
         assert!(safe_join(root, "\\evil.mid").is_err());
         assert!(safe_join(root, "/etc/passwd").is_err());
     }
