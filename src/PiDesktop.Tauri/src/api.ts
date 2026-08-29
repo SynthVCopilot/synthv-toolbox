@@ -420,6 +420,28 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     recipeId: String(args?.recipeId ?? "project-doctor"), completed: (args?.inputPaths as unknown[] | undefined)?.length ?? 0, failed: 0,
     items: ((args?.inputPaths as string[] | undefined) ?? []).map((inputPath) => ({ inputPath, status: "completed", result: { kind: String(args?.recipeId ?? "batch"), summary: "预览批处理完成。", data: { preview: true } } })),
   } as T;
+  if (command === "run_project_doctor" || command === "run_pronunciation_diagnostics") return {
+    kind: command === "run_project_doctor" ? "project-doctor" : "pronunciation-check",
+    summary: "预览诊断发现 1 个错误和 1 个警告。",
+    data: {
+      kind: command === "run_project_doctor" ? "project-doctor" : "pronunciation-check",
+      ok: false,
+      summary: "预览诊断发现 1 个错误和 1 个警告。",
+      inspectedItems: 24,
+      issues: [
+        { code: "NOTE_TIMING_INVALID", severity: "error", message: "音符起点或时值无效。", location: "tracks[0].mainGroup.notes[3]", suggestion: "检查该音符的起止位置。" },
+        { code: "LYRIC_EMPTY", severity: "warning", message: "音符歌词为空。", location: "tracks[0].mainGroup.notes[7]", suggestion: "补充歌词或确认这是有意的静音音符。" },
+      ],
+    },
+  } as T;
+  if (command === "run_render_review") return {
+    kind: "render-quality-check",
+    summary: "渲染复检通过，未发现交付阻断项。",
+    data: {
+      probe: { duration_sec: 183.2, bpm: 128, key_guess: "C#", peak_dbfs: -1.1, rms_dbfs: -14.8, clipped_sample_ratio: 0, silent_frame_ratio: 0.02 },
+      report: { kind: "render-quality-check", ok: true, summary: "渲染复检通过。", inspectedItems: 8, issues: [] },
+    },
+  } as T;
   if (command === "list_conversations") return [] as T;
   if (command === "new_conversation") return { id: "preview", title: "新对话", messages: [] } as T;
   if (command === "open_conversation") return { id: "preview", title: "预览对话", messages: [] } as T;
