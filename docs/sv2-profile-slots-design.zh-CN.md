@@ -16,7 +16,7 @@
 
 当前槽位真实占用上述官方路径；其他槽位停放在同一父目录下的工具箱保管区。切换通过同卷目录重命名完成，不安装驱动、不注入进程、不修改 SV2 二进制，也不改变系统文件关联。
 
-普通启动路径同一时刻最多激活一个槽位。实验性并发路径使用 Sandboxie-Plus 为每个已准备槽位建立持久化的文件、注册表和 IPC 隔离空间；它是独立能力，不改变普通槽位的事务模型。
+普通启动路径同一时刻最多激活一个槽位。实验性并发路径使用 Sandboxie Plus / Classic 为每个已准备槽位建立持久化的文件、注册表和 IPC 隔离空间；它是独立能力，不改变普通槽位的事务模型。
 
 ## 2. 已验证事实与设计约束
 
@@ -49,17 +49,27 @@ Windows 对全局和会话级命名对象的区别见 [Kernel object namespaces]
 
 ## 3. 用户体验
 
-工具箱增加一级导航项“SV2 账号”。页面采用启动器式卡片：
+工具箱增加一级导航项“SV2 账号”。页面先并列解释两条启动路线，再按账号展示启动器式卡片：
+
+- `普通启动`：使用当前默认槽位；切换账号前必须退出普通 SV2 / 插件进程；
+- `隔离启动`：使用 Sandboxie 为该槽位启动独立实例；准备完成后可与普通实例或其他隔离槽位并发；
+- 隔离提供方区域显示实际识别到的 Sandboxie 版本线、版本号、安装目录、已准备数量和运行数量；
+- 网络持续验证与官方同步明确标为 SV2 / Dreamtonics 负责，工具箱不代理网络。
+
+每个账号卡片包含：
 
 - 用户自定义名称，例如“主账号”“制作账号”“测试账号”；
+- 用户自行填写的用户名和邮箱标签；
 - 自定义颜色或头像首字母；
-- 状态：`当前默认`、`可切换`、`首次登录`、`需要恢复`；
+- 状态：`当前默认`、`登录缓存已存在`、`首次启动需要登录`、`未准备`、`已准备`、`运行中`、`需要处理`；
 - 最近使用时间；
 - 会话缓存是否存在，仅作为诊断信息，不宣称账号仍在线有效；
-- 主按钮：`使用并启动`；
-- 次按钮：`设为默认`、`重命名`、`打开数据目录`。
+- 普通启动按钮：`普通启动` 或 `切换并启动`；
+- 隔离启动按钮：`准备隔离实例` 或 `启动隔离实例`；
+- 次按钮：`设为默认`、打开数据目录；
+- 低频的重命名和数据路径收纳到“管理槽位与存储位置”折叠区。
 
-不自动读取账号邮箱、产品清单或 Cookie，不保存 Dreamtonics 密码。
+用户名和邮箱仅作为用户填写的工具箱本地元数据；不从 `license/session`、Cookie 或 WebView2 缓存推断账号邮箱，不读取产品清单，也不保存 Dreamtonics 密码。
 
 ### 3.1 首次使用
 
@@ -75,7 +85,7 @@ Windows 对全局和会话级命名对象的区别见 [Kernel object namespaces]
 ### 3.2 新建账号槽位
 
 1. 在保管区创建只含工具箱标记的新目录；
-2. 用户点击“使用并启动”；
+2. 用户点击“切换并启动”；
 3. 工具箱将当前槽位停放并把新槽位移到官方路径；
 4. 启动 SV2；
 5. 用户在 Dreamtonics 官方界面完成登录。
@@ -97,6 +107,12 @@ Windows 对全局和会话级命名对象的区别见 [Kernel object namespaces]
 ```
 
 因此工具箱不运行时，SV2 仍然保持正常启动行为。
+
+### 3.4 隔离启动
+
+用户第一次点击“准备隔离实例”时，工具箱从该槽位建立一份持久化、不透明的完整副本。之后点击“启动隔离实例”会通过对应 Sandboxie box 启动 SV2 standalone；普通槽位和隔离副本各自保存本地变化，不做运行中合并。
+
+普通槽位被 SV2 / 插件占用时只阻止普通切换，不应错误阻止已经准备好的其他隔离实例启动。同一个 Sandboxie box 已运行时，界面显示“运行中”并禁用重复启动。
 
 ## 4. 文件布局
 
@@ -137,6 +153,8 @@ Windows 对全局和会话级命名对象的区别见 [Kernel object namespaces]
     {
       "id": "0c8fd8f4-3e0d-4c48-97c1-377167d5f158",
       "displayName": "主账号",
+      "username": "Producer",
+      "email": "producer@example.com",
       "color": "#5B8DEF",
       "createdAtUtc": "2026-08-28T20:00:00Z",
       "lastActivatedAtUtc": "2026-08-28T20:00:00Z"
@@ -254,7 +272,7 @@ Restart Manager 不是唯一判断依据。还要检查：
 
 ## 8. 启动流程
 
-`使用并启动(slotId, optionalProjectPath)`：
+`切换并启动(slotId, optionalProjectPath)`：
 
 1. 如果目标不是当前槽位，执行完整切换事务。
 2. 再次确认清单和根标记一致。
@@ -299,19 +317,19 @@ synthv-studio.exe
 
 用户态 API Hook 容易漏掉直接 NT 文件调用和子进程。minifilter 能覆盖文件系统，但需要管理员权限、驱动签名、安全维护和版本兼容；而且它仍不能自然虚拟化全局命名互斥量。Windows 的 reparse point 与文件系统过滤机制见 [Reparse points](https://learn.microsoft.com/en-us/windows/win32/fileio/reparse-points)。
 
-因此实现没有编写 DLL 注入或文件系统驱动，而是把 Sandboxie-Plus 作为可选提供方。每个槽位使用确定性的 sandbox 名称，并把 `FileRootPath` 指向：
+因此实现没有编写 DLL 注入或文件系统驱动，而是把共享同一隔离核心的 Sandboxie Plus / Classic 作为可选提供方。每个槽位使用确定性的 sandbox 名称，并把 `FileRootPath` 指向：
 
 ```text
 %APPDATA%\Dreamtonics\Synthesizer V Studio 2.toolbox-slots\concurrent\<slot-id>\box
 ```
 
-工具箱同时为该 sandbox 配置独立 `KeyRootPath` 和 `IpcRootPath`，从而覆盖 SV2 进程树、WebView2 子进程以及命名对象，而不是只改主进程看到的文件路径。启动使用官方 `Start.exe /box:<name> /silent` 接口，配置通过 `SbieIni.exe` 写入并回读校验 `FileRootPath`。
+工具箱同时为该 sandbox 配置独立 `KeyRootPath` 和 `IpcRootPath`，从而覆盖 SV2 进程树、WebView2 子进程以及命名对象，而不是只改主进程看到的文件路径。启动使用 Sandboxie `Start.exe /box:<name> /silent` 接口，box 名称前不添加 `#`；配置通过 `SbieIni.exe` 写入并回读校验 `FileRootPath`。
 
 当前入口只并发启动 SV2 standalone。工具箱不会把已有 DAW 宿主强行移入 sandbox，因此不承诺隔离 DAW 内的 SV2 插件实例。
 
-并发能力默认关闭，只有用户对某槽位点击“准备并发副本”后才启用。首次准备复制完整不透明数据根，不解析 `license\session`；后续隔离实例直接在持久化副本上运行。隔离副本不会自动覆盖或合并回普通槽位，避免把两个运行中的数据库、WebView2 状态或 session 做文件级拼接。网络不被工具箱拦截，持续验证以及同账号/工程同步仍由 Dreamtonics 官方服务决定。
+并发能力默认关闭，只有用户对某槽位点击“准备隔离实例”后才启用。第一次实际启动并发实例前，界面必须提示这不是 Dreamtonics 官方支持的行为，并在用户明确确认后持久化该选择。首次准备复制完整不透明数据根，不解析 `license\session`；后续隔离实例直接在持久化副本上运行。隔离副本不会自动覆盖或合并回普通槽位，避免把两个运行中的数据库、WebView2 状态或 session 做文件级拼接。网络不被工具箱拦截，持续验证以及同账号/工程同步仍由 Dreamtonics 官方服务决定。
 
-出于安全原因，提供方版本低于 Sandboxie-Plus 1.17.6 / Classic 5.72.6 时拒绝启用；复制源、目标和中间树中出现 reparse point 时 fail closed。若 Sandboxie-Plus 未安装或配置受密码保护，普通顺序切换不受影响。
+出于安全原因，提供方版本低于 Sandboxie Plus 1.17.6 / Classic 5.72.6 时拒绝启用；复制源、目标和中间树中出现 reparse point 时 fail closed。若 Sandboxie 未安装或配置受密码保护，普通顺序切换不受影响。
 
 ## 10. RDPWrap 决策
 
@@ -328,7 +346,7 @@ synthv-studio.exe
 
 1. Dreamtonics 官方多实例/多账号支持；
 2. 不同 Windows 用户运行不同 DAW 插件进程的受控实验；
-3. 本实现的 Sandboxie-Plus 进程树隔离；
+3. 本实现的 Sandboxie Plus / Classic 进程树隔离；
 4. 完整 VM/Windows Sandbox 级隔离。
 
 ## 11. 项目集成点
@@ -380,8 +398,11 @@ src/PiDesktop.Tauri/src/styles.css
 
 ### Phase 3：启动器 UI（已实现）
 
-- 账号卡片；
-- 使用并启动；
+- 账号卡片内区分“普通启动”和“隔离启动”；
+- 展示用户填写的用户名和邮箱标签，不从 SV2 会话数据推断身份；
+- 显示默认路由、登录缓存、隔离准备和运行状态；
+- 显示实际 Sandboxie 版本线、版本号、安装目录与实例统计；
+- 将重命名和存储路径收纳到可展开管理区；
 - 后端支持带 `.svp` 工程启动；
 - 展示 standalone、DAW 插件、文件句柄和单实例锁阻塞提示。
 
@@ -394,14 +415,16 @@ src/PiDesktop.Tauri/src/styles.css
 - 验证直接启动和工具箱启动使用同一默认槽位；
 - 验证 standalone、WebView2 或 DAW 插件运行时拒绝切换。
 
-### Phase 5：实验性并发隔离（代码与自动化检查已实现，需安装提供方和真实 SV2 人工验证）
+### Phase 5：实验性并发隔离（代码、自动化检查和本机 standalone 冒烟测试已通过，多账号登录仍需人工验证）
 
-- 探测 Sandboxie-Plus 并拒绝低于 1.17.6 / 5.72.6 的版本；
+- 探测 Sandboxie Plus / Classic 并拒绝低于 1.17.6 / 5.72.6 的版本；
 - 为槽位原子准备带标记的持久化不透明副本；
 - 配置并回读每槽位 `FileRootPath`、注册表根和 IPC 根；
 - 允许不同槽位并发启动，拒绝同一 sandbox 重复启动；
+- 第一次并发启动前显示非官方支持警告，并确保 Sandboxie `/box:<name>` 参数不含 `#`；
 - 不拦截网络，不解析登录缓存，不自动合并隔离副本；
-- Sandboxie-Plus 与真实 SV2/WebView2 的完整往返仍需在安装该提供方的机器上验证。
+- 已在 Sandboxie Classic 5.73.2 + SV2 2.2.1 上验证：普通 SV2 保持运行时，第二个 boxed SV2 主窗口可响应，WebView2 进程树正常，网络连接保持建立；测试结束后可正常关闭并清理 box。
+- 上述测试未确认 Dreamtonics 的并发登录、设备计数、账号同步或云工程政策；这些行为必须在用户自己的合法账号上人工确认。
 
 ## 13. 必测不变量
 

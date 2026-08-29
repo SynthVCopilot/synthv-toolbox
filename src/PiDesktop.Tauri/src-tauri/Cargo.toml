@@ -20,6 +20,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "process", "io-util", "sync", "macros"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 uuid = { version = "1.26.0", features = ["v4"] }
+sha2 = "0.10"
 pi-agent-core = { path = "../../../external/pi-agent/crates/pi-agent-core" }
 pi-agent-provider = { path = "../../../external/pi-agent/crates/pi-agent-provider" }
 pi-agent-mcp = { path = "../../../external/pi-agent/crates/pi-agent-mcp" }

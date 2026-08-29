@@ -1,6 +1,7 @@
 mod commands;
 mod components;
 mod config;
+mod downloads;
 mod mcp;
 mod state;
 mod sv2_concurrent;
@@ -49,17 +50,20 @@ pub fn run() {
             commands::import_current_sv2_profile,
             commands::create_sv2_profile,
             commands::rename_sv2_profile,
+            commands::update_sv2_profile_identity,
             commands::activate_sv2_profile,
             commands::launch_sv2_profile,
             commands::open_sv2_profile_folder,
             commands::prepare_sv2_concurrent_profile,
             commands::launch_sv2_concurrent_profile,
+            commands::accept_sv2_concurrent_disclaimer,
             commands::open_sv2_concurrent_folder,
             commands::save_scripts_path,
             commands::install_bridge,
             commands::diagnose_bridge,
             commands::connect_bridge,
-            commands::install_component,
+            commands::component_downloads,
+            commands::queue_component_install,
             commands::run_audio_probe,
             commands::run_game_to_midi,
             commands::run_project_probe,

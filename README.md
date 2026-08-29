@@ -29,14 +29,19 @@ SynthV Toolbox 是以 **Rust + Tauri** 构建的 Synthesizer V 创作工具箱�
 - **SynthV Bridge**：探测 Synthesizer V、安装/诊断内置 Bridge，并通过私有 stdio MCP 连接；不监听网络端口。
 - **Copilot**：可持久化会话，通过已启用的 SynthV Bridge 与外部 MCP 工具工作。
 - **外部 MCP**：配置、启用、测试和移除受信任的 stdio MCP 服务器。
-- **SV2 账号槽位（Windows）**：保存完整官方数据根的本地槽位，事务化切换默认环境并启动 SV2；不读取或伪造凭据/session 内容。
-- **实验性并发隔离（Windows）**：在用户显式准备隔离副本且本机提供 Sandboxie-Plus 1.17.6 / 5.72.6 或更高版本时，为每个槽位分配独立的文件、注册表与 IPC 命名空间，并允许多个槽位并发启动。
+- **组件下载队列**：将 `pi-audio`、CVRS 等受信任组件加入串行队列，使用 aria2 断点下载，并在安装前再次校验固定提交与 SHA-256。
+- **SV2 账号槽位（Windows）**：保存完整官方数据根的本地槽位，事务化切换默认环境并启动 SV2；可为槽位填写用户名和邮箱标签，但不读取或伪造凭据/session 内容。
+- **实验性并发隔离（Windows）**：在用户显式准备隔离副本且本机提供 Sandboxie Plus 1.17.6 或 Classic 5.72.6 以上版本时，为每个槽位分配独立的文件、注册表与 IPC 命名空间，并允许多个槽位并发启动。
 
 账号槽位和并发隔离是 Windows 专属能力；音频、MIDI、工程、Bridge、Copilot 与 MCP 工作流同时支持 Windows 和 macOS。
 
-并发隔离不会拦截网络，也不会读取或伪造账号凭据，SV2 仍通过官方服务完成持续验证。第一次点击“准备并发副本”会把该槽位的完整不透明数据复制到工具箱保管区；此后隔离实例的本地变化不会自动合并回普通槽位。同账号或工程能否跨实例同步取决于 Dreamtonics 官方服务。Sandboxie-Plus 未安装时，顺序槽位切换仍可独立使用。
+并发隔离不会拦截网络，也不会读取或伪造账号凭据，SV2 仍通过官方服务完成持续验证。第一次点击“准备隔离实例”会把该槽位的完整不透明数据复制到工具箱保管区；此后隔离实例的本地变化不会自动合并回普通槽位。同账号或工程能否跨实例同步取决于 Dreamtonics 官方服务。Sandboxie Plus / Classic 未安装时，普通槽位切换仍可独立使用。
 
-实验性并发入口当前只启动 SV2 standalone，不会把已经运行的 DAW 宿主或插件实例移入隔离空间。
+“SV2 账号”页面会分别呈现普通启动和隔离启动，并显示实际集成的 Sandboxie 版本线、版本号、安装目录，以及每个槽位的用户名、邮箱和未准备、已准备或运行中状态。用户名与邮箱只是用户填写的本地标签，不从 Cookie、WebView2 缓存或 `license/session` 推断。重命名和数据路径位于折叠的管理区，不会干扰日常启动操作。
+
+第一次启动并发实例时，应用会明确提示这是 Dreamtonics 未官方支持的实验性行为；确认结果会保存到本地设置。实验性入口当前只启动 SV2 standalone，不会把已经运行的 DAW 宿主或插件实例移入隔离空间。Sandboxie 启动参数固定为 `/box:<name>`，box 名称不添加 `#`。
+
+本地兼容性冒烟测试已验证 Sandboxie Classic 5.73.2 可以在普通 SV2 2.2.1 已运行时启动第二个 SV2，并保持主窗口、WebView2 子进程树和网络连接正常。该结果只证明技术兼容性，不代表 Dreamtonics 对并发登录、设备计数或云同步策略的承诺。
 
 ## 安全边界
 
@@ -45,8 +50,8 @@ SynthV Toolbox 是以 **Rust + Tauri** 构建的 Synthesizer V 创作工具箱�
 - 外部 MCP 只能由用户显式添加和启用；它可以启动本地进程，因此只应配置可信命令。
 - MIDI 和工程副本统一写入 `~/.SynthVcopilot/output/`，输出参数只接受文件名并拒绝路径穿透。
 - Bridge 安装器只写入用户指定的 SynthV `scripts` 目录。
-- 本地组件只有在应用包中包含可信源码时才能安装；不会静默下载未知二进制。
-- 并发隔离只使用受支持版本的本机 Sandboxie-Plus，拒绝未知 reparse point，不修改 SV2 二进制或官方校验流程，也不提供自动回写/合并登录缓存。
+- 远程组件只能进入串行下载队列；aria2 只获取代码中固定的公开 `pi-agent` 提交，Rust 后端在安装前复核 SHA-256，未知或未固定版本的组件会被拒绝。
+- 并发隔离只使用受支持版本的本机 Sandboxie Plus / Classic，拒绝未知 reparse point，不修改 SV2 二进制或官方校验流程，也不提供自动回写/合并登录缓存。
 
 ## 仓库结构
 
@@ -59,7 +64,7 @@ external/synthv-agent-bridge/ SynthV Bridge（submodule）
 
 ## 本地开发
 
-需要 Rust stable、Node.js `22.19+`、npm，以及对应平台的 [Tauri 系统依赖](https://v2.tauri.app/start/prerequisites/)。安装 `pi-audio` 时还需要 Python 3.11；macOS 构建需要 Xcode Command Line Tools。
+需要 Rust stable、Node.js `22.19+`、npm、aria2，以及对应平台的 [Tauri 系统依赖](https://v2.tauri.app/start/prerequisites/)。也可以通过 `SYNTHV_TOOLBOX_ARIA2` 指定 `aria2c` 路径。安装 `pi-audio` 时还需要 Python 3.11；macOS 构建需要 Xcode Command Line Tools。
 
 ```bash
 git submodule update --init --recursive

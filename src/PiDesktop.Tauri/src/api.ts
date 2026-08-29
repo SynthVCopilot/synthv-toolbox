@@ -3,6 +3,7 @@ import type {
   AppMode,
   BootstrapState,
   ChatMessage,
+  ComponentDownload,
   ConversationSnapshot,
   ConversationSummary,
   McpServerConfig,
@@ -15,6 +16,8 @@ import type {
 const preview = import.meta.env.DEV && !isTauri();
 let previewMode: AppMode = "toolbox";
 let previewOnboarding = false;
+let previewConcurrentDisclaimerAccepted = false;
+let previewDownloads: ComponentDownload[] = [];
 let previewProfiles: Sv2ProfilesState = {
   supported: true,
   canonicalPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2",
@@ -27,12 +30,17 @@ let previewProfiles: Sv2ProfilesState = {
   blockers: [],
   concurrentProvider: {
     available: true,
-    name: "Sandboxie-Plus",
-    detail: "视觉预览：已检测到隔离提供方。",
+    name: "Sandboxie Classic",
+    edition: "Classic",
+    version: "5.73.2",
+    installPath: "C:\\Program Files\\Sandboxie",
+    detail: "隔离核心已就绪，可以为不同账号槽位运行相互独立的 SV2 实例。",
   },
   slots: [{
     id: "11111111-1111-4111-8111-111111111111",
     displayName: "主账号",
+    username: "Producer",
+    email: "producer@example.com",
     color: "#6D5CE7",
     createdAtUtc: new Date().toISOString(),
     lastActivatedAtUtc: new Date().toISOString(),
@@ -65,11 +73,13 @@ const previewState = (): BootstrapState => ({
     source: "macOS 用户脚本目录",
   }],
   components: [
-    { id: "ffmpeg", displayName: "FFmpeg", description: "音视频转码与抽取；所有音频流程的基础。", audience: "AI 与人工", installed: true, status: "已就绪" },
-    { id: "pi-audio", displayName: "pi-audio 音频探针", description: "特征指纹、BPM、乐器与风格倾向。", audience: "AI 与人工", installed: true, status: "已就绪" },
-    { id: "cvrs", displayName: "CVRS", description: "跨版本工程探测与安全参考轨。", audience: "AI 与人工", installed: true, status: "已就绪" },
+    { id: "ffmpeg", displayName: "FFmpeg", description: "音视频转码与抽取；所有音频流程的基础。", audience: "AI 与人工", installed: true, installable: true, status: "已就绪" },
+    { id: "pi-audio", displayName: "pi-audio 音频探针", description: "特征指纹、BPM、乐器与风格倾向。", audience: "AI 与人工", installed: false, installable: true, status: "可通过 aria2 下载" },
+    { id: "cvrs", displayName: "CVRS", description: "跨版本工程探测与安全参考轨。", audience: "AI 与人工", installed: true, installable: true, status: "已就绪" },
   ],
+  downloads: previewDownloads,
   mcpServers: previewMode === "ai" ? [{ id: "demo", name: "Demo tools", command: "node", args: ["server.mjs"], enabled: true }] : [],
+  concurrentDisclaimerAccepted: previewConcurrentDisclaimerAccepted,
 });
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -89,6 +99,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     previewProfiles.slots.push({
       id,
       displayName: String(args?.displayName ?? "新账号"),
+      username: "",
+      email: "",
       color: "#3478C9",
       createdAtUtc: new Date().toISOString(),
       isActive: false,
@@ -110,6 +122,14 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     if (slot) slot.displayName = String(args?.displayName ?? slot.displayName);
     return previewProfiles as T;
   }
+  if (command === "update_sv2_profile_identity") {
+    const slot = previewProfiles.slots.find((item) => item.id === args?.slotId);
+    if (slot) {
+      slot.username = String(args?.username ?? "");
+      slot.email = String(args?.email ?? "");
+    }
+    return previewProfiles as T;
+  }
   if (command === "activate_sv2_profile") {
     previewProfiles.activeSlotId = String(args?.slotId ?? "");
     previewProfiles.slots.forEach((slot) => { slot.isActive = slot.id === previewProfiles.activeSlotId; });
@@ -123,6 +143,26 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     }
     return previewProfiles as T;
   }
+  if (command === "accept_sv2_concurrent_disclaimer") {
+    previewConcurrentDisclaimerAccepted = true;
+    return previewState() as T;
+  }
+  if (command === "queue_component_install") {
+    const componentId = String(args?.id ?? "");
+    if (!previewDownloads.some((item) => item.componentId === componentId)) {
+      previewDownloads.push({
+        id: crypto.randomUUID(),
+        componentId,
+        displayName: componentId,
+        status: "downloading",
+        progress: 38,
+        detail: "aria2 正在下载固定版本组件。",
+        updatedAt: new Date().toISOString(),
+      });
+    }
+    return previewDownloads as T;
+  }
+  if (command === "component_downloads") return previewDownloads as T;
   if (command === "list_conversations") return [] as T;
   if (command === "new_conversation") return { id: "preview", title: "新对话", messages: [] } as T;
   if (command === "open_conversation") return { id: "preview", title: "预览对话", messages: [] } as T;
@@ -151,6 +191,8 @@ export const api = {
     call<Sv2ProfilesState>("create_sv2_profile", { displayName }),
   renameSv2Profile: (slotId: string, displayName: string) =>
     call<Sv2ProfilesState>("rename_sv2_profile", { slotId, displayName }),
+  updateSv2ProfileIdentity: (slotId: string, username: string, email: string) =>
+    call<Sv2ProfilesState>("update_sv2_profile_identity", { slotId, username, email }),
   activateSv2Profile: (slotId: string) =>
     call<Sv2ProfilesState>("activate_sv2_profile", { slotId }),
   launchSv2Profile: (slotId: string, projectPath?: string) =>
@@ -161,13 +203,16 @@ export const api = {
     call<Sv2ProfilesState>("prepare_sv2_concurrent_profile", { slotId }),
   launchSv2ConcurrentProfile: (slotId: string, projectPath?: string) =>
     call<OperationResult>("launch_sv2_concurrent_profile", { slotId, projectPath: projectPath || null }),
+  acceptSv2ConcurrentDisclaimer: () =>
+    call<BootstrapState>("accept_sv2_concurrent_disclaimer"),
   openSv2ConcurrentFolder: (slotId: string) =>
     call<OperationResult>("open_sv2_concurrent_folder", { slotId }),
   saveScriptsPath: (scriptsPath: string) => call<BootstrapState>("save_scripts_path", { scriptsPath }),
   installBridge: (scriptsPath: string) => call<OperationResult>("install_bridge", { scriptsPath }),
   diagnoseBridge: (scriptsPath: string) => call<OperationResult>("diagnose_bridge", { scriptsPath }),
   connectBridge: () => call<OperationResult>("connect_bridge"),
-  installComponent: (id: string) => call<OperationResult>("install_component", { id }),
+  componentDownloads: () => call<ComponentDownload[]>("component_downloads"),
+  queueComponentInstall: (id: string) => call<ComponentDownload[]>("queue_component_install", { id }),
   runAudioProbe: (audioPath: string, advanced: boolean) =>
     call<WorkflowResult>("run_audio_probe", { audioPath, advanced }),
   runGameToMidi: (vocalPath: string, instrumentalPath: string, outputName: string, tolerance: number, advanced: boolean) =>

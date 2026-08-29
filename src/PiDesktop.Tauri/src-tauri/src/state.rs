@@ -5,6 +5,7 @@ use pi_agent_core::ChatMessage;
 use tokio::sync::RwLock;
 
 use crate::config::{load_settings, ToolboxSettings};
+use crate::downloads::ComponentDownloadManager;
 use crate::mcp::McpManager;
 use crate::sv2_profiles::Sv2ProfileService;
 
@@ -23,6 +24,7 @@ pub struct AppState {
     pub resource_dir: PathBuf,
     pub bridge_dir: PathBuf,
     pub components_dir: PathBuf,
+    pub downloads: Arc<ComponentDownloadManager>,
     pub sv2_profiles: Arc<Sv2ProfileService>,
 }
 
@@ -35,6 +37,7 @@ impl AppState {
             resource_dir,
             bridge_dir,
             components_dir,
+            downloads: Arc::new(ComponentDownloadManager::default()),
             sv2_profiles: Arc::new(Sv2ProfileService::new()),
         }
     }

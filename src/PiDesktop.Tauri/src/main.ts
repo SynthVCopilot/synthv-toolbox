@@ -82,10 +82,12 @@ let conversation: ConversationSnapshot | undefined;
 let profiles: Sv2ProfilesState | undefined;
 let activeWorkflow: Feature["id"] | undefined;
 let workflowResult: WorkflowResult | undefined;
+let pendingConcurrentLaunchSlot: string | undefined;
+let downloadPollTimer: number | undefined;
 
 const pageMeta: Record<Page, { title: string; subtitle: string }> = {
   home: { title: "概览", subtitle: "查看环境状态与常用能力" },
-  accounts: { title: "SV2 账号", subtitle: "像游戏启动器一样选择默认账号环境" },
+  accounts: { title: "SV2 账号", subtitle: "普通切换与隔离并发，集中管理账号环境" },
   toolbox: { title: "超级工具箱", subtitle: "从音频到 SynthV 工程的一站式工作流" },
   copilot: { title: "Copilot", subtitle: "让 AI 在受控工具边界内协助工作" },
   components: { title: "组件中心", subtitle: "管理本地模型与运行组件" },
@@ -136,6 +138,24 @@ async function run(task: () => Promise<void>): Promise<void> {
 
 async function refresh(): Promise<void> {
   app = await api.bootstrap();
+}
+
+function scheduleDownloadPoll(): void {
+  if (!app?.downloads.some((item) => ["queued", "downloading", "installing"].includes(item.status)) || downloadPollTimer !== undefined) return;
+  downloadPollTimer = window.setTimeout(async () => {
+    downloadPollTimer = undefined;
+    if (!app) return;
+    try {
+      const wasActive = app.downloads.some((item) => ["queued", "downloading", "installing"].includes(item.status));
+      app.downloads = await api.componentDownloads();
+      const isActive = app.downloads.some((item) => ["queued", "downloading", "installing"].includes(item.status));
+      if (wasActive && !isActive) await refresh();
+      render();
+    } catch (reason) {
+      error = formatError(reason);
+      render();
+    }
+  }, 700);
 }
 
 function modePill(): string {
@@ -199,8 +219,23 @@ function render(): void {
         </section>
       </main>
       ${busy ? '<div class="busy-overlay" aria-label="处理中"><span class="spinner"></span></div>' : ""}
-    </div>`;
+    </div>
+    ${pendingConcurrentLaunchSlot ? renderConcurrentDisclaimer() : ""}`;
   wireForms();
+  scheduleDownloadPoll();
+}
+
+function renderConcurrentDisclaimer(): string {
+  const slot = profiles?.slots.find((item) => item.id === pendingConcurrentLaunchSlot);
+  return `<div class="dialog-backdrop" role="presentation">
+    <section class="fluent-dialog" role="alertdialog" aria-modal="true" aria-labelledby="concurrent-warning-title">
+      <span class="dialog-icon">${icon("boxes", 24)}</span>
+      <div><span class="eyebrow">首次使用提示</span><h2 id="concurrent-warning-title">隔离并发不是官方支持的运行方式</h2></div>
+      <p>工具箱会通过 Sandboxie 启动“${escapeHtml(slot?.displayName ?? "此槽位")}”的独立 SV2 实例。这是实验性兼容方案，不代表 Dreamtonics 对多实例登录、设备计数、云工程同步或账号策略提供支持。</p>
+      <ul><li>开始前保存工程，并确认重要账号数据已有备份。</li><li>当前只支持启动 standalone，不会把已有 DAW 插件移入隔离环境。</li><li>Sandbox 名称会以普通 <code>/box:名称</code> 传递，不添加 <code>#</code>。</li></ul>
+      <div class="dialog-actions"><button class="secondary" data-cancel-concurrent>取消</button><button class="primary" data-accept-concurrent>理解风险并启动</button></div>
+    </section>
+  </div>`;
 }
 
 function renderOnboarding(): void {
@@ -254,40 +289,70 @@ function renderAccounts(): string {
   if (!profiles.supported) {
     return `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("users", 24)}</span><div><h2>当前平台不支持账号槽位</h2><p>${escapeHtml(profiles.recoveryDetail)}</p></div></section>`;
   }
-  const blockerPanel = profiles.blockers.length ? `<div class="warning-card profile-blockers"><span>${icon("plug", 23)}</span><div><strong>切换前需要关闭这些程序</strong><p>${profiles.blockers.map((blocker) => `${escapeHtml(blocker.name)}${blocker.pid ? ` (PID ${blocker.pid})` : ""}：${escapeHtml(blocker.reason)}`).join("<br />")}</p></div></div>` : "";
-  const providerPanel = profiles.concurrentProvider.available
-    ? `<section class="panel concurrent-provider ready"><span class="feature-icon violet">${icon("boxes", 23)}</span><div><strong>实验性并发隔离已可用</strong><p>${escapeHtml(profiles.concurrentProvider.detail)} 每个槽位使用独立文件、注册表和 IPC 命名空间；当前仅启动 standalone。网络不被工具箱拦截，账号与工程同步是否可用由 Dreamtonics 官方服务决定。</p></div></section>`
-    : `<section class="panel concurrent-provider"><span class="feature-icon orange">${icon("boxes", 23)}</span><div><strong>实验性并发隔离尚不可用</strong><p>${escapeHtml(profiles.concurrentProvider.detail)}</p></div></section>`;
+  const blockerPanel = profiles.blockers.length ? `<div class="warning-card profile-blockers"><span>${icon("plug", 23)}</span><div><strong>普通槽位暂时不能切换</strong><p>请先关闭下列普通 SV2 / 插件进程；已经准备好的隔离实例仍可单独启动。<br />${profiles.blockers.map((blocker) => `${escapeHtml(blocker.name)}${blocker.pid ? ` (PID ${blocker.pid})` : ""}：${escapeHtml(blocker.reason)}`).join("<br />")}</p></div></div>` : "";
   const concurrentProviderAvailable = profiles.concurrentProvider.available;
   if (profiles.recoveryRequired) {
     return `${blockerPanel}<div class="warning-card recovery-card"><span>${icon("refresh", 23)}</span><div><strong>槽位需要人工恢复</strong><p>${escapeHtml(profiles.recoveryDetail)}</p><p>工具箱没有删除或覆盖任何目录。请先备份下方路径，再检查目录实况。</p></div><button class="secondary" data-profile-refresh>${icon("refresh", 16)} 重新检查</button></div>
       <section class="panel"><dl class="detail-list"><div><dt>官方路径</dt><dd><code>${escapeHtml(profiles.canonicalPath)}</code></dd></div><div><dt>保管区</dt><dd><code>${escapeHtml(profiles.vaultPath)}</code></dd></div></dl></section>`;
   }
+  const activeSlot = profiles.slots.find((slot) => slot.isActive);
+  const preparedCount = profiles.slots.filter((slot) => slot.concurrent.ready).length;
+  const runningSlots = profiles.slots.filter((slot) => slot.concurrent.runningPids.length > 0);
+  const runningProcessCount = runningSlots.reduce((total, slot) => total + slot.concurrent.runningPids.length, 0);
+  const providerLabel = [profiles.concurrentProvider.name, profiles.concurrentProvider.version].filter(Boolean).join(" ");
+  const providerPath = profiles.concurrentProvider.installPath
+    ? `<span class="provider-path" title="${escapeHtml(profiles.concurrentProvider.installPath)}">${icon("folder", 14)} ${escapeHtml(profiles.concurrentProvider.installPath)}</span>`
+    : "";
+  const launchModes = `<section class="launch-mode-grid" aria-label="启动方式">
+    <article class="launch-mode-card default-mode">
+      <div class="launch-mode-head"><span class="feature-icon blue">${icon("play", 22)}</span><div><span class="eyebrow">默认方式</span><h3>普通启动</h3></div><span class="launch-mode-state">${activeSlot ? `${escapeHtml(activeSlot.displayName)} · 当前默认` : "等待设置默认槽位"}</span></div>
+      <p>适合日常使用。一次只挂载一个账号环境；从桌面快捷方式启动或双击 .svp 时，也会使用当前默认槽位。</p>
+      <div class="launch-mode-facts"><span>${icon("check", 14)} 可继续使用原有启动方式</span><span>${icon("refresh", 14)} 切换前需退出普通实例</span></div>
+    </article>
+    <article class="launch-mode-card isolation-mode ${concurrentProviderAvailable ? "ready" : "unavailable"}">
+      <div class="launch-mode-head"><span class="feature-icon violet">${icon("boxes", 22)}</span><div><span class="eyebrow">实验功能</span><h3>隔离并发</h3></div><span class="launch-mode-state ${concurrentProviderAvailable ? "online" : ""}">${concurrentProviderAvailable ? `${icon("check", 13)} 隔离核心就绪` : "需要 Sandboxie"}</span></div>
+      ${concurrentProviderAvailable
+        ? `<p>通过 ${escapeHtml(providerLabel)} 为每个槽位创建独立的文件、注册表和 IPC 环境，可与普通实例或其他隔离槽位同时运行。</p><div class="provider-integration"><strong>${icon("boxes", 15)} ${escapeHtml(providerLabel)}</strong><span>${preparedCount} 个已准备</span><span>${runningSlots.length} 个运行中${runningProcessCount ? ` · ${runningProcessCount} 个相关进程` : ""}</span>${providerPath}</div>`
+        : `<p>${escapeHtml(profiles.concurrentProvider.detail)}</p><div class="provider-integration unavailable"><strong>普通账号切换仍可使用</strong><span>安装受支持版本后，重启工具箱即可自动集成。</span></div>`}
+      <small>工具箱不代理或修改网络；持续验证、账号与工程同步仍由 SV2 和 Dreamtonics 官方服务处理。</small>
+    </article>
+  </section>`;
+  const concurrentProviderDetail = profiles.concurrentProvider.detail;
   const cards = profiles.slots.map((slot) => {
     const lastUsed = slot.lastActivatedAtUtc ? new Date(slot.lastActivatedAtUtc).toLocaleString("zh-CN") : "尚未启动";
     const initial = Array.from(slot.displayName)[0] ?? "S";
     const color = /^#[0-9a-f]{6}$/i.test(slot.color) ? slot.color : "#6D5CE7";
+    const identity = [slot.username, slot.email].filter(Boolean);
     const concurrentRunning = slot.concurrent.runningPids.length > 0;
+    const concurrentNeedsAttention = !slot.concurrent.ready && slot.concurrent.detail !== "尚未准备隔离副本。";
+    const concurrentState = concurrentRunning ? "running" : slot.concurrent.ready ? "ready" : concurrentNeedsAttention ? "attention" : "pending";
+    const concurrentStateLabel = concurrentRunning ? "运行中" : slot.concurrent.ready ? "已准备" : concurrentNeedsAttention ? "需要处理" : "未准备";
+    const concurrentDescription = concurrentRunning
+      ? `SV2 正在此隔离环境中运行（${slot.concurrent.runningPids.length} 个相关进程）。`
+      : slot.concurrent.ready
+        ? "独立副本已就绪，可与普通实例或其他隔离槽位同时运行。其本地变化不会自动覆盖普通槽位。"
+        : concurrentNeedsAttention
+          ? slot.concurrent.detail
+          : "首次使用时，从此槽位建立一份独立副本；之后两套本地数据各自保存。";
     const concurrentControls = slot.concurrent.ready
-      ? `<button class="secondary concurrent-launch" data-profile-concurrent-launch="${slot.id}" ${concurrentProviderAvailable && !concurrentRunning ? "" : "disabled"}>${icon("boxes", 16)} ${concurrentRunning ? "隔离实例运行中" : "并发启动"}</button><button class="icon-plain" data-profile-concurrent-folder="${slot.id}" title="打开隔离副本目录">${icon("folder", 17)}</button>`
-      : `<button class="secondary" data-profile-concurrent-prepare="${slot.id}" ${concurrentProviderAvailable ? "" : "disabled"}>${icon("download", 16)} 准备并发副本</button>`;
+      ? `<button class="secondary concurrent-launch" data-profile-concurrent-launch="${slot.id}" ${concurrentProviderAvailable && !concurrentRunning ? "" : `disabled title="${concurrentRunning ? "该隔离实例已经在运行" : "Sandboxie 隔离核心不可用"}"`}>${icon("boxes", 16)} ${concurrentRunning ? "隔离实例正在运行" : "启动隔离实例"}</button><button class="icon-plain" data-profile-concurrent-folder="${slot.id}" title="打开隔离数据目录" aria-label="打开 ${escapeHtml(slot.displayName)} 的隔离数据目录">${icon("folder", 17)}</button>`
+      : `<button class="secondary concurrent-prepare" data-profile-concurrent-prepare="${slot.id}" ${concurrentProviderAvailable ? "" : `disabled title="${escapeHtml(concurrentProviderDetail)}"`}>${icon("download", 16)} 准备隔离实例</button>`;
     return `<article class="profile-card ${slot.isActive ? "active" : ""}" style="--profile-color:${color}">
-      <div class="profile-card-head"><span class="profile-avatar">${escapeHtml(initial)}</span><div><span class="eyebrow">${slot.isActive ? "CURRENT DEFAULT" : "SV2 PROFILE"}</span><h2>${escapeHtml(slot.displayName)}</h2></div>${slot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
-      <div class="profile-meta"><span>${slot.sessionCached ? `${icon("check", 14)} 会话缓存存在` : `${icon("plug", 14)} 首次启动需登录`}</span><span>最近使用：${escapeHtml(lastUsed)}</span></div>
-      <div class="profile-actions"><button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "启动 SV2" : "使用并启动"}</button>${slot.isActive ? "" : `<button class="secondary" data-profile-activate="${slot.id}">设为默认</button>`}<button class="icon-plain profile-folder" data-profile-folder="${slot.id}" title="打开数据目录">${icon("folder", 18)}</button></div>
-      <div class="profile-concurrent ${slot.concurrent.ready ? "ready" : ""}"><div><span>EXPERIMENTAL CONCURRENT</span>${concurrentRunning ? `<strong>${icon("plug", 13)} ${slot.concurrent.runningPids.length} 个隔离进程</strong>` : ""}</div><p>${escapeHtml(slot.concurrent.detail)}</p><div class="profile-concurrent-actions">${concurrentControls}</div>${slot.concurrent.ready ? `<code title="${escapeHtml(slot.concurrent.dataPath)}">${escapeHtml(slot.concurrent.boxName)}</code>` : ""}</div>
-      <form class="profile-rename" data-profile-rename-form="${slot.id}"><label>槽位名称<input value="${escapeHtml(slot.displayName)}" maxlength="64" required /></label><button class="secondary">保存名称</button></form>
-      <code class="profile-path" title="${escapeHtml(slot.dataPath)}">${escapeHtml(slot.dataPath)}</code>
+      <div class="profile-card-head"><span class="profile-avatar">${escapeHtml(initial)}</span><div><span class="eyebrow">账号槽位</span><h2>${escapeHtml(slot.displayName)}</h2>${identity.length ? `<span class="profile-identity">${identity.map(escapeHtml).join(" · ")}</span>` : '<span class="profile-identity empty">尚未填写用户名或邮箱</span>'}</div>${slot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
+      <div class="profile-meta"><span class="${slot.sessionCached ? "cached" : ""}">${slot.sessionCached ? `${icon("check", 14)} 登录缓存已存在` : `${icon("plug", 14)} 首次启动需要登录`}</span><span>${icon("refresh", 14)} 最近使用：${escapeHtml(lastUsed)}</span></div>
+      <section class="profile-launch-block ordinary"><div class="profile-launch-heading"><div><span>普通启动</span><strong>${slot.isActive ? "使用当前默认环境" : "切换到此账号环境"}</strong></div>${slot.isActive ? '<span class="profile-route-badge">默认路由</span>' : ""}</div><p>${slot.isActive ? "桌面快捷方式和 .svp 文件也会继续使用此槽位。" : "会先安全切换默认槽位，再启动 SV2；现有普通实例需要先退出。"}</p><div class="profile-actions"><button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button>${slot.isActive ? "" : `<button class="secondary" data-profile-activate="${slot.id}">设为默认</button>`}<button class="icon-plain profile-folder" data-profile-folder="${slot.id}" title="打开普通数据目录" aria-label="打开 ${escapeHtml(slot.displayName)} 的普通数据目录">${icon("folder", 18)}</button></div></section>
+      <section class="profile-launch-block isolation ${slot.concurrent.ready ? "ready" : ""}"><div class="profile-launch-heading"><div><span>隔离启动</span><strong>独立运行此账号</strong></div><span class="profile-isolation-status ${concurrentState}">${concurrentRunning ? icon("plug", 12) : ""}${concurrentStateLabel}</span></div><p>${escapeHtml(concurrentDescription)}</p><div class="profile-concurrent-actions">${concurrentControls}</div>${slot.concurrent.ready ? `<code title="隔离箱名称：${escapeHtml(slot.concurrent.boxName)}">${escapeHtml(slot.concurrent.boxName)}</code>` : ""}</section>
+      <details class="profile-details"><summary>管理账号标签与存储位置 ${icon("arrow", 14)}</summary><div class="profile-details-body"><form class="profile-identity-form" data-profile-identity-form="${slot.id}"><label>用户名<input name="username" value="${escapeHtml(slot.username)}" maxlength="100" placeholder="用于区分账号的用户名" /></label><label>邮箱<input name="email" type="email" value="${escapeHtml(slot.email)}" maxlength="254" placeholder="name@example.com" /></label><button class="secondary">保存账号标签</button><small>这些标签由工具箱单独保存；不会读取或修改 SV2 的密码、Cookie 或 session。</small></form><form class="profile-rename" data-profile-rename-form="${slot.id}"><label>槽位显示名称<input value="${escapeHtml(slot.displayName)}" maxlength="64" required /></label><button class="secondary">保存</button></form><dl class="profile-storage-list"><div><dt>普通数据</dt><dd><code title="${escapeHtml(slot.dataPath)}">${escapeHtml(slot.dataPath)}</code></dd></div>${slot.concurrent.ready ? `<div><dt>隔离数据</dt><dd><code title="${escapeHtml(slot.concurrent.dataPath)}">${escapeHtml(slot.concurrent.dataPath)}</code></dd></div>` : ""}</dl></div></details>
     </article>`;
   }).join("");
   const importPanel = profiles.canImportCurrent ? `<section class="panel profile-setup"><div class="panel-heading"><span class="feature-icon emerald">${icon("folder", 24)}</span><div><h2>导入当前 SV2 环境</h2><p>现有官方数据目录尚未纳入槽位；导入不会移动账号文件。</p></div></div><form id="profile-import-form" class="profile-create-form"><input id="profile-import-name" maxlength="64" required placeholder="例如 主账号" /><button class="primary">导入为第一个槽位</button></form></section>` : "";
-  const createPanel = `<section class="panel profile-setup"><div class="panel-heading"><span class="feature-icon blue">${icon("plus", 24)}</span><div><h2>新建账号槽位</h2><p>创建空环境；首次“使用并启动”后在 Dreamtonics 官方页面登录。</p></div></div><form id="profile-create-form" class="profile-create-form"><input id="profile-create-name" maxlength="64" required placeholder="例如 制作账号" /><button class="secondary">创建空槽位</button></form></section>`;
-  return `<div class="profile-intro"><div><span class="eyebrow">ACCOUNT LAUNCHER</span><h2>选择账号环境，再启动 SynthV</h2><p>直接启动 SV2 或双击 .svp 时会继续使用“当前默认”槽位。工具箱不读取账号邮箱、密码或 session 内容。</p></div><button class="secondary" data-profile-refresh>${icon("refresh", 16)} 刷新状态</button></div>
-    ${providerPanel}
+  const createPanel = `<section class="panel profile-setup"><div class="panel-heading"><span class="feature-icon blue">${icon("plus", 24)}</span><div><h2>添加账号槽位</h2><p>创建一个空环境；首次启动后，在 SV2 的 Dreamtonics 官方登录页面完成登录。</p></div></div><form id="profile-create-form" class="profile-create-form"><input id="profile-create-name" maxlength="64" required placeholder="例如 制作账号" /><button class="secondary">创建空槽位</button></form></section>`;
+  return `<div class="profile-intro"><div><span class="eyebrow">SV2 ACCOUNT LAUNCHER</span><h2>像游戏启动器一样，选账号再启动</h2><p>普通启动负责默认账号切换；隔离启动负责多账号并发。用户名和邮箱是工具箱自己的可编辑标签，登录数据仍按原样、不透明地保存。</p><div class="profile-summary"><span>${profiles.slots.length} 个账号槽位</span><span>${preparedCount} 个隔离实例已准备</span>${runningSlots.length ? `<span class="running">${icon("plug", 13)} ${runningSlots.length} 个正在运行</span>` : ""}</div></div><button class="secondary" data-profile-refresh>${icon("refresh", 16)} 刷新状态</button></div>
+    ${launchModes}
     ${blockerPanel}
     <div class="profile-grid">${cards || '<div class="empty-inline">还没有账号槽位。请导入当前环境或创建一个空槽位。</div>'}</div>
     <div class="profile-setup-grid">${importPanel}${createPanel}</div>
-    <section class="panel profile-safety"><span>${icon("check", 18)}</span><div><strong>完整环境隔离</strong><p>每个槽位包含 license、WebView2、设置、数据库、缓存和脚本。切换只在相关进程全部退出后进行，失败时绝不覆盖目录。</p></div></section>`;
+    <section class="panel profile-safety"><span>${icon("check", 18)}</span><div><strong>不伪造登录，也不绕过联网验证</strong><p>每个槽位按原样保存 license、WebView2、设置、数据库、缓存和脚本。普通切换只在相关进程退出后进行；隔离实例仅重定向本地文件、注册表和 IPC，官方网络连接保持不变。</p></div></section>`;
 }
 
 function renderHome(): string {
@@ -372,14 +437,38 @@ function renderMessage(message: ChatMessage): string {
 
 function renderComponents(): string {
   if (!app) return "";
-  return `<div class="section-heading"><div><h2>本地组件</h2><p>所有组件都安装在用户数据目录；无可信来源的组件会拒绝下载。</p></div></div>
-    <div class="component-list">${app.components.map((component) => `<article class="component-row"><span class="component-status ${component.installed ? "ready" : ""}">${component.installed ? icon("check", 18) : icon("download", 18)}</span><div><h3>${escapeHtml(component.displayName)}</h3><p>${escapeHtml(component.description)}</p><div class="tags"><span>${escapeHtml(component.audience)}</span><span>${escapeHtml(component.status)}</span></div></div><button class="secondary" data-install-component="${escapeHtml(component.id)}" ${component.installed ? "disabled" : ""}>${component.installed ? "已就绪" : "安装"}</button></article>`).join("")}</div>`;
+  const statusLabel = { queued: "排队中", downloading: "aria2 下载中", installing: "安装中", completed: "已完成", failed: "失败" } as const;
+  const activeDownloads = app.downloads.filter((item) => item.status !== "completed");
+  const queue = activeDownloads.length ? `<section class="download-queue panel">
+    <div class="section-heading"><div><h2>下载队列</h2><p>队列串行执行；远程组件固定版本并由 aria2 + SHA-256 校验。</p></div><span class="queue-count">${activeDownloads.length}</span></div>
+    <div class="download-list">${activeDownloads.map((item) => `<article class="download-item ${item.status}">
+      <span class="component-status ${item.status === "completed" ? "ready" : ""}">${item.status === "failed" ? icon("plug", 17) : icon("download", 17)}</span>
+      <div><div class="download-title"><strong>${escapeHtml(item.displayName)}</strong><span>${statusLabel[item.status]}</span></div><div class="progress-track"><span style="width:${Math.max(2, Math.min(100, item.progress))}%"></span></div><small>${escapeHtml(item.detail)}</small></div>
+    </article>`).join("")}</div>
+  </section>` : "";
+  return `${queue}<div class="section-heading"><div><h2>本地组件</h2><p>下载任务会加入队列；无固定来源与 SHA-256 的组件会拒绝安装。</p></div></div>
+    <div class="component-list">${app.components.map((component) => {
+      const task = app?.downloads.find((item) => item.componentId === component.id && ["queued", "downloading", "installing"].includes(item.status));
+      const label = component.installed ? "已就绪" : task ? statusLabel[task.status] : component.installable ? "加入队列" : "需系统安装";
+      return `<article class="component-row"><span class="component-status ${component.installed ? "ready" : ""}">${component.installed ? icon("check", 18) : icon("download", 18)}</span><div><h3>${escapeHtml(component.displayName)}</h3><p>${escapeHtml(component.description)}</p><div class="tags"><span>${escapeHtml(component.audience)}</span><span>${escapeHtml(component.status)}</span></div></div><button class="secondary" data-install-component="${escapeHtml(component.id)}" ${component.installed || task || !component.installable ? "disabled" : ""}>${label}</button></article>`;
+    }).join("")}</div>`;
 }
 
 function renderBridge(): string {
   if (!app) return "";
+  const applicationLocations = app.installations.filter((item) => item.installPath);
+  const scriptsLocations = app.installations.filter((item) => item.scriptsPath);
+  const applicationList = applicationLocations.length
+    ? applicationLocations.map((item) => `<article class="installation-item"><span class="status-dot online"></span><span><strong>${escapeHtml(item.displayName)}</strong><small title="${escapeHtml(item.installPath ?? "")}">${escapeHtml(item.installPath ?? "")}</small></span><span class="location-source">${escapeHtml(item.source)}</span></article>`).join("")
+    : '<div class="empty-inline compact-empty">没有发现 Synthesizer V 应用安装。</div>';
+  const scriptsList = scriptsLocations.length
+    ? scriptsLocations.map((item) => `<button class="installation-item" data-scripts="${escapeHtml(item.scriptsPath ?? "")}" title="选择此 scripts 目录作为 Bridge 安装目标"><span class="status-dot online"></span><span><strong>${escapeHtml(item.displayName)}</strong><small title="${escapeHtml(item.scriptsPath ?? "")}">${escapeHtml(item.scriptsPath ?? "")}</small></span><span class="location-action">选择</span></button>`).join("")
+    : '<div class="empty-inline compact-empty">没有发现 scripts 目录，可以在右侧手动填写。</div>';
   return `<div class="bridge-grid"><section class="panel"><div class="panel-heading"><span class="feature-icon orange">${icon("bridge", 25)}</span><div><h2>Synthesizer V 探测</h2><p>Windows 与 macOS 使用各自的标准路径，只进行只读检查。</p></div><button class="secondary compact" data-scan>${icon("refresh", 16)} 重新探测</button></div>
-    <div class="installation-list">${app.installations.length ? app.installations.map((item) => `<button data-scripts="${escapeHtml(item.scriptsPath ?? "")}"><span class="status-dot online"></span><span><strong>${escapeHtml(item.displayName)}</strong><small>${escapeHtml(item.scriptsPath ?? item.installPath ?? item.source)}</small></span></button>`).join("") : '<div class="empty-inline">没有自动发现 SynthV；可以手动填写 scripts 目录。</div>'}</div></section>
+    <div class="detection-groups">
+      <section class="detection-group"><div class="detection-group-title"><strong>应用安装</strong><span>${applicationLocations.length}</span></div><div class="installation-list">${applicationList}</div></section>
+      <section class="detection-group"><div class="detection-group-title"><strong>Scripts 目录</strong><span>${scriptsLocations.length}</span></div><p class="detection-group-help">选择一个目录后，会填入右侧的 Bridge 安装目标。</p><div class="installation-list">${scriptsList}</div></section>
+    </div></section>
     <section class="panel"><div class="panel-heading"><span class="feature-icon blue">${icon("plug", 25)}</span><div><h2>Bridge 管理</h2><p>安装器只写入你指定的 scripts 目录，不开放网络端口。</p></div></div>
       <form id="bridge-form" class="form-stack"><label>Scripts 目录<input id="scripts-path" value="${escapeHtml(app.scriptsPath ?? app.installations.find((item) => item.scriptsPath)?.scriptsPath ?? "")}" placeholder="选择或粘贴 SynthV scripts 目录" /></label><div class="button-row"><button class="primary" value="install">安装 / 更新</button><button class="secondary" value="diagnose">检查安装</button><button class="secondary" value="connect">测试连接</button></div></form>
       <div class="inline-status"><span class="status-dot ${app.bridgeBundled ? "online" : ""}"></span><span>${app.bridgeBundled ? "内置 Bridge 资源已就绪" : "当前构建未包含 Bridge 资源"}</span></div>
@@ -449,6 +538,14 @@ function wireForms(): void {
     if (!slotId || !displayName) return;
     void run(async () => { profiles = await api.renameSv2Profile(slotId, displayName); notice = "槽位名称已保存。"; });
   }));
+  document.querySelectorAll<HTMLFormElement>("[data-profile-identity-form]").forEach((form) => form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const slotId = form.dataset.profileIdentityForm ?? "";
+    const username = form.querySelector<HTMLInputElement>('[name="username"]')?.value.trim() ?? "";
+    const email = form.querySelector<HTMLInputElement>('[name="email"]')?.value.trim() ?? "";
+    if (!slotId) return;
+    void run(async () => { profiles = await api.updateSv2ProfileIdentity(slotId, username, email); notice = "账号用户名和邮箱标签已保存。"; });
+  }));
   document.querySelector<HTMLFormElement>("#chat-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const input = document.querySelector<HTMLTextAreaElement>("#chat-input")?.value.trim();
@@ -508,6 +605,22 @@ async function sendPrompt(input: string): Promise<void> {
 document.addEventListener("click", (event) => {
   const target = (event.target as HTMLElement).closest<HTMLElement>("button, [data-page], [data-onboarding]");
   if (!target || target.hasAttribute("disabled")) return;
+  if (target.hasAttribute("data-cancel-concurrent")) {
+    pendingConcurrentLaunchSlot = undefined;
+    render();
+    return;
+  }
+  if (target.hasAttribute("data-accept-concurrent")) {
+    const slotId = pendingConcurrentLaunchSlot;
+    if (!slotId) return;
+    void run(async () => {
+      app = await api.acceptSv2ConcurrentDisclaimer();
+      pendingConcurrentLaunchSlot = undefined;
+      setFeedback(await api.launchSv2ConcurrentProfile(slotId));
+      profiles = await api.sv2ProfileState();
+    });
+    return;
+  }
   const targetPage = target.dataset.page as Page | undefined;
   if (targetPage) {
     page = targetPage;
@@ -543,14 +656,29 @@ document.addEventListener("click", (event) => {
   if (target.dataset.profileActivate) { void run(async () => { profiles = await api.activateSv2Profile(target.dataset.profileActivate ?? ""); notice = "默认账号槽位已切换。"; }); return; }
   if (target.dataset.profileFolder) { void run(async () => { setFeedback(await api.openSv2ProfileFolder(target.dataset.profileFolder ?? "")); }); return; }
   if (target.dataset.profileConcurrentPrepare) { void run(async () => { profiles = await api.prepareSv2ConcurrentProfile(target.dataset.profileConcurrentPrepare ?? ""); notice = "隔离副本已准备，可以并发启动。"; }); return; }
-  if (target.dataset.profileConcurrentLaunch) { void run(async () => { setFeedback(await api.launchSv2ConcurrentProfile(target.dataset.profileConcurrentLaunch ?? "")); profiles = await api.sv2ProfileState(); }); return; }
+  if (target.dataset.profileConcurrentLaunch) {
+    const slotId = target.dataset.profileConcurrentLaunch;
+    if (!app?.concurrentDisclaimerAccepted) {
+      pendingConcurrentLaunchSlot = slotId;
+      render();
+    } else {
+      void run(async () => { setFeedback(await api.launchSv2ConcurrentProfile(slotId)); profiles = await api.sv2ProfileState(); });
+    }
+    return;
+  }
   if (target.dataset.profileConcurrentFolder) { void run(async () => { setFeedback(await api.openSv2ConcurrentFolder(target.dataset.profileConcurrentFolder ?? "")); }); return; }
   if (target.dataset.scripts !== undefined) {
     const input = document.querySelector<HTMLInputElement>("#scripts-path");
     if (input && target.dataset.scripts) input.value = target.dataset.scripts;
     return;
   }
-  if (target.dataset.installComponent) { void run(async () => { setFeedback(await api.installComponent(target.dataset.installComponent ?? "")); await refresh(); }); return; }
+  if (target.dataset.installComponent) {
+    void run(async () => {
+      if (app) app.downloads = await api.queueComponentInstall(target.dataset.installComponent ?? "");
+      notice = "组件已加入下载队列。";
+    });
+    return;
+  }
   if (target.hasAttribute("data-new-conversation")) { void run(async () => { conversation = await api.newConversation(); conversations = await api.listConversations(); }); return; }
   if (target.dataset.conversation) { void run(async () => { conversation = await api.openConversation(target.dataset.conversation ?? ""); }); return; }
   if (target.dataset.prompt) { void sendPrompt(target.dataset.prompt); return; }
