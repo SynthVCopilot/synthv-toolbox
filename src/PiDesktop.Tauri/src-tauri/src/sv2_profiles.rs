@@ -146,6 +146,8 @@ pub struct Sv2ProfilesState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Sv2RemoteUseStatus {
+    #[allow(dead_code)]
+    Clear,
     Detected,
     Unknown,
 }
