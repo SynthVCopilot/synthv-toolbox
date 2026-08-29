@@ -389,18 +389,25 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 pub fn quiet_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
-    let mut command = Command::new(program);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        let mut command = Command::new(program);
         command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+        command
     }
-    command
+    #[cfg(not(windows))]
+    {
+        Command::new(program)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{node_version_supported, normalized_path_string};
+    use super::node_version_supported;
+    #[cfg(windows)]
+    use super::normalized_path_string;
+    #[cfg(windows)]
     use std::path::Path;
 
     #[test]

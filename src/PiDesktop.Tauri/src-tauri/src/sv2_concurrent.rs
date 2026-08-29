@@ -10,6 +10,7 @@ use crate::synthv::{quiet_command, succeeded, OperationResult};
 
 const CONCURRENT_SCHEMA_VERSION: u32 = 1;
 const CONCURRENT_MARKER_FILE: &str = ".synthv-toolbox-concurrent.json";
+#[cfg(windows)]
 const PROVIDER_ENV: &str = "SV2_TOOLBOX_SANDBOXIE_HOME";
 
 #[derive(Debug, Clone, Serialize)]
@@ -133,7 +134,7 @@ pub fn slot_view(
             true,
             "隔离副本已准备；本地变化不会自动覆盖普通槽位。".to_string(),
         ),
-        Err(error) if !box_root.exists() => (false, "尚未准备隔离副本。".to_string()),
+        Err(_error) if !box_root.exists() => (false, "尚未准备隔离副本。".to_string()),
         Err(error) => (false, error),
     };
     let running_pids = if ready {
@@ -379,7 +380,7 @@ fn decode_output(bytes: &[u8]) -> String {
             > bytes.len() / 8;
     if looks_utf16 {
         let words = bytes
-            .chunks_exact(2)
+            .chunks(2)
             .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
             .collect::<Vec<_>>();
         String::from_utf16_lossy(&words)
@@ -529,6 +530,7 @@ fn box_name(slot_id: &str) -> Result<String, String> {
     Ok(format!("SV2TB{}", &compact[..24]))
 }
 
+#[cfg(any(windows, test))]
 fn supported_provider_version(version: (u16, u16, u16, u16)) -> bool {
     match version.0 {
         0 => false,
@@ -621,11 +623,6 @@ fn file_version(path: &Path) -> Result<(u16, u16, u16, u16), String> {
         (fixed.dwFileVersionLS >> 16) as u16,
         fixed.dwFileVersionLS as u16,
     ))
-}
-
-#[cfg(not(windows))]
-fn file_version(_path: &Path) -> Result<(u16, u16, u16, u16), String> {
-    Err("实验性并发隔离当前仅支持 Windows。".to_string())
 }
 
 #[cfg(test)]
