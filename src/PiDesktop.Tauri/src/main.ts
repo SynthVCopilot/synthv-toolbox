@@ -511,6 +511,7 @@ function renderAccountManager(): string {
 
 function renderHome(): string {
   if (!app) return "";
+  const current = app;
   const ready = app.components.filter((component) => component.installed).length;
   return `<div class="hero-panel">
       <div><span class="eyebrow">${app.mode === "ai" ? "AI workspace" : "Local utility workspace"}</span>
@@ -527,7 +528,12 @@ function renderHome(): string {
       <article class="stat-card"><span>工具连接</span><strong>${app.bridgeConnected ? "在线" : "离线"}</strong><small>${app.mode === "ai" ? `${app.mcpServers.filter((server) => server.enabled).length} 个 MCP 已启用` : "Bridge 可独立使用"}</small></article>
     </div>
     <section class="section-block"><div class="section-heading"><div><h2>快速开始</h2><p>继续最近的工作，或打开常用能力。</p></div></div>
-      <div class="quick-grid">${features.slice(0, 3).map((feature) => `<button class="quick-card" data-feature="${feature.id}"><span class="feature-icon ${feature.accent}">${icon(feature.icon, 23)}</span><span><strong>${feature.title}</strong><small>${feature.base[0]} · ${feature.base[1]}</small></span>${icon("arrow", 18)}</button>`).join("")}</div>
+      <div class="quick-grid">${features.slice(0, 3).map((feature) => {
+        const availability = featureAvailability(feature, current);
+        const target = availability.route ? `data-page="${availability.route}"` : `data-feature="${feature.id}"`;
+        const detail = availability.tone === "ready" ? `${feature.base[0]} · ${feature.base[1]}` : availability.label;
+        return `<button class="quick-card ${availability.tone}" ${target} ${availability.disabled ? "disabled" : ""}><span class="feature-icon ${feature.accent}">${icon(feature.icon, 23)}</span><span><strong>${feature.title}</strong><small>${escapeHtml(detail)}</small></span>${icon("arrow", 18)}</button>`;
+      }).join("")}</div>
     </section>`;
 }
 
@@ -602,18 +608,130 @@ function renderAccountPrecheck(): string {
   </section>`;
 }
 
+interface FeatureAvailability {
+  label: string;
+  tone: "ready" | "warning" | "blocked";
+  actionLabel: string;
+  route?: Page;
+  disabled?: boolean;
+}
+
+function featureAvailability(feature: Feature, current: BootstrapState): FeatureAvailability {
+  if (feature.windowsOnly && current.platform !== "windows" && current.platform !== "preview") {
+    return { label: "仅 Windows", tone: "blocked", actionLabel: "当前平台不可用", disabled: true };
+  }
+  const missing = (feature.componentIds ?? [])
+    .map((id) => current.components.find((component) => component.id === id))
+    .filter((component) => !component?.installed);
+  if (missing.length) {
+    return { label: `缺少 ${missing.length} 个组件`, tone: "warning", actionLabel: "前往组件中心", route: "components" };
+  }
+  if (feature.requiresConnectedBridge && !current.bridgeConnected) {
+    return { label: "Bridge 未连接", tone: "warning", actionLabel: "连接 Bridge", route: "bridge" };
+  }
+  if (feature.id === "bridge-tools" && !current.bridgeConnected) {
+    return { label: "可连接", tone: "warning", actionLabel: "打开 Bridge 中心", route: "bridge" };
+  }
+  return {
+    label: "基础可用",
+    tone: "ready",
+    actionLabel: current.mode === "ai" ? "打开工作流" : "使用基础流程",
+  };
+}
+
 function renderToolbox(): string {
   if (!app) return "";
   const current = app;
   return `${renderAccountPrecheck()}${activeWorkflow ? renderWorkflowPanel(activeWorkflow) : ""}<div class="section-heading"><div><h2>创作能力</h2><p>基础流程在两种模式下都可用；带 ${icon("sparkles", 14)} 的能力由后端限定为 AI 模式。</p></div></div>
-    <div class="feature-grid">${features.map((feature) => `<article class="feature-card">
-      <div class="feature-card-head"><span class="feature-icon ${feature.accent}">${icon(feature.icon, 25)}</span><span class="availability">基础可用</span></div>
+    <div class="feature-grid">${features.map((feature) => {
+      const availability = featureAvailability(feature, current);
+      const target = availability.route ? `data-page="${availability.route}"` : `data-feature="${feature.id}"`;
+      return `<article class="feature-card ${availability.disabled ? "unavailable" : ""}">
+      <div class="feature-card-head"><span class="feature-icon ${feature.accent}">${icon(feature.icon, 25)}</span><span class="availability ${availability.tone}">${escapeHtml(availability.label)}</span></div>
       <h3>${feature.title}</h3><p>${feature.description}</p>
       <div class="capability-columns"><div><span>工具箱能力</span>${feature.base.map((item) => `<small>${icon("check", 14)} ${item}</small>`).join("")}</div><div class="ai-capabilities ${current.mode === "ai" ? "unlocked" : ""}"><span>${icon("sparkles", 14)} AI 增强</span>${feature.ai.map((item) => `<small>${item}</small>`).join("")}</div></div>
       <div class="feature-requirements">${feature.requirements.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>
-      <button class="card-action ${current.mode === "ai" ? "" : "restricted"}" data-feature="${feature.id}">${current.mode === "ai" ? "打开工作流" : "使用基础流程"} ${icon("arrow", 17)}</button>
-    </article>`).join("")}</div>
+      <button class="card-action ${availability.tone !== "ready" || current.mode !== "ai" ? "restricted" : ""}" ${target} ${availability.disabled ? "disabled" : ""}>${escapeHtml(availability.actionLabel)} ${icon("arrow", 17)}</button>
+    </article>`;
+    }).join("")}</div>
     ${current.mode === "toolbox" ? `<div class="upgrade-banner"><span class="mode-icon purple">${icon("sparkles", 24)}</span><div><strong>需要自动纠正、置信度复核或高级参数微调？</strong><p>切换到 AI 模式即可在现有工具之上启用智能增强。</p></div><button class="secondary" data-enable-ai>了解 AI 模式</button></div>` : ""}`;
+}
+
+type JsonObject = Record<string, unknown>;
+
+function asObject(value: unknown): JsonObject | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : undefined;
+}
+
+function resultMetric(label: string, value: unknown, tone = ""): string {
+  return `<div class="result-metric ${tone}"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong></div>`;
+}
+
+function renderDiagnosticResult(data: JsonObject): string | undefined {
+  const report = asObject(data.report) ?? data;
+  if (typeof report.ok !== "boolean" || !Array.isArray(report.issues)) return undefined;
+  const issues = report.issues.map(asObject).filter((item): item is JsonObject => Boolean(item));
+  const errors = issues.filter((item) => item.severity === "error").length;
+  const warnings = issues.filter((item) => item.severity === "warning").length;
+  const inspected = typeof report.inspectedItems === "number" ? report.inspectedItems : 0;
+  const list = issues.length ? `<div class="diagnostic-list">${issues.map((issue) => {
+    const severity = issue.severity === "error" ? "error" : issue.severity === "warning" ? "warning" : "info";
+    const severityLabel = severity === "error" ? "错误" : severity === "warning" ? "警告" : "提示";
+    return `<article class="diagnostic-item ${severity}"><span>${severityLabel}</span><div><strong>${escapeHtml(issue.message ?? issue.code ?? "诊断项")}</strong>${issue.location ? `<code>${escapeHtml(issue.location)}</code>` : ""}${issue.suggestion ? `<small>${escapeHtml(issue.suggestion)}</small>` : ""}</div><code>${escapeHtml(issue.code ?? "")}</code></article>`;
+  }).join("")}</div>` : `<div class="result-clear">${icon("shield", 18)} 未发现需要处理的问题。</div>`;
+  return `<div class="result-dashboard">${resultMetric("检查项目", inspected)}${resultMetric("错误", errors, errors ? "error" : "")}${resultMetric("警告", warnings, warnings ? "warning" : "")}${resultMetric("结论", report.ok ? "通过" : "需处理", report.ok ? "success" : "error")}</div>${list}`;
+}
+
+function renderBatchResult(data: JsonObject): string | undefined {
+  if (!Array.isArray(data.items) || typeof data.completed !== "number" || typeof data.failed !== "number") return undefined;
+  const items = data.items.map(asObject).filter((item): item is JsonObject => Boolean(item));
+  return `<div class="result-dashboard">${resultMetric("总计", items.length)}${resultMetric("完成", data.completed, "success")}${resultMetric("失败", data.failed, data.failed ? "error" : "")}</div><div class="batch-result-list">${items.map((item) => {
+    const completed = item.status === "completed";
+    const nested = asObject(item.result);
+    return `<article class="batch-result-item ${completed ? "completed" : "failed"}"><span>${icon(completed ? "check" : "plug", 15)}</span><div><strong>${escapeHtml(item.inputPath ?? "未命名输入")}</strong><small>${escapeHtml(completed ? nested?.summary ?? "处理完成" : item.error ?? "处理失败")}</small></div><span>${completed ? "完成" : "失败"}</span></article>`;
+  }).join("")}</div>`;
+}
+
+function renderScalarResult(data: JsonObject): string {
+  const source = asObject(data.probe) ?? data;
+  const definitions: Array<[string, string, (value: unknown) => unknown]> = [
+    ["duration_sec", "时长", (value) => typeof value === "number" ? `${value} 秒` : value],
+    ["bpm", "BPM", (value) => value],
+    ["key_guess", "调性估计", (value) => value],
+    ["peak_dbfs", "峰值", (value) => typeof value === "number" ? `${value} dBFS` : value],
+    ["rms_dbfs", "RMS", (value) => typeof value === "number" ? `${value} dBFS` : value],
+    ["clipped_sample_ratio", "削波样本", (value) => typeof value === "number" ? `${(value * 100).toFixed(3)}%` : value],
+    ["silent_frame_ratio", "静音帧", (value) => typeof value === "number" ? `${(value * 100).toFixed(1)}%` : value],
+    ["brightness_trend", "明亮度趋势", (value) => value],
+    ["copied", "已复制", (value) => value],
+    ["updated", "已更新", (value) => value],
+    ["skipped", "已跳过", (value) => value],
+    ["conflicts", "冲突", (value) => value],
+  ];
+  const metrics = definitions
+    .filter(([key]) => source[key] !== undefined)
+    .map(([key, label, format]) => resultMetric(label, format(source[key])))
+    .join("");
+  if (metrics) return `<div class="result-dashboard compact">${metrics}</div>`;
+  const scalars = Object.entries(data)
+    .filter(([, value]) => ["string", "number", "boolean"].includes(typeof value))
+    .slice(0, 6);
+  return scalars.length ? `<div class="result-dashboard compact">${scalars.map(([key, value]) => resultMetric(key, value)).join("")}</div>` : "";
+}
+
+function renderWorkflowResult(result: WorkflowResult, ai: boolean): string {
+  const data = asObject(result.data) ?? {};
+  const diagnostic = renderDiagnosticResult(data);
+  const batch = renderBatchResult(data);
+  const scalar = renderScalarResult(data);
+  const structured = diagnostic
+    ? `${asObject(data.probe) ? scalar : ""}${diagnostic}`
+    : batch ?? scalar;
+  const raw = `<details class="raw-result"><summary>${icon("file", 14)} 查看原始结构化数据</summary><pre>${escapeHtml(JSON.stringify(result.data, null, 2))}</pre></details>`;
+  const review = result.aiReview
+    ? `<div class="ai-review"><strong>${icon("sparkles", 15)} AI 复核</strong><p>${escapeHtml(result.aiReview)}</p></div>`
+    : ai ? `<button class="secondary" data-review-workflow>${icon("sparkles", 16)} 用已配置模型复核结果</button>` : "";
+  return `<section class="workflow-result"><div class="result-head"><div><span class="availability ready">运行完成</span><h3>${escapeHtml(result.summary)}</h3></div>${result.outputPath ? `<code>${escapeHtml(result.outputPath)}</code>` : ""}</div>${structured}${raw}${review}</section>`;
 }
 
 function renderWorkflowPanel(id: string): string {
@@ -679,7 +797,7 @@ function renderWorkflowPanel(id: string): string {
     form = catalogFeature ? `<div class="mode-limit"><strong>能力入口已就绪</strong><br />${escapeHtml(catalogFeature.base.join(" · "))}。后端工作流接入后会在这里显示参数与执行结果；当前不会对工程或音频执行写入。</div>` : "";
   }
   const feature = features.find((item) => item.id === id);
-  const result = workflowResult ? `<section class="workflow-result"><div class="result-head"><div><span class="availability">运行完成</span><h3>${escapeHtml(workflowResult.summary)}</h3></div>${workflowResult.outputPath ? `<code>${escapeHtml(workflowResult.outputPath)}</code>` : ""}</div><pre>${escapeHtml(JSON.stringify(workflowResult.data, null, 2))}</pre>${workflowResult.aiReview ? `<div class="ai-review"><strong>${icon("sparkles", 15)} AI 复核</strong><p>${escapeHtml(workflowResult.aiReview)}</p></div>` : ai ? `<button class="secondary" data-review-workflow>${icon("sparkles", 16)} 用已配置模型复核结果</button>` : ""}</section>` : "";
+  const result = workflowResult ? renderWorkflowResult(workflowResult, ai) : "";
   return `<section class="panel workflow-panel"><div class="workflow-heading"><span class="feature-icon ${feature?.accent ?? "violet"}">${icon(feature?.icon ?? "toolbox", 25)}</span><div><span class="eyebrow">ACTIVE WORKFLOW</span><h2>${escapeHtml(feature?.title ?? "工作流")}</h2><p>${escapeHtml(feature?.description ?? "")}</p></div><button class="icon-plain" data-close-workflow title="关闭">×</button></div>${form}${result}</section>`;
 }
 
