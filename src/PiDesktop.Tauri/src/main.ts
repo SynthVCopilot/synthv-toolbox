@@ -293,6 +293,7 @@ function formatAudioNumber(value: number | undefined, suffix = ""): string {
 
 function beginAudioArtifactAction(): boolean {
   if (audioArtifactActionInFlight) return false;
+  audioUiError = "";
   audioArtifactActionInFlight = true;
   render();
   return true;
@@ -1582,13 +1583,13 @@ function renderWorkflowPanel(id: string): string {
     const controlsLocked = running || audioPlanRequestInFlight || audioLoudnessAnalysisInFlight;
     const probe = audioProbe;
     const probeCard = probe
-      ? `<section class="audio-probe-card" aria-label="媒体信息"><div class="audio-probe-heading"><div><span class="eyebrow">MEDIA PROBE</span><strong>${escapeHtml(probe.codec ?? "未知编码")}</strong></div><span class="availability ready">已读取</span></div><dl class="audio-metadata"><div><dt>容器</dt><dd>${escapeHtml(probe.container ?? "未知")}</dd></div><div><dt>时长</dt><dd>${formatAudioNumber(probe.durationSeconds, " 秒")}</dd></div><div><dt>采样率</dt><dd>${formatAudioNumber(probe.sampleRate, " Hz")}</dd></div><div><dt>声道</dt><dd>${formatAudioNumber(probe.channels)}${probe.channelLayout ? ` · ${escapeHtml(probe.channelLayout)}` : ""}</dd></div><div><dt>位深</dt><dd>${formatAudioNumber(probe.bitDepth, " bit")}</dd></div><div><dt>码率</dt><dd>${formatAudioNumber(probe.bitRate ? probe.bitRate / 1000 : undefined, " kb/s")}</dd></div></dl>${probe.sourceArtifactId && probe.sourceMimeType ? `<div class="audio-source-preview">${audioSourcePreviewUrl ? `<audio controls preload="metadata" src="${escapeHtml(audioSourcePreviewUrl)}" aria-label="原音试听"></audio>` : `<button class="secondary" data-preview-audio-artifact="${escapeHtml(probe.sourceArtifactId)}" data-audio-preview-kind="source" ${audioArtifactActionInFlight ? "disabled" : ""}>${icon("play", 16)} 试听原音</button>`}</div>` : ""}</section>`
+      ? `<section class="audio-probe-card" aria-label="媒体信息"><div class="audio-probe-heading"><div><span class="eyebrow">MEDIA PROBE</span><strong>${escapeHtml(probe.codec ?? "未知编码")}</strong></div><span class="availability ready">已读取</span></div><dl class="audio-metadata"><div><dt>容器</dt><dd>${escapeHtml(probe.container ?? "未知")}</dd></div><div><dt>时长</dt><dd>${formatAudioNumber(probe.durationSeconds, " 秒")}</dd></div><div><dt>采样率</dt><dd>${formatAudioNumber(probe.sampleRate, " Hz")}</dd></div><div><dt>声道</dt><dd>${formatAudioNumber(probe.channels)}${probe.channelLayout ? ` · ${escapeHtml(probe.channelLayout)}` : ""}</dd></div><div><dt>位深</dt><dd>${formatAudioNumber(probe.bitDepth, " bit")}</dd></div><div><dt>码率</dt><dd>${formatAudioNumber(probe.bitRate ? probe.bitRate / 1000 : undefined, " kb/s")}</dd></div></dl>${probe.sourceArtifactId && probe.sourceMimeType ? `<div class="audio-source-preview">${audioSourcePreviewUrl ? `<audio controls preload="metadata" src="${escapeHtml(audioSourcePreviewUrl)}" data-audio-preview-artifact="${escapeHtml(probe.sourceArtifactId)}" data-audio-preview-kind="source" data-audio-preview-generation="${audioInputGeneration}" aria-label="原音试听"></audio>` : `<button class="secondary" data-preview-audio-artifact="${escapeHtml(probe.sourceArtifactId)}" data-audio-preview-kind="source" ${audioArtifactActionInFlight ? "disabled" : ""}>${icon("play", 16)} 试听原音</button>`}</div>` : ""}</section>`
       : `<div class="audio-empty-probe" role="status">选择一个本地音频后，将显示容器、编码、时长、采样率、声道、位深与码率。</div>`;
     const loudness = audioLoudness
       ? `<div class="audio-loudness-readout" role="status"><strong>EBU R128 结果</strong><span>综合响度 ${formatAudioNumber(audioLoudness.integratedLufs, " LUFS")}</span><span>True Peak ${formatAudioNumber(audioLoudness.truePeakDbtp, " dBTP")}</span><span>LRA ${formatAudioNumber(audioLoudness.loudnessRange, " LU")}</span></div>`
       : "";
     const jobPanel = audioJob
-      ? `<section class="audio-job-card ${audioJob.status}" aria-live="polite"><div class="audio-job-heading"><div><span class="eyebrow">AUDIO TASK</span><strong>${audioJob.operation === "loudness-normalize" ? "响度标准化" : "PCM WAV 转码"}</strong></div><span class="availability ${audioJob.status === "completed" ? "ready" : audioJob.status === "failed" ? "warning" : ""}">${escapeHtml(audioJob.status)}</span></div>${audioJob.progressPercent !== undefined ? `<div class="audio-progress" role="progressbar" aria-label="音频处理进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(audioJob.progressPercent)}"><span style="width:${Math.max(0, Math.min(100, audioJob.progressPercent))}%"></span></div><small>${formatAudioNumber(audioJob.progressPercent, "%")}</small>` : `<small>${running ? "正在处理；可继续浏览其他页面。" : "任务已结束。"}</small>`}${audioJob.outputPath ? `<div class="audio-output-path"><span>结果路径</span><code>${escapeHtml(audioJob.outputPath)}</code></div>` : ""}${audioJob.error ? `<pre class="audio-job-error">${escapeHtml(audioJob.error)}</pre>` : ""}${audioJob.loudnessReport ? `<div class="audio-loudness-readout compact"><span>复测 ${formatAudioNumber(audioJob.loudnessReport.integratedLufs, " LUFS")}</span><span>峰值 ${formatAudioNumber(audioJob.loudnessReport.truePeakDbtp, " dBTP")}</span><span>LRA ${formatAudioNumber(audioJob.loudnessReport.loudnessRange, " LU")}</span></div>` : ""}${running ? `<div class="button-row"><button class="secondary" data-cancel-audio-job="${escapeHtml(audioJob.id)}" ${audioCancelInFlight ? "disabled" : ""}>${audioCancelInFlight ? "正在取消…" : "取消任务"}</button></div>` : audioJob.status === "completed" && audioJob.artifactId ? `<div class="audio-artifact-actions">${audioPreviewUrl ? `<audio controls preload="metadata" src="${escapeHtml(audioPreviewUrl)}" aria-label="结果试听"></audio>` : `<button class="secondary" data-preview-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>${icon("play", 16)} 试听结果</button>`}<button class="secondary" data-reveal-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>打开文件位置</button><button class="secondary" data-copy-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>复制路径</button><button class="primary" data-save-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>安全另存为</button></div>` : ""}</section>`
+      ? `<section class="audio-job-card ${audioJob.status}" aria-live="polite"><div class="audio-job-heading"><div><span class="eyebrow">AUDIO TASK</span><strong>${audioJob.operation === "loudness-normalize" ? "响度标准化" : "PCM WAV 转码"}</strong></div><span class="availability ${audioJob.status === "completed" ? "ready" : audioJob.status === "failed" ? "warning" : ""}">${escapeHtml(audioJob.status)}</span></div>${audioJob.progressPercent !== undefined ? `<div class="audio-progress" role="progressbar" aria-label="音频处理进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(audioJob.progressPercent)}"><span style="width:${Math.max(0, Math.min(100, audioJob.progressPercent))}%"></span></div><small>${formatAudioNumber(audioJob.progressPercent, "%")}</small>` : `<small>${running ? "正在处理；可继续浏览其他页面。" : "任务已结束。"}</small>`}${audioJob.outputPath ? `<div class="audio-output-path"><span>结果路径</span><code>${escapeHtml(audioJob.outputPath)}</code></div>` : ""}${audioJob.error ? `<pre class="audio-job-error">${escapeHtml(audioJob.error)}</pre>` : ""}${audioJob.loudnessReport ? `<div class="audio-loudness-readout compact"><span>复测 ${formatAudioNumber(audioJob.loudnessReport.integratedLufs, " LUFS")}</span><span>峰值 ${formatAudioNumber(audioJob.loudnessReport.truePeakDbtp, " dBTP")}</span><span>LRA ${formatAudioNumber(audioJob.loudnessReport.loudnessRange, " LU")}</span></div>` : ""}${running ? `<div class="button-row"><button class="secondary" data-cancel-audio-job="${escapeHtml(audioJob.id)}" ${audioCancelInFlight ? "disabled" : ""}>${audioCancelInFlight ? "正在取消…" : "取消任务"}</button></div>` : audioJob.status === "completed" && audioJob.artifactId ? `<div class="audio-artifact-actions">${audioPreviewUrl ? `<audio controls preload="metadata" src="${escapeHtml(audioPreviewUrl)}" data-audio-preview-artifact="${escapeHtml(audioJob.artifactId)}" data-audio-preview-kind="result" data-audio-preview-generation="${audioInputGeneration}" aria-label="结果试听"></audio>` : `<button class="secondary" data-preview-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>${icon("play", 16)} 试听结果</button>`}<button class="secondary" data-reveal-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>打开文件位置</button><button class="secondary" data-copy-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>复制路径</button><button class="primary" data-save-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>安全另存为</button></div>` : ""}</section>`
       : "";
     form = `<div class="audio-preparation" aria-label="音频准备">
       <section class="audio-runtime-card ${runtime?.available ? "ready" : "warning"}"><div><span class="eyebrow">FFMPEG RUNTIME</span><strong>${runtime?.available ? `可用${runtime.version ? ` · ${escapeHtml(runtime.version)}` : ""}` : "正在检查…"}</strong><small>${escapeHtml(runtime?.detail ?? "进入此工具后检查本机 FFmpeg。")}</small></div><span class="availability ${runtime?.available ? "ready" : "warning"}">${escapeHtml(runtime?.source ?? (runtime?.available ? "已就绪" : "检查中"))}</span></section>
@@ -2355,6 +2356,40 @@ document.addEventListener("input", (event) => {
     syncLyricDraftFromDom();
   }, 250);
 });
+
+// Media loading happens outside the promise that resolves the opaque artifact
+// URL.  Convert a native WebView failure into a visible, retryable UI state,
+// but only for the artifact and input generation that is still on screen.
+document.addEventListener("error", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLMediaElement) || target.tagName.toLowerCase() !== "audio") return;
+  if (!target.closest(".audio-preparation")) return;
+
+  const artifactId = target.dataset.audioPreviewArtifact;
+  const previewKind = target.dataset.audioPreviewKind;
+  const generation = Number(target.dataset.audioPreviewGeneration);
+  if (!artifactId || !Number.isInteger(generation) || generation !== audioInputGeneration) return;
+
+  const currentArtifactId = previewKind === "source"
+    ? audioProbe?.sourceArtifactId
+    : previewKind === "result"
+      ? audioJob?.artifactId
+      : undefined;
+  if (currentArtifactId !== artifactId) return;
+
+  // Clearing the URL removes the failed element on the next render and
+  // restores the explicit preview button.  The guard also prevents a stale
+  // error event from causing a render loop after that replacement.
+  if (previewKind === "source") {
+    if (!audioSourcePreviewUrl) return;
+    audioSourcePreviewUrl = "";
+  } else {
+    if (!audioPreviewUrl) return;
+    audioPreviewUrl = "";
+  }
+  audioUiError = "当前 WebView 无法分段读取、文件过大或格式不支持；处理不受影响；结果可打开位置/另存为。";
+  render();
+}, true);
 
 document.addEventListener("click", (event) => {
   const target = (event.target as HTMLElement).closest<HTMLElement>("button, [data-page], [data-onboarding], [data-audio-drop-zone]");

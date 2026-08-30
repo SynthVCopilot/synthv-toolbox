@@ -38,6 +38,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 const LOUDNESS_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 const CAPTURE_LIMIT: usize = 8 * 1024 * 1024;
 const MAX_PROTOCOL_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_PROTOCOL_FULL_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1171,8 +1172,72 @@ fn commit_temporary_no_replace(temporary: &Path, destination: &Path) -> std::io:
 }
 
 #[cfg(not(windows))]
+fn commit_temporary_copy_new(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    // This is deliberately a no-overwrite fallback, not an atomic publish:
+    // `create_new` claims the selected name before writing, so an existing
+    // user file is never replaced even on filesystems without no-replace
+    // rename support.  If copying fails, leave the claimed destination in
+    // place rather than deleting by pathname and risking a TOCTOU deletion.
+    let mut input = fs::File::open(temporary)?;
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)?;
+    let copy_result = std::io::copy(&mut input, &mut output)
+        .and_then(|_| output.flush())
+        .and_then(|_| output.sync_all());
+    if let Err(error) = copy_result {
+        return Err(std::io::Error::new(
+            error.kind(),
+            format!(
+                "The destination was created but may be incomplete; remove it before retrying: {error}"
+            ),
+        ));
+    }
+    drop(output);
+    let _ = fs::remove_file(temporary);
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
 fn commit_temporary_no_replace(temporary: &Path, destination: &Path) -> std::io::Result<()> {
-    fs::hard_link(temporary, destination).and_then(|_| fs::remove_file(temporary))
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let temporary_c = CString::new(temporary.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Temporary audio path contains an unexpected NUL byte.",
+        )
+    })?;
+    let destination_c = CString::new(destination.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Selected audio path contains an unexpected NUL byte.",
+        )
+    })?;
+    if unsafe {
+        libc::renamex_np(
+            temporary_c.as_ptr(),
+            destination_c.as_ptr(),
+            libc::RENAME_EXCL,
+        )
+    } == 0
+    {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if matches!(error.raw_os_error(), Some(code) if code == libc::ENOTSUP || code == libc::EOPNOTSUPP || code == libc::EINVAL || code == libc::ENOSYS)
+    {
+        commit_temporary_copy_new(temporary, destination)
+    } else {
+        Err(error)
+    }
+}
+
+#[cfg(all(not(windows), not(target_os = "macos")))]
+fn commit_temporary_no_replace(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    commit_temporary_copy_new(temporary, destination)
 }
 
 fn safe_copy_artifact(source: &Path, destination: &Path) -> Result<(), String> {
@@ -1286,6 +1351,18 @@ fn serve_audio_artifact_request(
     };
     let length = metadata.len();
     let requested_range = request.headers().get(http::header::RANGE);
+    if requested_range.is_none() && length > MAX_PROTOCOL_FULL_RESPONSE_BYTES {
+        return protocol_response(
+            http::StatusCode::PAYLOAD_TOO_LARGE,
+            Vec::new(),
+            Some(("x-toolbox-audio-size", length.to_string())),
+            Some((
+                "x-toolbox-audio-limit",
+                MAX_PROTOCOL_FULL_RESPONSE_BYTES.to_string(),
+            )),
+            "text/plain",
+        );
+    }
     let range = match requested_range {
         Some(value) => match value
             .to_str()
@@ -3098,6 +3175,69 @@ fn main() {
     }
 
     #[test]
+    fn protocol_enforces_the_unranged_full_response_limit() {
+        let (service, case_root, _) = registered_output_service("artifact-full-limit");
+        let root = fs::canonicalize(&service.output_root).unwrap();
+        let exact_output = service.output_root.join("at-full-limit.wav");
+        let exact_file = fs::File::create(&exact_output).unwrap();
+        exact_file
+            .set_len(MAX_PROTOCOL_FULL_RESPONSE_BYTES)
+            .unwrap();
+        drop(exact_file);
+        let exact_artifact = service
+            .register_completed_artifact(&exact_output.to_string_lossy(), &root, "pcm-prepare")
+            .unwrap();
+        let exact_request = http::Request::builder()
+            .method("GET")
+            .uri(format!("toolbox-audio://localhost/{exact_artifact}"))
+            .body(Vec::new())
+            .unwrap();
+        let exact_response = service.serve_audio_artifact_request(&exact_request);
+        assert_eq!(exact_response.status(), http::StatusCode::OK);
+        assert_eq!(
+            exact_response.headers()["content-length"],
+            MAX_PROTOCOL_FULL_RESPONSE_BYTES.to_string()
+        );
+        assert!(exact_response.headers().get("content-range").is_none());
+        assert_eq!(
+            exact_response.body().len(),
+            MAX_PROTOCOL_FULL_RESPONSE_BYTES as usize
+        );
+        drop(exact_response);
+
+        let oversized_output = service.output_root.join("over-full-limit.wav");
+        let oversized_file = fs::File::create(&oversized_output).unwrap();
+        oversized_file
+            .set_len(MAX_PROTOCOL_FULL_RESPONSE_BYTES + 1)
+            .unwrap();
+        drop(oversized_file);
+        let oversized_artifact = service
+            .register_completed_artifact(&oversized_output.to_string_lossy(), &root, "pcm-prepare")
+            .unwrap();
+        for method in [http::Method::GET, http::Method::HEAD] {
+            let request = http::Request::builder()
+                .method(method)
+                .uri(format!("toolbox-audio://localhost/{oversized_artifact}"))
+                .body(Vec::new())
+                .unwrap();
+            let response = service.serve_audio_artifact_request(&request);
+            assert_eq!(response.status(), http::StatusCode::PAYLOAD_TOO_LARGE);
+            assert_eq!(
+                response.headers()["x-toolbox-audio-size"],
+                (MAX_PROTOCOL_FULL_RESPONSE_BYTES + 1).to_string()
+            );
+            assert_eq!(
+                response.headers()["x-toolbox-audio-limit"],
+                MAX_PROTOCOL_FULL_RESPONSE_BYTES.to_string()
+            );
+            assert_eq!(response.headers()["accept-ranges"], "bytes");
+            assert!(response.headers().get("content-range").is_none());
+            assert!(response.body().is_empty());
+        }
+        fs::remove_dir_all(case_root).unwrap();
+    }
+
+    #[test]
     fn artifacts_only_exist_after_completed_regular_output_and_revalidate_links() {
         let (service, case_root) = fake_service("artifact-completion");
         fs::create_dir_all(&service.output_root).unwrap();
@@ -3203,6 +3343,26 @@ fn main() {
             assert_eq!(args[0], OsStr::new("-R"));
             assert_eq!(args[1], source.as_os_str());
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn portable_no_replace_fallback_copies_new_files_without_touching_existing_ones() {
+        let root = temporary_test_base().join(format!("toolbox-copy-fallback-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let temporary = root.join("new.tmp");
+        let destination = root.join("saved.wav");
+        fs::write(&temporary, b"saved-result").unwrap();
+        commit_temporary_copy_new(&temporary, &destination).unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"saved-result");
+        assert!(!temporary.exists());
+
+        let replacement = root.join("replacement.tmp");
+        fs::write(&replacement, b"replacement-result").unwrap();
+        assert!(commit_temporary_copy_new(&replacement, &destination).is_err());
+        assert_eq!(fs::read(&destination).unwrap(), b"saved-result");
+        assert!(replacement.exists());
         fs::remove_dir_all(root).unwrap();
     }
 }
