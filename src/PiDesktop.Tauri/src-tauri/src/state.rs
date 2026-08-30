@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
 
 use crate::agent::ChatMessage;
+use crate::audio_prep::AudioPreparationService;
 use crate::config::ToolboxSettings;
 use crate::downloads::ComponentDownloadManager;
 use crate::mcp::McpManager;
@@ -26,6 +27,7 @@ pub struct AppState {
     pub bridge_dir: PathBuf,
     pub components_dir: PathBuf,
     pub downloads: Arc<ComponentDownloadManager>,
+    pub audio_preparation: Arc<AudioPreparationService>,
     pub sv2_profiles: Arc<Sv2ProfileService>,
     pub svp_passthrough_only: AtomicBool,
 }
@@ -38,6 +40,7 @@ impl AppState {
         svp_passthrough_only: bool,
         settings: ToolboxSettings,
     ) -> Self {
+        let audio_preparation = AudioPreparationService::new(resource_dir.clone());
         Self {
             settings: Arc::new(RwLock::new(settings)),
             agent: Arc::new(Mutex::new(AgentSession::default())),
@@ -46,6 +49,7 @@ impl AppState {
             bridge_dir,
             components_dir,
             downloads: Arc::new(ComponentDownloadManager::default()),
+            audio_preparation,
             sv2_profiles: Arc::new(Sv2ProfileService::new()),
             svp_passthrough_only: AtomicBool::new(svp_passthrough_only),
         }

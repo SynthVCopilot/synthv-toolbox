@@ -2,7 +2,8 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::{RwLock, RwLockReadGuard};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -20,14 +21,61 @@ const SANDBOXIE_INSTALLER_URL: &str =
     "https://github.com/sandboxie-plus/Sandboxie/releases/download/v1.18.2/Sandboxie-Plus-x64-v1.18.2.exe";
 const SANDBOXIE_INSTALLER_SHA256: &str =
     "1c19832c8bb84f5dcde1bf59b7f38b7cfe94989c09dd0acd0b7ce7485dde8987";
-static COMPONENT_MUTATION_LOCK: RwLock<()> = RwLock::new(());
+const FFMPEG_VERSION: &str = "n8.1.2-50-g1a748fe2cd";
+const FFMPEG_RELEASE_TAG: &str = "autobuild-2026-08-29-13-12";
+const FFMPEG_ARCHIVE_NAME: &str = "ffmpeg-n8.1.2-50-g1a748fe2cd-win64-lgpl-8.1.zip";
+const FFMPEG_ARCHIVE_URL: &str = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-29-13-12/ffmpeg-n8.1.2-50-g1a748fe2cd-win64-lgpl-8.1.zip";
+const FFMPEG_ARCHIVE_SHA256: &str =
+    "e1cafe80e9fb3e4e4024923a2ed2544bc3a0545af09b6a7861a7193210988c63";
+const FFMPEG_MANIFEST_NAME: &str = "manifest.json";
+const FFMPEG_MANIFEST_SCHEMA: u32 = 1;
+const FFMPEG_MANAGED_BY: &str = "SynthV Toolbox";
+const FFMPEG_ARTIFACT_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+const MAX_FFMPEG_ARTIFACTS_TO_SCAN: usize = 64;
+static COMPONENT_MUTATING: AtomicBool = AtomicBool::new(false);
+static COMPONENT_USAGE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) type ComponentUsageGuard = RwLockReadGuard<'static, ()>;
+pub(crate) struct ComponentUsageGuard;
+
+impl Drop for ComponentUsageGuard {
+    fn drop(&mut self) {
+        let previous = COMPONENT_USAGE_COUNT.fetch_sub(1, Ordering::SeqCst);
+        debug_assert!(previous > 0, "component usage counter underflowed");
+    }
+}
+
+struct ComponentMutationGuard;
+
+impl Drop for ComponentMutationGuard {
+    fn drop(&mut self) {
+        COMPONENT_MUTATING.store(false, Ordering::SeqCst);
+    }
+}
 
 pub(crate) fn component_usage_guard() -> Result<ComponentUsageGuard, String> {
-    COMPONENT_MUTATION_LOCK
-        .read()
-        .map_err(|_| "组件使用锁已损坏。请重启 SynthV Toolbox 后重试。".to_string())
+    if COMPONENT_MUTATING.load(Ordering::SeqCst) {
+        return Err("组件正在安装或删除；请等待当前组件操作完成后重试。".to_string());
+    }
+    COMPONENT_USAGE_COUNT.fetch_add(1, Ordering::SeqCst);
+    if COMPONENT_MUTATING.load(Ordering::SeqCst) {
+        COMPONENT_USAGE_COUNT.fetch_sub(1, Ordering::SeqCst);
+        Err("组件正在安装或删除；请等待当前组件操作完成后重试。".to_string())
+    } else {
+        Ok(ComponentUsageGuard)
+    }
+}
+
+fn component_mutation_guard() -> ComponentMutationGuard {
+    while COMPONENT_MUTATING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        std::thread::yield_now();
+    }
+    while COMPONENT_USAGE_COUNT.load(Ordering::SeqCst) != 0 {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    ComponentMutationGuard
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -65,21 +113,26 @@ fn component_info_at(
     config_path: &Path,
 ) -> ComponentInfo {
     let installed = match component.id.as_str() {
-        "ffmpeg" => {
-            bundled_binary(resource_root, "ffmpeg").is_some() || command_available("ffmpeg")
-        }
+        "ffmpeg" => resolve_ffmpeg_binary(resource_root, managed_data_root).is_some(),
         "pi-audio" => configured_component_at("audio", config_path),
         "cvrs" => configured_component_at("cvrs", config_path),
         _ => false,
     };
     let id = component.id;
-    let removable = managed_component_paths(&id, managed_data_root)
-        .ok()
-        .is_some_and(|managed| {
-            managed_component_directory_exists(&managed.target)
-                || config_references_managed_component(config_path, &managed)
-        });
-    let installable = installed || matches!(id.as_str(), "pi-audio" | "cvrs");
+    let removable = if id == "ffmpeg" {
+        toolbox_managed_ffmpeg_directory_exists(managed_data_root)
+    } else {
+        managed_component_paths(&id, managed_data_root)
+            .ok()
+            .is_some_and(|managed| {
+                managed_component_directory_exists(&managed.target)
+                    || config_references_managed_component(config_path, &managed)
+            })
+    };
+    let installable = installed
+        || matches!(id.as_str(), "pi-audio" | "cvrs")
+        || (id == "ffmpeg" && cfg!(all(windows, target_arch = "x86_64")));
+    let is_ffmpeg = id == "ffmpeg";
     ComponentInfo {
         id,
         display_name: component.display_name,
@@ -91,9 +144,13 @@ fn component_info_at(
         },
         installed,
         removable,
-        downloaded: false,
+        downloaded: is_ffmpeg && ffmpeg_archive_cached(managed_data_root),
         status: if installed {
-            "已就绪".to_string()
+            if is_ffmpeg {
+                ffmpeg_status_label(resource_root, managed_data_root, "已就绪")
+            } else {
+                "已就绪".to_string()
+            }
         } else if installable {
             "可通过 aria2 下载".to_string()
         } else {
@@ -112,22 +169,9 @@ pub fn install_component<F>(
 where
     F: FnMut(&str, u8, &str),
 {
-    let _mutation_guard = match COMPONENT_MUTATION_LOCK.write() {
-        Ok(guard) => guard,
-        Err(_) => return failed("组件操作锁已损坏。", "请重启 SynthV Toolbox 后重试。"),
-    };
+    let _mutation_guard = component_mutation_guard();
     match id {
-        "ffmpeg" => {
-            progress("installing", 80, "正在检查系统或应用内 FFmpeg。");
-            if bundled_binary(resource_root, "ffmpeg").is_some() || command_available("ffmpeg") {
-                succeeded("FFmpeg 已可用。", "已发现应用内或系统 FFmpeg。")
-            } else {
-                failed(
-                    "当前平台包未包含 FFmpeg。",
-                    "为避免不可信下载，应用不会自动安装未锁定哈希的二进制。请安装 FFmpeg，或在发布构建中提供对应平台的签名资源。",
-                )
-            }
-        }
+        "ffmpeg" => install_managed_ffmpeg(resource_root, &mut progress),
         "pi-audio" | "cvrs" => {
             let source = if std::env::var("SYNTHV_TOOLBOX_COMPONENT_SOURCE")
                 .is_ok_and(|value| value.eq_ignore_ascii_case("bundled"))
@@ -182,10 +226,7 @@ struct ManagedComponentPaths {
 }
 
 pub fn remove_local_component(id: &str) -> OperationResult {
-    let _mutation_guard = match COMPONENT_MUTATION_LOCK.write() {
-        Ok(guard) => guard,
-        Err(_) => return failed("组件操作锁已损坏。", "请重启 SynthV Toolbox 后重试。"),
-    };
+    let _mutation_guard = component_mutation_guard();
     let _config_guard = match model_config_mutation_guard() {
         Ok(guard) => guard,
         Err(error) => return failed("无法锁定组件配置。", error),
@@ -209,6 +250,14 @@ fn remove_local_component_at(
     config_path: &Path,
 ) -> Result<ComponentRemovalOutcome, String> {
     let managed = managed_component_paths(id, managed_data_root)?;
+    if id == "ffmpeg"
+        && managed.target.exists()
+        && !toolbox_managed_ffmpeg_directory_exists(managed_data_root)
+    {
+        return Err(
+            "FFmpeg 目录缺少匹配当前固定版本的 Toolbox manifest，已按外部文件保留。".to_string(),
+        );
+    }
     let config_removal = prepare_component_config_removal(config_path, &managed)?;
     let components_root = managed_data_root.join("components");
     let target = &managed.target;
@@ -262,7 +311,8 @@ fn managed_component_paths(
     let (managed_id, config_key, script_name) = match id {
         "pi-audio" => ("pi-audio", "audio", "pi_audio.py"),
         "cvrs" => ("cvrs", "cvrs", "cvrs.py"),
-        "ffmpeg" | "sandboxie" => {
+        "ffmpeg" => ("ffmpeg", "", "bin/ffmpeg.exe"),
+        "sandboxie" => {
             return Err(format!(
                 "{} 不是由 SynthV Toolbox 管理安装的组件，不能在这里删除。",
                 display_name(id)
@@ -290,6 +340,9 @@ fn prepare_component_config_removal(
     config_path: &Path,
     managed: &ManagedComponentPaths,
 ) -> Result<Option<ComponentConfigRemoval>, String> {
+    if managed.config_key.is_empty() {
+        return Ok(None);
+    }
     reject_symlink_or_reparse(config_path, "组件配置")?;
     let original = match fs::read(config_path) {
         Ok(bytes) => bytes,
@@ -397,6 +450,32 @@ fn reject_symlink_or_reparse(path: &Path, label: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+fn regular_file_without_links(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|metadata| {
+        metadata.is_file()
+            && !metadata.file_type().is_symlink()
+            && !metadata_is_reparse_point(&metadata)
+    })
+}
+
+fn path_chain_has_no_links(path: &Path) -> bool {
+    let mut current = Some(path);
+    while let Some(candidate) = current {
+        match fs::symlink_metadata(candidate) {
+            Ok(metadata)
+                if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) =>
+            {
+                return false;
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return false,
+        }
+        current = candidate.parent();
+    }
+    true
 }
 
 #[cfg(windows)]
@@ -540,6 +619,628 @@ fn sandboxie_component_info() -> ComponentInfo {
             "仅适用于 Windows x64".to_string()
         },
     }
+}
+
+fn managed_ffmpeg_directory(data_root: &Path) -> PathBuf {
+    data_root.join("components").join("ffmpeg")
+}
+
+fn ffmpeg_archive_cached(data_root: &Path) -> bool {
+    let archive = data_root
+        .join("downloads")
+        .join("ffmpeg")
+        .join(FFMPEG_RELEASE_TAG)
+        .join(FFMPEG_ARCHIVE_NAME);
+    regular_file_without_links(&archive) && verify_sha256(&archive, FFMPEG_ARCHIVE_SHA256).is_ok()
+}
+
+fn managed_ffmpeg_directory_exists(data_root: &Path) -> bool {
+    if !cfg!(all(windows, target_arch = "x86_64")) {
+        return false;
+    }
+    managed_ffmpeg_directory_exists_at(&managed_ffmpeg_directory(data_root))
+}
+
+fn toolbox_managed_ffmpeg_directory_exists(data_root: &Path) -> bool {
+    if !cfg!(all(windows, target_arch = "x86_64")) {
+        return false;
+    }
+    toolbox_managed_ffmpeg_directory_exists_at(&managed_ffmpeg_directory(data_root))
+}
+
+pub(crate) fn managed_ffmpeg_runtime() -> Option<(PathBuf, PathBuf)> {
+    let managed_data_root = data_root();
+    managed_ffmpeg_directory_exists(&managed_data_root).then(|| {
+        let bin = managed_ffmpeg_directory(&managed_data_root).join("bin");
+        (bin.join("ffmpeg.exe"), bin.join("ffprobe.exe"))
+    })
+}
+
+fn configured_ffmpeg_directory() -> Option<PathBuf> {
+    std::env::var_os("SYNTHV_TOOLBOX_FFMPEG_DIR")
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir())
+}
+
+fn resolve_ffmpeg_binary(resource_root: &Path, managed_data_root: &Path) -> Option<PathBuf> {
+    let configured = configured_ffmpeg_directory();
+    if let Some(path) = configured
+        .as_ref()
+        .and_then(|root| find_ffmpeg_pair(root))
+        .map(|(ffmpeg, _)| ffmpeg)
+    {
+        return Some(path);
+    }
+    if managed_ffmpeg_directory_exists(managed_data_root) {
+        return Some(managed_ffmpeg_directory(managed_data_root).join("bin/ffmpeg.exe"));
+    }
+    if let Some((ffmpeg, _)) = find_ffmpeg_pair(&resource_root.join("ffmpeg")) {
+        return Some(ffmpeg);
+    }
+    system_ffmpeg_pair().map(|(ffmpeg, _)| ffmpeg)
+}
+
+pub(crate) fn find_ffmpeg_pair(root: &Path) -> Option<(PathBuf, PathBuf)> {
+    let ffmpeg_name = if cfg!(windows) {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    };
+    let ffprobe_name = if cfg!(windows) {
+        "ffprobe.exe"
+    } else {
+        "ffprobe"
+    };
+    [root.to_path_buf(), root.join("bin")]
+        .into_iter()
+        .find_map(|directory| {
+            let ffmpeg = directory.join(ffmpeg_name);
+            let ffprobe = directory.join(ffprobe_name);
+            (path_chain_has_no_links(&directory)
+                && regular_file_without_links(&ffmpeg)
+                && regular_file_without_links(&ffprobe))
+            .then_some((ffmpeg, ffprobe))
+        })
+}
+
+fn system_ffmpeg_pair() -> Option<(PathBuf, PathBuf)> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).find_map(|directory| find_ffmpeg_pair(&directory))
+}
+
+fn ffmpeg_status_label(resource_root: &Path, managed_data_root: &Path, fallback: &str) -> String {
+    if configured_ffmpeg_directory()
+        .as_ref()
+        .and_then(|root| find_ffmpeg_pair(root))
+        .is_some()
+    {
+        "已就绪（显式目录）".to_string()
+    } else if managed_ffmpeg_directory_exists(managed_data_root) {
+        format!("已就绪（Toolbox 私有 {FFMPEG_VERSION}）")
+    } else if find_ffmpeg_pair(&resource_root.join("ffmpeg")).is_some() {
+        "已就绪（应用包内）".to_string()
+    } else if system_ffmpeg_pair().is_some() {
+        "已就绪（系统 PATH）".to_string()
+    } else {
+        fallback.to_string()
+    }
+}
+
+#[derive(Debug, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FfmpegInstallManifest {
+    schema_version: u32,
+    managed_by: String,
+    version: String,
+    release_tag: String,
+    archive: String,
+    sha256: String,
+    source: String,
+    binaries: [String; 2],
+}
+
+fn read_toolbox_ffmpeg_manifest(root: &Path) -> Option<FfmpegInstallManifest> {
+    let manifest_path = root.join(FFMPEG_MANIFEST_NAME);
+    if !regular_file_without_links(&manifest_path) || !path_chain_has_no_links(&manifest_path) {
+        return None;
+    }
+    let bytes = fs::read(manifest_path).ok()?;
+    let manifest: FfmpegInstallManifest = serde_json::from_slice(&bytes).ok()?;
+    (manifest.schema_version == FFMPEG_MANIFEST_SCHEMA
+        && manifest.managed_by == FFMPEG_MANAGED_BY
+        && manifest.source == "BtbN LGPL"
+        && manifest.binaries == ["bin/ffmpeg.exe", "bin/ffprobe.exe"]
+        && !manifest.version.trim().is_empty()
+        && !manifest.release_tag.trim().is_empty()
+        && Path::new(&manifest.archive)
+            .file_name()
+            .and_then(|name| name.to_str())
+            == Some(manifest.archive.as_str())
+        && manifest.archive.ends_with(".zip")
+        && manifest.sha256.len() == 64
+        && manifest.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    .then_some(manifest)
+}
+
+fn read_ffmpeg_manifest(root: &Path) -> Option<FfmpegInstallManifest> {
+    let manifest = read_toolbox_ffmpeg_manifest(root)?;
+    (manifest.version == FFMPEG_VERSION
+        && manifest.release_tag == FFMPEG_RELEASE_TAG
+        && manifest.archive == FFMPEG_ARCHIVE_NAME
+        && manifest.sha256 == FFMPEG_ARCHIVE_SHA256)
+        .then_some(manifest)
+}
+
+fn install_managed_ffmpeg<F>(resource_root: &Path, progress: &mut F) -> OperationResult
+where
+    F: FnMut(&str, u8, &str),
+{
+    if !cfg!(all(windows, target_arch = "x86_64")) {
+        return failed(
+            "Toolbox 私有 FFmpeg 安装仅适用于 Windows x64。",
+            "macOS 及其他平台只使用显式目录、应用包内或系统 PATH 中的 FFmpeg，不会自动下载未知二进制。",
+        );
+    }
+    let managed_data_root = data_root();
+    let managed_root = managed_ffmpeg_directory(&managed_data_root);
+    if managed_ffmpeg_directory_exists(&managed_data_root) {
+        if let Some(components_root) = managed_root.parent() {
+            if let Err(error) =
+                cleanup_ffmpeg_artifacts(components_root, &managed_root, SystemTime::now())
+            {
+                eprintln!("FFmpeg 安装残留清理跳过：{error}");
+            }
+        }
+        return succeeded(
+            format!("FFmpeg {FFMPEG_VERSION} 已可用。"),
+            format!("Toolbox 私有安装位置：{}。", managed_root.display()),
+        );
+    }
+    let Some(aria2) = find_aria2(resource_root) else {
+        return failed(
+            "未找到 aria2c。",
+            "请安装 aria2，或设置 SYNTHV_TOOLBOX_ARIA2 指向 aria2c。",
+        );
+    };
+    let cache = managed_data_root
+        .join("downloads")
+        .join("ffmpeg")
+        .join(FFMPEG_RELEASE_TAG);
+    if let Err(error) = reject_symlink_or_reparse(&managed_data_root, "应用数据根目录") {
+        return failed("FFmpeg 下载路径不安全。", error);
+    }
+    if let Err(error) = reject_symlink_or_reparse(&managed_data_root.join("downloads"), "下载目录")
+    {
+        return failed("FFmpeg 下载路径不安全。", error);
+    }
+    if let Err(error) = reject_symlink_or_reparse(
+        &managed_data_root.join("downloads/ffmpeg"),
+        "FFmpeg 下载目录",
+    ) {
+        return failed("FFmpeg 下载路径不安全。", error);
+    }
+    if let Err(error) = reject_symlink_or_reparse(&cache, "FFmpeg 下载缓存") {
+        return failed("FFmpeg 下载缓存不安全。", error);
+    }
+    if let Err(error) = fs::create_dir_all(&cache) {
+        return failed("无法创建 FFmpeg 下载缓存。", error.to_string());
+    }
+    if !path_chain_has_no_links(&cache) {
+        return failed(
+            "FFmpeg 下载缓存不安全。",
+            "下载路径包含符号链接或 reparse point。",
+        );
+    }
+    let payload = ComponentPayload {
+        name: FFMPEG_ARCHIVE_NAME,
+        relative_url: "",
+        sha256: FFMPEG_ARCHIVE_SHA256,
+    };
+    let archive = cache.join(FFMPEG_ARCHIVE_NAME);
+    if !ffmpeg_archive_cached(&managed_data_root) {
+        progress(
+            "downloading",
+            12,
+            "aria2 正在下载固定版本的 FFmpeg LGPL 包。",
+        );
+        let download_stage = cache.join(format!(".download-{}", Uuid::new_v4()));
+        if let Err(error) = fs::create_dir(&download_stage) {
+            return failed("无法创建 FFmpeg 下载暂存目录。", error.to_string());
+        }
+        let staged_archive = download_stage.join(FFMPEG_ARCHIVE_NAME);
+        let download_result =
+            download_with_aria2(&aria2, FFMPEG_ARCHIVE_URL, &download_stage, &payload).and_then(
+                |()| {
+                    if !regular_file_without_links(&staged_archive) {
+                        return Err("FFmpeg 下载结果不是安全的普通文件。".to_string());
+                    }
+                    verify_sha256(&staged_archive, FFMPEG_ARCHIVE_SHA256)?;
+                    if archive.exists() {
+                        if !regular_file_without_links(&archive) {
+                            return Err("FFmpeg 最终缓存路径是链接或非普通文件。".to_string());
+                        }
+                        fs::remove_file(&archive)
+                            .map_err(|error| format!("无法替换旧 FFmpeg 缓存：{error}"))?;
+                    }
+                    fs::rename(&staged_archive, &archive)
+                        .map_err(|error| format!("无法提交 FFmpeg 下载缓存：{error}"))
+                },
+            );
+        let _ = fs::remove_dir_all(&download_stage);
+        if let Err(error) = download_result {
+            return failed("FFmpeg 下载失败。", error);
+        }
+    }
+    progress(
+        "installing",
+        68,
+        "FFmpeg 下载包校验通过，正在安全解压并原子安装。",
+    );
+    let target = managed_ffmpeg_directory(&managed_data_root);
+    match install_ffmpeg_archive(&archive, &target) {
+        Ok(()) => {
+            progress("installing", 96, "FFmpeg 私有副本安装完成。");
+            succeeded(
+                format!("FFmpeg {FFMPEG_VERSION} 已安装。"),
+                format!("Toolbox 私有安装位置：{}", target.display()),
+            )
+        }
+        Err(error) => failed("FFmpeg 安装失败。", error),
+    }
+}
+
+fn install_ffmpeg_archive(archive: &Path, target: &Path) -> Result<(), String> {
+    let components_root = target
+        .parent()
+        .ok_or_else(|| "FFmpeg 目标目录没有组件父目录。".to_string())?;
+    let managed_data_root = components_root
+        .parent()
+        .ok_or_else(|| "FFmpeg 组件目录没有应用数据根目录。".to_string())?;
+    reject_symlink_or_reparse(managed_data_root, "应用数据根目录")?;
+    reject_symlink_or_reparse(components_root, "组件管理目录")?;
+    reject_symlink_or_reparse(target, "FFmpeg 私有目录")?;
+    if !path_chain_has_no_links(managed_data_root)
+        || !path_chain_has_no_links(components_root)
+        || !path_chain_has_no_links(target)
+    {
+        return Err("FFmpeg 安装路径包含符号链接或 reparse point。".to_string());
+    }
+    fs::create_dir_all(components_root).map_err(|error| format!("无法创建组件目录：{error}"))?;
+    if !path_chain_has_no_links(components_root) || !path_chain_has_no_links(target) {
+        return Err("FFmpeg 安装目录创建后检测到符号链接或 reparse point。".to_string());
+    }
+    // An interrupted replacement can leave only a private staging artifact behind. Recover
+    // verified managed backups before creating another transaction; unverified artifacts are
+    // deliberately left untouched and can be inspected by the user.
+    if let Err(error) = cleanup_ffmpeg_artifacts(components_root, target, SystemTime::now()) {
+        eprintln!("FFmpeg 安装残留清理跳过：{error}");
+    }
+    let extract = components_root.join(format!(".ffmpeg.extract-{}", Uuid::new_v4()));
+    let stage = components_root.join(format!(".ffmpeg.install-{}", Uuid::new_v4()));
+    fs::create_dir_all(&extract).map_err(|error| format!("无法创建解压暂存目录：{error}"))?;
+    let result = (|| {
+        let listing = quiet_command("tar")
+            .args(["-tf"])
+            .arg(archive)
+            .output()
+            .map_err(|error| format!("无法启动 tar 解压工具：{error}"))?;
+        if !listing.status.success() {
+            return Err("无法读取 FFmpeg ZIP 文件目录。".to_string());
+        }
+        let entries = String::from_utf8_lossy(&listing.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let ffmpeg_entry = find_archive_binary(&entries, "ffmpeg.exe")?;
+        let ffprobe_entry = find_archive_binary(&entries, "ffprobe.exe")?;
+        for entry in &entries {
+            validate_archive_entry(entry)?;
+        }
+        let verbose_listing = quiet_command("tar")
+            .args(["-tvf"])
+            .arg(archive)
+            .output()
+            .map_err(|error| format!("无法检查 FFmpeg ZIP 条目类型：{error}"))?;
+        if !verbose_listing.status.success() {
+            return Err("无法检查 FFmpeg ZIP 条目类型。".to_string());
+        }
+        validate_archive_entry_types(&verbose_listing.stdout)?;
+        let extraction = quiet_command("tar")
+            .args(["-xf"])
+            .arg(archive)
+            .args(["-C"])
+            .arg(&extract)
+            .output()
+            .map_err(|error| format!("无法解压 FFmpeg ZIP 文件：{error}"))?;
+        if !extraction.status.success() {
+            return Err("FFmpeg ZIP 解压失败。".to_string());
+        }
+        let ffmpeg_source = extract.join(&ffmpeg_entry);
+        let ffprobe_source = extract.join(&ffprobe_entry);
+        reject_extracted_file(&extract, &ffmpeg_source, "ffmpeg.exe")?;
+        reject_extracted_file(&extract, &ffprobe_source, "ffprobe.exe")?;
+        fs::create_dir_all(stage.join("bin"))
+            .map_err(|error| format!("无法创建 FFmpeg 目录：{error}"))?;
+        copy_ffmpeg_bin(
+            ffmpeg_source.parent().unwrap_or(&extract),
+            &stage.join("bin"),
+        )?;
+        let manifest = FfmpegInstallManifest {
+            schema_version: FFMPEG_MANIFEST_SCHEMA,
+            managed_by: FFMPEG_MANAGED_BY.to_string(),
+            version: FFMPEG_VERSION.to_string(),
+            release_tag: FFMPEG_RELEASE_TAG.to_string(),
+            archive: FFMPEG_ARCHIVE_NAME.to_string(),
+            sha256: FFMPEG_ARCHIVE_SHA256.to_string(),
+            source: "BtbN LGPL".to_string(),
+            binaries: ["bin/ffmpeg.exe".to_string(), "bin/ffprobe.exe".to_string()],
+        };
+        let bytes = serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?;
+        fs::write(stage.join(FFMPEG_MANIFEST_NAME), bytes)
+            .map_err(|error| format!("无法写入 FFmpeg manifest：{error}"))?;
+        atomic_replace_managed_directory(&stage, target, components_root)
+    })();
+    let _ = fs::remove_dir_all(&extract);
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&stage);
+    }
+    result
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FfmpegArtifactKind {
+    Extract,
+    Install,
+    Backup,
+}
+
+fn ffmpeg_artifact_kind(path: &Path) -> Option<FfmpegArtifactKind> {
+    let name = path.file_name()?.to_str()?;
+    let (prefix, kind) = if let Some(suffix) = name.strip_prefix(".ffmpeg.extract-") {
+        (suffix, FfmpegArtifactKind::Extract)
+    } else if let Some(suffix) = name.strip_prefix(".ffmpeg.install-") {
+        (suffix, FfmpegArtifactKind::Install)
+    } else {
+        (
+            name.strip_prefix(".ffmpeg.backup-")?,
+            FfmpegArtifactKind::Backup,
+        )
+    };
+    Uuid::parse_str(prefix).ok().map(|_| kind)
+}
+
+fn managed_ffmpeg_directory_exists_at(root: &Path) -> bool {
+    toolbox_managed_ffmpeg_directory_exists_at(root) && read_ffmpeg_manifest(root).is_some()
+}
+
+fn toolbox_managed_ffmpeg_directory_exists_at(root: &Path) -> bool {
+    managed_component_directory_exists(root)
+        && path_chain_has_no_links(&root.join("bin"))
+        && regular_file_without_links(&root.join("bin/ffmpeg.exe"))
+        && regular_file_without_links(&root.join("bin/ffprobe.exe"))
+        && read_toolbox_ffmpeg_manifest(root).is_some()
+}
+
+fn directory_tree_has_no_links(path: &Path) -> bool {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(_) => return false,
+    };
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || metadata_is_reparse_point(&metadata)
+    {
+        return false;
+    }
+    fs::read_dir(path).is_ok_and(|entries| {
+        entries.flatten().all(|entry| {
+            let child = entry.path();
+            match fs::symlink_metadata(&child) {
+                Ok(metadata)
+                    if metadata.file_type().is_symlink()
+                        || metadata_is_reparse_point(&metadata) =>
+                {
+                    false
+                }
+                Ok(metadata) if metadata.is_dir() => directory_tree_has_no_links(&child),
+                Ok(_) => true,
+                Err(_) => false,
+            }
+        })
+    })
+}
+
+fn ffmpeg_artifact_is_stale(path: &Path, now: SystemTime) -> bool {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| now.duration_since(modified).ok())
+        .is_some_and(|age| age > FFMPEG_ARTIFACT_MAX_AGE)
+}
+
+fn cleanup_ffmpeg_artifacts(
+    components_root: &Path,
+    target: &Path,
+    now: SystemTime,
+) -> Result<(), String> {
+    reject_symlink_or_reparse(components_root, "组件管理目录")?;
+    reject_symlink_or_reparse(target, "FFmpeg 私有目录")?;
+    if !path_chain_has_no_links(components_root) || !path_chain_has_no_links(target) {
+        return Err("FFmpeg 残留清理路径包含符号链接或 reparse point。".to_string());
+    }
+    let mut artifacts = fs::read_dir(components_root)
+        .map_err(|error| format!("无法扫描 FFmpeg 安装残留：{error}"))?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| ffmpeg_artifact_kind(path).is_some())
+        .collect::<Vec<_>>();
+    if artifacts.len() > MAX_FFMPEG_ARTIFACTS_TO_SCAN {
+        return Err(format!(
+            "发现超过 {MAX_FFMPEG_ARTIFACTS_TO_SCAN} 个带 UUID 的 FFmpeg 残留，已停止自动清理。"
+        ));
+    }
+
+    // If a process stopped after moving the old target aside but before publishing the new one,
+    // recover the newest *validated* Toolbox installation. Never infer trust from the filename.
+    if !target.exists() {
+        let recovery = artifacts
+            .iter()
+            .filter(|path| ffmpeg_artifact_kind(path) == Some(FfmpegArtifactKind::Backup))
+            .filter(|path| toolbox_managed_ffmpeg_directory_exists_at(path))
+            .max_by_key(|path| {
+                fs::metadata(path)
+                    .and_then(|metadata| metadata.modified())
+                    .ok()
+            })
+            .cloned();
+        if let Some(backup) = recovery {
+            if let Err(error) = fs::rename(&backup, target) {
+                eprintln!("无法恢复已验证的 FFmpeg 备份 {}：{error}", backup.display());
+            }
+        }
+    }
+
+    for artifact in artifacts.drain(..) {
+        let Some(kind) = ffmpeg_artifact_kind(&artifact) else {
+            continue;
+        };
+        // Only remove private directories that are regular, link-free directories. In
+        // particular, an unverified backup is retained even when it is old.
+        if !ffmpeg_artifact_is_stale(&artifact, now) || !directory_tree_has_no_links(&artifact) {
+            continue;
+        }
+        if kind == FfmpegArtifactKind::Backup
+            && !toolbox_managed_ffmpeg_directory_exists_at(&artifact)
+        {
+            continue;
+        }
+        if let Err(error) = fs::remove_dir_all(&artifact) {
+            eprintln!("无法清理 FFmpeg 安装残留 {}：{error}", artifact.display());
+        }
+    }
+    Ok(())
+}
+
+fn find_archive_binary(entries: &[String], name: &str) -> Result<String, String> {
+    entries
+        .iter()
+        .find(|entry| {
+            let normalized = entry.replace('\\', "/");
+            normalized.ends_with(&format!("/bin/{name}")) || normalized == format!("bin/{name}")
+        })
+        .cloned()
+        .ok_or_else(|| format!("FFmpeg ZIP 缺少 bin/{name}。"))
+}
+
+fn validate_archive_entry(entry: &str) -> Result<(), String> {
+    let normalized = entry.replace('\\', "/");
+    if normalized.starts_with('/')
+        || normalized.contains(':')
+        || normalized.split('/').any(|part| part == "..")
+    {
+        return Err(format!("FFmpeg ZIP 包含不安全路径：{entry}"));
+    }
+    Ok(())
+}
+
+fn validate_archive_entry_types(listing: &[u8]) -> Result<(), String> {
+    let listing = String::from_utf8_lossy(listing);
+    for line in listing
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        match line.as_bytes().first().copied() {
+            Some(b'-' | b'd') => {}
+            _ => {
+                return Err(format!("FFmpeg ZIP 包含链接或特殊条目，已拒绝解压：{line}"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn reject_extracted_file(root: &Path, path: &Path, name: &str) -> Result<(), String> {
+    if !path.starts_with(root) {
+        return Err(format!("解压后的 {name} 路径越出暂存目录。"));
+    }
+    let mut current = Some(path);
+    while let Some(candidate) = current {
+        reject_symlink_or_reparse(candidate, "FFmpeg 解压路径")?;
+        current = candidate.parent().filter(|parent| parent.starts_with(root));
+    }
+    let metadata =
+        fs::metadata(path).map_err(|error| format!("无法读取解压后的 {name}：{error}"))?;
+    if !metadata.is_file() {
+        return Err(format!("解压后的 {name} 不是普通文件。"));
+    }
+    Ok(())
+}
+
+fn copy_ffmpeg_bin(source: &Path, destination: &Path) -> Result<(), String> {
+    reject_symlink_or_reparse(source, "FFmpeg 解压 bin 目录")?;
+    for entry in
+        fs::read_dir(source).map_err(|error| format!("无法读取 FFmpeg bin 目录：{error}"))?
+    {
+        let entry = entry.map_err(|error| format!("无法读取 FFmpeg bin 条目：{error}"))?;
+        let path = entry.path();
+        reject_symlink_or_reparse(&path, "FFmpeg 解压条目")?;
+        let metadata =
+            fs::metadata(&path).map_err(|error| format!("无法读取 FFmpeg 解压条目：{error}"))?;
+        if !metadata.is_file() {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .ok_or_else(|| "FFmpeg 解压条目缺少文件名。".to_string())?;
+        fs::copy(&path, destination.join(name))
+            .map_err(|error| format!("无法暂存 FFmpeg bin 条目：{error}"))?;
+    }
+    Ok(())
+}
+
+fn atomic_replace_managed_directory(
+    stage: &Path,
+    target: &Path,
+    root: &Path,
+) -> Result<(), String> {
+    reject_symlink_or_reparse(stage, "FFmpeg 安装暂存目录")?;
+    reject_symlink_or_reparse(root, "组件管理目录")?;
+    if !managed_ffmpeg_directory_exists_at(stage) {
+        return Err("FFmpeg 安装暂存目录缺少当前固定版本的有效 manifest。".to_string());
+    }
+    let backup = root.join(format!(".ffmpeg.backup-{}", Uuid::new_v4()));
+    let had_target = target.exists();
+    if had_target {
+        reject_symlink_or_reparse(target, "FFmpeg 私有目录")?;
+        if !toolbox_managed_ffmpeg_directory_exists_at(target) {
+            return Err(
+                "现有 FFmpeg 私有目录缺少匹配当前版本的 Toolbox manifest，已保留原目录。"
+                    .to_string(),
+            );
+        }
+        fs::rename(target, &backup).map_err(|error| format!("无法暂存旧 FFmpeg：{error}"))?;
+    }
+    if let Err(error) = fs::rename(stage, target) {
+        if had_target {
+            let _ = fs::rename(&backup, target);
+        }
+        return Err(format!("无法提交 FFmpeg 私有目录：{error}"));
+    }
+    if had_target {
+        // The new target is already published. Failure to remove the old, validated backup is
+        // recoverable and must not turn a successful install into a false failure. The next
+        // install will retry bounded cleanup; retaining it is safer than deleting blindly.
+        if let Err(error) = fs::remove_dir_all(&backup) {
+            eprintln!(
+                "FFmpeg 新版本已安装，但旧目录备份暂时无法清理 {}：{error}",
+                backup.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 fn download_sandboxie_installer<F>(resource_root: &Path, progress: &mut F) -> OperationResult
@@ -980,25 +1681,6 @@ fn find_python() -> Option<PythonCommand> {
     candidates.into_iter().find(PythonCommand::is_python_311)
 }
 
-fn command_available(command: &str) -> bool {
-    quiet_command(command)
-        .arg("-version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
-fn bundled_binary(resource_root: &Path, name: &str) -> Option<PathBuf> {
-    let filename = if cfg!(windows) {
-        format!("{name}.exe")
-    } else {
-        name.to_string()
-    };
-    let candidate = resource_root.join("ffmpeg").join(filename);
-    candidate.is_file().then_some(candidate)
-}
-
 fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
     fs::create_dir_all(destination)?;
     for entry in fs::read_dir(source)? {
@@ -1032,7 +1714,10 @@ mod tests {
     use super::*;
 
     fn temporary_test_root(label: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
+        let root = std::env::temp_dir();
+        #[cfg(target_os = "macos")]
+        let root = fs::canonicalize(root).expect("macOS test temp root must be canonicalizable");
+        root.join(format!(
             "synthv-toolbox-components-{label}-{}",
             Uuid::new_v4()
         ))
@@ -1188,7 +1873,7 @@ mod tests {
         );
         let original_config = fs::read(&config).unwrap();
 
-        for id in ["ffmpeg", "sandboxie", "unknown", "../../outside"] {
+        for id in ["sandboxie", "unknown", "../../outside"] {
             assert!(remove_local_component_at(id, &root, &config).is_err());
         }
 
@@ -1234,11 +1919,29 @@ mod tests {
 
     #[test]
     fn component_usage_guard_excludes_install_or_remove_writer() {
+        fn assert_send<T: Send>() {}
+        assert_send::<ComponentUsageGuard>();
         let usage_guard = component_usage_guard().unwrap();
-        assert!(COMPONENT_MUTATION_LOCK.try_write().is_err());
-
+        let started = std::sync::Arc::new(AtomicBool::new(false));
+        let acquired = std::sync::Arc::new(AtomicBool::new(false));
+        let thread_started = started.clone();
+        let thread_acquired = acquired.clone();
+        let writer = std::thread::spawn(move || {
+            thread_started.store(true, Ordering::SeqCst);
+            let _guard = component_mutation_guard();
+            thread_acquired.store(true, Ordering::SeqCst);
+        });
+        while !started.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+        while !COMPONENT_MUTATING.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+        assert!(!acquired.load(Ordering::SeqCst));
+        assert!(component_usage_guard().is_err());
         drop(usage_guard);
-        assert!(COMPONENT_MUTATION_LOCK.try_write().is_ok());
+        writer.join().unwrap();
+        assert!(acquired.load(Ordering::SeqCst));
     }
 
     #[test]
@@ -1298,6 +2001,315 @@ mod tests {
         let value: Value = serde_json::from_slice(&fs::read(&config).unwrap()).unwrap();
         assert!(value.get("audio").is_some());
         fs::remove_file(root.join("components/pi-audio")).unwrap();
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn ffmpeg_archive_manifest_and_paths_are_strictly_allowlisted() {
+        let entries = vec![
+            "ffmpeg-n8.1.2-50-g1a748fe2cd-win64-lgpl-8.1/bin/ffmpeg.exe".to_string(),
+            "ffmpeg-n8.1.2-50-g1a748fe2cd-win64-lgpl-8.1/bin/ffprobe.exe".to_string(),
+        ];
+        assert_eq!(
+            find_archive_binary(&entries, "ffmpeg.exe").unwrap(),
+            entries[0]
+        );
+        assert!(validate_archive_entry("../outside").is_err());
+        assert!(validate_archive_entry("C:/outside").is_err());
+        assert!(validate_archive_entry("bin/ffmpeg.exe").is_ok());
+        assert!(validate_archive_entry_types(
+            b"drwxr-xr-x  0 user group 0 Jan 1 00:00 bin/\n-rwxr-xr-x  0 user group 1 Jan 1 00:00 bin/ffmpeg.exe\n"
+        )
+        .is_ok());
+        assert!(validate_archive_entry_types(
+            b"lrwxrwxrwx  0 user group 0 Jan 1 00:00 bin/ffmpeg.exe -> ../../outside\n"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn sha256_verification_accepts_only_the_expected_digest() {
+        let root = temporary_test_root("sha256");
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("fixture.bin");
+        fs::write(&file, b"abc").unwrap();
+        assert!(verify_sha256(
+            &file,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        )
+        .is_ok());
+        assert!(verify_sha256(&file, FFMPEG_ARCHIVE_SHA256).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn write_valid_ffmpeg_install(root: &Path) {
+        fs::create_dir_all(root.join("bin")).unwrap();
+        fs::write(root.join("bin/ffmpeg.exe"), b"ffmpeg").unwrap();
+        fs::write(root.join("bin/ffprobe.exe"), b"ffprobe").unwrap();
+        fs::write(
+            root.join(FFMPEG_MANIFEST_NAME),
+            serde_json::to_vec_pretty(&FfmpegInstallManifest {
+                schema_version: FFMPEG_MANIFEST_SCHEMA,
+                managed_by: FFMPEG_MANAGED_BY.to_string(),
+                version: FFMPEG_VERSION.to_string(),
+                release_tag: FFMPEG_RELEASE_TAG.to_string(),
+                archive: FFMPEG_ARCHIVE_NAME.to_string(),
+                sha256: FFMPEG_ARCHIVE_SHA256.to_string(),
+                source: "BtbN LGPL".to_string(),
+                binaries: ["bin/ffmpeg.exe".to_string(), "bin/ffprobe.exe".to_string()],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn managed_ffmpeg_manifest_rejects_changed_binary_allowlist() {
+        let root = temporary_test_root("ffmpeg-manifest-binaries");
+        write_valid_ffmpeg_install(&root);
+        let mut manifest: FfmpegInstallManifest =
+            serde_json::from_slice(&fs::read(root.join(FFMPEG_MANIFEST_NAME)).unwrap()).unwrap();
+        manifest.binaries[1] = "bin/other.exe".to_string();
+        fs::write(
+            root.join(FFMPEG_MANIFEST_NAME),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        assert!(read_ffmpeg_manifest(&root).is_none());
+        assert!(!managed_ffmpeg_directory_exists_at(&root));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_ffmpeg_manifest_never_follows_a_symbolic_link() {
+        use std::os::unix::fs::symlink;
+
+        let base = temporary_test_root("ffmpeg-manifest-link");
+        let root = base.join("managed");
+        write_valid_ffmpeg_install(&root);
+        let manifest_path = root.join(FFMPEG_MANIFEST_NAME);
+        let external = base.join("external-manifest.json");
+        fs::write(&external, fs::read(&manifest_path).unwrap()).unwrap();
+        fs::remove_file(&manifest_path).unwrap();
+        symlink(&external, &manifest_path).unwrap();
+        assert!(read_toolbox_ffmpeg_manifest(&root).is_none());
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn managed_ffmpeg_manifest_never_follows_a_reparse_point_when_available() {
+        use std::os::windows::fs::symlink_file;
+
+        let base = temporary_test_root("ffmpeg-manifest-link");
+        let root = base.join("managed");
+        write_valid_ffmpeg_install(&root);
+        let manifest_path = root.join(FFMPEG_MANIFEST_NAME);
+        let external = base.join("external-manifest.json");
+        fs::write(&external, fs::read(&manifest_path).unwrap()).unwrap();
+        fs::remove_file(&manifest_path).unwrap();
+        if symlink_file(&external, &manifest_path).is_ok() {
+            assert!(read_toolbox_ffmpeg_manifest(&root).is_none());
+        }
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn ffmpeg_artifact_cleanup_recovers_only_a_verified_backup() {
+        let base = temporary_test_root("ffmpeg-artifact-recovery");
+        let components = base.join("components");
+        let target = components.join("ffmpeg");
+        let backup = components.join(format!(".ffmpeg.backup-{}", Uuid::new_v4()));
+        fs::create_dir_all(&components).unwrap();
+        write_valid_ffmpeg_install(&backup);
+
+        cleanup_ffmpeg_artifacts(
+            &components,
+            &target,
+            SystemTime::now() + FFMPEG_ARTIFACT_MAX_AGE + Duration::from_secs(1),
+        )
+        .unwrap();
+
+        assert!(managed_ffmpeg_directory_exists_at(&target));
+        assert!(!backup.exists());
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn ffmpeg_artifact_cleanup_preserves_unverified_and_normal_directories() {
+        let base = temporary_test_root("ffmpeg-artifact-safety");
+        let components = base.join("components");
+        let target = components.join("ffmpeg");
+        let unverified = components.join(format!(".ffmpeg.backup-{}", Uuid::new_v4()));
+        let normal = components.join("ffmpeg-backup");
+        let extract = components.join(format!(".ffmpeg.extract-{}", Uuid::new_v4()));
+        let install = components.join(format!(".ffmpeg.install-{}", Uuid::new_v4()));
+        fs::create_dir_all(unverified.join("bin")).unwrap();
+        fs::write(unverified.join("bin/ffmpeg.exe"), b"external").unwrap();
+        fs::write(unverified.join("bin/ffprobe.exe"), b"external").unwrap();
+        fs::create_dir_all(&normal).unwrap();
+        fs::create_dir_all(&extract).unwrap();
+        fs::create_dir_all(&install).unwrap();
+
+        cleanup_ffmpeg_artifacts(
+            &components,
+            &target,
+            SystemTime::now() + FFMPEG_ARTIFACT_MAX_AGE + Duration::from_secs(1),
+        )
+        .unwrap();
+
+        assert!(unverified.exists());
+        assert!(normal.exists());
+        assert!(!extract.exists());
+        assert!(!install.exists());
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn ffmpeg_artifact_names_require_an_exact_uuid_suffix() {
+        let root = Path::new("components");
+        assert_eq!(
+            ffmpeg_artifact_kind(&root.join(format!(".ffmpeg.extract-{}", Uuid::new_v4()))),
+            Some(FfmpegArtifactKind::Extract)
+        );
+        assert!(ffmpeg_artifact_kind(&root.join(".ffmpeg.extract-user-data")).is_none());
+        assert!(ffmpeg_artifact_kind(&root.join(".ffmpeg.install-")).is_none());
+        assert!(ffmpeg_artifact_kind(&root.join(".ffmpeg.backup-foo/bar")).is_none());
+        assert!(ffmpeg_artifact_kind(&root.join("ffmpeg")).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ffmpeg_artifact_cleanup_never_removes_a_tree_containing_a_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let base = temporary_test_root("ffmpeg-artifact-link");
+        let components = base.join("components");
+        let target = components.join("ffmpeg");
+        let artifact = components.join(format!(".ffmpeg.extract-{}", Uuid::new_v4()));
+        let external = base.join("external");
+        fs::create_dir_all(&components).unwrap();
+        fs::create_dir_all(&external).unwrap();
+        fs::create_dir_all(&artifact).unwrap();
+        symlink(&external, artifact.join("linked")).unwrap();
+
+        cleanup_ffmpeg_artifacts(
+            &components,
+            &target,
+            SystemTime::now() + FFMPEG_ARTIFACT_MAX_AGE + Duration::from_secs(1),
+        )
+        .unwrap();
+
+        assert!(artifact.exists());
+        assert!(external.exists());
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn atomic_ffmpeg_replace_preserves_an_unverified_existing_target() {
+        let base = temporary_test_root("ffmpeg-atomic-safety");
+        let components = base.join("components");
+        let target = components.join("ffmpeg");
+        let stage = components.join(format!(".ffmpeg.install-{}", Uuid::new_v4()));
+        fs::create_dir_all(target.join("bin")).unwrap();
+        fs::write(target.join("bin/ffmpeg.exe"), b"external").unwrap();
+        fs::write(target.join("bin/ffprobe.exe"), b"external").unwrap();
+        write_valid_ffmpeg_install(&stage);
+
+        let error = atomic_replace_managed_directory(&stage, &target, &components).unwrap_err();
+
+        assert!(error.contains("manifest"));
+        assert_eq!(
+            fs::read(target.join("bin/ffmpeg.exe")).unwrap(),
+            b"external"
+        );
+        assert!(stage.exists());
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn atomic_ffmpeg_replace_upgrades_a_previous_toolbox_managed_version() {
+        let base = temporary_test_root("ffmpeg-atomic-upgrade");
+        let components = base.join("components");
+        let target = components.join("ffmpeg");
+        let stage = components.join(format!(".ffmpeg.install-{}", Uuid::new_v4()));
+        write_valid_ffmpeg_install(&target);
+        let manifest_path = target.join(FFMPEG_MANIFEST_NAME);
+        let mut previous: FfmpegInstallManifest =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        previous.version = "previous-version".to_string();
+        previous.release_tag = "previous-release".to_string();
+        previous.archive = "previous-lgpl.zip".to_string();
+        previous.sha256 = "0".repeat(64);
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&previous).unwrap(),
+        )
+        .unwrap();
+        assert!(toolbox_managed_ffmpeg_directory_exists_at(&target));
+        assert!(!managed_ffmpeg_directory_exists_at(&target));
+
+        write_valid_ffmpeg_install(&stage);
+        atomic_replace_managed_directory(&stage, &target, &components).unwrap();
+
+        assert!(managed_ffmpeg_directory_exists_at(&target));
+        assert!(!stage.exists());
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    #[test]
+    fn managed_ffmpeg_directory_is_removable_but_external_sources_are_not() {
+        let base = temporary_test_root("ffmpeg-removal");
+        let root = base.join("managed-data");
+        let config = root.join("config.json");
+        let target = managed_ffmpeg_directory(&root);
+        fs::create_dir_all(target.join("bin")).unwrap();
+        fs::write(target.join("bin/ffmpeg.exe"), b"ffmpeg").unwrap();
+        fs::write(target.join("bin/ffprobe.exe"), b"ffprobe").unwrap();
+        fs::write(
+            target.join(FFMPEG_MANIFEST_NAME),
+            serde_json::to_vec_pretty(&FfmpegInstallManifest {
+                schema_version: FFMPEG_MANIFEST_SCHEMA,
+                managed_by: FFMPEG_MANAGED_BY.to_string(),
+                version: FFMPEG_VERSION.to_string(),
+                release_tag: FFMPEG_RELEASE_TAG.to_string(),
+                archive: FFMPEG_ARCHIVE_NAME.to_string(),
+                sha256: FFMPEG_ARCHIVE_SHA256.to_string(),
+                source: "BtbN LGPL".to_string(),
+                binaries: ["bin/ffmpeg.exe".to_string(), "bin/ffprobe.exe".to_string()],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        write_json(&config, &json!({ "provider": "keep" }));
+
+        let outcome = remove_local_component_at("ffmpeg", &root, &config).unwrap();
+
+        assert!(outcome.removed_directory);
+        assert!(!target.exists());
+        assert_eq!(
+            serde_json::from_slice::<Value>(&fs::read(&config).unwrap()).unwrap()["provider"],
+            "keep"
+        );
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn unmanaged_ffmpeg_directory_is_never_deleted() {
+        let base = temporary_test_root("ffmpeg-unmanaged-removal");
+        let root = base.join("managed-data");
+        let config = root.join("config.json");
+        let target = managed_ffmpeg_directory(&root);
+        fs::create_dir_all(target.join("bin")).unwrap();
+        fs::write(target.join("bin/ffmpeg.exe"), b"external").unwrap();
+        fs::write(target.join("bin/ffprobe.exe"), b"external").unwrap();
+        write_json(&config, &json!({}));
+
+        assert!(remove_local_component_at("ffmpeg", &root, &config).is_err());
+        assert!(target.exists());
+
         fs::remove_dir_all(base).unwrap();
     }
 }

@@ -3452,6 +3452,7 @@ dependencies = [
  "cc",
  "chrono",
  "keyring",
+ "libc",
  "pinyin",
  "semver",
  "serde",
