@@ -18,6 +18,10 @@ use crate::audio_capture::{
     self, AudioCaptureCapability, AudioCaptureTarget, CaptureClipRequest, CompareClipsRequest,
     ToolboxAudioToolExecutor,
 };
+use crate::audio_prep::{
+    AudioJobSnapshot, AudioPrepareRequest, AudioWritePlan, FfmpegRuntimeStatus,
+    LoudnessNormalizeRequest, LoudnessReport, MediaProbe,
+};
 use crate::components::{
     component_list, open_component_download, remove_local_component as remove_local_component_impl,
     ComponentInfo,
@@ -986,6 +990,76 @@ pub async fn connect_bridge(state: State<'_, AppState>) -> Result<OperationResul
         )),
         Err(error) => Ok(failed("SynthV Bridge 连接失败。", error)),
     }
+}
+
+#[tauri::command]
+pub async fn ffmpeg_status(state: State<'_, AppState>) -> Result<FfmpegRuntimeStatus, String> {
+    Ok(state.audio_preparation.status().await)
+}
+
+#[tauri::command]
+pub async fn probe_media(path: String, state: State<'_, AppState>) -> Result<MediaProbe, String> {
+    state.audio_preparation.probe_media(path).await
+}
+
+#[tauri::command]
+pub async fn plan_audio_prepare(
+    request: AudioPrepareRequest,
+    state: State<'_, AppState>,
+) -> Result<AudioWritePlan, String> {
+    state.audio_preparation.plan_audio_prepare(request).await
+}
+
+#[tauri::command]
+pub fn start_audio_prepare(
+    request: AudioPrepareRequest,
+    token: String,
+    state: State<'_, AppState>,
+) -> Result<AudioJobSnapshot, String> {
+    state.audio_preparation.start_audio_prepare(request, token)
+}
+
+#[tauri::command]
+pub async fn analyze_loudness(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<LoudnessReport, String> {
+    state.audio_preparation.analyze_loudness(path).await
+}
+
+#[tauri::command]
+pub fn plan_loudness_normalize(
+    request: LoudnessNormalizeRequest,
+    state: State<'_, AppState>,
+) -> Result<AudioWritePlan, String> {
+    state.audio_preparation.plan_loudness_normalize(request)
+}
+
+#[tauri::command]
+pub fn start_loudness_normalize(
+    request: LoudnessNormalizeRequest,
+    token: String,
+    state: State<'_, AppState>,
+) -> Result<AudioJobSnapshot, String> {
+    state
+        .audio_preparation
+        .start_loudness_normalize(request, token)
+}
+
+#[tauri::command]
+pub fn audio_job_snapshot(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<AudioJobSnapshot, String> {
+    state.audio_preparation.audio_job_snapshot(&id)
+}
+
+#[tauri::command]
+pub fn cancel_audio_job(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<AudioJobSnapshot, String> {
+    state.audio_preparation.cancel_audio_job(&id)
 }
 
 #[tauri::command]
