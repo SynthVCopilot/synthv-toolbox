@@ -1,10 +1,23 @@
-use std::fs;
-use std::path::PathBuf;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
+use uuid::Uuid;
 
-const SETTINGS_SCHEMA_VERSION: u32 = 1;
+use crate::oauth::{self, AiProviderId, OAuthAccountMetadata};
+
+const SETTINGS_SCHEMA_VERSION: u32 = 2;
+static MODEL_CONFIG_MUTATION_LOCK: Mutex<()> = Mutex::new(());
+static SETTINGS_LOAD_ERROR: OnceLock<String> = OnceLock::new();
+
+pub(crate) fn model_config_mutation_guard() -> Result<MutexGuard<'static, ()>, String> {
+    MODEL_CONFIG_MUTATION_LOCK
+        .lock()
+        .map_err(|_| "模型配置写入锁已损坏。请重启 SynthV Toolbox 后重试。".to_string())
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -41,25 +54,55 @@ pub struct ToolboxSettings {
     pub mcp_servers: Vec<McpServerConfig>,
     #[serde(default)]
     pub concurrent_disclaimer_accepted: bool,
+    #[serde(default = "default_true")]
+    pub sv2_concurrent_enabled: bool,
+    #[serde(default)]
+    pub sv2_account_indicator_enabled: bool,
     #[serde(default)]
     pub smart_svp_launch_enabled: bool,
     #[serde(default)]
     pub original_svp_prog_id: Option<String>,
+    #[serde(default)]
+    pub ai_provider: AiProviderId,
+    #[serde(default = "default_anthropic_model")]
+    pub anthropic_model: String,
+    #[serde(default = "default_codex_model")]
+    pub codex_model: String,
+    #[serde(default)]
+    pub oauth_accounts: Vec<OAuthAccountMetadata>,
 }
 
-#[derive(Debug, Clone)]
-pub struct ModelSettings {
-    pub base_url: String,
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthAccountSummary {
+    pub id: String,
+    pub label: String,
+    pub expires_at: i64,
+    pub authorized: bool,
+    pub healthy: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiProviderSummary {
+    pub id: AiProviderId,
+    pub display_name: String,
+    pub description: String,
+    pub active: bool,
+    pub connected: bool,
+    pub healthy_accounts: usize,
+    pub total_accounts: usize,
     pub model: String,
-    pub auth_token: String,
+    pub models: Vec<String>,
+    pub accounts: Vec<OAuthAccountSummary>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelSummary {
-    pub base_url: String,
-    pub model: String,
-    pub token_configured: bool,
+    pub active_provider: AiProviderId,
+    pub providers: Vec<AiProviderSummary>,
+    pub legacy_configured: bool,
 }
 
 impl Default for ToolboxSettings {
@@ -71,8 +114,14 @@ impl Default for ToolboxSettings {
             scripts_path: None,
             mcp_servers: Vec::new(),
             concurrent_disclaimer_accepted: false,
+            sv2_concurrent_enabled: true,
+            sv2_account_indicator_enabled: false,
             smart_svp_launch_enabled: false,
             original_svp_prog_id: None,
+            ai_provider: AiProviderId::Anthropic,
+            anthropic_model: default_anthropic_model(),
+            codex_model: default_codex_model(),
+            oauth_accounts: Vec::new(),
         }
     }
 }
@@ -85,6 +134,47 @@ fn schema_version() -> u32 {
     SETTINGS_SCHEMA_VERSION
 }
 
+fn default_anthropic_model() -> String {
+    AiProviderId::Anthropic.default_model().to_string()
+}
+
+fn default_codex_model() -> String {
+    AiProviderId::OpenaiCodex.default_model().to_string()
+}
+
+impl ToolboxSettings {
+    pub fn model_for(&self, provider: AiProviderId) -> &str {
+        let value = match provider {
+            AiProviderId::Anthropic => &self.anthropic_model,
+            AiProviderId::OpenaiCodex => &self.codex_model,
+        };
+        if value.trim().is_empty() {
+            provider.default_model()
+        } else {
+            value.trim()
+        }
+    }
+
+    pub fn set_model_for(&mut self, provider: AiProviderId, model: String) {
+        match provider {
+            AiProviderId::Anthropic => self.anthropic_model = model,
+            AiProviderId::OpenaiCodex => self.codex_model = model,
+        }
+    }
+
+    pub fn upsert_oauth_account(&mut self, account: OAuthAccountMetadata) {
+        if let Some(existing) = self
+            .oauth_accounts
+            .iter_mut()
+            .find(|existing| existing.id == account.id)
+        {
+            *existing = account;
+        } else {
+            self.oauth_accounts.push(account);
+        }
+    }
+}
+
 pub fn settings_path() -> PathBuf {
     crate::agent::data_root().join("toolbox.json")
 }
@@ -93,89 +183,347 @@ pub fn model_config_path() -> PathBuf {
     crate::agent::config_path()
 }
 
-pub fn load_settings() -> ToolboxSettings {
-    fs::read_to_string(settings_path())
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default()
+pub fn load_settings() -> Result<ToolboxSettings, String> {
+    let result = load_settings_from(&settings_path());
+    if let Err(error) = &result {
+        let _ = SETTINGS_LOAD_ERROR.set(error.clone());
+    }
+    result
+}
+
+pub fn settings_load_error() -> Option<&'static str> {
+    SETTINGS_LOAD_ERROR.get().map(String::as_str)
+}
+
+fn load_settings_from(path: &Path) -> Result<ToolboxSettings, String> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ToolboxSettings::default());
+        }
+        Err(error) => {
+            return Err(format!(
+                "无法读取工具箱设置 {}：{error}。原文件未被修改；请修复权限或恢复该文件后重启。",
+                path.display()
+            ));
+        }
+    };
+    let value = serde_json::from_str::<Value>(&text).map_err(|error| {
+        format!(
+            "工具箱设置 {} 不是有效的 JSON：{error}。为保护 OAuth 账号映射，应用不会用默认设置覆盖它；请修复或恢复该文件后重启。",
+            path.display()
+        )
+    })?;
+    let schema = value
+        .as_object()
+        .and_then(|object| object.get("schemaVersion"))
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            format!(
+                "工具箱设置 {} 缺少有效的 schemaVersion。为保护 OAuth 账号映射，应用不会覆盖该文件；请恢复已知版本的设置后重启。",
+                path.display()
+            )
+        })?;
+    if schema == 0 || schema > u64::from(SETTINGS_SCHEMA_VERSION) {
+        return Err(format!(
+            "工具箱设置 {} 使用不受支持的 schemaVersion {schema}（当前支持 1–{SETTINGS_SCHEMA_VERSION}）。应用不会覆盖来自未知版本的设置；请使用兼容版本打开或恢复该文件。",
+            path.display()
+        ));
+    }
+    let mut settings = serde_json::from_value::<ToolboxSettings>(value).map_err(|error| {
+        format!(
+            "工具箱设置 {} 的字段格式无效：{error}。为保护 OAuth 账号映射，应用不会覆盖该文件；请修复或恢复后重启。",
+            path.display()
+        )
+    })?;
+    // Version 1 did not contain provider/account fields; serde defaults are
+    // its explicit migration path. Every subsequent save is version 2.
+    settings.schema_version = SETTINGS_SCHEMA_VERSION;
+    Ok(settings)
 }
 
 pub fn save_settings(settings: &ToolboxSettings) -> Result<(), String> {
+    if let Some(load_error) = settings_load_error() {
+        return Err(format!(
+            "工具箱处于设置恢复保护模式，已阻止写入以免覆盖 OAuth 账号映射。请修复配置并重启。原始错误：{load_error}"
+        ));
+    }
     let path = settings_path();
     let parent = path
         .parent()
         .ok_or_else(|| "设置路径没有父目录".to_string())?;
     fs::create_dir_all(parent).map_err(|error| format!("无法创建设置目录：{error}"))?;
     let text = serde_json::to_string_pretty(settings).map_err(|error| error.to_string())?;
-    fs::write(path, text).map_err(|error| format!("无法保存工具箱设置：{error}"))
-}
-
-pub fn load_model_settings() -> Option<ModelSettings> {
-    let value: Value = serde_json::from_str(&fs::read_to_string(model_config_path()).ok()?).ok()?;
-    let anthropic = value.get("anthropic")?;
-    Some(ModelSettings {
-        base_url: anthropic
-            .get("base_url")
-            .and_then(Value::as_str)
-            .unwrap_or("https://api.anthropic.com")
-            .to_string(),
-        model: anthropic.get("model")?.as_str()?.to_string(),
-        auth_token: anthropic
-            .get("auth_token")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-    })
-}
-
-pub fn model_summary() -> Option<ModelSummary> {
-    load_model_settings().map(|settings| ModelSummary {
-        base_url: settings.base_url,
-        model: settings.model,
-        token_configured: !settings.auth_token.is_empty(),
-    })
-}
-
-pub fn save_model_settings(
-    base_url: String,
-    model: String,
-    token: Option<String>,
-) -> Result<(), String> {
-    if base_url.trim().is_empty() || model.trim().is_empty() {
-        return Err("API 地址与模型 ID 不能为空。".to_string());
+    let temporary = parent.join(format!(".toolbox-{}.tmp", Uuid::new_v4().simple()));
+    let result: Result<(), AtomicReplaceError> = (|| {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary).map_err(|error| {
+            AtomicReplaceError::cleanup(format!("无法创建设置临时文件：{error}"))
+        })?;
+        file.write_all(text.as_bytes()).map_err(|error| {
+            AtomicReplaceError::cleanup(format!("无法写入设置临时文件：{error}"))
+        })?;
+        file.sync_all().map_err(|error| {
+            AtomicReplaceError::cleanup(format!("无法同步设置临时文件：{error}"))
+        })?;
+        drop(file);
+        atomic_replace(&temporary, &path)
+    })();
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            if !error.preserve_temporary {
+                let _ = fs::remove_file(&temporary);
+            }
+            Err(error.message)
+        }
     }
-    let path = model_config_path();
-    let mut value: Value = fs::read_to_string(&path)
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_else(|| json!({}));
-    let root = value
-        .as_object_mut()
-        .ok_or_else(|| "现有模型配置不是 JSON 对象。".to_string())?;
-    root.insert("provider".to_string(), json!("anthropic"));
-    let anthropic = root
-        .entry("anthropic".to_string())
-        .or_insert_with(|| json!({}));
-    let section = anthropic
-        .as_object_mut()
-        .ok_or_else(|| "anthropic 配置不是 JSON 对象。".to_string())?;
-    section.insert("base_url".to_string(), json!(base_url.trim()));
-    section.insert("model".to_string(), json!(model.trim()));
-    if token
-        .as_deref()
-        .is_some_and(|value| !value.trim().is_empty())
-    {
-        section.insert("auth_token".to_string(), json!(token.unwrap().trim()));
+}
+
+struct AtomicReplaceError {
+    message: String,
+    preserve_temporary: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowsReplaceFailureAction {
+    RestoreOriginal,
+    CleanupTemporary,
+    PreserveRecoveryCopies,
+}
+
+fn windows_replace_failure_action(
+    error_code: u32,
+    target_exists: bool,
+    backup_exists: bool,
+) -> WindowsReplaceFailureAction {
+    const ERROR_UNABLE_TO_MOVE_REPLACEMENT_2: u32 = 1177;
+    if error_code == ERROR_UNABLE_TO_MOVE_REPLACEMENT_2 && backup_exists && !target_exists {
+        WindowsReplaceFailureAction::RestoreOriginal
+    } else if target_exists && !backup_exists {
+        WindowsReplaceFailureAction::CleanupTemporary
+    } else {
+        WindowsReplaceFailureAction::PreserveRecoveryCopies
     }
-    let parent = path
+}
+
+impl AtomicReplaceError {
+    fn cleanup(message: String) -> Self {
+        Self {
+            message,
+            preserve_temporary: false,
+        }
+    }
+
+    fn preserve(message: String) -> Self {
+        Self {
+            message,
+            preserve_temporary: true,
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn atomic_replace(temporary: &Path, target: &Path) -> Result<(), AtomicReplaceError> {
+    fs::rename(temporary, target).map_err(|error| {
+        AtomicReplaceError::preserve(format!(
+            "无法原子替换工具箱设置：{error}。完整的新设置保留在 {}。",
+            temporary.display()
+        ))
+    })?;
+    let parent = target
         .parent()
-        .ok_or_else(|| "模型配置路径没有父目录".to_string())?;
-    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    fs::write(
-        path,
-        serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| format!("无法保存模型设置：{error}"))
+        .ok_or_else(|| AtomicReplaceError::cleanup("设置路径没有父目录".to_string()))?;
+    // Persist the renamed directory entry as well as the file contents. Once
+    // rename succeeds the in-memory settings must be committed too, so a
+    // filesystem that cannot fsync directories is treated as best-effort.
+    if let Err(error) = fs::File::open(parent).and_then(|directory| directory.sync_all()) {
+        eprintln!("无法同步工具箱设置目录 {}：{error}", parent.display());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn atomic_replace(temporary: &Path, target: &Path) -> Result<(), AtomicReplaceError> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
+
+    if !target.exists() {
+        return fs::rename(temporary, target).map_err(|error| {
+            AtomicReplaceError::preserve(format!(
+                "无法安装工具箱设置：{error}。完整的新设置保留在 {}。",
+                temporary.display()
+            ))
+        });
+    }
+    let parent = target
+        .parent()
+        .ok_or_else(|| AtomicReplaceError::cleanup("设置路径没有父目录".to_string()))?;
+    let backup = parent.join(format!(".toolbox-{}.bak", Uuid::new_v4().simple()));
+    let target_wide = target
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let temporary_wide = temporary
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let backup_wide = backup
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let replaced = unsafe {
+        ReplaceFileW(
+            target_wide.as_ptr(),
+            temporary_wide.as_ptr(),
+            backup_wide.as_ptr(),
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    if replaced != 0 {
+        let _ = fs::remove_file(backup);
+        return Ok(());
+    }
+
+    let replace_error = std::io::Error::last_os_error();
+    let error_code = replace_error.raw_os_error().unwrap_or_default() as u32;
+
+    match windows_replace_failure_action(error_code, target.exists(), backup.exists()) {
+        // ERROR_UNABLE_TO_MOVE_REPLACEMENT_2 means ReplaceFileW already moved
+        // the original to the backup path. Restore it before returning.
+        WindowsReplaceFailureAction::RestoreOriginal => match fs::rename(&backup, target) {
+            Ok(()) => {
+                Err(AtomicReplaceError::cleanup(format!(
+                    "无法原子替换工具箱设置：{replace_error}。原设置已恢复。"
+                )))
+            }
+            Err(restore_error) => Err(AtomicReplaceError::preserve(format!(
+                    "无法原子替换工具箱设置：{replace_error}；原设置恢复也失败：{restore_error}。原设置保留在 {}，新设置保留在 {}。",
+                    backup.display(),
+                    temporary.display()
+                ))),
+        },
+        // For documented 1175/1176 paths, both files retain their original
+        // names when a backup name was supplied.
+        WindowsReplaceFailureAction::CleanupTemporary => Err(AtomicReplaceError::cleanup(format!(
+            "无法原子替换工具箱设置：{replace_error}"
+        ))),
+        WindowsReplaceFailureAction::PreserveRecoveryCopies => Err(AtomicReplaceError::preserve(format!(
+            "无法原子替换工具箱设置：{replace_error}。为避免数据丢失，新设置保留在 {}{}。",
+            temporary.display(),
+            if backup.exists() {
+                format!("，原设置保留在 {}", backup.display())
+            } else {
+                String::new()
+            }
+        ))),
+    }
+}
+
+fn legacy_model_token_configured() -> bool {
+    let Ok(text) = fs::read_to_string(model_config_path()) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&text) else {
+        return false;
+    };
+    value
+        .get("anthropic")
+        .and_then(|anthropic| anthropic.get("auth_token"))
+        .and_then(Value::as_str)
+        .is_some_and(|token| !token.trim().is_empty())
+}
+
+pub fn model_summary(settings: &ToolboxSettings) -> ModelSummary {
+    let providers = [AiProviderId::Anthropic, AiProviderId::OpenaiCodex]
+        .into_iter()
+        .map(|provider| {
+            let account_metadata = settings
+                .oauth_accounts
+                .iter()
+                .filter(|account| account.provider == provider)
+                .cloned()
+                .collect::<Vec<_>>();
+            let discovered_codex_models = (provider == AiProviderId::OpenaiCodex)
+                .then(|| oauth::discover_codex_models(&account_metadata).ok())
+                .flatten();
+            let accounts = account_metadata
+                .iter()
+                .map(|account| {
+                    let authorized = oauth::credential_available(account);
+                    OAuthAccountSummary {
+                        id: account.id.clone(),
+                        label: account.label.clone(),
+                        expires_at: oauth::credential_expires_at(account).unwrap_or_default(),
+                        authorized,
+                        healthy: authorized && oauth::credential_healthy(account),
+                    }
+                })
+                .collect::<Vec<_>>();
+            let healthy_accounts = accounts.iter().filter(|account| account.healthy).count();
+            AiProviderSummary {
+                id: provider,
+                display_name: provider.display_name().to_string(),
+                description: match provider {
+                    AiProviderId::Anthropic => {
+                        "通过浏览器授权 Claude Pro / Max 官方订阅。".to_string()
+                    }
+                    AiProviderId::OpenaiCodex => {
+                        "通过浏览器授权 ChatGPT Plus / Pro 的 Codex 运行时。".to_string()
+                    }
+                },
+                active: settings.ai_provider == provider,
+                connected: accounts.iter().any(|account| account.authorized),
+                healthy_accounts,
+                total_accounts: accounts.len(),
+                model: settings.model_for(provider).to_string(),
+                models: provider
+                    .model_options()
+                    .iter()
+                    .filter(|model| {
+                        **model != oauth::CODEX_SPARK_MODEL_ID
+                            || discovered_codex_models
+                                .as_ref()
+                                .is_some_and(|models| models.contains(**model))
+                    })
+                    .map(|model| (*model).to_string())
+                    .collect(),
+                accounts,
+            }
+        })
+        .collect();
+    ModelSummary {
+        active_provider: settings.ai_provider,
+        providers,
+        legacy_configured: legacy_model_token_configured(),
+    }
+}
+
+pub fn validate_ai_model(provider: AiProviderId, model: &str) -> Result<String, String> {
+    let model = model.trim();
+    if model.is_empty() || model.len() > 120 {
+        return Err("模型 ID 不能为空且不能超过 120 个字符。".to_string());
+    }
+    if !model.chars().all(|character| {
+        character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | ':')
+    }) {
+        return Err("模型 ID 包含不受支持的字符。".to_string());
+    }
+    if provider == AiProviderId::OpenaiCodex && !provider.model_options().contains(&model) {
+        return Err("该模型不在当前 Codex 官方订阅目录中。".to_string());
+    }
+    Ok(model.to_string())
 }
 
 pub fn validate_mcp_server(server: &McpServerConfig) -> Result<(), String> {
@@ -206,8 +554,79 @@ mod tests {
         assert!(!settings.onboarding_completed);
         assert!(settings.mcp_servers.is_empty());
         assert!(!settings.concurrent_disclaimer_accepted);
+        assert!(settings.sv2_concurrent_enabled);
+        assert!(!settings.sv2_account_indicator_enabled);
         assert!(!settings.smart_svp_launch_enabled);
         assert!(settings.original_svp_prog_id.is_none());
+        assert_eq!(settings.ai_provider, AiProviderId::Anthropic);
+        assert_eq!(settings.anthropic_model, "claude-sonnet-4-6");
+        assert_eq!(settings.codex_model, "gpt-5.6-terra");
+        assert!(settings.oauth_accounts.is_empty());
+    }
+
+    #[test]
+    fn missing_settings_file_uses_safe_defaults() {
+        let path = std::env::temp_dir().join(format!(
+            "synthv-toolbox-missing-settings-{}.json",
+            Uuid::new_v4().simple()
+        ));
+        let settings = load_settings_from(&path).unwrap();
+        assert_eq!(settings.mode, AppMode::Toolbox);
+        assert!(settings.oauth_accounts.is_empty());
+    }
+
+    #[test]
+    fn malformed_settings_are_not_silently_replaced() {
+        let path = std::env::temp_dir().join(format!(
+            "synthv-toolbox-invalid-settings-{}.json",
+            Uuid::new_v4().simple()
+        ));
+        let original = b"{invalid-json";
+        fs::write(&path, original).unwrap();
+
+        let error = load_settings_from(&path).unwrap_err();
+
+        assert!(error.contains("不会用默认设置覆盖"));
+        assert_eq!(fs::read(&path).unwrap(), original);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn schema_one_settings_are_explicitly_migrated() {
+        let path = std::env::temp_dir().join(format!(
+            "synthv-toolbox-v1-settings-{}.json",
+            Uuid::new_v4().simple()
+        ));
+        fs::write(
+            &path,
+            r#"{"schemaVersion":1,"onboardingCompleted":true,"mode":"ai"}"#,
+        )
+        .unwrap();
+
+        let settings = load_settings_from(&path).unwrap();
+
+        assert_eq!(settings.schema_version, SETTINGS_SCHEMA_VERSION);
+        assert!(settings.onboarding_completed);
+        assert_eq!(settings.mode, AppMode::Ai);
+        assert!(settings.oauth_accounts.is_empty());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn missing_or_future_schema_is_recovery_only() {
+        for document in [r#"{}"#, r#"{"schemaVersion":999,"futureField":true}"#] {
+            let path = std::env::temp_dir().join(format!(
+                "synthv-toolbox-unsupported-settings-{}.json",
+                Uuid::new_v4().simple()
+            ));
+            fs::write(&path, document).unwrap();
+
+            let error = load_settings_from(&path).unwrap_err();
+
+            assert!(error.contains("不会覆盖"));
+            assert_eq!(fs::read_to_string(&path).unwrap(), document);
+            fs::remove_file(path).unwrap();
+        }
     }
 
     #[test]
@@ -220,5 +639,40 @@ mod tests {
             enabled: true,
         };
         assert!(validate_mcp_server(&server).is_err());
+    }
+
+    #[test]
+    fn codex_model_must_come_from_the_subscription_catalog() {
+        assert!(validate_ai_model(AiProviderId::OpenaiCodex, "gpt-5.6-terra").is_ok());
+        assert!(validate_ai_model(AiProviderId::OpenaiCodex, "invented-model").is_err());
+    }
+
+    #[test]
+    fn model_config_mutation_guard_is_exclusive() {
+        let guard = model_config_mutation_guard().unwrap();
+        assert!(MODEL_CONFIG_MUTATION_LOCK.try_lock().is_err());
+
+        drop(guard);
+        assert!(MODEL_CONFIG_MUTATION_LOCK.try_lock().is_ok());
+    }
+
+    #[test]
+    fn windows_replace_failure_paths_preserve_a_recovery_copy() {
+        assert_eq!(
+            windows_replace_failure_action(1175, true, false),
+            WindowsReplaceFailureAction::CleanupTemporary
+        );
+        assert_eq!(
+            windows_replace_failure_action(1176, true, false),
+            WindowsReplaceFailureAction::CleanupTemporary
+        );
+        assert_eq!(
+            windows_replace_failure_action(1177, false, true),
+            WindowsReplaceFailureAction::RestoreOriginal
+        );
+        assert_eq!(
+            windows_replace_failure_action(1176, false, false),
+            WindowsReplaceFailureAction::PreserveRecoveryCopies
+        );
     }
 }

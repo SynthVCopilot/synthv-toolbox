@@ -74,6 +74,10 @@ jobs:
         working-directory: src/PiDesktop.Tauri
         run: npm run build
 
+      - name: Test desktop contracts
+        working-directory: src/PiDesktop.Tauri
+        run: npm run test:contracts
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src/PiDesktop.Tauri/src-tauri/Cargo.toml -- --check
 

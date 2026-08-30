@@ -153,8 +153,8 @@ pub fn builtin_recipes() -> Vec<WorkflowRecipe> {
         ),
         recipe(
             "lyric-template",
-            "作词与押韵",
-            "查询中文韵脚字典，编排歌曲段落、行数和 A/B/C 押韵格式；Copilot 候选始终由用户手动采用。",
+            "作词",
+            "在本地草稿中写作，按需使用歌曲结构、韵脚字典和 Copilot 候选；候选始终由用户手动采用。",
             "lyric-template",
             "lyrics",
             false,

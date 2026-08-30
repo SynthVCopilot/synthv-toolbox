@@ -1,5 +1,12 @@
 {
   "bundle": {
-    "targets": ["nsis"]
+    "targets": ["nsis"],
+    "windows": {
+      "nsis": {
+        "template": "./windows/installer.nsi",
+        "languages": ["SimpChinese", "English"],
+        "displayLanguageSelector": true
+      }
+    }
   }
 }

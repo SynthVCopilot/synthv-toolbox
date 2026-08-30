@@ -8,13 +8,19 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub use crate::sv2_account_probe::Sv2RemoteUseStatus;
+use crate::sv2_account_probe::{
+    cached_sv2_account_probe_for_account, refresh_sv2_account_probes, Sv2AccountProbeRequest,
+    Sv2AccountProbeView, Sv2AuthorizationStatus, Sv2SessionInspectionStatus,
+};
 #[cfg(windows)]
 use crate::sv2_concurrent::concurrent_folder;
 use crate::sv2_concurrent::{
     detect_provider as detect_concurrent_provider, launch_slot as launch_concurrent,
     prepare_slot as prepare_concurrent, provider_view as concurrent_provider_view,
-    slot_view as concurrent_slot_view, Sv2ConcurrentContentPreferences, Sv2ConcurrentDefaults,
-    Sv2ConcurrentProviderView, Sv2ConcurrentSlotView, Sv2IsolationPreference,
+    remove_slot_data as remove_concurrent_slot_data, slot_view as concurrent_slot_view,
+    Sv2ConcurrentContentPreferences, Sv2ConcurrentDefaults, Sv2ConcurrentProviderView,
+    Sv2ConcurrentSlotView, Sv2IsolationPreference,
 };
 use crate::sv2_session_guard::{
     SessionLaunchPreparation, Sv2SessionEnvironment, Sv2SessionGuardStore, Sv2SessionProtectionView,
@@ -124,6 +130,8 @@ pub struct Sv2ProfileSlotView {
     pub concurrent_session_protection: Sv2SessionProtectionView,
     pub concurrent: Sv2ConcurrentSlotView,
     pub voice_inventory: Sv2VoiceInventoryView,
+    pub account_probe: Sv2AccountProbeView,
+    pub concurrent_account_probe: Sv2AccountProbeView,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -151,15 +159,6 @@ pub struct Sv2ProfilesState {
     pub concurrent_defaults: Sv2ConcurrentDefaults,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum Sv2RemoteUseStatus {
-    #[allow(dead_code)]
-    Clear,
-    Detected,
-    Unknown,
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sv2AccountPrecheck {
@@ -171,6 +170,9 @@ pub struct Sv2AccountPrecheck {
     pub local_processes: Vec<Sv2ProcessBlocker>,
     pub concurrent_pids: Vec<u32>,
     pub remote_use: Sv2RemoteUseStatus,
+    pub session_status: Sv2SessionInspectionStatus,
+    pub authorization_status: Sv2AuthorizationStatus,
+    pub authorized_voice_count: usize,
     pub session_cached: bool,
     pub recovery_pending: bool,
     pub summary: String,
@@ -286,11 +288,27 @@ impl Sv2ProfileService {
     }
 
     pub fn account_precheck(&self) -> Result<Sv2AccountPrecheck, String> {
-        self.account_usage_snapshot()
+        self.build_account_usage_snapshot(false, None)
             .map(|snapshot| snapshot.precheck)
     }
 
     pub fn account_usage_snapshot(&self) -> Result<Sv2AccountUsageSnapshot, String> {
+        self.build_account_usage_snapshot(true, None)
+    }
+
+    pub fn account_usage_snapshot_for_slot(
+        &self,
+        slot_id: String,
+    ) -> Result<Sv2AccountUsageSnapshot, String> {
+        validate_slot_id(&slot_id)?;
+        self.build_account_usage_snapshot(true, Some(&slot_id))
+    }
+
+    fn build_account_usage_snapshot(
+        &self,
+        refresh_sensitive_probe: bool,
+        refresh_slot_id: Option<&str>,
+    ) -> Result<Sv2AccountUsageSnapshot, String> {
         let _gate = self
             .gate
             .lock()
@@ -305,7 +323,18 @@ impl Sv2ProfileService {
         let _file_lock = acquire_switch_lock(paths)?;
         recover_if_needed(paths)?;
         let manifest = load_manifest(paths)?;
-        let profiles = build_state(paths, &manifest, false, String::new())?;
+        if refresh_slot_id
+            .is_some_and(|slot_id| !manifest.slots.iter().any(|slot| slot.id == slot_id))
+        {
+            return Err("找不到该 SV2 槽位。".to_string());
+        }
+        let mut profiles = build_state(paths, &manifest, false, String::new())?;
+        enrich_account_probes(
+            paths,
+            &mut profiles,
+            refresh_sensitive_probe,
+            refresh_slot_id,
+        );
         let precheck = build_account_precheck(&profiles);
         Ok(Sv2AccountUsageSnapshot { profiles, precheck })
     }
@@ -523,8 +552,62 @@ impl Sv2ProfileService {
         build_state(paths, &manifest, false, String::new())
     }
 
+    pub fn delete_slot(&self, slot_id: String) -> Result<Sv2ProfilesState, String> {
+        validate_slot_id(&slot_id)?;
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| "SV2 槽位状态锁已损坏。".to_string())?;
+        let paths = self.paths.as_ref().map_err(Clone::clone)?;
+        let _file_lock = acquire_switch_lock(paths)?;
+        recover_if_needed(paths)?;
+        reject_blockers(paths)?;
+        let mut manifest = load_manifest(paths)?;
+        let slot = manifest
+            .slots
+            .iter()
+            .find(|slot| slot.id == slot_id)
+            .ok_or_else(|| "找不到该 SV2 槽位。".to_string())?;
+        let concurrent = concurrent_slot_view(
+            &paths.vault,
+            &slot_id,
+            detect_concurrent_provider().as_ref().ok(),
+            slot.concurrent_content
+                .resolve(manifest.concurrent_defaults),
+        );
+        if !concurrent.running_pids.is_empty() {
+            return Err("请先关闭该账号的隔离 SV2 实例，再删除账号。".to_string());
+        }
+
+        if manifest.active_slot_id.as_deref() == Some(slot_id.as_str()) {
+            if let Some(replacement) = manifest
+                .slots
+                .iter()
+                .find(|slot| slot.id != slot_id)
+                .map(|slot| slot.id.clone())
+            {
+                switch_slot(paths, &mut manifest, &replacement)?;
+            } else {
+                verify_marker(&paths.canonical, &slot_id)?;
+                remove_owned_directory(&paths.canonical, "当前账号数据")?;
+                manifest.active_slot_id = None;
+            }
+        }
+
+        let parked = paths.parked(&slot_id);
+        if parked.exists() {
+            verify_marker(&parked, &slot_id)?;
+            remove_owned_directory(&parked, "账号槽位数据")?;
+        }
+        remove_concurrent_slot_data(&paths.vault, &slot_id)?;
+        Sv2SessionGuardStore::new(&paths.metadata).remove_slot(&slot_id)?;
+        manifest.slots.retain(|slot| slot.id != slot_id);
+        save_manifest(paths, &manifest)?;
+        build_state(paths, &manifest, false, String::new())
+    }
+
     pub fn preview_svp_route(&self, project_path: String) -> Result<SvpRoutePlan, String> {
-        let snapshot = self.account_usage_snapshot()?;
+        let snapshot = self.build_account_usage_snapshot(false, None)?;
         build_route_plan(&project_path, &snapshot.profiles)
     }
 
@@ -534,6 +617,15 @@ impl Sv2ProfileService {
         project_path: String,
         mode: SvpLaunchMode,
     ) -> Result<OperationResult, String> {
+        let plan = self.preview_svp_route(project_path.clone())?;
+        let candidate = plan
+            .candidates
+            .iter()
+            .find(|candidate| candidate.slot_id == slot_id)
+            .ok_or_else(|| "预检后找不到所选 SV2 账号，请刷新后重试。".to_string())?;
+        if !candidate.idle || candidate.launch_mode != Some(mode) {
+            return Err("账号状态在启动前发生变化，已取消旧的启动选择；请刷新后重试。".to_string());
+        }
         match mode {
             SvpLaunchMode::Normal => self.launch_slot(slot_id, Some(project_path)),
             SvpLaunchMode::Concurrent => self.launch_concurrent_slot(slot_id, Some(project_path)),
@@ -919,10 +1011,117 @@ fn unsupported_precheck(detail: String) -> Sv2AccountPrecheck {
         local_processes: Vec::new(),
         concurrent_pids: Vec::new(),
         remote_use: Sv2RemoteUseStatus::Unknown,
+        session_status: Sv2SessionInspectionStatus::Unsupported,
+        authorization_status: Sv2AuthorizationStatus::Unknown,
+        authorized_voice_count: 0,
         session_cached: false,
         recovery_pending: false,
         summary: "当前平台不支持 SV2 账号占用预检。".to_string(),
         detail,
+    }
+}
+
+fn enrich_account_probes(
+    paths: &SlotPaths,
+    state: &mut Sv2ProfilesState,
+    refresh_sensitive_probe: bool,
+    refresh_slot_id: Option<&str>,
+) {
+    let normal_environment_blocked = !state.blockers.is_empty();
+    let mut targets = Vec::<(usize, bool, PathBuf, bool, String)>::new();
+    for (index, slot) in state.slots.iter().enumerate() {
+        let normal_root = PathBuf::from(&slot.data_path);
+        let normal_source_in_use = (slot.is_active && normal_environment_blocked)
+            || slot.session_protection.recovery_pending();
+        targets.push((
+            index,
+            false,
+            normal_root,
+            normal_source_in_use,
+            slot.id.clone(),
+        ));
+        if !slot.concurrent.ready {
+            continue;
+        }
+        #[cfg(windows)]
+        if let Ok(root) = concurrent_folder(&paths.vault, &slot.id) {
+            targets.push((
+                index,
+                true,
+                root,
+                !slot.concurrent.running_pids.is_empty()
+                    || slot.concurrent_session_protection.recovery_pending(),
+                slot.id.clone(),
+            ));
+        }
+    }
+
+    let mut views = targets
+        .iter()
+        .map(|(_, concurrent, root, source_in_use, slot_id)| {
+            cached_sv2_account_probe_for_account(root, *source_in_use, slot_id, *concurrent)
+        })
+        .collect::<Vec<_>>();
+    if refresh_sensitive_probe {
+        let selected = targets
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, _, _, _, slot_id))| {
+                refresh_slot_id.is_none_or(|selected_slot_id| selected_slot_id == slot_id)
+            })
+            .collect::<Vec<_>>();
+        let requests = selected
+            .iter()
+            .map(
+                |(_, (slot_index, concurrent, root, source_in_use, slot_id))| {
+                    Sv2AccountProbeRequest::for_account(
+                        root,
+                        *source_in_use,
+                        *slot_index,
+                        !*concurrent,
+                        slot_id,
+                        *concurrent,
+                    )
+                },
+            )
+            .collect::<Vec<_>>();
+        for ((view_index, _), refreshed) in selected
+            .into_iter()
+            .zip(refresh_sv2_account_probes(&requests))
+        {
+            views[view_index] = refreshed;
+        }
+    }
+
+    for ((slot_index, concurrent, _, _, _), view) in targets.into_iter().zip(views) {
+        if concurrent {
+            state.slots[slot_index].concurrent_account_probe = view;
+        } else {
+            state.slots[slot_index].account_probe = view;
+        }
+    }
+
+    for slot in &mut state.slots {
+        let verified_count = [&slot.account_probe, &slot.concurrent_account_probe]
+            .into_iter()
+            .filter(|probe| probe.authorization_status == Sv2AuthorizationStatus::Verified)
+            .map(|probe| probe.authorized_voice_count)
+            .max();
+        if let Some(verified_count) = verified_count {
+            slot.voice_inventory.status =
+                crate::svp_launch_router::Sv2VoiceInventoryStatus::Verified;
+            slot.voice_inventory.verified_authorized_voice_count = verified_count;
+            slot.voice_inventory.detail =
+                if slot.voice_inventory.manually_confirmed_voices.is_empty() {
+                    format!("账号登录预检已确认 {verified_count} 个声库授权。")
+                } else {
+                    format!(
+                        "账号登录预检已确认 {} 个声库授权；另保留 {} 个用户确认记录作为补充。",
+                        verified_count,
+                        slot.voice_inventory.manually_confirmed_voices.len()
+                    )
+                };
+        }
     }
 }
 
@@ -937,19 +1136,23 @@ fn build_account_precheck(state: &Sv2ProfilesState) -> Sv2AccountPrecheck {
             local_processes: state.blockers.clone(),
             concurrent_pids: Vec::new(),
             remote_use: Sv2RemoteUseStatus::Unknown,
+            session_status: Sv2SessionInspectionStatus::Missing,
+            authorization_status: Sv2AuthorizationStatus::Unknown,
+            authorized_voice_count: 0,
             session_cached: false,
             recovery_pending: false,
             summary: "尚未设置当前默认账号。".to_string(),
             detail: "请先在“SV2 账号”页面导入或创建账号槽位。".to_string(),
         };
     };
+    let account_probe = preferred_account_probe(slot);
     let local_use = !state.blockers.is_empty() || !slot.concurrent.running_pids.is_empty();
     let recovery_pending = slot.session_protection.recovery_pending()
         || slot.concurrent_session_protection.recovery_pending();
     let remote_use = if recovery_pending {
         Sv2RemoteUseStatus::Detected
     } else {
-        Sv2RemoteUseStatus::Unknown
+        account_probe.remote_use
     };
     let (summary, detail) = if recovery_pending {
         (
@@ -961,26 +1164,76 @@ fn build_account_precheck(state: &Sv2ProfilesState) -> Sv2AccountPrecheck {
             "当前账号正在本机使用。".to_string(),
             "已发现普通 SV2、插件、WebView2 或该账号的 Sandboxie 隔离进程。".to_string(),
         )
+    } else if remote_use == Sv2RemoteUseStatus::Detected {
+        (
+            "账号服务返回了并发占用冲突。".to_string(),
+            account_probe.detail.clone(),
+        )
+    } else if account_probe.session_status == Sv2SessionInspectionStatus::Ready
+        && account_probe.authorization_status == Sv2AuthorizationStatus::Verified
+    {
+        (
+            "官方服务已接受无踢出设备登录事件。".to_string(),
+            format!(
+                "账号服务接受了与 SV2 启动一致的无踢出登录事件，并返回 {} 个可用于路由的声库授权。该结果只代表本次检查时刻。",
+                account_probe.authorized_voice_count
+            ),
+        )
     } else {
         (
-            "本机未发现当前账号正在使用。".to_string(),
-            "工具箱未接入 Dreamtonics 官方实时远端占用查询；其他设备状态只能在 SV2 启动验证后确认。"
-                .to_string(),
+            "账号远端状态仍未确认。".to_string(),
+            account_probe.detail.clone(),
         )
     };
     Sv2AccountPrecheck {
         supported: state.supported,
-        checked_at_utc: Utc::now().to_rfc3339(),
+        checked_at_utc: account_probe.checked_at_utc.clone(),
         slot_id: Some(slot.id.clone()),
         display_name: slot.display_name.clone(),
         local_use,
         local_processes: state.blockers.clone(),
         concurrent_pids: slot.concurrent.running_pids.clone(),
         remote_use,
-        session_cached: slot.session_cached,
+        session_status: account_probe.session_status,
+        authorization_status: account_probe.authorization_status,
+        authorized_voice_count: account_probe.authorized_voice_count,
+        session_cached: slot.session_cached
+            || (slot.concurrent.ready
+                && account_probe.session_status != Sv2SessionInspectionStatus::Missing),
         recovery_pending,
         summary,
         detail,
+    }
+}
+
+/// Ordinary and Sandboxie roots are separate filesystems, but they represent
+/// one account slot.  Account-level summaries must therefore use the strongest
+/// usable result instead of reporting one stale copy as if the whole account
+/// had signed out.  Environment-specific routing still consumes both probes.
+fn preferred_account_probe(slot: &Sv2ProfileSlotView) -> &Sv2AccountProbeView {
+    if !slot.concurrent.ready
+        || account_probe_rank(&slot.account_probe)
+            >= account_probe_rank(&slot.concurrent_account_probe)
+    {
+        &slot.account_probe
+    } else {
+        &slot.concurrent_account_probe
+    }
+}
+
+fn account_probe_rank(probe: &Sv2AccountProbeView) -> u8 {
+    match (probe.session_status, probe.remote_use) {
+        (Sv2SessionInspectionStatus::Ready, Sv2RemoteUseStatus::Clear) => 8,
+        (Sv2SessionInspectionStatus::Ready, Sv2RemoteUseStatus::Detected) => 7,
+        (Sv2SessionInspectionStatus::Ready, Sv2RemoteUseStatus::Unknown) => 6,
+        (Sv2SessionInspectionStatus::Offline, _) => 5,
+        (Sv2SessionInspectionStatus::InUse, _) => 4,
+        (Sv2SessionInspectionStatus::Unsupported, _) => 3,
+        (Sv2SessionInspectionStatus::Invalid, _) => 2,
+        (Sv2SessionInspectionStatus::Expired, _) => 1,
+        (Sv2SessionInspectionStatus::SyncFailed, _) => 0,
+        (Sv2SessionInspectionStatus::AccountMismatch, _) => 0,
+        (Sv2SessionInspectionStatus::Missing, _) => 0,
     }
 }
 
@@ -1068,6 +1321,10 @@ fn build_state(
                     !concurrent.running_pids.is_empty(),
                 )
                 .unwrap_or_else(Sv2SessionProtectionView::attention);
+            let session_cached = data_path.join("license/session").is_file();
+            let concurrent_session_cached = Path::new(&concurrent.data_path)
+                .join("license/session")
+                .is_file();
             Sv2ProfileSlotView {
                 id: slot.id.clone(),
                 display_name: slot.display_name.clone(),
@@ -1077,7 +1334,7 @@ fn build_state(
                 created_at_utc: slot.created_at_utc.clone(),
                 last_activated_at_utc: slot.last_activated_at_utc.clone(),
                 is_active,
-                session_cached: data_path.join("license/session").is_file(),
+                session_cached,
                 data_path: data_path.to_string_lossy().into_owned(),
                 session_protection,
                 concurrent_session_protection,
@@ -1086,11 +1343,15 @@ fn build_state(
                     &data_path,
                     &slot.manually_confirmed_voices,
                 ),
+                account_probe: Sv2AccountProbeView::not_checked(session_cached),
+                concurrent_account_probe: Sv2AccountProbeView::not_checked(
+                    concurrent_session_cached,
+                ),
             }
         })
         .collect();
 
-    Ok(Sv2ProfilesState {
+    let mut state = Sv2ProfilesState {
         supported: true,
         canonical_path: paths.canonical.to_string_lossy().into_owned(),
         vault_path: paths.vault.to_string_lossy().into_owned(),
@@ -1105,7 +1366,9 @@ fn build_state(
         blockers,
         concurrent_provider: concurrent_provider_view(&provider),
         concurrent_defaults: manifest.concurrent_defaults,
-    })
+    };
+    enrich_account_probes(paths, &mut state, false, None);
+    Ok(state)
 }
 
 fn switch_slot(
@@ -1516,6 +1779,41 @@ fn validate_managed_roots(paths: &SlotPaths) -> Result<(), String> {
     Ok(())
 }
 
+fn remove_owned_directory(path: &Path, label: &str) -> Result<(), String> {
+    reject_reparse_point(path)?;
+    let metadata =
+        fs::symlink_metadata(path).map_err(|error| format!("无法检查{label}：{error}"))?;
+    if !metadata.is_dir() {
+        return Err(format!("{label}不是目录，删除已取消。"));
+    }
+    for entry in fs::read_dir(path).map_err(|error| format!("无法读取{label}：{error}"))? {
+        let entry = entry.map_err(|error| format!("无法读取{label}内容：{error}"))?;
+        let child = entry.path();
+        let child_metadata = fs::symlink_metadata(&child)
+            .map_err(|error| format!("无法检查{label}内容：{error}"))?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+            if child_metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return Err(format!("{label}包含 reparse point；删除已取消。"));
+            }
+        }
+        #[cfg(not(windows))]
+        if child_metadata.file_type().is_symlink() {
+            return Err(format!("{label}包含符号链接；删除已取消。"));
+        }
+        if child_metadata.is_dir() {
+            remove_owned_directory(&child, label)?;
+        } else if child_metadata.is_file() {
+            fs::remove_file(&child).map_err(|error| format!("无法删除{label}内容：{error}"))?;
+        } else {
+            return Err(format!("{label}包含不支持的目录项，删除已取消。"));
+        }
+    }
+    fs::remove_dir(path).map_err(|error| format!("无法删除{label}：{error}"))
+}
+
 fn validate_display_name(value: &str) -> Result<String, String> {
     let value = value.trim();
     if value.is_empty() || value.chars().count() > 64 || value.chars().any(char::is_control) {
@@ -1913,11 +2211,44 @@ mod windows_guard {
 mod tests {
     use super::*;
 
+    fn account_probe(
+        session_status: Sv2SessionInspectionStatus,
+        remote_use: Sv2RemoteUseStatus,
+    ) -> Sv2AccountProbeView {
+        Sv2AccountProbeView {
+            session_status,
+            remote_use,
+            authorization_status: Sv2AuthorizationStatus::Unknown,
+            authorized_voice_count: 0,
+            authorized_voices: Vec::new(),
+            account_display_name: None,
+            account_email: None,
+            checked_at_utc: Utc::now().to_rfc3339(),
+            detail: String::new(),
+        }
+    }
+
     fn fixture() -> (PathBuf, SlotPaths) {
         let root = std::env::temp_dir().join(format!("sv2-slot-test-{}", Uuid::new_v4()));
         let paths = SlotPaths::for_test(&root);
         fs::create_dir_all(&paths.metadata).unwrap();
         (root, paths)
+    }
+
+    #[test]
+    fn account_summary_prefers_a_usable_environment_over_a_stale_copy() {
+        let available = account_probe(Sv2SessionInspectionStatus::Ready, Sv2RemoteUseStatus::Clear);
+        let stale = account_probe(
+            Sv2SessionInspectionStatus::Expired,
+            Sv2RemoteUseStatus::Unknown,
+        );
+        let busy = account_probe(
+            Sv2SessionInspectionStatus::Ready,
+            Sv2RemoteUseStatus::Detected,
+        );
+
+        assert!(account_probe_rank(&available) > account_probe_rank(&stale));
+        assert!(account_probe_rank(&available) > account_probe_rank(&busy));
     }
 
     fn import_fixture(paths: &SlotPaths, name: &str) -> SlotManifest {

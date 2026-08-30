@@ -1,9 +1,44 @@
 export type AppMode = "toolbox" | "ai";
 
-export interface ModelSummary {
-  baseUrl: string;
+export type AiProviderId = "anthropic" | "openai-codex";
+
+export interface AiProviderAccountSummary {
+  id: string;
+  label: string;
+  expiresAt: number;
+  authorized: boolean;
+  healthy: boolean;
+}
+
+export interface AiProviderSummary {
+  id: AiProviderId;
+  displayName: string;
+  description: string;
+  active: boolean;
+  connected: boolean;
+  healthyAccounts: number;
+  totalAccounts: number;
   model: string;
-  tokenConfigured: boolean;
+  models: string[];
+  accounts: AiProviderAccountSummary[];
+}
+
+export interface ModelSummary {
+  activeProvider: AiProviderId;
+  legacyConfigured: boolean;
+  providers: AiProviderSummary[];
+}
+
+export interface OpenCodeCatalogProvider {
+  id: string;
+  name: string;
+  modelCount: number;
+  package: string;
+}
+
+export interface OpenCodeCatalog {
+  generatedAt: number;
+  providers: OpenCodeCatalogProvider[];
 }
 
 export interface McpServerConfig {
@@ -70,12 +105,27 @@ export interface Sv2SessionProtection {
   detail: string;
 }
 
-export type Sv2VoiceInventoryStatus = "manual" | "localEvidence" | "unknown";
+export type Sv2AccountProbeSessionStatus = "ready" | "missing" | "inUse" | "expired" | "loginRequired" | "invalid" | "syncFailed" | "accountMismatch" | "unsupported" | "offline";
+export type Sv2AuthorizationStatus = "verified" | "unknown";
+
+export interface Sv2AccountProbe {
+  sessionStatus: Sv2AccountProbeSessionStatus;
+  remoteUse: Sv2RemoteUseStatus;
+  authorizationStatus: Sv2AuthorizationStatus;
+  authorizedVoiceCount: number;
+  authorizedVoices: string[];
+  accountDisplayName?: string;
+  accountEmail?: string;
+  checkedAtUtc: string;
+  detail: string;
+}
+
+export type Sv2VoiceInventoryStatus = "verified" | "manual" | "unknown";
 
 export interface Sv2VoiceInventory {
   status: Sv2VoiceInventoryStatus;
   manuallyConfirmedVoices: string[];
-  installedOpaqueCount: number;
+  verifiedAuthorizedVoiceCount: number;
   detail: string;
 }
 
@@ -92,6 +142,8 @@ export interface Sv2ProfileSlot {
   dataPath: string;
   sessionProtection: Sv2SessionProtection;
   concurrentSessionProtection: Sv2SessionProtection;
+  accountProbe: Sv2AccountProbe;
+  concurrentAccountProbe: Sv2AccountProbe;
   concurrent: Sv2ConcurrentSlot;
   voiceInventory: Sv2VoiceInventory;
 }
@@ -122,6 +174,9 @@ export interface Sv2AccountPrecheck {
   localProcesses: Sv2ProcessBlocker[];
   concurrentPids: number[];
   remoteUse: Sv2RemoteUseStatus;
+  sessionStatus: Sv2AccountProbeSessionStatus;
+  authorizationStatus: Sv2AuthorizationStatus;
+  authorizedVoiceCount: number;
   sessionCached: boolean;
   recoveryPending: boolean;
   summary: string;
@@ -134,6 +189,7 @@ export interface Sv2AccountUsageSnapshot {
 }
 
 export type SvpLaunchMode = "normal" | "concurrent";
+export type SvpAuthorizationSource = "session" | "mixed" | "manual" | "unknown";
 
 export interface SvpVoiceRequirement {
   name: string;
@@ -146,6 +202,9 @@ export interface SvpRouteCandidate {
   displayName: string;
   idle: boolean;
   launchMode?: SvpLaunchMode | null;
+  remoteUse: Sv2RemoteUseStatus;
+  sessionStatus: Sv2AccountProbeSessionStatus;
+  authorizationSource: SvpAuthorizationSource;
   matchedVoices: string[];
   missingOrUnknownVoices: string[];
   exactAuthorizationMatch: boolean;
@@ -178,6 +237,7 @@ export interface ComponentInfo {
   installed: boolean;
   downloaded: boolean;
   installable: boolean;
+  removable: boolean;
   status: string;
 }
 
@@ -199,6 +259,7 @@ export interface BootstrapState {
   platform: string;
   appVersion: string;
   configPath: string;
+  settingsLoadError?: string | null;
   model?: ModelSummary;
   scriptsPath?: string;
   bridgeBundled: boolean;
@@ -208,6 +269,8 @@ export interface BootstrapState {
   downloads: ComponentDownload[];
   mcpServers: McpServerConfig[];
   concurrentDisclaimerAccepted: boolean;
+  sv2ConcurrentEnabled: boolean;
+  sv2AccountIndicatorEnabled: boolean;
   smartSvpLaunchEnabled: boolean;
   svpAssociation: SvpAssociationState;
 }
@@ -236,12 +299,35 @@ export interface OperationResult {
   detail: string;
 }
 
+export interface ToolboxUpdateCheck {
+  currentVersion: string;
+  latestVersion: string;
+  updateAvailable: boolean;
+  releaseName: string;
+  releaseUrl: string;
+  publishedAtUtc?: string;
+  releaseNotes: string;
+  checkedAtUtc: string;
+}
+
 export interface WorkflowResult {
   kind: string;
   summary: string;
   outputPath?: string;
   data: Record<string, unknown>;
   aiReview?: string;
+}
+
+export interface AudioCaptureCapability {
+  supported: boolean;
+  backend: string;
+  detail: string;
+  maxClipSeconds: number;
+}
+
+export interface AudioCaptureTarget {
+  processId: number;
+  name: string;
 }
 
 export type RhymeMatchMode = "family" | "exact";

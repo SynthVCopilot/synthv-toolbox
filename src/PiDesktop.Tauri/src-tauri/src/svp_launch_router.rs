@@ -5,11 +5,11 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::sv2_account_probe::{Sv2RemoteUseStatus, Sv2SessionInspectionStatus};
 use crate::sv2_profiles::{Sv2ProfileSlotView, Sv2ProfilesState};
 
 const MAX_PROJECT_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_VOICE_REQUIREMENTS: usize = 128;
-const MAX_INSTALLED_DATABASES: usize = 512;
 
 pub const TOOLBOX_SVP_PROG_ID: &str = "SynthVToolbox.SVP";
 #[cfg(windows)]
@@ -34,8 +34,8 @@ pub struct SvpAssociationView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Sv2VoiceInventoryStatus {
+    Verified,
     Manual,
-    LocalEvidence,
     Unknown,
 }
 
@@ -44,7 +44,7 @@ pub enum Sv2VoiceInventoryStatus {
 pub struct Sv2VoiceInventoryView {
     pub status: Sv2VoiceInventoryStatus,
     pub manually_confirmed_voices: Vec<String>,
-    pub installed_opaque_count: usize,
+    pub verified_authorized_voice_count: usize,
     pub detail: String,
 }
 
@@ -63,6 +63,15 @@ pub enum SvpLaunchMode {
     Concurrent,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SvpAuthorizationSource {
+    Session,
+    Mixed,
+    Manual,
+    Unknown,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SvpRouteCandidate {
@@ -70,12 +79,17 @@ pub struct SvpRouteCandidate {
     pub display_name: String,
     pub idle: bool,
     pub launch_mode: Option<SvpLaunchMode>,
+    pub remote_use: Sv2RemoteUseStatus,
+    pub session_status: Sv2SessionInspectionStatus,
+    pub authorization_source: SvpAuthorizationSource,
     pub matched_voices: Vec<String>,
     pub missing_or_unknown_voices: Vec<String>,
     pub exact_authorization_match: bool,
     pub reason: String,
     #[serde(skip)]
     score: i32,
+    #[serde(skip)]
+    verified_authorization_match: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -215,36 +229,27 @@ pub fn validate_confirmed_voice_names(values: Vec<String>) -> Result<Vec<String>
 }
 
 pub fn inspect_voice_inventory(
-    data_root: &Path,
+    _data_root: &Path,
     manually_confirmed_voices: &[String],
 ) -> Sv2VoiceInventoryView {
-    let installed_opaque_count = count_installed_opaque_databases(data_root);
     let (status, detail) = if !manually_confirmed_voices.is_empty() {
         (
             Sv2VoiceInventoryStatus::Manual,
             format!(
-                "已手工确认 {} 个声库；本地另检测到 {} 个不透明安装项。Dreamtonics 官方授权仍以 SV2 启动验证为准。",
-                manually_confirmed_voices.len(),
-                installed_opaque_count
-            ),
-        )
-    } else if installed_opaque_count > 0 {
-        (
-            Sv2VoiceInventoryStatus::LocalEvidence,
-            format!(
-                "检测到 {installed_opaque_count} 个本地声库安装项，但本地文件不公开产品映射，无法据此确认账号授权。"
+                "已手工确认 {} 个声库；该记录只用于工程路由，不替代 Dreamtonics 官方授权预检。",
+                manually_confirmed_voices.len()
             ),
         )
     } else {
         (
             Sv2VoiceInventoryStatus::Unknown,
-            "未发现可安全映射的账号声库授权；不会把商店目录或可下载状态当作已授权。".to_string(),
+            "尚无官方账号授权结果或用户手工确认记录。".to_string(),
         )
     };
     Sv2VoiceInventoryView {
         status,
         manually_confirmed_voices: manually_confirmed_voices.to_vec(),
-        installed_opaque_count,
+        verified_authorized_voice_count: 0,
         detail,
     }
 }
@@ -286,7 +291,9 @@ pub fn build_route_plan(value: &str, state: &Sv2ProfilesState) -> Result<SvpRout
     let selected_slot_id = selected.map(|candidate| candidate.slot_id.clone());
     let selected_launch_mode = selected.and_then(|candidate| candidate.launch_mode);
     let requires_confirmation = selected.is_some_and(|candidate| {
-        !required_voices.is_empty() && !candidate.exact_authorization_match
+        candidate.remote_use != Sv2RemoteUseStatus::Clear
+            || candidate.session_status != Sv2SessionInspectionStatus::Ready
+            || (!required_voices.is_empty() && !candidate.verified_authorization_match)
     });
     let (summary, detail) = match selected {
         None => (
@@ -295,7 +302,7 @@ pub fn build_route_plan(value: &str, state: &Sv2ProfilesState) -> Result<SvpRout
         ),
         Some(candidate) if requires_confirmation => (
             format!("需要确认使用账号“{}”。", candidate.display_name),
-            "工程声库与账号授权没有完整的权威匹配结果；请选择账号，最终授权由 SV2 官方验证。"
+            "账号占用或工程声库授权仍有未知项；请选择账号，最终并发与授权仍由 SV2 官方验证。"
                 .to_string(),
         ),
         Some(candidate) => (
@@ -320,70 +327,193 @@ fn route_candidate(
     state: &Sv2ProfilesState,
     required: &[SvpVoiceRequirement],
 ) -> SvpRouteCandidate {
-    let recovery_pending = slot.session_protection.recovery_pending()
-        || slot.concurrent_session_protection.recovery_pending();
-    let locally_busy =
-        !slot.concurrent.running_pids.is_empty() || (slot.is_active && !state.blockers.is_empty());
-    let idle = !locally_busy && !recovery_pending;
-    let launch_mode = if !idle {
-        None
-    } else if state.blockers.is_empty() {
-        Some(SvpLaunchMode::Normal)
-    } else if state.concurrent_provider.available && slot.concurrent.ready {
-        Some(SvpLaunchMode::Concurrent)
+    let normal = route_mode_candidate(slot, state, required, SvpLaunchMode::Normal);
+    let concurrent = route_mode_candidate(slot, state, required, SvpLaunchMode::Concurrent);
+    if compare_mode_candidates(&normal, &concurrent).is_lt() {
+        concurrent.candidate
     } else {
-        None
+        normal.candidate
+    }
+}
+
+struct ModeRouteCandidate {
+    candidate: SvpRouteCandidate,
+    mode: SvpLaunchMode,
+    locally_available: bool,
+}
+
+fn compare_mode_candidates(
+    left: &ModeRouteCandidate,
+    right: &ModeRouteCandidate,
+) -> std::cmp::Ordering {
+    let left_launchable = left.candidate.idle && left.candidate.launch_mode.is_some();
+    let right_launchable = right.candidate.idle && right.candidate.launch_mode.is_some();
+    left_launchable
+        .cmp(&right_launchable)
+        .then_with(|| left.locally_available.cmp(&right.locally_available))
+        .then_with(|| left.candidate.score.cmp(&right.candidate.score))
+        .then_with(|| mode_preference(left.mode).cmp(&mode_preference(right.mode)))
+}
+
+fn mode_preference(mode: SvpLaunchMode) -> u8 {
+    match mode {
+        SvpLaunchMode::Normal => 1,
+        SvpLaunchMode::Concurrent => 0,
+    }
+}
+
+fn route_mode_candidate(
+    slot: &Sv2ProfileSlotView,
+    state: &Sv2ProfilesState,
+    required: &[SvpVoiceRequirement],
+    mode: SvpLaunchMode,
+) -> ModeRouteCandidate {
+    let locally_available = match mode {
+        SvpLaunchMode::Normal => {
+            state.blockers.is_empty() && !slot.session_protection.recovery_pending()
+        }
+        SvpLaunchMode::Concurrent => {
+            state.concurrent_provider.available
+                && slot.concurrent.ready
+                && slot.concurrent.running_pids.is_empty()
+                && !slot.concurrent_session_protection.recovery_pending()
+        }
     };
-    let confirmed = slot
+    let account_probe = if mode == SvpLaunchMode::Concurrent {
+        &slot.concurrent_account_probe
+    } else {
+        &slot.account_probe
+    };
+    let remote_busy = account_probe.remote_use == Sv2RemoteUseStatus::Detected;
+    let account_mismatch =
+        account_probe.session_status == Sv2SessionInspectionStatus::AccountMismatch;
+    let session_sync_failed =
+        account_probe.session_status == Sv2SessionInspectionStatus::SyncFailed;
+    let idle = locally_available && !remote_busy && !account_mismatch && !session_sync_failed;
+    let launch_mode = idle.then_some(mode);
+
+    let manually_confirmed = slot
         .voice_inventory
         .manually_confirmed_voices
         .iter()
         .map(|name| normalized_voice_name(name))
         .collect::<HashSet<_>>();
+    let verified = account_probe
+        .authorized_voices
+        .iter()
+        .map(|name| normalized_voice_name(name))
+        .collect::<HashSet<_>>();
     let mut matched_voices = Vec::new();
     let mut missing_or_unknown_voices = Vec::new();
+    let mut verified_matches = 0usize;
+    let mut manual_matches = 0usize;
     for voice in required {
-        if confirmed.contains(&normalized_voice_name(&voice.name)) {
+        let normalized = normalized_voice_name(&voice.name);
+        if verified.contains(&normalized) {
             matched_voices.push(voice.name.clone());
+            verified_matches += 1;
+        } else if manually_confirmed.contains(&normalized) {
+            matched_voices.push(voice.name.clone());
+            manual_matches += 1;
         } else {
             missing_or_unknown_voices.push(voice.name.clone());
         }
     }
     let exact_authorization_match = !required.is_empty() && missing_or_unknown_voices.is_empty();
-    let mut score = if required.is_empty() {
-        5_000
+    let verified_authorization_match = exact_authorization_match && manual_matches == 0;
+    let authorization_source = if verified_matches > 0 && manual_matches > 0 {
+        SvpAuthorizationSource::Mixed
+    } else if !verified.is_empty()
+        || account_probe.authorization_status
+            == crate::sv2_account_probe::Sv2AuthorizationStatus::Verified
+    {
+        SvpAuthorizationSource::Session
+    } else if manual_matches > 0 || !manually_confirmed.is_empty() {
+        SvpAuthorizationSource::Manual
+    } else {
+        SvpAuthorizationSource::Unknown
+    };
+    let mut score = match account_probe.remote_use {
+        Sv2RemoteUseStatus::Clear => 40_000,
+        Sv2RemoteUseStatus::Unknown => 0,
+        Sv2RemoteUseStatus::Detected => -40_000,
+    };
+    if account_probe.session_status == Sv2SessionInspectionStatus::Ready {
+        score += 5_000;
+    }
+    if account_probe.authorization_status
+        == crate::sv2_account_probe::Sv2AuthorizationStatus::Verified
+    {
+        score += 1_000;
+    }
+    score += if required.is_empty() {
+        10_000
+    } else if verified_authorization_match {
+        20_000 + verified_matches as i32 * 200
     } else if exact_authorization_match {
         10_000 + matched_voices.len() as i32 * 100
     } else {
-        matched_voices.len() as i32 * 100
+        verified_matches as i32 * 200 + manual_matches as i32 * 100
     };
     if slot.is_active {
         score += 20;
     }
-    if launch_mode == Some(SvpLaunchMode::Normal) {
+    if mode == SvpLaunchMode::Normal {
         score += 5;
     }
-    let reason = if !idle {
-        "账号当前正在使用或存在远端冲突证据。".to_string()
-    } else if launch_mode.is_none() {
-        "当前普通槽位被占用，且该账号的并发隔离副本不可用。".to_string()
+    let reason = if session_sync_failed {
+        "该启动环境没有同步到账号 authority 的最新会话，已从路由中排除；请在账号页重新预检。"
+            .to_string()
+    } else if account_mismatch {
+        "该启动环境登录的是另一个账号，已从此槽位路由中隔离；请重新准备隔离副本或在 SV2 中统一账号。".to_string()
+    } else if remote_busy {
+        "官方无踢出登录预检返回并发占用冲突，已排除该账号。".to_string()
+    } else if !locally_available {
+        match mode {
+            SvpLaunchMode::Normal if slot.session_protection.recovery_pending() => {
+                "普通槽位正在等待登录态恢复。".to_string()
+            }
+            SvpLaunchMode::Normal => "当前普通槽位正在被本机程序使用。".to_string(),
+            SvpLaunchMode::Concurrent if slot.concurrent_session_protection.recovery_pending() => {
+                "并发隔离副本正在等待登录态恢复。".to_string()
+            }
+            SvpLaunchMode::Concurrent if !slot.concurrent.running_pids.is_empty() => {
+                "该账号的并发隔离实例已经在运行。".to_string()
+            }
+            SvpLaunchMode::Concurrent => "该账号的并发隔离副本不可用。".to_string(),
+        }
+    } else if account_probe.session_status != Sv2SessionInspectionStatus::Ready {
+        "缓存会话尚未通过账号服务预检，需要人工确认或重新登录。".to_string()
     } else if required.is_empty() {
-        "工程没有可识别的演唱声库要求，优先使用空闲默认账号。".to_string()
+        "工程没有可识别的演唱声库要求，优先使用通过预检的空闲账号。".to_string()
+    } else if verified_authorization_match {
+        format!(
+            "账号登录预检已匹配工程所需的 {} 个官方声库授权。",
+            required.len()
+        )
     } else if exact_authorization_match {
-        format!("已匹配工程所需的 {} 个手工确认声库。", required.len())
+        format!("已由用户确认记录补全工程所需的 {} 个声库。", required.len())
     } else {
         "账号授权不完整或未知，需要人工确认。".to_string()
     };
-    SvpRouteCandidate {
-        slot_id: slot.id.clone(),
-        display_name: slot.display_name.clone(),
-        idle,
-        launch_mode,
-        matched_voices,
-        missing_or_unknown_voices,
-        exact_authorization_match,
-        reason,
-        score,
+    ModeRouteCandidate {
+        candidate: SvpRouteCandidate {
+            slot_id: slot.id.clone(),
+            display_name: slot.display_name.clone(),
+            idle,
+            launch_mode,
+            remote_use: account_probe.remote_use,
+            session_status: account_probe.session_status,
+            authorization_source,
+            matched_voices,
+            missing_or_unknown_voices,
+            exact_authorization_match,
+            reason,
+            score,
+            verified_authorization_match,
+        },
+        mode,
+        locally_available,
     }
 }
 
@@ -493,38 +623,6 @@ fn normalized_voice_name(value: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase()
-}
-
-fn count_installed_opaque_databases(data_root: &Path) -> usize {
-    let databases = data_root.join("databases");
-    let Ok(entries) = fs::read_dir(databases) else {
-        return 0;
-    };
-    entries
-        .flatten()
-        .filter(|entry| {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if matches!(name.as_ref(), "meta" | "tmp") || !entry.path().is_dir() {
-                return false;
-            }
-            fs::read_dir(entry.path())
-                .ok()
-                .into_iter()
-                .flatten()
-                .flatten()
-                .take(32)
-                .any(|version| {
-                    version.path().is_dir()
-                        && version
-                            .file_name()
-                            .to_string_lossy()
-                            .chars()
-                            .all(|character| character.is_ascii_digit())
-                })
-        })
-        .take(MAX_INSTALLED_DATABASES)
-        .count()
 }
 
 fn validate_project_path(value: &str) -> Result<PathBuf, String> {
@@ -887,6 +985,12 @@ mod windows_association {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sv2_account_probe::{Sv2AccountProbeView, Sv2AuthorizationStatus};
+    use crate::sv2_concurrent::{
+        Sv2ConcurrentContentPreferences, Sv2ConcurrentDefaults, Sv2ConcurrentProviderView,
+        Sv2ConcurrentSlotView,
+    };
+    use crate::sv2_session_guard::{Sv2SessionProtectionStatus, Sv2SessionProtectionView};
     use uuid::Uuid;
 
     fn write_project(project: Value) -> (PathBuf, PathBuf) {
@@ -895,6 +999,429 @@ mod tests {
         let path = root.join("voice project.svp");
         fs::write(&path, serde_json::to_vec(&project).unwrap()).unwrap();
         (root, path)
+    }
+
+    fn voice_project(name: &str) -> (PathBuf, PathBuf) {
+        write_project(serde_json::json!({
+            "tracks": [{
+                "mainRef": {
+                    "database": {"name": name, "version": 100, "backendType": "sv2"}
+                }
+            }]
+        }))
+    }
+
+    fn account_probe(
+        remote_use: Sv2RemoteUseStatus,
+        authorization_status: Sv2AuthorizationStatus,
+        authorized_voices: &[&str],
+    ) -> Sv2AccountProbeView {
+        Sv2AccountProbeView {
+            session_status: Sv2SessionInspectionStatus::Ready,
+            remote_use,
+            authorization_status,
+            authorized_voice_count: authorized_voices.len(),
+            checked_at_utc: "2026-08-30T00:00:00Z".to_string(),
+            detail: "test probe".to_string(),
+            authorized_voices: authorized_voices
+                .iter()
+                .map(|voice| (*voice).to_string())
+                .collect(),
+            account_display_name: None,
+            account_email: None,
+        }
+    }
+
+    fn ready_session_protection() -> Sv2SessionProtectionView {
+        Sv2SessionProtectionView {
+            status: Sv2SessionProtectionStatus::Ready,
+            snapshot_available: true,
+            last_detected_at_utc: None,
+            last_restored_at_utc: None,
+            detail: "ready".to_string(),
+        }
+    }
+
+    fn route_slot(
+        id: &str,
+        display_name: &str,
+        remote_use: Sv2RemoteUseStatus,
+        authorization_status: Sv2AuthorizationStatus,
+        authorized_voices: &[&str],
+        manually_confirmed_voices: &[&str],
+    ) -> Sv2ProfileSlotView {
+        let defaults = Sv2ConcurrentDefaults::default();
+        let probe = account_probe(remote_use, authorization_status, authorized_voices);
+        Sv2ProfileSlotView {
+            id: id.to_string(),
+            display_name: display_name.to_string(),
+            username: String::new(),
+            email: String::new(),
+            color: "#000000".to_string(),
+            created_at_utc: "2026-08-30T00:00:00Z".to_string(),
+            last_activated_at_utc: None,
+            is_active: false,
+            session_cached: true,
+            data_path: format!("test/{id}"),
+            session_protection: ready_session_protection(),
+            concurrent_session_protection: ready_session_protection(),
+            concurrent: Sv2ConcurrentSlotView {
+                ready: false,
+                box_name: String::new(),
+                data_path: String::new(),
+                running_pids: Vec::new(),
+                detail: String::new(),
+                content: Sv2ConcurrentContentPreferences::default().resolve(defaults),
+            },
+            voice_inventory: Sv2VoiceInventoryView {
+                status: if manually_confirmed_voices.is_empty() {
+                    Sv2VoiceInventoryStatus::Unknown
+                } else {
+                    Sv2VoiceInventoryStatus::Manual
+                },
+                manually_confirmed_voices: manually_confirmed_voices
+                    .iter()
+                    .map(|voice| (*voice).to_string())
+                    .collect(),
+                verified_authorized_voice_count: authorized_voices.len(),
+                detail: String::new(),
+            },
+            account_probe: probe.clone(),
+            concurrent_account_probe: probe,
+        }
+    }
+
+    fn route_state(slots: Vec<Sv2ProfileSlotView>) -> Sv2ProfilesState {
+        Sv2ProfilesState {
+            supported: true,
+            canonical_path: String::new(),
+            vault_path: String::new(),
+            active_slot_id: None,
+            canonical_root_exists: true,
+            can_import_current: false,
+            recovery_required: false,
+            recovery_detail: String::new(),
+            slots,
+            blockers: Vec::new(),
+            concurrent_provider: Sv2ConcurrentProviderView {
+                available: false,
+                name: String::new(),
+                edition: String::new(),
+                version: String::new(),
+                install_path: String::new(),
+                detail: String::new(),
+            },
+            concurrent_defaults: Sv2ConcurrentDefaults::default(),
+        }
+    }
+
+    #[test]
+    fn remote_detected_account_is_excluded_from_routing() {
+        let (root, path) = voice_project("Mai 2");
+        let state = route_state(vec![
+            route_slot(
+                "busy",
+                "Busy account",
+                Sv2RemoteUseStatus::Detected,
+                Sv2AuthorizationStatus::Verified,
+                &["Mai 2"],
+                &[],
+            ),
+            route_slot(
+                "available",
+                "Available account",
+                Sv2RemoteUseStatus::Unknown,
+                Sv2AuthorizationStatus::Verified,
+                &["Mai 2"],
+                &[],
+            ),
+        ]);
+
+        let plan = build_route_plan(path.to_str().unwrap(), &state).unwrap();
+        let busy = plan
+            .candidates
+            .iter()
+            .find(|candidate| candidate.slot_id == "busy")
+            .unwrap();
+
+        assert!(!busy.idle);
+        assert_eq!(busy.launch_mode, None);
+        assert_eq!(plan.selected_slot_id.as_deref(), Some("available"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ready_clear_official_exact_match_is_selected_without_confirmation() {
+        let (root, path) = voice_project("Mai 2");
+        let state = route_state(vec![route_slot(
+            "verified",
+            "Verified account",
+            Sv2RemoteUseStatus::Clear,
+            Sv2AuthorizationStatus::Verified,
+            &["Mai 2"],
+            &[],
+        )]);
+
+        let plan = build_route_plan(path.to_str().unwrap(), &state).unwrap();
+
+        assert_eq!(plan.selected_slot_id.as_deref(), Some("verified"));
+        assert_eq!(plan.selected_launch_mode, Some(SvpLaunchMode::Normal));
+        assert!(!plan.requires_confirmation);
+        assert_eq!(
+            plan.candidates[0].authorization_source,
+            SvpAuthorizationSource::Session
+        );
+        assert!(plan.candidates[0].exact_authorization_match);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unknown_remote_use_requires_confirmation() {
+        let (root, path) = voice_project("Mai 2");
+        let state = route_state(vec![route_slot(
+            "unknown",
+            "Unknown account",
+            Sv2RemoteUseStatus::Unknown,
+            Sv2AuthorizationStatus::Verified,
+            &["Mai 2"],
+            &[],
+        )]);
+
+        let plan = build_route_plan(path.to_str().unwrap(), &state).unwrap();
+
+        assert_eq!(plan.selected_slot_id.as_deref(), Some("unknown"));
+        assert!(plan.requires_confirmation);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn verified_official_authorization_is_preferred_over_manual_record() {
+        let (root, path) = voice_project("Mai 2");
+        let state = route_state(vec![
+            route_slot(
+                "manual",
+                "A manual account",
+                Sv2RemoteUseStatus::Clear,
+                Sv2AuthorizationStatus::Unknown,
+                &[],
+                &["Mai 2"],
+            ),
+            route_slot(
+                "official",
+                "Z official account",
+                Sv2RemoteUseStatus::Clear,
+                Sv2AuthorizationStatus::Verified,
+                &["Mai 2"],
+                &[],
+            ),
+        ]);
+
+        let plan = build_route_plan(path.to_str().unwrap(), &state).unwrap();
+
+        assert_eq!(plan.selected_slot_id.as_deref(), Some("official"));
+        assert_eq!(
+            plan.candidates[0].authorization_source,
+            SvpAuthorizationSource::Session
+        );
+        assert!(!plan.requires_confirmation);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn normal_expired_and_concurrent_clear_selects_concurrent() {
+        let (root, path) = voice_project("Mai 2");
+        let mut slot = route_slot(
+            "dual-mode",
+            "Dual-mode account",
+            Sv2RemoteUseStatus::Clear,
+            Sv2AuthorizationStatus::Verified,
+            &["Mai 2"],
+            &[],
+        );
+        slot.account_probe.session_status = Sv2SessionInspectionStatus::Expired;
+        slot.concurrent.ready = true;
+        let mut state = route_state(vec![slot]);
+        state.concurrent_provider.available = true;
+
+        let plan = build_route_plan(path.to_str().unwrap(), &state).unwrap();
+
+        assert_eq!(plan.selected_slot_id.as_deref(), Some("dual-mode"));
+        assert_eq!(plan.selected_launch_mode, Some(SvpLaunchMode::Concurrent));
+        assert_eq!(
+            plan.candidates[0].session_status,
+            Sv2SessionInspectionStatus::Ready
+        );
+        assert!(!plan.requires_confirmation);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_detected_and_normal_clear_selects_normal() {
+        let (root, path) = voice_project("Mai 2");
+        let mut slot = route_slot(
+            "dual-mode",
+            "Dual-mode account",
+            Sv2RemoteUseStatus::Clear,
+            Sv2AuthorizationStatus::Verified,
+            &["Mai 2"],
+            &[],
+        );
+        slot.concurrent.ready = true;
+        slot.concurrent_account_probe.remote_use = Sv2RemoteUseStatus::Detected;
+        let mut state = route_state(vec![slot]);
+        state.concurrent_provider.available = true;
+
+        let plan = build_route_plan(path.to_str().unwrap(), &state).unwrap();
+
+        assert_eq!(plan.selected_slot_id.as_deref(), Some("dual-mode"));
+        assert_eq!(plan.selected_launch_mode, Some(SvpLaunchMode::Normal));
+        assert_eq!(plan.candidates[0].remote_use, Sv2RemoteUseStatus::Clear);
+        assert!(!plan.requires_confirmation);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn equally_healthy_modes_prefer_normal() {
+        let (root, path) = voice_project("Mai 2");
+        let mut slot = route_slot(
+            "dual-mode",
+            "Dual-mode account",
+            Sv2RemoteUseStatus::Clear,
+            Sv2AuthorizationStatus::Verified,
+            &["Mai 2"],
+            &[],
+        );
+        slot.concurrent.ready = true;
+        let mut state = route_state(vec![slot]);
+        state.concurrent_provider.available = true;
+
+        let plan = build_route_plan(path.to_str().unwrap(), &state).unwrap();
+
+        assert_eq!(plan.selected_slot_id.as_deref(), Some("dual-mode"));
+        assert_eq!(plan.selected_launch_mode, Some(SvpLaunchMode::Normal));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn running_concurrent_does_not_exclude_clear_normal() {
+        let (root, path) = voice_project("Mai 2");
+        let mut slot = route_slot(
+            "dual-mode",
+            "Dual-mode account",
+            Sv2RemoteUseStatus::Clear,
+            Sv2AuthorizationStatus::Verified,
+            &["Mai 2"],
+            &[],
+        );
+        slot.concurrent.ready = true;
+        slot.concurrent.running_pids.push(4242);
+        let mut state = route_state(vec![slot]);
+        state.concurrent_provider.available = true;
+
+        let plan = build_route_plan(path.to_str().unwrap(), &state).unwrap();
+
+        assert_eq!(plan.selected_slot_id.as_deref(), Some("dual-mode"));
+        assert_eq!(plan.selected_launch_mode, Some(SvpLaunchMode::Normal));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn normal_blocker_does_not_exclude_clear_concurrent() {
+        let (root, path) = voice_project("Mai 2");
+        let mut slot = route_slot(
+            "dual-mode",
+            "Dual-mode account",
+            Sv2RemoteUseStatus::Clear,
+            Sv2AuthorizationStatus::Verified,
+            &["Mai 2"],
+            &[],
+        );
+        slot.concurrent.ready = true;
+        let mut state = route_state(vec![slot]);
+        state.concurrent_provider.available = true;
+        state.blockers.push(crate::sv2_profiles::Sv2ProcessBlocker {
+            pid: Some(4242),
+            name: "synthv-studio.exe".to_string(),
+            reason: "test blocker".to_string(),
+        });
+
+        let plan = build_route_plan(path.to_str().unwrap(), &state).unwrap();
+
+        assert_eq!(plan.selected_slot_id.as_deref(), Some("dual-mode"));
+        assert_eq!(plan.selected_launch_mode, Some(SvpLaunchMode::Concurrent));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn account_mismatch_environment_is_never_routable() {
+        let (root, path) = voice_project("Mai 2");
+        let mut slot = route_slot(
+            "mismatch",
+            "Mismatch account",
+            Sv2RemoteUseStatus::Clear,
+            Sv2AuthorizationStatus::Verified,
+            &["Mai 2"],
+            &[],
+        );
+        slot.concurrent.ready = true;
+        slot.concurrent_account_probe.session_status = Sv2SessionInspectionStatus::AccountMismatch;
+        slot.concurrent_account_probe.remote_use = Sv2RemoteUseStatus::Unknown;
+        slot.concurrent_account_probe.authorization_status = Sv2AuthorizationStatus::Unknown;
+        slot.concurrent_account_probe.authorized_voices.clear();
+        slot.concurrent_account_probe.authorized_voice_count = 0;
+        let mut state = route_state(vec![slot]);
+        state.concurrent_provider.available = true;
+        state.blockers.push(crate::sv2_profiles::Sv2ProcessBlocker {
+            pid: Some(4242),
+            name: "synthv-studio.exe".to_string(),
+            reason: "test blocker".to_string(),
+        });
+
+        let plan = build_route_plan(path.to_str().unwrap(), &state).unwrap();
+
+        assert_eq!(plan.selected_slot_id, None);
+        assert_eq!(plan.candidates[0].launch_mode, None);
+        assert_eq!(
+            plan.candidates[0].session_status,
+            Sv2SessionInspectionStatus::AccountMismatch
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unsynchronized_environment_is_never_routable() {
+        let (root, path) = voice_project("Mai 2");
+        let mut slot = route_slot(
+            "sync-failed",
+            "Unsynchronized account",
+            Sv2RemoteUseStatus::Clear,
+            Sv2AuthorizationStatus::Verified,
+            &["Mai 2"],
+            &[],
+        );
+        slot.concurrent.ready = true;
+        slot.concurrent_account_probe.session_status = Sv2SessionInspectionStatus::SyncFailed;
+        slot.concurrent_account_probe.remote_use = Sv2RemoteUseStatus::Unknown;
+        slot.concurrent_account_probe.authorization_status = Sv2AuthorizationStatus::Unknown;
+        slot.concurrent_account_probe.authorized_voices.clear();
+        slot.concurrent_account_probe.authorized_voice_count = 0;
+        let mut state = route_state(vec![slot]);
+        state.concurrent_provider.available = true;
+        state.blockers.push(crate::sv2_profiles::Sv2ProcessBlocker {
+            pid: Some(4242),
+            name: "synthv-studio.exe".to_string(),
+            reason: "test blocker".to_string(),
+        });
+
+        let plan = build_route_plan(path.to_str().unwrap(), &state).unwrap();
+
+        assert_eq!(plan.selected_slot_id, None);
+        assert_eq!(plan.candidates[0].launch_mode, None);
+        assert_eq!(
+            plan.candidates[0].session_status,
+            Sv2SessionInspectionStatus::SyncFailed
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -932,7 +1459,7 @@ mod tests {
     }
 
     #[test]
-    fn local_database_count_does_not_expose_opaque_ids() {
+    fn local_databases_are_not_treated_as_account_authorization() {
         let root = std::env::temp_dir().join(format!("svp-inventory-test-{}", Uuid::new_v4()));
         let version = root.join("databases").join("opaque-license-id").join("104");
         fs::create_dir_all(&version).unwrap();
@@ -940,9 +1467,9 @@ mod tests {
 
         let inventory = inspect_voice_inventory(&root, &[]);
 
-        assert_eq!(inventory.installed_opaque_count, 1);
-        assert_eq!(inventory.status, Sv2VoiceInventoryStatus::LocalEvidence);
+        assert_eq!(inventory.status, Sv2VoiceInventoryStatus::Unknown);
         assert!(!inventory.detail.contains("opaque-license-id"));
+        assert!(!inventory.detail.contains("安装"));
         fs::remove_dir_all(root).unwrap();
     }
 

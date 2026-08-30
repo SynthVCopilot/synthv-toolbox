@@ -1,5 +1,8 @@
 <script setup lang="ts">
-defineProps<{ title: string; subtitle: string; bridgeConnected: boolean }>();
+import { icon } from "../../icons";
+
+defineProps<{ title: string; subtitle: string; page: string; busy: boolean }>();
+const refreshIcon = icon("sync", 17);
 </script>
 
 <template>
@@ -8,9 +11,18 @@ defineProps<{ title: string; subtitle: string; bridgeConnected: boolean }>();
       <h1>{{ title }}</h1>
       <p>{{ subtitle }}</p>
     </div>
-    <div class="top-actions">
-      <span class="status-dot" :class="{ online: bridgeConnected }"></span>
-      <span class="muted">Bridge {{ bridgeConnected ? "已连接" : "未连接" }}</span>
+    <div class="topbar-status-group">
+      <Transition name="busy-chip">
+        <div v-if="busy" class="top-actions operation-progress" role="status" aria-live="polite">
+          <span class="mini-spinner"></span>
+          <span>处理中</span>
+        </div>
+      </Transition>
+      <div v-if="page === 'accounts'" class="topbar-account-actions">
+        <button class="topbar-icon-button" data-profile-refresh title="刷新账号状态" aria-label="刷新账号状态" v-html="refreshIcon"></button>
+        <button class="secondary compact" data-account-manager="global">全部设置</button>
+        <button class="primary compact" data-account-manager="add">添加账号</button>
+      </div>
     </div>
   </header>
 </template>
