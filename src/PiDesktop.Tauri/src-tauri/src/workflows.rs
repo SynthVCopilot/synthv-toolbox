@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::audio_prep::configure_ffmpeg_environment;
 use crate::components::{component_usage_guard, ComponentUsageGuard};
 use crate::config::model_config_path;
 
@@ -302,7 +303,7 @@ fn run_python(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    prepend_bundled_ffmpeg(&mut command, resource_dir);
+    let _ = configure_ffmpeg_environment(&mut command, resource_dir);
     let output = command
         .output()
         .map_err(|error| format!("无法启动{label}：{error}"))?;
@@ -361,25 +362,6 @@ fn validate_output_name(value: &str, extension: &str) -> Result<String, String> 
         return Err("输出文件名无效。".to_string());
     }
     Ok(format!("{stem}.{extension}"))
-}
-
-fn prepend_bundled_ffmpeg(command: &mut Command, resource_dir: &Path) {
-    let ffmpeg_dir = resource_dir.join("ffmpeg");
-    let binary = if cfg!(windows) {
-        "ffmpeg.exe"
-    } else {
-        "ffmpeg"
-    };
-    if !ffmpeg_dir.join(binary).is_file() {
-        return;
-    }
-    let mut paths = vec![ffmpeg_dir];
-    if let Some(existing) = std::env::var_os("PATH") {
-        paths.extend(std::env::split_paths(&existing));
-    }
-    if let Ok(joined) = std::env::join_paths(paths) {
-        command.env("PATH", joined);
-    }
 }
 
 fn component_name(key: &str) -> &str {
