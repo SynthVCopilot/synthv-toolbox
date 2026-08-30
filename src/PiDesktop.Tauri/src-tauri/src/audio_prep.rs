@@ -1537,10 +1537,22 @@ mod tests {
     use super::*;
     use std::sync::OnceLock;
 
+    fn temporary_test_base() -> PathBuf {
+        let root = std::env::temp_dir();
+        #[cfg(target_os = "macos")]
+        {
+            fs::canonicalize(root).expect("macOS test temp root must be canonicalizable")
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            root
+        }
+    }
+
     fn fake_runtime_root() -> &'static PathBuf {
         static ROOT: OnceLock<PathBuf> = OnceLock::new();
         ROOT.get_or_init(|| {
-            let root = std::env::temp_dir().join(format!(
+            let root = temporary_test_base().join(format!(
                 "synthv-toolbox-fake-ffmpeg-{}",
                 Uuid::new_v4()
             ));
@@ -1656,7 +1668,7 @@ fn main() {
     }
 
     fn fake_service(label: &str) -> (Arc<AudioPreparationService>, PathBuf) {
-        let case_root = std::env::temp_dir().join(format!(
+        let case_root = temporary_test_base().join(format!(
             "synthv-toolbox-audio-case-{label}-{}",
             Uuid::new_v4()
         ));
@@ -1950,7 +1962,7 @@ fn main() {
     #[test]
     fn generated_outputs_reject_source_identity_and_conflicts() {
         let root =
-            std::env::temp_dir().join(format!("synthv-toolbox-output-safety-{}", Uuid::new_v4()));
+            temporary_test_base().join(format!("synthv-toolbox-output-safety-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let source = root.join("source.wav");
         fs::write(&source, b"source").unwrap();
@@ -1969,7 +1981,7 @@ fn main() {
         use std::os::unix::fs::symlink;
 
         let base =
-            std::env::temp_dir().join(format!("synthv-toolbox-output-link-{}", Uuid::new_v4()));
+            temporary_test_base().join(format!("synthv-toolbox-output-link-{}", Uuid::new_v4()));
         let external = base.join("external");
         let linked = base.join("linked-output");
         fs::create_dir_all(&external).unwrap();
@@ -1984,7 +1996,7 @@ fn main() {
         use std::os::unix::fs::symlink;
 
         let root =
-            std::env::temp_dir().join(format!("synthv-toolbox-input-link-{}", Uuid::new_v4()));
+            temporary_test_base().join(format!("synthv-toolbox-input-link-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let source = root.join("source.wav");
         let linked = root.join("linked.wav");
@@ -2002,7 +2014,7 @@ fn main() {
         use std::os::windows::fs::symlink_file;
 
         let root =
-            std::env::temp_dir().join(format!("synthv-toolbox-input-link-{}", Uuid::new_v4()));
+            temporary_test_base().join(format!("synthv-toolbox-input-link-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let source = root.join("source.wav");
         let linked = root.join("linked.wav");
@@ -2029,7 +2041,7 @@ fn main() {
     #[tokio::test]
     async fn runtime_status_is_unavailable_when_version_execution_fails() {
         let case_root =
-            std::env::temp_dir().join(format!("synthv-toolbox-status-failure-{}", Uuid::new_v4()));
+            temporary_test_base().join(format!("synthv-toolbox-status-failure-{}", Uuid::new_v4()));
         let resource = case_root.join("resource");
         let bin = resource.join("ffmpeg");
         copy_fake_pair(&bin);
@@ -2103,7 +2115,7 @@ fn main() {
 
     #[test]
     fn runtime_source_priority_is_explicit_managed_bundled_then_path() {
-        let root = std::env::temp_dir().join(format!(
+        let root = temporary_test_base().join(format!(
             "synthv-toolbox-runtime-priority-{}",
             Uuid::new_v4()
         ));
