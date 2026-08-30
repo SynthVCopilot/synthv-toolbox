@@ -5,24 +5,31 @@
 //! 阻塞式 HTTP（ureq），与 `AgentProvider::step` 的同步签名吻合；
 //! 上层 Tauri 命令自行放到后台线程。
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use zeroize::Zeroize;
 
 use super::{
     AgentError, AgentProvider, AgentStep, ChatMessage, Result, Role, ToolCall, ToolDefinition,
 };
 
 /// Anthropic provider 配置。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AnthropicConfig {
-    /// 端点。可以是官方 `https://api.anthropic.com`、中继根（自动拼 `/v1/messages`），
+    /// 端点。可以是官方服务或中继根（自动拼 `/v1/messages`），
     /// 或已含 `/v1/messages` 的完整 URL（原样使用）。
     #[serde(default = "default_base_url")]
     pub base_url: String,
     /// API key 或中继 auth token。`sk-ant-` 开头走 `x-api-key`，否则两种头都带上
     /// （中继对 `x-api-key`/`Authorization: Bearer` 的取舍不一，双发兼容面最大）。
     pub auth_token: String,
-    /// 模型 id（如 `claude-sonnet-5`，中继上常见 `glm-5.2` 等）。
+    /// Explicit authentication mode. OAuth must never be inferred from a token
+    /// prefix because an upstream format change could leak it into API-key headers.
+    #[serde(default)]
+    pub auth_mode: AnthropicAuthMode,
+    /// 服务端接受的模型 id。
     pub model: String,
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
@@ -32,6 +39,36 @@ pub struct AnthropicConfig {
     /// 请求超时秒数。
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
+}
+
+impl fmt::Debug for AnthropicConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AnthropicConfig")
+            .field("base_url", &self.base_url)
+            .field("auth_token", &"[redacted]")
+            .field("auth_mode", &self.auth_mode)
+            .field("model", &self.model)
+            .field("max_tokens", &self.max_tokens)
+            .field("system", &self.system)
+            .field("timeout_secs", &self.timeout_secs)
+            .finish()
+    }
+}
+
+impl Drop for AnthropicConfig {
+    fn drop(&mut self) {
+        self.auth_token.zeroize();
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AnthropicAuthMode {
+    ApiKey,
+    OAuth,
+    #[default]
+    Relay,
 }
 
 fn default_base_url() -> String {
@@ -53,6 +90,31 @@ impl AnthropicConfig {
         Self {
             base_url: base_url.into(),
             auth_token: auth_token.into(),
+            auth_mode: AnthropicAuthMode::Relay,
+            model: model.into(),
+            max_tokens: default_max_tokens(),
+            system: None,
+            timeout_secs: default_timeout_secs(),
+        }
+    }
+
+    pub fn oauth(auth_token: impl Into<String>, model: impl Into<String>) -> Self {
+        Self {
+            base_url: default_base_url(),
+            auth_token: auth_token.into(),
+            auth_mode: AnthropicAuthMode::OAuth,
+            model: model.into(),
+            max_tokens: default_max_tokens(),
+            system: None,
+            timeout_secs: default_timeout_secs(),
+        }
+    }
+
+    pub fn api_key(auth_token: impl Into<String>, model: impl Into<String>) -> Self {
+        Self {
+            base_url: default_base_url(),
+            auth_token: auth_token.into(),
+            auth_mode: AnthropicAuthMode::ApiKey,
             model: model.into(),
             max_tokens: default_max_tokens(),
             system: None,
@@ -250,15 +312,22 @@ impl AgentProvider for AnthropicProvider {
             .post(&url)
             .set("content-type", "application/json")
             .set("anthropic-version", "2023-06-01");
-        if self.config.auth_token.starts_with("sk-ant-") {
-            req = req.set("x-api-key", &self.config.auth_token);
-        } else {
+        req = match self.config.auth_mode {
+            AnthropicAuthMode::OAuth => req
+                .set(
+                    "authorization",
+                    &format!("Bearer {}", self.config.auth_token),
+                )
+                .set("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
+                .set("user-agent", "claude-cli/2.1.75")
+                .set("x-app", "cli"),
+            AnthropicAuthMode::ApiKey => req.set("x-api-key", &self.config.auth_token),
             // 中继 token：双发两种头，兼容 x-api-key 或 Bearer 任一实现。
-            req = req.set("x-api-key", &self.config.auth_token).set(
+            AnthropicAuthMode::Relay => req.set("x-api-key", &self.config.auth_token).set(
                 "authorization",
                 &format!("Bearer {}", self.config.auth_token),
-            );
-        }
+            ),
+        };
 
         let response = req.send_string(&request.to_string());
         match response {
@@ -271,9 +340,9 @@ impl AgentProvider for AnthropicProvider {
             Err(ureq::Error::Status(code, resp)) => {
                 let body = resp.into_string().unwrap_or_default();
                 let snippet: String = body.chars().take(600).collect();
-                Err(AgentError::new(format!("HTTP {code}: {snippet}")))
+                Err(AgentError::http(code, format!("HTTP {code}: {snippet}")))
             }
-            Err(e) => Err(AgentError::new(format!("请求失败: {e}"))),
+            Err(e) => Err(AgentError::transport(format!("请求失败: {e}"))),
         }
     }
 }
@@ -287,6 +356,7 @@ mod tests {
         let mut c = AnthropicConfig {
             base_url: "https://api.anthropic.com".into(),
             auth_token: "t".into(),
+            auth_mode: AnthropicAuthMode::Relay,
             model: "m".into(),
             max_tokens: 16,
             system: None,
@@ -306,6 +376,7 @@ mod tests {
         let cfg = AnthropicConfig {
             base_url: "https://x".into(),
             auth_token: "t".into(),
+            auth_mode: AnthropicAuthMode::Relay,
             model: "m".into(),
             max_tokens: 16,
             system: Some("sys".into()),
@@ -382,6 +453,7 @@ mod tests {
         let p = AnthropicProvider::new(AnthropicConfig {
             base_url: base,
             auth_token: token,
+            auth_mode: AnthropicAuthMode::Relay,
             model,
             max_tokens: 64,
             system: Some("You are a terse test assistant. Reply in one short sentence.".into()),

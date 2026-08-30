@@ -190,6 +190,17 @@ impl Sv2SessionGuardStore {
         })
     }
 
+    pub fn remove_slot(&self, slot_id: &str) -> Result<(), String> {
+        validate_slot_id(slot_id)?;
+        reject_reparse_point(&self.root)?;
+        let slot_root = self.root.join(slot_id);
+        if !slot_root.exists() {
+            return Ok(());
+        }
+        reject_reparse_point(&slot_root)?;
+        fs::remove_dir_all(&slot_root).map_err(|error| format!("无法删除登录态恢复快照：{error}"))
+    }
+
     fn reconcile_record(
         &self,
         slot_id: &str,

@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::components::{component_usage_guard, ComponentUsageGuard};
 use crate::config::model_config_path;
 
 #[derive(Debug, Clone, Serialize)]
@@ -249,11 +250,13 @@ pub fn export_project_lyrics(
 const AUDIO_EXTENSIONS: &[&str] = &["wav", "flac", "mp3", "m4a", "aac", "ogg", "opus"];
 
 struct PythonRuntime {
+    _usage_guard: ComponentUsageGuard,
     python: PathBuf,
     script: PathBuf,
 }
 
 fn python_component(key: &str, components_dir: Option<&Path>) -> Result<PythonRuntime, String> {
+    let usage_guard = component_usage_guard()?;
     let value: Value = serde_json::from_str(
         &fs::read_to_string(model_config_path())
             .map_err(|_| format!("组件尚未安装。请先在组件中心安装 {}。", component_name(key)))?,
@@ -279,7 +282,11 @@ fn python_component(key: &str, components_dir: Option<&Path>) -> Result<PythonRu
     let script = bundled_script
         .or(configured_script)
         .ok_or_else(|| "组件脚本已丢失，请重新安装组件。".to_string())?;
-    Ok(PythonRuntime { python, script })
+    Ok(PythonRuntime {
+        _usage_guard: usage_guard,
+        python,
+        script,
+    })
 }
 
 fn run_python(

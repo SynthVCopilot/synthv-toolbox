@@ -1,11 +1,12 @@
 {
   "name": "synthv-toolbox",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.6",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "tsc && vite build",
+    "test:contracts": "node ../../test/sv2-account-refresh.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

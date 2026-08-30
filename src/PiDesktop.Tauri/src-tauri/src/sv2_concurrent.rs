@@ -54,20 +54,11 @@ impl Sv2IsolationPreference {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sv2ConcurrentDefaults {
     pub app_settings: bool,
     pub voice_libraries: bool,
-}
-
-impl Default for Sv2ConcurrentDefaults {
-    fn default() -> Self {
-        Self {
-            app_settings: true,
-            voice_libraries: true,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -323,6 +314,22 @@ pub fn concurrent_folder(vault: &Path, slot_id: &str) -> Result<PathBuf, String>
     let root = box_root(vault, slot_id);
     validate_prepared(&root, slot_id, &name)?;
     Ok(virtual_data_root(&root))
+}
+
+pub fn remove_slot_data(vault: &Path, slot_id: &str) -> Result<(), String> {
+    let name = box_name(slot_id)?;
+    let root = box_root(vault, slot_id);
+    let slot_root = root
+        .parent()
+        .ok_or_else(|| "隔离副本路径无效。".to_string())?;
+    if !slot_root.exists() {
+        return Ok(());
+    }
+    reject_reparse_point(slot_root)?;
+    if root.exists() {
+        validate_prepared(&root, slot_id, &name)?;
+    }
+    fs::remove_dir_all(slot_root).map_err(|error| format!("无法删除隔离副本：{error}"))
 }
 
 fn configure_box(

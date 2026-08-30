@@ -9,13 +9,14 @@ defineProps<{ state: ShellState }>();
 </script>
 
 <template>
-  <div id="app-shell" class="app-shell" :class="{ 'sidebar-collapsed': state.sidebarCollapsed }">
+  <div id="app-shell" class="app-shell" :class="{ 'sidebar-collapsed': state.sidebarCollapsed, 'is-busy': state.busy }">
     <SidebarNavigation :html="state.sidebarHtml" />
     <main class="main">
       <PageHeader
         :title="state.title"
         :subtitle="state.subtitle"
-        :bridge-connected="state.bridgeConnected"
+        :page="state.page"
+        :busy="state.busy"
       />
       <PageViewport
         :page="state.page"

@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
 
 use crate::agent::ChatMessage;
-use crate::config::{load_settings, ToolboxSettings};
+use crate::config::ToolboxSettings;
 use crate::downloads::ComponentDownloadManager;
 use crate::mcp::McpManager;
 use crate::sv2_profiles::Sv2ProfileService;
@@ -36,9 +36,10 @@ impl AppState {
         bridge_dir: PathBuf,
         components_dir: PathBuf,
         svp_passthrough_only: bool,
+        settings: ToolboxSettings,
     ) -> Self {
         Self {
-            settings: Arc::new(RwLock::new(load_settings())),
+            settings: Arc::new(RwLock::new(settings)),
             agent: Arc::new(Mutex::new(AgentSession::default())),
             mcp: Arc::new(McpManager::default()),
             resource_dir,

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -39,11 +40,25 @@ pub struct ComponentDownload {
 struct QueueState {
     items: Vec<ComponentDownload>,
     worker_running: bool,
+    removal_reservations: HashSet<String>,
 }
 
 #[derive(Default)]
 pub struct ComponentDownloadManager {
     inner: Mutex<QueueState>,
+}
+
+pub struct ComponentRemovalReservation {
+    manager: Arc<ComponentDownloadManager>,
+    component_id: String,
+}
+
+impl Drop for ComponentRemovalReservation {
+    fn drop(&mut self) {
+        if let Ok(mut queue) = self.manager.inner.lock() {
+            queue.removal_reservations.remove(&self.component_id);
+        }
+    }
 }
 
 impl ComponentDownloadManager {
@@ -54,6 +69,43 @@ impl ComponentDownloadManager {
             .unwrap_or_default()
     }
 
+    #[cfg(test)]
+    pub fn has_active(&self, component_id: &str) -> bool {
+        self.inner
+            .lock()
+            .map(|queue| {
+                queue
+                    .items
+                    .iter()
+                    .any(|item| item.component_id == component_id && item.status.active())
+            })
+            .unwrap_or(true)
+    }
+
+    pub fn reserve_removal(
+        self: &Arc<Self>,
+        component_id: &str,
+    ) -> Result<ComponentRemovalReservation, String> {
+        let mut queue = self
+            .inner
+            .lock()
+            .map_err(|_| "组件下载队列锁已损坏。".to_string())?;
+        if queue
+            .items
+            .iter()
+            .any(|item| item.component_id == component_id && item.status.active())
+        {
+            return Err("组件仍在下载或安装中，请等待任务结束后重试。".to_string());
+        }
+        if !queue.removal_reservations.insert(component_id.to_string()) {
+            return Err("组件删除操作已经在进行中。".to_string());
+        }
+        Ok(ComponentRemovalReservation {
+            manager: Arc::clone(self),
+            component_id: component_id.to_string(),
+        })
+    }
+
     pub fn enqueue(&self, component_id: &str) -> Result<(Vec<ComponentDownload>, bool), String> {
         let display_name = component_display_name(component_id)
             .ok_or_else(|| "未知组件，无法加入下载队列。".to_string())?;
@@ -61,6 +113,9 @@ impl ComponentDownloadManager {
             .inner
             .lock()
             .map_err(|_| "组件下载队列锁已损坏。".to_string())?;
+        if queue.removal_reservations.contains(component_id) {
+            return Err("组件正在删除，暂时不能加入安装队列。".to_string());
+        }
         if queue
             .items
             .iter()
@@ -210,6 +265,45 @@ mod tests {
         assert!(!duplicate_start);
         assert_eq!(first.len(), 1);
         assert_eq!(second.len(), 1);
+    }
+
+    #[test]
+    fn active_query_tracks_only_active_tasks_for_requested_component() {
+        let queue = ComponentDownloadManager::default();
+        assert!(!queue.has_active("pi-audio"));
+        let (items, _) = queue.enqueue("pi-audio").unwrap();
+        assert!(queue.has_active("pi-audio"));
+        assert!(!queue.has_active("cvrs"));
+
+        queue.finish(
+            &items[0].id,
+            ComponentDownloadStatus::Completed,
+            100,
+            "done".to_string(),
+        );
+
+        assert!(!queue.has_active("pi-audio"));
+    }
+
+    #[test]
+    fn active_install_prevents_removal_reservation() {
+        let queue = Arc::new(ComponentDownloadManager::default());
+        queue.enqueue("pi-audio").unwrap();
+
+        assert!(queue.reserve_removal("pi-audio").is_err());
+        assert!(queue.reserve_removal("cvrs").is_ok());
+    }
+
+    #[test]
+    fn removal_reservation_blocks_same_component_enqueue_until_drop() {
+        let queue = Arc::new(ComponentDownloadManager::default());
+        let reservation = queue.reserve_removal("pi-audio").unwrap();
+
+        assert!(queue.enqueue("pi-audio").is_err());
+        assert!(queue.enqueue("cvrs").is_ok());
+
+        drop(reservation);
+        assert!(queue.enqueue("pi-audio").is_ok());
     }
 
     #[test]

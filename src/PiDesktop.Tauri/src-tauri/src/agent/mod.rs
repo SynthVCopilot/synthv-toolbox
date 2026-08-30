@@ -7,6 +7,7 @@ pub mod catalog;
 pub mod engine;
 pub mod error;
 pub mod history;
+pub mod openai_codex;
 pub mod paths;
 pub mod provider;
 
@@ -18,7 +19,8 @@ pub use engine::{
     AgentLoop, AgentProvider, AgentStep, ChatMessage, EchoProvider, NoTools, Role, ToolCall,
     ToolDefinition, ToolExecutor, ToolResult,
 };
-pub use error::{AgentError, Result};
+pub use error::{AgentError, AgentErrorKind, Result};
 pub use history::{Conversation, ConversationStore, JsonConversationStore};
+pub use openai_codex::{OpenAiCodexConfig, OpenAiCodexProvider};
 pub use paths::{config_path, data_root, history_dir, models_dir, output_dir, safe_join};
 pub use provider::{AnthropicConfig, AnthropicProvider};
