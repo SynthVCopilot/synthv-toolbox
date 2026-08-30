@@ -47,11 +47,7 @@ type AccountManagerSection = "profile" | "global" | "add";
 interface PendingAccountIndicatorConsent {
   refreshAfterEnable: boolean;
   refreshSlotId?: string;
-  globalSettings?: {
-    concurrentEnabled: boolean;
-    appSettings: boolean;
-    voiceLibraries: boolean;
-  };
+  concurrentEnabled?: boolean;
 }
 
 type Feature = FeatureCatalogItem;
@@ -891,6 +887,16 @@ async function launchConcurrentSlot(slotId: string, prepare: boolean): Promise<v
   profiles = await api.sv2ProfileState();
 }
 
+async function prepareConcurrentSlotsWhenEnabled(): Promise<number> {
+  if (!app?.sv2ConcurrentEnabled || !profiles?.concurrentProvider.available) return 0;
+  let prepared = 0;
+  for (const slot of profiles.slots.filter((item) => !item.concurrent.ready)) {
+    profiles = await api.prepareSv2ConcurrentProfile(slot.id);
+    prepared += 1;
+  }
+  return prepared;
+}
+
 function renderOnboarding(): void {
   root.innerHTML = `<main class="onboarding">
     <div class="onboarding-glow one"></div><div class="onboarding-glow two"></div>
@@ -975,9 +981,9 @@ function renderAccounts(): string {
         ? "隔离功能已在全局设置中关闭"
         : providerDetail;
     return `<article class="account-launch-card ${slot.isActive ? "active" : ""}" style="--profile-color:${color}">
-      <div class="account-card-main"><span class="profile-avatar compact">${escapeHtml(initial)}</span><div class="account-card-identity"><div class="profile-title-line"><h2>${escapeHtml(slot.displayName)}</h2>${accountUseDot(useState)}${slot.isActive ? '<span class="profile-active-badge">默认</span>' : ""}</div>${identity.length ? `<span class="profile-identity" title="${escapeHtml(identityTitle)}">${identity.map(escapeHtml).join(" · ")}</span>` : `<span class="profile-identity empty">${app?.sv2AccountIndicatorEnabled ? "尚未读取 JWT 姓名/邮箱" : "未设置账号标签"}</span>`}</div><div class="account-card-actions"><button class="icon-plain" data-profile-refresh-slot="${slot.id}" title="仅刷新此账号" aria-label="仅刷新 ${escapeHtml(slot.displayName)}">${icon("sync", 18)}</button><button class="icon-plain" data-manage-slot="${slot.id}" title="设置" aria-label="设置 ${escapeHtml(slot.displayName)}">${icon("settings", 18)}</button><button class="icon-plain danger" data-delete-profile="${slot.id}" title="删除" aria-label="删除 ${escapeHtml(slot.displayName)}">${icon("trash", 18)}</button><button class="icon-plain" data-profile-activate="${slot.id}" title="切换默认账户" aria-label="将 ${escapeHtml(slot.displayName)} 设为默认账户" ${slot.isActive ? "disabled" : ""}>${icon("check", 18)}</button></div></div>
+      <div class="account-card-main"><span class="profile-avatar compact">${escapeHtml(initial)}</span><div class="account-card-identity"><div class="profile-title-line"><h2>${escapeHtml(slot.displayName)}</h2>${accountUseDot(useState)}${slot.isActive ? '<span class="profile-active-badge">默认</span>' : ""}</div>${identity.length ? `<span class="profile-identity" title="${escapeHtml(identityTitle)}">${identity.map(escapeHtml).join(" · ")}</span>` : `<span class="profile-identity empty">${app?.sv2AccountIndicatorEnabled ? "尚未读取 JWT 姓名/邮箱" : "未设置账号标签"}</span>`}</div><div class="account-card-actions"><button class="icon-plain" data-profile-refresh-slot="${slot.id}" title="刷新此账号状态" aria-label="刷新 ${escapeHtml(slot.displayName)}">${icon("refresh", 18)}</button><button class="icon-plain" data-manage-slot="${slot.id}" title="设置" aria-label="设置 ${escapeHtml(slot.displayName)}">${icon("settings", 18)}</button><button class="icon-plain danger" data-delete-profile="${slot.id}" title="删除" aria-label="删除 ${escapeHtml(slot.displayName)}">${icon("trash", 18)}</button><button class="icon-plain" data-profile-activate="${slot.id}" title="切换默认账户" aria-label="将 ${escapeHtml(slot.displayName)} 设为默认账户" ${slot.isActive ? "disabled" : ""}>${icon("check", 18)}</button></div></div>
       <div class="account-card-facts">${accountProbeBadge(slot)}${voiceInventoryBadge(slot)}<span>${icon("sync", 13)} ${escapeHtml(lastUsed)}</span>${concurrentRunning ? `<span class="running">${icon("plug", 13)} ${slot.concurrent.runningPids.length} 个隔离进程</span>` : ""}</div>
-      <div class="account-launch-actions"><button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button>${slot.concurrent.ready ? `<button class="secondary" data-profile-concurrent-launch="${slot.id}" ${isolatedDisabled ? `disabled title="${escapeHtml(isolatedTitle)}"` : ""}>${icon("boxes", 16)} ${isolatedLabel}</button>` : `<button class="secondary" data-profile-concurrent-prepare="${slot.id}" ${isolatedDisabled ? `disabled title="${escapeHtml(isolatedTitle)}"` : ""}>${icon("download", 16)} ${isolatedLabel}</button>`}</div>
+      <div class="account-launch-actions">${concurrentEnabled && slot.concurrent.ready ? `<button class="primary" data-profile-concurrent-launch="${slot.id}" ${isolatedDisabled ? `disabled title="${escapeHtml(isolatedTitle)}"` : ""}>${icon("boxes", 16)} ${isolatedLabel}</button><button class="secondary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button>` : `<button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button><button class="secondary" data-profile-concurrent-prepare="${slot.id}" ${isolatedDisabled ? `disabled title="${escapeHtml(isolatedTitle)}"` : ""}>${icon("download", 16)} ${isolatedLabel}</button>`}</div>
     </article>`;
   }).join("");
   return `${blockerPanel}<div class="account-launch-grid">${cards || `<button class="empty-account-card" data-account-manager="add">${icon("plus", 22)}<strong>添加第一个账号</strong><span>导入当前环境或创建空槽位</span></button>`}</div>`;
@@ -1043,11 +1049,7 @@ function renderAccountManager(): string {
       <div class="manager-action-row">${managedSlot.isActive ? "" : `<button class="secondary" data-profile-activate="${managedSlot.id}">${icon("check", 15)} 设为默认账号</button>`}<button class="secondary" data-profile-folder="${managedSlot.id}">${icon("folder", 15)} 打开普通数据目录</button>${managedSlot.concurrent.ready ? `<button class="secondary" data-profile-concurrent-folder="${managedSlot.id}">${icon("folder", 15)} 打开隔离目录</button>` : ""}<button class="secondary component-remove-action" data-delete-profile="${managedSlot.id}">${icon("trash", 15)} 删除账号</button></div>
       <dl class="profile-storage-list compact"><div><dt>普通数据</dt><dd><code title="${escapeHtml(managedSlot.dataPath)}">${escapeHtml(managedSlot.dataPath)}</code></dd></div>${managedSlot.concurrent.ready ? `<div><dt>隔离数据</dt><dd><code title="${escapeHtml(managedSlot.concurrent.dataPath)}">${escapeHtml(managedSlot.concurrent.dataPath)}</code></dd></div>` : ""}</dl></div>` : '<div class="empty-inline">尚无账号，请先添加一个槽位。</div>';
   } else if (accountManagerSection === "global") {
-    const defaults = profiles.concurrentDefaults;
-    const isolationDefaults = app?.sv2ConcurrentEnabled
-      ? `<label class="fluent-switch"><input name="appSettings" type="checkbox" ${defaults.appSettings ? "checked" : ""} /><span></span>默认隔离应用设置</label><label class="fluent-switch"><input name="voiceLibraries" type="checkbox" ${defaults.voiceLibraries ? "checked" : ""} /><span></span>默认隔离声库数据</label>`
-      : "";
-    body = `<form id="sv2-global-settings-form" class="isolation-defaults-form manager-defaults"><div><strong>全局设置</strong><small>默认共享应用设置和声库数据；启用隔离后可设置隔离默认值。</small></div><label class="fluent-switch"><input name="accountProbeEnabled" type="checkbox" ${app?.sv2AccountIndicatorEnabled ? "checked" : ""} /><span></span>启用账号登录指示器</label>${isolationDefaults}<label class="fluent-switch"><input name="concurrentEnabled" type="checkbox" ${app?.sv2ConcurrentEnabled ? "checked" : ""} /><span></span>启用隔离功能</label><button class="secondary" type="submit">保存全局设置</button></form>`;
+    body = `<form id="sv2-global-settings-form" class="isolation-defaults-form manager-defaults"><div><strong>全局设置</strong><small>应用设置和声库数据始终共享，不会写入隔离副本。</small></div><label class="fluent-switch"><input name="accountProbeEnabled" type="checkbox" ${app?.sv2AccountIndicatorEnabled ? "checked" : ""} /><span></span>启用账号登录指示器</label><label class="fluent-switch"><input name="concurrentEnabled" type="checkbox" ${app?.sv2ConcurrentEnabled ? "checked" : ""} /><span></span>启用隔离功能</label><button class="secondary" type="submit">保存全局设置</button></form>`;
   } else {
     body = `<div class="account-add-grid">${profiles.canImportCurrent ? `<section><span class="feature-icon emerald">${icon("folder", 20)}</span><h3>导入当前环境</h3><p>把现有官方数据目录纳入槽位，不移动账号文件。</p><form id="profile-import-form" class="profile-create-form"><input id="profile-import-name" maxlength="64" required placeholder="例如 主账号" /><button class="primary">导入</button></form></section>` : ""}<section><span class="feature-icon blue">${icon("plus", 20)}</span><h3>创建空槽位</h3><p>首次启动后，在 SV2 官方登录页面完成登录。</p><form id="profile-create-form" class="profile-create-form"><input id="profile-create-name" maxlength="64" required placeholder="例如 制作账号" /><button class="secondary">创建</button></form></section></div><div class="manager-safety">${icon("check", 17)}<span><strong>账号数据保持原样</strong><small>工具箱不会伪造登录或绕过联网验证。</small></span></div>`;
   }
@@ -1877,8 +1879,9 @@ function wireForms(): void {
     if (!displayName) return;
     void run(async () => {
       profiles = await api.importCurrentSv2Profile(displayName);
+      const prepared = await prepareConcurrentSlotsWhenEnabled();
       await refreshAccountUsage();
-      notice = `已导入“${displayName}”。`;
+      notice = `已导入“${displayName}”。${prepared ? "已自动准备隔离数据。" : ""}`;
     });
   });
   document.querySelector<HTMLFormElement>("#profile-create-form")?.addEventListener("submit", (event) => {
@@ -1887,8 +1890,9 @@ function wireForms(): void {
     if (!displayName) return;
     void run(async () => {
       profiles = await api.createSv2Profile(displayName);
+      const prepared = await prepareConcurrentSlotsWhenEnabled();
       await refreshAccountUsage();
-      notice = `已创建“${displayName}”。`;
+      notice = `已创建“${displayName}”。${prepared ? "已自动准备隔离数据。" : ""}`;
     });
   });
   document.querySelectorAll<HTMLFormElement>("[data-profile-rename-form]").forEach((form) => form.addEventListener("submit", (event) => {
@@ -1926,23 +1930,18 @@ function wireForms(): void {
     const form = event.currentTarget as HTMLFormElement;
     const concurrentEnabled = form.querySelector<HTMLInputElement>('[name="concurrentEnabled"]')?.checked ?? false;
     const accountProbeEnabled = form.querySelector<HTMLInputElement>('[name="accountProbeEnabled"]')?.checked ?? false;
-    const appSettings = form.querySelector<HTMLInputElement>('[name="appSettings"]')?.checked ?? false;
-    const voiceLibraries = form.querySelector<HTMLInputElement>('[name="voiceLibraries"]')?.checked ?? false;
     if (accountProbeEnabled && !app?.sv2AccountIndicatorEnabled) {
-      pendingAccountIndicatorConsent = {
-        refreshAfterEnable: true,
-        globalSettings: { concurrentEnabled, appSettings, voiceLibraries },
-      };
+      pendingAccountIndicatorConsent = { refreshAfterEnable: true, concurrentEnabled };
       accountManagerOpen = false;
       render();
       return;
     }
     void run(async () => {
       app = await api.setSv2ConcurrentEnabled(concurrentEnabled);
+      const prepared = await prepareConcurrentSlotsWhenEnabled();
       app = await api.setSv2AccountIndicator(accountProbeEnabled);
-      profiles = await api.updateSv2ConcurrentDefaults(appSettings, voiceLibraries);
       if (!accountProbeEnabled) profiles = await api.sv2ProfileState();
-      notice = "全局设置已保存。";
+      notice = `全局设置已保存。${prepared ? `已自动准备 ${prepared} 个隔离数据目录。` : ""}`;
     });
   });
   document.querySelector<HTMLFormElement>("#chat-form")?.addEventListener("submit", (event) => {
@@ -2199,16 +2198,11 @@ document.addEventListener("click", (event) => {
     if (!consent) return;
     pendingAccountIndicatorConsent = undefined;
     void run(async () => {
-      if (consent.globalSettings) {
-        app = await api.setSv2ConcurrentEnabled(consent.globalSettings.concurrentEnabled);
+      if (consent.concurrentEnabled !== undefined) {
+        app = await api.setSv2ConcurrentEnabled(consent.concurrentEnabled);
+        await prepareConcurrentSlotsWhenEnabled();
       }
       app = await api.setSv2AccountIndicator(true, true);
-      if (consent.globalSettings) {
-        profiles = await api.updateSv2ConcurrentDefaults(
-          consent.globalSettings.appSettings,
-          consent.globalSettings.voiceLibraries,
-        );
-      }
       if (consent.refreshAfterEnable) await refreshAccountUsage(consent.refreshSlotId);
       notice = "账号登录指示器已开启，access JWT 已按需自动续期并完成首次预检。";
     });

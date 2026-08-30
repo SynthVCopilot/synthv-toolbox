@@ -45,16 +45,6 @@ pub enum Sv2IsolationPreference {
     Off,
 }
 
-impl Sv2IsolationPreference {
-    pub fn resolve(self, global_default: bool) -> bool {
-        match self {
-            Self::Global => global_default,
-            Self::On => true,
-            Self::Off => false,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sv2ConcurrentDefaults {
@@ -79,12 +69,13 @@ pub struct Sv2ConcurrentContentView {
 }
 
 impl Sv2ConcurrentContentPreferences {
-    pub fn resolve(self, defaults: Sv2ConcurrentDefaults) -> Sv2ConcurrentContentView {
+    pub fn resolve(self, _defaults: Sv2ConcurrentDefaults) -> Sv2ConcurrentContentView {
         Sv2ConcurrentContentView {
-            app_settings: self.app_settings,
-            voice_libraries: self.voice_libraries,
-            effective_app_settings: self.app_settings.resolve(defaults.app_settings),
-            effective_voice_libraries: self.voice_libraries.resolve(defaults.voice_libraries),
+            // Settings and voice databases stay on the host for every box.
+            app_settings: Sv2IsolationPreference::Off,
+            voice_libraries: Sv2IsolationPreference::Off,
+            effective_app_settings: false,
+            effective_voice_libraries: false,
         }
     }
 }
@@ -788,13 +779,13 @@ mod tests {
     }
 
     #[test]
-    fn content_preferences_resolve_against_global_defaults() {
+    fn content_preferences_always_share_settings_and_voice_libraries() {
         let defaults = Sv2ConcurrentDefaults {
             app_settings: true,
             voice_libraries: false,
         };
         let inherited = Sv2ConcurrentContentPreferences::default().resolve(defaults);
-        assert!(inherited.effective_app_settings);
+        assert!(!inherited.effective_app_settings);
         assert!(!inherited.effective_voice_libraries);
 
         let overridden = Sv2ConcurrentContentPreferences {
@@ -803,7 +794,7 @@ mod tests {
         }
         .resolve(defaults);
         assert!(!overridden.effective_app_settings);
-        assert!(overridden.effective_voice_libraries);
+        assert!(!overridden.effective_voice_libraries);
     }
 
     #[test]

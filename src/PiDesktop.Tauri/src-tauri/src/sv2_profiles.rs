@@ -1063,13 +1063,28 @@ fn enrich_account_probes(
         })
         .collect::<Vec<_>>();
     if refresh_sensitive_probe {
-        let selected = targets
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, _, _, _, slot_id))| {
-                refresh_slot_id.is_none_or(|selected_slot_id| selected_slot_id == slot_id)
-            })
-            .collect::<Vec<_>>();
+        // Use the prepared Sandboxie root as authority so a stale fallback copy cannot fail the account refresh.
+        let mut selected = Vec::new();
+        for slot_index in 0..state.slots.len() {
+            let slot_id = &state.slots[slot_index].id;
+            if refresh_slot_id.is_some_and(|selected_slot_id| selected_slot_id != slot_id) {
+                continue;
+            }
+            let authority = targets
+                .iter()
+                .enumerate()
+                .find(|(_, (index, concurrent, _, _, _))| {
+                    *index == slot_index && *concurrent
+                })
+                .or_else(|| {
+                    targets.iter().enumerate().find(|(_, (index, _, _, _, _))| {
+                        *index == slot_index
+                    })
+                });
+            if let Some(authority) = authority {
+                selected.push(authority);
+            }
+        }
         let requests = selected
             .iter()
             .map(
@@ -1085,11 +1100,17 @@ fn enrich_account_probes(
                 },
             )
             .collect::<Vec<_>>();
-        for ((view_index, _), refreshed) in selected
+        for ((view_index, (slot_index, _, _, _, _)), refreshed) in selected
             .into_iter()
             .zip(refresh_sv2_account_probes(&requests))
         {
-            views[view_index] = refreshed;
+            views[view_index] = refreshed.clone();
+            // Account status follows the selected launch authority while ordinary startup remains a fallback.
+            for (target_index, (index, _, _, _, _)) in targets.iter().enumerate() {
+                if index == slot_index {
+                    views[target_index] = refreshed.clone();
+                }
+            }
         }
     }
 
