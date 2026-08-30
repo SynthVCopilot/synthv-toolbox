@@ -151,6 +151,15 @@ jobs:
           $installer = Get-ChildItem -Path $bundle -Filter *.exe -File | Select-Object -First 1
           if ($null -eq $installer) { throw "NSIS bundle was not produced" }
 
+      - name: Upload Windows hands-on verification bundle
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: synthv-toolbox-windows-x64-${{ github.sha }}
+          path: src/PiDesktop.Tauri/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 3
+
       - name: Verify macOS universal app and DMG output
         if: runner.os == 'macOS'
         shell: bash
