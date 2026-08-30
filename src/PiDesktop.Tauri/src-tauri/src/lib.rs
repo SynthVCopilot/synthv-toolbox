@@ -1,5 +1,6 @@
 pub mod agent;
 mod audio_capture;
+mod audio_prep;
 mod bridge_workflows;
 mod commands;
 mod components;
@@ -11,6 +12,7 @@ mod lyric_tools;
 mod mcp;
 mod oauth;
 mod opencode_catalog;
+mod process_tree;
 mod state;
 mod sv2_account_probe;
 mod sv2_concurrent;
@@ -177,6 +179,15 @@ pub fn run() {
             commands::list_synthv_capture_targets,
             commands::capture_synthv_clip,
             commands::compare_synthv_clips,
+            commands::ffmpeg_status,
+            commands::probe_media,
+            commands::plan_audio_prepare,
+            commands::start_audio_prepare,
+            commands::analyze_loudness,
+            commands::plan_loudness_normalize,
+            commands::start_loudness_normalize,
+            commands::audio_job_snapshot,
+            commands::cancel_audio_job,
             commands::component_downloads,
             commands::queue_component_install,
             commands::open_downloaded_component,

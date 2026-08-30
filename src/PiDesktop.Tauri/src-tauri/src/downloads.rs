@@ -245,6 +245,7 @@ impl ComponentDownloadManager {
 
 fn component_display_name(id: &str) -> Option<&'static str> {
     match id {
+        "ffmpeg" => Some("FFmpeg"),
         "pi-audio" => Some("pi-audio"),
         "cvrs" => Some("CVRS"),
         "sandboxie" => Some("Sandboxie Plus"),
