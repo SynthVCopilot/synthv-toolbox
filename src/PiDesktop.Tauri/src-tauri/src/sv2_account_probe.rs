@@ -610,7 +610,7 @@ fn decrypt_session(
     }
 
     let cipher: Blowfish = Blowfish::new_from_slice(key).map_err(|_| ())?;
-    for chunk in ciphertext.chunks_exact_mut(8) {
+    for chunk in ciphertext.as_chunks_mut::<8>().0 {
         // JUCE loads both halves as native little-endian uint32 values.  The
         // RustCrypto default Blowfish block adapter is big-endian.
         chunk[..4].reverse();
@@ -645,7 +645,7 @@ fn encrypt_session(plaintext: &[u8], key: &[u8; 8]) -> Result<Zeroizing<Vec<u8>>
     ciphertext.extend_from_slice(plaintext);
     let padding = 8 - ciphertext.len() % 8;
     ciphertext.extend(std::iter::repeat_n(padding as u8, padding));
-    for chunk in ciphertext.chunks_exact_mut(8) {
+    for chunk in ciphertext.as_chunks_mut::<8>().0 {
         chunk[..4].reverse();
         chunk[4..].reverse();
         cipher.encrypt_block(blowfish::cipher::Block::<Blowfish>::from_mut_slice(chunk));
@@ -2701,6 +2701,7 @@ fn current_user_sid_hash() -> Result<u32, ()> {
 }
 
 #[cfg(windows)]
+#[allow(unused_unsafe)]
 fn processor_signature() -> u32 {
     #[cfg(target_arch = "x86_64")]
     {

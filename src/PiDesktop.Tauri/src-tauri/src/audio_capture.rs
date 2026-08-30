@@ -1255,7 +1255,7 @@ mod platform {
             ok = unsafe { Process32NextW(snapshot, &mut entry) } != 0;
         }
         unsafe { CloseHandle(snapshot) };
-        targets.sort_by(|left, right| left.process_id.cmp(&right.process_id));
+        targets.sort_by_key(|target| target.process_id);
         Ok(targets)
     }
 
