@@ -10,6 +10,8 @@ use crate::synthv::{quiet_command, succeeded, OperationResult};
 
 const CONCURRENT_SCHEMA_VERSION: u32 = 1;
 const CONCURRENT_MARKER_FILE: &str = ".synthv-toolbox-concurrent.json";
+// Sandboxie uses `-` (rather than a boolean `n`) for "do not alter the title".
+const BOX_NAME_TITLE_SETTING: &str = "-";
 #[cfg(windows)]
 const PROVIDER_ENV: &str = "SV2_TOOLBOX_SANDBOXIE_HOME";
 
@@ -28,7 +30,6 @@ pub struct Sv2ConcurrentProviderView {
 #[serde(rename_all = "camelCase")]
 pub struct Sv2ConcurrentSlotView {
     pub ready: bool,
-    pub box_name: String,
     pub data_path: String,
     pub running_pids: Vec<u32>,
     pub detail: String,
@@ -210,7 +211,6 @@ pub fn slot_view(
     };
     Sv2ConcurrentSlotView {
         ready,
-        box_name,
         data_path: data_path.to_string_lossy().into_owned(),
         running_pids,
         detail,
@@ -313,7 +313,7 @@ pub fn launch_slot(
     }
     Ok(succeeded(
         "已在独立文件、注册表和 IPC 命名空间中启动 SV2。",
-        format!("Sandboxie box: {name}"),
+        "隔离实例已启动。".to_string(),
     ))
 }
 
@@ -350,7 +350,7 @@ fn configure_box(
         ("SeparateUserFolders", "y"),
         ("AutoRecover", "n"),
         ("NeverDelete", "y"),
-        ("BoxNameTitle", "y"),
+        ("BoxNameTitle", BOX_NAME_TITLE_SETTING),
         ("ConfigLevel", "10"),
         ("UseFileDeleteV2", "y"),
         ("UseRegDeleteV2", "y"),
@@ -771,6 +771,7 @@ mod tests {
         assert!(box_name("../../escape").is_err());
         assert_eq!(sandbox_box_argument(&name), format!("/box:{name}"));
         assert!(!sandbox_box_argument(&name).contains('#'));
+        assert_eq!(BOX_NAME_TITLE_SETTING, "-");
     }
 
     #[test]
