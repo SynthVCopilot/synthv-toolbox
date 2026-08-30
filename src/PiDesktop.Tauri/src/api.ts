@@ -4,11 +4,15 @@ import type {
   BatchWorkflowResult,
   BootstrapState,
   ChatMessage,
+  ChineseRhymeLookup,
   ComponentDownload,
   CreativeHistoryEntry,
   ConversationSnapshot,
   ConversationSummary,
   McpServerConfig,
+  LyricCandidateRequest,
+  LyricCandidateSet,
+  LyricSectionRequest,
   OperationResult,
   ProjectCheckpoint,
   Sv2AccountPrecheck,
@@ -24,6 +28,7 @@ import type {
   SynthVInstallation,
   WorkflowRecipe,
   WorkflowResult,
+  RhymeMatchMode,
 } from "./types";
 
 const preview = import.meta.env.DEV && !isTauri();
@@ -398,6 +403,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     { id: "project-doctor", title: "工程医生", description: "只读检查工程风险。", kind: "project-doctor", inputKind: "svp", supportsBatch: true, requiresBridge: false, requiresAi: false, defaultParameters: {} },
     { id: "pronunciation-check", title: "发音诊断", description: "检查歌词和音素风险。", kind: "pronunciation-check", inputKind: "svpOrText", supportsBatch: true, requiresBridge: false, requiresAi: false, defaultParameters: {} },
     { id: "render-quality-check", title: "渲染复检", description: "检查渲染交付风险。", kind: "render-quality-check", inputKind: "audio", supportsBatch: true, requiresBridge: false, requiresAi: false, defaultParameters: {} },
+    { id: "lyric-template", title: "作词与押韵", description: "中文韵脚与歌曲结构模板。", kind: "lyric-template", inputKind: "lyrics", supportsBatch: false, requiresBridge: false, requiresAi: false, defaultParameters: { language: "zh-CN", rhymeMode: "family" } },
   ] as T;
   if (command === "list_creative_history" || command === "list_project_checkpoints") return [] as T;
   if (command === "create_project_checkpoint") return {
@@ -409,6 +415,48 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     succeeded: true,
     summary: "工作流报告已导出。",
     detail: `预览路径：workflow-reports/preview-report.${args?.format === "json" ? "json" : "md"}`,
+  } as T;
+  if (command === "lookup_chinese_rhyme") {
+    const query = String(args?.query ?? "ang");
+    const characters = "昂盎邦帮膀榜傍磅蚌仓苍沧舱藏昌长常场厂唱倡畅肠偿尝当党档荡芳房防仿访放冈刚岗钢纲港杠光广逛杭航行巷慌黄皇凰恍晃荒江姜将浆疆讲奖匠康扛抗亢廊狼朗浪凉梁良两亮茫忙盲氓囊娘酿旁胖庞腔墙强抢枪襄湘乡香箱祥详响想向央扬杨洋阳仰养样张章彰樟涨掌仗丈帐障妆庄桩装壮状王望忘网往";
+    return {
+      language: "zh-CN",
+      query,
+      queryPinyin: /[\u3400-\u9fff]/u.test(query) ? ["guang"] : [],
+      matchMode: (args?.matchMode as RhymeMatchMode | undefined) ?? "family",
+      rhymeKeys: ["ang"],
+      total: [...characters].length,
+      characters: [...characters].map((character) => ({ character, pinyin: ["…ang"] })),
+      coverageNote: "预览模式展示常用字子集；桌面后端会扫描内置拼音字典收录的全部 CJK 字符。",
+    } as T;
+  }
+  if (command === "build_lyric_template") {
+    const sections = (args?.sections as LyricSectionRequest[] | undefined) ?? [];
+    const rhymeTargets = (args?.rhymeTargets as Record<string, string> | undefined) ?? {};
+    const title = String(args?.title || "未命名歌曲");
+    const built = sections.map((section) => ({
+      ...section,
+      lines: Array.from({ length: section.lineCount }, (_, index) => {
+        const scheme = section.rhymeScheme || "-";
+        const marker = scheme[index % scheme.length]?.toUpperCase() ?? "-";
+        return { lineNumber: index + 1, rhymeLabel: marker === "-" ? null : marker, targetRhyme: rhymeTargets[marker] || null, placeholder: `${section.label} 第 ${index + 1} 句${marker === "-" ? "" : ` · ${marker} 韵`}` };
+      }),
+    }));
+    const totalLines = sections.reduce((sum, section) => sum + section.lineCount, 0);
+    return { kind: "lyric-template", summary: `已建立《${title}》的歌词结构：${sections.length} 个段落，共 ${totalLines} 行。`, data: { language: "zh-CN", title, totalLines, rhymeTargets, sections: built } } as T;
+  }
+  if (command === "generate_lyric_candidates") return {
+    language: "zh-CN",
+    brief: String((args?.request as LyricCandidateRequest | undefined)?.brief ?? ""),
+    imagery: String((args?.request as LyricCandidateRequest | undefined)?.imagery ?? ""),
+    sectionLabel: String((args?.request as LyricCandidateRequest | undefined)?.sectionLabel ?? "副歌"),
+    targetRhyme: "ang",
+    candidates: [
+      { text: "旧月台还留着未熄的光", rhymeFoot: "光", rhymeMatched: true, note: "用月台承接离别，句尾落在 ang 韵。" },
+      { text: "风把那封信吹回我身旁", rhymeFoot: "旁", rhymeMatched: true, note: "让旧信成为回望的动作线索。" },
+      { text: "我把没说完的话装进行囊", rhymeFoot: "囊", rhymeMatched: true, note: "收束情绪，同时保留继续发展的空间。" },
+      { text: "车窗外的故乡越来越长", rhymeFoot: "长", rhymeMatched: true, note: "用移动镜头扩大空间感。" },
+    ],
   } as T;
   if (command === "sv2_sync_categories") return [
     { id: "userDictionaries", label: "用户词典", description: "仅同步用户词典文件；不包含账号或登录数据。", relativeRoots: ["dicts"] },
@@ -536,6 +584,12 @@ export const api = {
     call<OperationResult>("restore_project_checkpoint", { id, outputName }),
   exportWorkflowReport: (kind: string, summary: string, data: Record<string, unknown>, format: "markdown" | "json") =>
     call<OperationResult>("export_workflow_report", { kind, summary, data, format }),
+  lookupChineseRhyme: (query: string, matchMode: RhymeMatchMode) =>
+    call<ChineseRhymeLookup>("lookup_chinese_rhyme", { query, matchMode }),
+  buildLyricTemplate: (language: "zh-CN", title: string, sections: LyricSectionRequest[], rhymeTargets: Record<string, string>) =>
+    call<WorkflowResult>("build_lyric_template", { language, title, sections, rhymeTargets }),
+  generateLyricCandidates: (request: LyricCandidateRequest) =>
+    call<LyricCandidateSet>("generate_lyric_candidates", { request }),
   runProjectDoctor: (projectPath: string) =>
     call<WorkflowResult>("run_project_doctor", { projectPath }),
   runPronunciationDiagnostics: (projectPath?: string, lyrics?: string) =>

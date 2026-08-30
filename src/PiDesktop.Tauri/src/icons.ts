@@ -27,6 +27,7 @@ const paths = {
   sync: '<path d="M20 7h-5V2M4 17h5v5"/><path d="M5.5 9A7 7 0 0 1 18 5l2 2M18.5 15A7 7 0 0 1 6 19l-2-2"/>',
   compare: '<path d="M8 3 4 7l4 4M4 7h13a3 3 0 0 1 3 3v1M16 21l4-4-4-4M20 17H7a3 3 0 0 1-3-3v-1"/>',
   pronunciation: '<path d="M5 10a7 7 0 0 1 14 0v2a7 7 0 0 1-14 0Z"/><path d="M9 11h.01M15 11h.01M9 15c2 1 4 1 6 0M12 3V1"/>',
+  lyrics: '<path d="M5 3h10l4 4v14H5z"/><path d="M15 3v5h5M8 12h7M8 16h5"/><path d="m16.5 13.5 3-3 1.5 1.5-3 3-2 .5.5-2Z"/>',
   waveform: '<path d="M3 12h2l2-6 3 12 3-14 3 12 2-4h3"/>',
   recipe: '<path d="M6 3h12v18H6z"/><path d="M9 7h6M9 11h6M9 15h3"/><path d="m15 16 1 1 2-3"/>',
   shield: '<path d="M12 3 20 6v5c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6l8-3Z"/><path d="m8.5 12 2.2 2.2 4.8-5"/>',

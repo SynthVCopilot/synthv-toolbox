@@ -151,6 +151,17 @@ pub fn builtin_recipes() -> Vec<WorkflowRecipe> {
             false,
             json!({ "categories": ["dictionaries", "scripts", "presets"] }),
         ),
+        recipe(
+            "lyric-template",
+            "作词与押韵",
+            "查询中文韵脚字典，编排歌曲段落、行数和 A/B/C 押韵格式；Copilot 候选始终由用户手动采用。",
+            "lyric-template",
+            "lyrics",
+            false,
+            false,
+            false,
+            json!({ "language": "zh-CN", "rhymeMode": "family" }),
+        ),
     ]
 }
 
@@ -509,12 +520,13 @@ mod tests {
     #[test]
     fn recipe_catalog_covers_the_new_vertical_slices() {
         let recipes = builtin_recipes();
-        assert_eq!(recipes.len(), 8);
+        assert_eq!(recipes.len(), 9);
         assert!(recipes.iter().any(|recipe| recipe.id == "audio-to-project"));
         assert!(recipes.iter().any(|recipe| recipe.id == "retake-workbench"));
         assert!(recipes
             .iter()
             .any(|recipe| recipe.id == "profile-selective-sync"));
+        assert!(recipes.iter().any(|recipe| recipe.id == "lyric-template"));
     }
 
     #[test]
