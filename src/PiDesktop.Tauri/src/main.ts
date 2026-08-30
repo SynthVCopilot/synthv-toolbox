@@ -11,6 +11,10 @@ import type {
   AppMode,
   AudioCaptureCapability,
   AudioCaptureTarget,
+  AudioJobSnapshot,
+  AudioPrepareRequest,
+  AudioSampleFormat,
+  AudioWritePlan,
   BootstrapState,
   ChatMessage,
   ChineseRhymeLookup,
@@ -19,6 +23,10 @@ import type {
   CreativeHistoryEntry,
   LyricCandidateSet,
   LyricSectionRequest,
+  LoudnessNormalizeRequest,
+  LoudnessReport,
+  FfmpegRuntimeStatus,
+  MediaProbe,
   McpServerConfig,
   OperationResult,
   OpenCodeCatalog,
@@ -132,6 +140,34 @@ let managedProfileSlotId: string | undefined;
 let shellController: ShellController | undefined;
 let lastWiredMarkup = "";
 
+// Audio preparation deliberately owns an independent piece of UI state.  In
+// particular, encoding must not use the app-wide busy overlay: users need to
+// keep navigating the Toolbox while a single, cancellable FFmpeg job runs.
+type AudioJobKind = "prepare" | "normalize";
+type AudioPrepareForm = Required<Pick<AudioPrepareRequest, "inputPath" | "sampleFormat">> & Omit<AudioPrepareRequest, "inputPath" | "sampleFormat">;
+type LoudnessNormalizeForm = Required<LoudnessNormalizeRequest>;
+
+const audioApi = api;
+let audioRuntime: FfmpegRuntimeStatus | undefined;
+let audioProbe: MediaProbe | undefined;
+let audioPrepareForm: AudioPrepareForm = { inputPath: "", sampleFormat: "s24" };
+let audioNormalizeForm: LoudnessNormalizeForm = { inputPath: "", integratedLufs: -16, truePeakDbtp: -1.5, loudnessRange: 11 };
+let audioLoudness: LoudnessReport | undefined;
+let pendingAudioPlan: { kind: AudioJobKind; request: AudioPrepareForm | LoudnessNormalizeForm; plan: AudioWritePlan } | undefined;
+let audioJob: AudioJobSnapshot | undefined;
+let audioJobPollTimer: number | undefined;
+let audioJobPollGeneration = 0;
+let audioInputGeneration = 0;
+let audioPlanRequestGeneration = 0;
+let audioPlanRequestInFlight = false;
+let audioStartInFlight = false;
+let audioArtifactActionInFlight = false;
+let audioCancelInFlight = false;
+let audioUiError = "";
+let audioUiNotice = "";
+let audioPreviewUrl = "";
+let audioSourcePreviewUrl = "";
+
 function createLyricSection(
   kind: LyricSectionRequest["kind"],
   label: string,
@@ -240,6 +276,189 @@ function escapeHtml(value: unknown): string {
 function formatError(value: unknown): string {
   if (value instanceof Error) return value.message;
   return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function optionalFinite(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const number = Number(trimmed);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function formatAudioNumber(value: number | undefined, suffix = ""): string {
+  return value === undefined || !Number.isFinite(value) ? "未知" : `${value.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}${suffix}`;
+}
+
+function beginAudioArtifactAction(): boolean {
+  if (audioArtifactActionInFlight) return false;
+  audioArtifactActionInFlight = true;
+  render();
+  return true;
+}
+
+function finishAudioArtifactAction(): void {
+  audioArtifactActionInFlight = false;
+  render();
+}
+
+function isTerminalAudioJob(snapshot: AudioJobSnapshot | undefined): boolean {
+  return ["completed", "failed", "cancelled"].includes(snapshot?.status ?? "");
+}
+
+function mergeAudioJobSnapshot(
+  current: AudioJobSnapshot | undefined,
+  incoming: AudioJobSnapshot,
+): AudioJobSnapshot {
+  // Once a terminal state has been observed for this job, an older in-flight
+  // request must not move the UI back to queued/running/cancelling.
+  if (current?.id === incoming.id && isTerminalAudioJob(current)) return current;
+  return incoming;
+}
+
+function clearAudioJobPoll(): void {
+  audioJobPollGeneration += 1;
+  if (audioJobPollTimer !== undefined) {
+    window.clearTimeout(audioJobPollTimer);
+    audioJobPollTimer = undefined;
+  }
+}
+
+function scheduleAudioJobPoll(jobId: string): void {
+  clearAudioJobPoll();
+  const generation = audioJobPollGeneration;
+  const poll = async () => {
+    if (generation !== audioJobPollGeneration || audioJob?.id !== jobId || isTerminalAudioJob(audioJob)) return;
+    try {
+      const snapshot = await audioApi.audioJobSnapshot(jobId);
+      // Ignore a late result from an older job.  This prevents a completed
+      // previous operation from overwriting the currently displayed state.
+      if (generation !== audioJobPollGeneration || audioJob?.id !== jobId) return;
+      const merged = mergeAudioJobSnapshot(audioJob, snapshot);
+      audioJob = merged;
+      if (isTerminalAudioJob(merged)) {
+        clearAudioJobPoll();
+        audioUiNotice = merged.status === "completed" ? "音频任务已完成。" : "音频任务已结束。";
+      } else {
+        audioJobPollTimer = window.setTimeout(() => { void poll(); }, 800);
+      }
+    } catch (reason) {
+      if (generation !== audioJobPollGeneration || audioJob?.id !== jobId) return;
+      audioUiError = formatError(reason);
+      audioJobPollTimer = window.setTimeout(() => { void poll(); }, 1000);
+    }
+    if (page === "toolbox" && activeWorkflow === "audio-preparation") render();
+  };
+  audioJobPollTimer = window.setTimeout(() => { void poll(); }, 800);
+}
+
+function requestAudioPlan(kind: AudioJobKind): void {
+  const request = kind === "prepare"
+    ? { ...audioPrepareForm }
+    : { ...audioNormalizeForm };
+  const inputPath = request.inputPath;
+  const inputGeneration = audioInputGeneration;
+  const planGeneration = ++audioPlanRequestGeneration;
+  pendingAudioPlan = undefined;
+  audioPlanRequestInFlight = true;
+  audioUiError = "";
+  audioUiNotice = "正在生成安全写入计划…";
+  render();
+  void (async () => {
+    try {
+      const plan = kind === "prepare"
+        ? await audioApi.planAudioPrepare(request as AudioPrepareForm)
+        : await audioApi.planLoudnessNormalize(request as LoudnessNormalizeForm);
+      if (planGeneration !== audioPlanRequestGeneration || inputGeneration !== audioInputGeneration || audioPrepareForm.inputPath !== inputPath) return;
+      audioPlanRequestInFlight = false;
+      audioUiNotice = "";
+      pendingAudioPlan = { kind, request, plan };
+      render();
+    } catch (reason) {
+      if (planGeneration !== audioPlanRequestGeneration || inputGeneration !== audioInputGeneration || audioPrepareForm.inputPath !== inputPath) return;
+      audioPlanRequestInFlight = false;
+      audioUiNotice = "";
+      audioUiError = formatError(reason);
+      render();
+    }
+  })();
+}
+
+function startPlannedAudioJob(): void {
+  const pending = pendingAudioPlan;
+  if (!pending) return;
+  audioPlanRequestGeneration += 1;
+  audioPlanRequestInFlight = false;
+  pendingAudioPlan = undefined;
+  audioStartInFlight = true;
+  audioJob = undefined;
+  audioPreviewUrl = "";
+  audioUiError = "";
+  audioUiNotice = "正在建立受控音频任务…";
+  // The one-use confirmation is now consumed locally.  Render immediately so
+  // the modal disappears and input controls cannot be used while the backend
+  // is installing the job record.
+  render();
+  void (async () => {
+    try {
+      audioJob = pending.kind === "prepare"
+        ? await audioApi.startAudioPrepare(pending.request as AudioPrepareForm, pending.plan.token)
+        : await audioApi.startLoudnessNormalize(pending.request as LoudnessNormalizeForm, pending.plan.token);
+      if (!isTerminalAudioJob(audioJob)) {
+        audioUiNotice = "音频任务已开始；可继续浏览其他页面。";
+        scheduleAudioJobPoll(audioJob.id);
+      }
+      else audioUiNotice = audioJob.status === "completed" ? "音频任务已完成。" : "音频任务已结束。";
+    } catch (reason) {
+      audioUiNotice = "";
+      audioUiError = formatError(reason);
+    } finally {
+      audioStartInFlight = false;
+      render();
+    }
+  })();
+}
+
+function selectAudioPreparationInput(path: string): void {
+  const trimmed = path.trim();
+  if (!trimmed) return;
+  if (audioPlanRequestInFlight || pendingAudioPlan) {
+    audioUiError = "请先完成或取消当前写入确认，再更换输入文件。";
+    render();
+    return;
+  }
+  if (audioStartInFlight || (audioJob && !isTerminalAudioJob(audioJob))) {
+    audioUiError = "当前有一个音频写入任务正在运行；完成或取消后才能更换输入。";
+    render();
+    return;
+  }
+  const generation = ++audioInputGeneration;
+  audioPlanRequestGeneration += 1;
+  audioPlanRequestInFlight = false;
+  pendingAudioPlan = undefined;
+  clearAudioJobPoll();
+  audioJob = undefined;
+  audioPrepareForm = { ...audioPrepareForm, inputPath: trimmed };
+  audioNormalizeForm = { ...audioNormalizeForm, inputPath: trimmed };
+  audioProbe = undefined;
+  audioLoudness = undefined;
+  audioPreviewUrl = "";
+  audioSourcePreviewUrl = "";
+  audioUiError = "";
+  audioUiNotice = "正在读取媒体信息…";
+  void (async () => {
+    try {
+      const probe = await audioApi.probeMedia(trimmed);
+      if (generation !== audioInputGeneration || audioPrepareForm.inputPath !== trimmed) return;
+      audioProbe = probe;
+      audioUiNotice = "媒体信息已读取。";
+    } catch (reason) {
+      if (generation !== audioInputGeneration || audioPrepareForm.inputPath !== trimmed) return;
+      audioUiError = formatError(reason);
+      audioUiNotice = "";
+    }
+    render();
+  })();
+  render();
 }
 
 function clearPendingAiAccountRemoval(): void {
@@ -427,7 +646,7 @@ function render(): void {
       }, 4200);
     }
   }
-  const overlayHtml = pendingComponentRemovalId ? renderComponentRemovalDialog() : pendingProfileDeletionId ? renderProfileDeletionDialog() : pendingBlockedSwitchSlot ? renderBlockedSwitchDialog() : pendingConcurrentLaunchSlot ? renderConcurrentDisclaimer() : pendingSvpRoute ? renderSvpRouteDialog() : pendingAccountIndicatorConsent ? renderAccountIndicatorConsent() : accountManagerOpen && page === "accounts" ? renderAccountManager() : "";
+  const overlayHtml = pendingAudioPlan ? renderAudioPlanDialog() : pendingComponentRemovalId ? renderComponentRemovalDialog() : pendingProfileDeletionId ? renderProfileDeletionDialog() : pendingBlockedSwitchSlot ? renderBlockedSwitchDialog() : pendingConcurrentLaunchSlot ? renderConcurrentDisclaimer() : pendingSvpRoute ? renderSvpRouteDialog() : pendingAccountIndicatorConsent ? renderAccountIndicatorConsent() : accountManagerOpen && page === "accounts" ? renderAccountManager() : "";
   const nextShellState = {
     page,
     sidebarCollapsed,
@@ -449,6 +668,24 @@ function render(): void {
     shellController.afterUpdate(wireForms);
   }
   scheduleDownloadPoll();
+}
+
+function renderAudioPlanDialog(): string {
+  const pending = pendingAudioPlan;
+  if (!pending) return "";
+  const plan = pending.plan;
+  const expiry = new Date(plan.expiresAt);
+  const expiryText = Number.isNaN(expiry.getTime()) ? plan.expiresAt : expiry.toLocaleString("zh-CN");
+  return `<div class="dialog-backdrop" role="presentation">
+    <section class="fluent-dialog audio-plan-dialog" role="dialog" aria-modal="true" aria-labelledby="audio-plan-title">
+      <span class="dialog-icon route">${icon("audio", 24)}</span>
+      <div><span class="eyebrow">AUDIO WRITE CONFIRMATION</span><h2 id="audio-plan-title">确认${pending.kind === "prepare" ? "生成 PCM WAV" : "响度标准化"}</h2></div>
+      <p>工具箱将只按以下已审核计划写入一个新文件。源文件不会修改，确认令牌只能使用一次。</p>
+      <dl class="audio-plan-details"><div><dt>输入</dt><dd><code>${escapeHtml(plan.inputPath)}</code></dd></div><div><dt>输出</dt><dd><code>${escapeHtml(plan.outputPath)}</code></dd></div><div><dt>全部参数</dt><dd>${plan.parameters.length ? plan.parameters.map(escapeHtml).join(" · ") : "默认参数"}</dd></div><div><dt>令牌有效至</dt><dd>${escapeHtml(expiryText)}</dd></div></dl>
+      ${plan.warnings.length ? `<div class="audio-plan-warnings" role="status"><strong>注意</strong><ul>${plan.warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul></div>` : ""}
+      <div class="dialog-actions"><button class="secondary" data-cancel-audio-plan>取消</button><button class="primary" data-confirm-audio-plan>${icon("check", 16)} 确认并开始</button></div>
+    </section>
+  </div>`;
 }
 
 function renderConcurrentDisclaimer(): string {
@@ -1332,7 +1569,29 @@ function renderWorkflowPanel(id: string): string {
   const feature = features.find((item) => item.id === id);
   const group = toolGroups.find((item) => item.featureIds.includes(id));
   let form = "";
-  if (id === "audio-insight") {
+  if (id === "audio-preparation") {
+    const runtime = audioRuntime;
+    const running = audioStartInFlight || Boolean(audioJob && !isTerminalAudioJob(audioJob));
+    const controlsLocked = running || audioPlanRequestInFlight;
+    const probe = audioProbe;
+    const probeCard = probe
+      ? `<section class="audio-probe-card" aria-label="媒体信息"><div class="audio-probe-heading"><div><span class="eyebrow">MEDIA PROBE</span><strong>${escapeHtml(probe.codec ?? "未知编码")}</strong></div><span class="availability ready">已读取</span></div><dl class="audio-metadata"><div><dt>容器</dt><dd>${escapeHtml(probe.container ?? "未知")}</dd></div><div><dt>时长</dt><dd>${formatAudioNumber(probe.durationSeconds, " 秒")}</dd></div><div><dt>采样率</dt><dd>${formatAudioNumber(probe.sampleRate, " Hz")}</dd></div><div><dt>声道</dt><dd>${formatAudioNumber(probe.channels)}${probe.channelLayout ? ` · ${escapeHtml(probe.channelLayout)}` : ""}</dd></div><div><dt>位深</dt><dd>${formatAudioNumber(probe.bitDepth, " bit")}</dd></div><div><dt>码率</dt><dd>${formatAudioNumber(probe.bitRate ? probe.bitRate / 1000 : undefined, " kb/s")}</dd></div></dl>${probe.sourceArtifactId && probe.sourceMimeType ? `<div class="audio-source-preview">${audioSourcePreviewUrl ? `<audio controls preload="metadata" src="${escapeHtml(audioSourcePreviewUrl)}" aria-label="原音试听"></audio>` : `<button class="secondary" data-preview-audio-artifact="${escapeHtml(probe.sourceArtifactId)}" data-audio-preview-kind="source" ${audioArtifactActionInFlight ? "disabled" : ""}>${icon("play", 16)} 试听原音</button>`}</div>` : ""}</section>`
+      : `<div class="audio-empty-probe" role="status">选择一个本地音频后，将显示容器、编码、时长、采样率、声道、位深与码率。</div>`;
+    const loudness = audioLoudness
+      ? `<div class="audio-loudness-readout" role="status"><strong>EBU R128 结果</strong><span>综合响度 ${formatAudioNumber(audioLoudness.integratedLufs, " LUFS")}</span><span>True Peak ${formatAudioNumber(audioLoudness.truePeakDbtp, " dBTP")}</span><span>LRA ${formatAudioNumber(audioLoudness.loudnessRange, " LU")}</span></div>`
+      : "";
+    const jobPanel = audioJob
+      ? `<section class="audio-job-card ${audioJob.status}" aria-live="polite"><div class="audio-job-heading"><div><span class="eyebrow">AUDIO TASK</span><strong>${audioJob.operation === "loudness-normalize" ? "响度标准化" : "PCM WAV 转码"}</strong></div><span class="availability ${audioJob.status === "completed" ? "ready" : audioJob.status === "failed" ? "warning" : ""}">${escapeHtml(audioJob.status)}</span></div>${audioJob.progressPercent !== undefined ? `<div class="audio-progress" role="progressbar" aria-label="音频处理进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(audioJob.progressPercent)}"><span style="width:${Math.max(0, Math.min(100, audioJob.progressPercent))}%"></span></div><small>${formatAudioNumber(audioJob.progressPercent, "%")}</small>` : `<small>${running ? "正在处理；可继续浏览其他页面。" : "任务已结束。"}</small>`}${audioJob.outputPath ? `<div class="audio-output-path"><span>结果路径</span><code>${escapeHtml(audioJob.outputPath)}</code></div>` : ""}${audioJob.error ? `<pre class="audio-job-error">${escapeHtml(audioJob.error)}</pre>` : ""}${audioJob.loudnessReport ? `<div class="audio-loudness-readout compact"><span>复测 ${formatAudioNumber(audioJob.loudnessReport.integratedLufs, " LUFS")}</span><span>峰值 ${formatAudioNumber(audioJob.loudnessReport.truePeakDbtp, " dBTP")}</span><span>LRA ${formatAudioNumber(audioJob.loudnessReport.loudnessRange, " LU")}</span></div>` : ""}${running ? `<div class="button-row"><button class="secondary" data-cancel-audio-job="${escapeHtml(audioJob.id)}" ${audioCancelInFlight ? "disabled" : ""}>${audioCancelInFlight ? "正在取消…" : "取消任务"}</button></div>` : audioJob.status === "completed" && audioJob.artifactId ? `<div class="audio-artifact-actions">${audioPreviewUrl ? `<audio controls preload="metadata" src="${escapeHtml(audioPreviewUrl)}" aria-label="结果试听"></audio>` : `<button class="secondary" data-preview-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>${icon("play", 16)} 试听结果</button>`}<button class="secondary" data-reveal-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>打开文件位置</button><button class="secondary" data-copy-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>复制路径</button><button class="primary" data-save-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>安全另存为</button></div>` : ""}</section>`
+      : "";
+    form = `<div class="audio-preparation" aria-label="音频准备">
+      <section class="audio-runtime-card ${runtime?.available ? "ready" : "warning"}"><div><span class="eyebrow">FFMPEG RUNTIME</span><strong>${runtime?.available ? `可用${runtime.version ? ` · ${escapeHtml(runtime.version)}` : ""}` : "正在检查…"}</strong><small>${escapeHtml(runtime?.detail ?? "进入此工具后检查本机 FFmpeg。")}</small></div><span class="availability ${runtime?.available ? "ready" : "warning"}">${escapeHtml(runtime?.source ?? (runtime?.available ? "已就绪" : "检查中"))}</span></section>
+      <section class="audio-input-card"><div class="section-heading"><div><h3>选择单个音频</h3><p>支持点击选择或拖放一个本地文件；不会自动导入 SynthV、运行 CVRS 或批处理。</p></div><button type="button" class="secondary" data-pick-audio-file ${controlsLocked ? "disabled" : ""}>选择文件</button></div><label class="visually-hidden" for="audio-prep-input">音频文件路径</label><input id="audio-prep-input" value="${escapeHtml(audioPrepareForm.inputPath)}" readonly placeholder="尚未选择文件" aria-describedby="audio-drop-help" /><button type="button" class="audio-drop-zone" data-audio-drop-zone aria-label="拖放一个音频文件或选择文件" aria-describedby="audio-drop-help" ${controlsLocked ? "disabled" : ""}><span>${icon("audio", 22)}</span><strong>把一个音频文件拖到这里</strong><small id="audio-drop-help">一次只接受一个文件。拖放后先进行只读媒体探测。</small></button></section>
+      ${probeCard}
+      <div class="audio-action-grid"><section class="audio-action-card"><div><span class="eyebrow">SYNTHV PCM WAV</span><h3>为 SynthV 准备 PCM WAV</h3><p>默认保持原采样率和声道，输出 24-bit PCM WAV。</p></div><form id="audio-prepare-form" class="workflow-form"><div class="workflow-pair three"><label>采样率（Hz）<input id="audio-prep-rate" type="number" min="8000" max="192000" step="1" value="${audioPrepareForm.sampleRate ?? ""}" placeholder="保持不变" ${controlsLocked ? "disabled" : ""}/></label><label>声道数<select id="audio-prep-channels" ${controlsLocked ? "disabled" : ""}><option value="">保持不变</option><option value="1" ${audioPrepareForm.channels === 1 ? "selected" : ""}>单声道</option><option value="2" ${audioPrepareForm.channels === 2 ? "selected" : ""}>立体声</option></select></label><label>位深<select id="audio-prep-format" ${controlsLocked ? "disabled" : ""}><option value="s16" ${audioPrepareForm.sampleFormat === "s16" ? "selected" : ""}>16-bit PCM</option><option value="s24" ${audioPrepareForm.sampleFormat === "s24" ? "selected" : ""}>24-bit PCM</option><option value="f32" ${audioPrepareForm.sampleFormat === "f32" ? "selected" : ""}>32-bit float</option></select></label></div><div class="workflow-pair"><label>起始位置（秒）<input id="audio-prep-start" type="number" min="0" step="0.01" value="${audioPrepareForm.startSeconds ?? ""}" placeholder="从头开始" ${controlsLocked ? "disabled" : ""}/></label><label>时长（秒）<input id="audio-prep-duration" type="number" min="0.01" step="0.01" value="${audioPrepareForm.durationSeconds ?? ""}" placeholder="直到结尾" ${controlsLocked ? "disabled" : ""}/></label></div><button class="primary" ${!audioPrepareForm.inputPath || !runtime?.available || controlsLocked ? "disabled" : ""}>${icon("audio", 16)} 查看写入计划</button></form></section>
+      <section class="audio-action-card"><div><span class="eyebrow">EBU R128</span><h3>检查 / 平衡响度</h3><p>默认目标 −16 LUFS / −1.5 dBTP / 11 LRA，写入后会自动复测。</p></div><div class="button-row"><button class="secondary" data-analyze-audio-loudness ${!audioPrepareForm.inputPath || !runtime?.available || controlsLocked ? "disabled" : ""}>检查响度</button></div>${loudness}<form id="audio-normalize-form" class="workflow-form"><div class="workflow-pair three"><label>LUFS<input id="audio-normalize-lufs" type="number" min="-70" max="-5" step="0.1" required value="${audioNormalizeForm.integratedLufs}" ${controlsLocked ? "disabled" : ""}/></label><label>dBTP<input id="audio-normalize-peak" type="number" min="-9" max="0" step="0.1" required value="${audioNormalizeForm.truePeakDbtp}" ${controlsLocked ? "disabled" : ""}/></label><label>LRA<input id="audio-normalize-lra" type="number" min="1" max="20" step="0.1" required value="${audioNormalizeForm.loudnessRange}" ${controlsLocked ? "disabled" : ""}/></label></div><button class="primary" ${!audioPrepareForm.inputPath || !runtime?.available || controlsLocked ? "disabled" : ""}>${icon("shield", 16)} 查看标准化计划</button></form></section></div>
+      ${audioUiNotice ? `<div class="audio-inline-notice" role="status">${escapeHtml(audioUiNotice)}</div>` : ""}${audioUiError ? `<div class="audio-inline-error" role="alert">${escapeHtml(audioUiError)}</div>` : ""}${jobPanel}
+    </div>`;
+  } else if (id === "audio-insight") {
     form = `<form id="audio-probe-form" class="workflow-form">
       <label>音频文件路径<input id="audio-path" required placeholder="选择待分析的 WAV、FLAC、MP3、M4A、AAC、OGG 或 OPUS" /></label>
       ${ai ? `<label class="checkbox workflow-check"><input id="audio-advanced" type="checkbox" checked /> 启用音符统计、PANNs 乐器/风格倾向和人声置信判断</label>` : `<div class="mode-limit">纯工具箱只输出 BPM、调性、能量与频谱趋势；不下载或运行高级模型。</div>`}
@@ -1661,6 +1920,38 @@ function renderSettings(): string {
 }
 
 function wireForms(): void {
+  document.querySelector<HTMLFormElement>("#audio-prepare-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    if (!form.checkValidity()) {
+      form.reportValidity();
+      return;
+    }
+    audioPrepareForm = {
+      inputPath: audioPrepareForm.inputPath,
+      sampleRate: optionalFinite(document.querySelector<HTMLInputElement>("#audio-prep-rate")?.value ?? ""),
+      channels: optionalFinite(document.querySelector<HTMLSelectElement>("#audio-prep-channels")?.value ?? ""),
+      sampleFormat: (document.querySelector<HTMLSelectElement>("#audio-prep-format")?.value ?? "s24") as AudioSampleFormat,
+      startSeconds: optionalFinite(document.querySelector<HTMLInputElement>("#audio-prep-start")?.value ?? ""),
+      durationSeconds: optionalFinite(document.querySelector<HTMLInputElement>("#audio-prep-duration")?.value ?? ""),
+    };
+    requestAudioPlan("prepare");
+  });
+  document.querySelector<HTMLFormElement>("#audio-normalize-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    if (!form.checkValidity()) {
+      form.reportValidity();
+      return;
+    }
+    audioNormalizeForm = {
+      inputPath: audioPrepareForm.inputPath,
+      integratedLufs: Number(document.querySelector<HTMLInputElement>("#audio-normalize-lufs")?.value ?? "-16"),
+      truePeakDbtp: Number(document.querySelector<HTMLInputElement>("#audio-normalize-peak")?.value ?? "-1.5"),
+      loudnessRange: Number(document.querySelector<HTMLInputElement>("#audio-normalize-lra")?.value ?? "11"),
+    };
+    requestAudioPlan("normalize");
+  });
   document.querySelector<HTMLFormElement>("#audio-probe-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const audioPath = document.querySelector<HTMLInputElement>("#audio-path")?.value.trim() ?? "";
@@ -2059,9 +2350,128 @@ document.addEventListener("input", (event) => {
 });
 
 document.addEventListener("click", (event) => {
-  const target = (event.target as HTMLElement).closest<HTMLElement>("button, [data-page], [data-onboarding]");
+  const target = (event.target as HTMLElement).closest<HTMLElement>("button, [data-page], [data-onboarding], [data-audio-drop-zone]");
   if (!target || target.hasAttribute("disabled")) return;
   if (page === "lyrics" && document.querySelector(".lyric-workbench-grid")) syncLyricDraftFromDom();
+  if (target.hasAttribute("data-audio-drop-zone")) {
+    void audioApi.pickAudioFile().then((path) => {
+      if (path) selectAudioPreparationInput(path);
+    }).catch((reason) => { audioUiError = formatError(reason); render(); });
+    return;
+  }
+  if (target.hasAttribute("data-pick-audio-file")) {
+    void audioApi.pickAudioFile().then((path) => {
+      if (path) selectAudioPreparationInput(path);
+    }).catch((reason) => {
+      audioUiError = formatError(reason);
+      render();
+    });
+    return;
+  }
+  if (target.hasAttribute("data-cancel-audio-plan")) {
+    pendingAudioPlan = undefined;
+    render();
+    return;
+  }
+  if (target.hasAttribute("data-confirm-audio-plan")) {
+    startPlannedAudioJob();
+    return;
+  }
+  if (target.dataset.cancelAudioJob) {
+    const jobId = target.dataset.cancelAudioJob;
+    if (!jobId || audioCancelInFlight || audioJob?.id !== jobId || isTerminalAudioJob(audioJob)) return;
+    audioCancelInFlight = true;
+    render();
+    void audioApi.cancelAudioJob(jobId).then((snapshot) => {
+      if (audioJob?.id !== jobId) return;
+      const merged = mergeAudioJobSnapshot(audioJob, snapshot);
+      audioJob = merged;
+      if (isTerminalAudioJob(merged)) {
+        clearAudioJobPoll();
+      } else {
+        scheduleAudioJobPoll(jobId);
+      }
+    }).catch((reason) => {
+      audioUiError = formatError(reason);
+    }).finally(() => {
+      audioCancelInFlight = false;
+      render();
+    });
+    return;
+  }
+  if (target.hasAttribute("data-analyze-audio-loudness")) {
+    const inputPath = audioPrepareForm.inputPath;
+    if (!inputPath) return;
+    const generation = audioInputGeneration;
+    audioUiError = "";
+    audioUiNotice = "正在检查 EBU R128 响度…";
+    render();
+    void audioApi.analyzeLoudness(inputPath).then((report) => {
+      if (generation !== audioInputGeneration || audioPrepareForm.inputPath !== inputPath) return;
+      audioLoudness = report;
+      audioUiNotice = "响度检查完成。";
+      render();
+    }).catch((reason) => {
+      if (generation !== audioInputGeneration || audioPrepareForm.inputPath !== inputPath) return;
+      audioUiError = formatError(reason);
+      audioUiNotice = "";
+      render();
+    });
+    return;
+  }
+  if (target.dataset.previewAudioArtifact) {
+    const artifactId = target.dataset.previewAudioArtifact;
+    const previewKind = target.dataset.audioPreviewKind;
+    const generation = audioInputGeneration;
+    const isCurrentArtifact = () => generation === audioInputGeneration && (
+      previewKind === "source"
+        ? audioProbe?.sourceArtifactId === artifactId
+        : audioJob?.artifactId === artifactId
+    );
+    if (!beginAudioArtifactAction()) return;
+    void audioApi.audioArtifactPreviewUrl(artifactId).then((url) => {
+      if (!isCurrentArtifact()) return;
+      if (previewKind === "source") audioSourcePreviewUrl = url;
+      else audioPreviewUrl = url;
+    }).catch((reason) => {
+      if (!isCurrentArtifact()) return;
+      audioUiError = formatError(reason);
+    }).finally(finishAudioArtifactAction);
+    return;
+  }
+  if (target.dataset.revealAudioArtifact) {
+    if (!beginAudioArtifactAction()) return;
+    void audioApi.revealAudioArtifact(target.dataset.revealAudioArtifact).then((result) => {
+      setFeedback(result);
+    }).catch((reason) => { audioUiError = formatError(reason); }).finally(finishAudioArtifactAction);
+    return;
+  }
+  if (target.dataset.copyAudioArtifact) {
+    // The path is only copied from the already rendered read-only snapshot;
+    // it is never sent back to a backend command as an authority-bearing path.
+    const displayPath = audioJob?.artifactId === target.dataset.copyAudioArtifact
+      ? audioJob.outputPath
+      : undefined;
+    if (!displayPath) {
+      audioUiError = "此结果没有可复制的显示路径。";
+      render();
+      return;
+    }
+    if (!beginAudioArtifactAction()) return;
+    void navigator.clipboard.writeText(displayPath).then(() => {
+      audioUiNotice = "路径已复制到剪贴板。";
+    }).catch((reason) => { audioUiError = formatError(reason); }).finally(finishAudioArtifactAction);
+    return;
+  }
+  if (target.dataset.saveAudioArtifact) {
+    if (!beginAudioArtifactAction()) return;
+    void audioApi.saveAudioArtifactAs(target.dataset.saveAudioArtifact).then((result) => {
+      audioUiNotice = result.saved
+        ? `已安全另存为${result.fileName ? `“${result.fileName}”` : "新文件"}。`
+        : "已取消另存为。";
+    }).catch((reason) => { audioUiError = formatError(reason); }).finally(finishAudioArtifactAction);
+    return;
+  }
   if (target.hasAttribute("data-toggle-sidebar")) {
     sidebarCollapsed = !sidebarCollapsed;
     try { localStorage.setItem("pi.sidebar.collapsed", String(sidebarCollapsed)); } catch { /* preference remains in memory */ }
@@ -2438,7 +2848,16 @@ document.addEventListener("click", (event) => {
     syncManifest = undefined;
     notice = "";
     const featureId = target.dataset.feature;
-    if (featureId === "batch-recipes") void run(async () => { workflowRecipes = await api.listWorkflowRecipes(); });
+    if (featureId === "audio-preparation") {
+      render();
+      void audioApi.ffmpegStatus().then((status) => {
+        audioRuntime = status;
+        if (page === "toolbox" && activeWorkflow === "audio-preparation") render();
+      }).catch((reason) => {
+        audioRuntime = { available: false, detail: formatError(reason) };
+        if (page === "toolbox" && activeWorkflow === "audio-preparation") render();
+      });
+    } else if (featureId === "batch-recipes") void run(async () => { workflowRecipes = await api.listWorkflowRecipes(); });
     else if (featureId === "ab-audition") void run(async () => {
       audioCaptureCapability = await api.audioCaptureCapability();
       audioCaptureTargets = audioCaptureCapability.supported ? await api.listSynthvCaptureTargets() : [];
@@ -2630,10 +3049,32 @@ async function listenForSvpRouteRequests(): Promise<void> {
   })]);
 }
 
+async function listenForAudioPreparationDrops(): Promise<void> {
+  if (!isTauri()) return;
+  try {
+    const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+    await getCurrentWebview().onDragDropEvent((event) => {
+      if (page !== "toolbox" || activeWorkflow !== "audio-preparation") return;
+      if (event.payload.type !== "drop") return;
+      const paths = event.payload.paths;
+      if (paths.length !== 1) {
+        audioUiError = "一次只能拖放一个音频文件。";
+        render();
+        return;
+      }
+      selectAudioPreparationInput(paths[0]);
+    });
+  } catch {
+    // The file picker remains available on hosts that do not expose Tauri v2
+    // drag-drop events (including the browser preview).
+  }
+}
+
 void (async () => {
   try {
     await refresh();
     await listenForSvpRouteRequests();
+    await listenForAudioPreparationDrops();
     render();
   } catch (reason) {
     root.innerHTML = `<div class="fatal"><div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.png" alt="SynthV Toolbox" /></div><h1>无法启动 SynthV Toolbox</h1><pre>${escapeHtml(formatError(reason))}</pre><p>请确认应用由 Tauri 运行，而不是直接打开前端页面。</p></div>`;

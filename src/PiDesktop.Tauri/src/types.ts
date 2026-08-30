@@ -318,6 +318,99 @@ export interface WorkflowResult {
   aiReview?: string;
 }
 
+/** Runtime and job contracts for the user-facing audio preparation flow. */
+export interface FfmpegRuntimeStatus {
+  available: boolean;
+  source?: string;
+  ffmpegPath?: string;
+  ffprobePath?: string;
+  version?: string;
+  detail: string;
+}
+
+export interface MediaProbe {
+  path: string;
+  sourceArtifactId?: string;
+  sourceMimeType?: string;
+  container?: string;
+  codec?: string;
+  durationSeconds?: number;
+  sampleRate?: number;
+  channels?: number;
+  channelLayout?: string;
+  bitDepth?: number;
+  bitRate?: number;
+}
+
+export type AudioSampleFormat = "s16" | "s24" | "f32";
+
+export interface AudioPrepareRequest {
+  inputPath: string;
+  sampleRate?: number;
+  channels?: number;
+  sampleFormat?: AudioSampleFormat;
+  startSeconds?: number;
+  durationSeconds?: number;
+}
+
+export interface LoudnessNormalizeRequest {
+  inputPath: string;
+  integratedLufs?: number;
+  truePeakDbtp?: number;
+  loudnessRange?: number;
+}
+
+export interface AudioWritePlan {
+  planId: string;
+  token: string;
+  expiresAt: string;
+  requestDigest: string;
+  operation: string;
+  inputPath: string;
+  outputPath: string;
+  parameters: string[];
+  warnings: string[];
+}
+
+export type AudioJobStatus = "queued" | "running" | "cancelling" | "completed" | "failed" | "cancelled";
+
+export interface AudioJobSnapshot {
+  id: string;
+  operation: string;
+  status: AudioJobStatus | string;
+  progressPercent?: number;
+  outputPath?: string;
+  artifactId?: string;
+  loudnessReport?: LoudnessReport;
+  error?: string;
+  startedAt: string;
+  completedAt?: string;
+}
+
+export interface LoudnessReport {
+  path: string;
+  integratedLufs?: number;
+  truePeakDbtp?: number;
+  loudnessRange?: number;
+  threshold?: number;
+  raw: Record<string, unknown>;
+}
+
+/** Deliberately contains no source filesystem path: the artifact id is the only handle exposed to UI. */
+export interface AudioArtifactInfo {
+  artifactId: string;
+  operation: string;
+  fileName: string;
+  byteLength: number;
+  mimeType?: string;
+  mediaUrl: string;
+}
+
+export interface AudioArtifactSaveResult {
+  saved: boolean;
+  fileName?: string;
+}
+
 export interface AudioCaptureCapability {
   supported: boolean;
   backend: string;
