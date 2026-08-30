@@ -4,13 +4,11 @@ use std::path::Path;
 use chrono::Utc;
 use serde::Serialize;
 
-const MAX_SESSION_FILE_BYTES: u64 = 1024 * 1024;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Sv2IdentityStatus {
-    SignedOut,
-    CredentialDetected,
+    SessionPresent,
+    SessionAbsent,
     Unknown,
 }
 
@@ -36,24 +34,25 @@ impl Sv2ProfileIdentityView {
     }
 }
 
-/// Reports only whether a bounded, ordinary SV2 session credential file exists.
+/// Reports only whether an ordinary `license/session` file exists.
 ///
-/// The session format is deliberately treated as opaque: this probe never reads,
-/// parses, logs, or returns credential bytes. Identity fields remain unavailable
-/// until Dreamtonics exposes a documented, non-secret representation for them.
+/// The file is deliberately treated as opaque: this probe never reads, parses,
+/// logs, returns, or sends its bytes. Presence is not treated as proof that a
+/// session is valid or that an account is signed in. Identity fields remain
+/// unavailable because this independent process has no verified token broker.
 pub fn probe_sv2_identity(data_root: &Path) -> Sv2ProfileIdentityView {
     match safe_metadata(data_root, "槽位数据目录") {
         Ok(Some(metadata)) if metadata.is_dir() => {}
         Ok(Some(_)) => {
             return Sv2ProfileIdentityView::new(
                 Sv2IdentityStatus::Unknown,
-                "槽位数据根路径不是普通目录，无法安全探测登录状态。",
+                "槽位数据根路径不是普通目录，无法检查本地 session 文件。",
             );
         }
         Ok(None) => {
             return Sv2ProfileIdentityView::new(
                 Sv2IdentityStatus::Unknown,
-                "槽位数据目录不存在，无法探测登录状态。",
+                "槽位数据目录不存在，无法检查本地 session 文件。",
             );
         }
         Err(detail) => {
@@ -67,13 +66,13 @@ pub fn probe_sv2_identity(data_root: &Path) -> Sv2ProfileIdentityView {
         Ok(Some(_)) => {
             return Sv2ProfileIdentityView::new(
                 Sv2IdentityStatus::Unknown,
-                "license 路径不是普通目录，无法安全探测登录状态。",
+                "license 路径不是普通目录，无法检查本地 session 文件。",
             );
         }
         Ok(None) => {
             return Sv2ProfileIdentityView::new(
-                Sv2IdentityStatus::SignedOut,
-                "未检测到 license/session 登录凭证。",
+                Sv2IdentityStatus::SessionAbsent,
+                "未检测到 license/session 文件；这不用于推断账号登录状态。",
             );
         }
         Err(detail) => {
@@ -82,41 +81,28 @@ pub fn probe_sv2_identity(data_root: &Path) -> Sv2ProfileIdentityView {
     }
 
     let session_path = license_root.join("session");
-    let session_metadata = match safe_metadata(&session_path, "license/session") {
-        Ok(Some(metadata)) if metadata.is_file() => metadata,
+    match safe_metadata(&session_path, "license/session") {
+        Ok(Some(metadata)) if metadata.is_file() => {}
         Ok(Some(_)) => {
             return Sv2ProfileIdentityView::new(
                 Sv2IdentityStatus::Unknown,
-                "license/session 不是普通文件，已拒绝探测。",
+                "license/session 不是普通文件，无法确认其存在状态。",
             );
         }
         Ok(None) => {
             return Sv2ProfileIdentityView::new(
-                Sv2IdentityStatus::SignedOut,
-                "未检测到 license/session 登录凭证。",
+                Sv2IdentityStatus::SessionAbsent,
+                "未检测到 license/session 文件；这不用于推断账号登录状态。",
             );
         }
         Err(detail) => {
             return Sv2ProfileIdentityView::new(Sv2IdentityStatus::Unknown, detail);
         }
-    };
-
-    if session_metadata.len() == 0 {
-        return Sv2ProfileIdentityView::new(
-            Sv2IdentityStatus::Unknown,
-            "检测到空的 license/session 文件，无法确认登录状态。",
-        );
-    }
-    if session_metadata.len() > MAX_SESSION_FILE_BYTES {
-        return Sv2ProfileIdentityView::new(
-            Sv2IdentityStatus::Unknown,
-            "license/session 超出安全探测大小限制，已拒绝读取。",
-        );
     }
 
     Sv2ProfileIdentityView::new(
-        Sv2IdentityStatus::CredentialDetected,
-        "检测到登录凭证但身份字段不可安全读取；当前 session 格式不透明，工具箱不会解析或输出原始凭证。",
+        Sv2IdentityStatus::SessionPresent,
+        "检测到 license/session 文件；仅报告文件存在，不验证 session、账号或授权。独立进程没有已验证的 token broker，因此不会读取或复用该文件查询身份。",
     )
 }
 
@@ -161,13 +147,13 @@ mod tests {
     }
 
     #[test]
-    fn missing_session_is_reported_as_signed_out() {
+    fn missing_session_only_reports_file_absence() {
         let root = fixture();
         fs::create_dir_all(root.join("license")).unwrap();
 
         let identity = probe_sv2_identity(&root);
 
-        assert_eq!(identity.status, Sv2IdentityStatus::SignedOut);
+        assert_eq!(identity.status, Sv2IdentityStatus::SessionAbsent);
         assert_eq!(identity.username, None);
         assert_eq!(identity.email, None);
         assert!(!identity.checked_at_utc.is_empty());
@@ -175,7 +161,7 @@ mod tests {
     }
 
     #[test]
-    fn opaque_session_only_reports_credential_presence() {
+    fn opaque_session_only_reports_file_presence() {
         let root = fixture();
         fs::create_dir_all(root.join("license")).unwrap();
         let secret = "producer@example.com:do-not-expose";
@@ -183,26 +169,26 @@ mod tests {
 
         let identity = probe_sv2_identity(&root);
 
-        assert_eq!(identity.status, Sv2IdentityStatus::CredentialDetected);
+        assert_eq!(identity.status, Sv2IdentityStatus::SessionPresent);
         assert_eq!(identity.username, None);
         assert_eq!(identity.email, None);
-        assert!(identity.detail.contains("身份字段不可安全读取"));
+        assert!(identity.detail.contains("仅报告文件存在"));
         assert!(!identity.detail.contains(secret));
         assert!(!identity.detail.contains("producer@example.com"));
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn oversized_session_is_not_treated_as_a_credential() {
+    fn empty_or_large_session_files_are_not_interpreted() {
         let root = fixture();
         fs::create_dir_all(root.join("license")).unwrap();
         let session = fs::File::create(root.join("license/session")).unwrap();
-        session.set_len(MAX_SESSION_FILE_BYTES + 1).unwrap();
+        session.set_len(8 * 1024 * 1024).unwrap();
 
         let identity = probe_sv2_identity(&root);
 
-        assert_eq!(identity.status, Sv2IdentityStatus::Unknown);
-        assert!(identity.detail.contains("大小限制"));
+        assert_eq!(identity.status, Sv2IdentityStatus::SessionPresent);
+        assert!(identity.detail.contains("不会读取"));
         fs::remove_dir_all(root).unwrap();
     }
 }

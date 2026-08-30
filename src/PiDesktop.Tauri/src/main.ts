@@ -532,7 +532,7 @@ function renderPage(): string {
 
 function renderAccounts(): string {
   if (!profiles) {
-    return `<section class="panel quiet-panel"><span class="mode-icon purple">${icon("users", 24)}</span><div><h2>正在读取账号槽位</h2><p>只检查本机目录、占用进程和会话缓存是否存在。</p></div></section>`;
+    return `<section class="panel quiet-panel"><span class="mode-icon purple">${icon("users", 24)}</span><div><h2>正在读取账号槽位</h2><p>只检查本机槽位文件、占用进程和 session 文件状态。</p></div></section>`;
   }
   if (!profiles.supported) {
     return `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("users", 24)}</span><div><h2>当前平台不支持账号槽位</h2><p>${escapeHtml(profiles.recoveryDetail)}</p></div></section>`;
@@ -552,21 +552,14 @@ function renderAccounts(): string {
     const lastUsed = slot.lastActivatedAtUtc ? new Date(slot.lastActivatedAtUtc).toLocaleString("zh-CN") : "尚未启动";
     const initial = Array.from(slot.displayName)[0] ?? "S";
     const color = /^#[0-9a-f]{6}$/i.test(slot.color) ? slot.color : "#6D5CE7";
-    const identity = [slot.identity.username, slot.identity.email]
-      .filter((value): value is string => Boolean(value?.trim()))
-      .map((value) => value.trim());
-    const identityFallback = slot.identity.status === "credentialDetected"
-      ? "登录凭证已检测 · 身份未知"
-      : slot.identity.status === "signedOut"
-        ? "未检测到登录凭证"
-        : "登录状态与身份未知";
+    const sessionFileStatus = sessionFileStatusLabel(slot.identity.status);
     const useState = accountUseStateForSlot(slot);
     const concurrentRunning = slot.concurrent.runningPids.length > 0;
     const isolatedLabel = concurrentRunning ? "隔离运行中" : slot.concurrent.ready ? "隔离启动" : "准备隔离";
     const isolatedDisabled = concurrentRunning || !concurrentProviderAvailable;
     return `<article class="account-launch-card ${slot.isActive ? "active" : ""}" style="--profile-color:${color}">
-      <div class="account-card-main"><span class="profile-avatar compact">${escapeHtml(initial)}</span><div class="account-card-identity"><div class="profile-title-line"><h2>${escapeHtml(slot.displayName)}</h2>${accountUseDot(useState)}${slot.isActive ? '<span class="profile-active-badge">默认</span>' : ""}</div>${identity.length ? `<span class="profile-identity">${identity.map(escapeHtml).join(" · ")}</span>` : `<span class="profile-identity empty" title="${escapeHtml(slot.identity.detail)}">${identityFallback}</span>`}</div><button class="icon-plain" data-manage-slot="${slot.id}" title="管理账号" aria-label="管理 ${escapeHtml(slot.displayName)}">${icon("settings", 18)}</button></div>
-      <div class="account-card-facts"><span class="${slot.sessionCached ? "cached" : ""}">${slot.sessionCached ? `${icon("check", 13)} 已缓存登录` : `${icon("plug", 13)} 需要登录`}</span>${sessionProtectionBadge(slot.sessionProtection)}${voiceInventoryBadge(slot)}<span>${icon("refresh", 13)} ${escapeHtml(lastUsed)}</span>${concurrentRunning ? `<span class="running">${icon("plug", 13)} ${slot.concurrent.runningPids.length} 个隔离进程</span>` : ""}</div>
+      <div class="account-card-main"><span class="profile-avatar compact">${escapeHtml(initial)}</span><div class="account-card-identity"><div class="profile-title-line"><h2>${escapeHtml(slot.displayName)}</h2>${accountUseDot(useState)}${slot.isActive ? '<span class="profile-active-badge">默认</span>' : ""}</div><span class="profile-identity empty" title="${escapeHtml(slot.identity.detail)}">${escapeHtml(sessionFileStatus)}</span></div><button class="icon-plain" data-manage-slot="${slot.id}" title="管理账号" aria-label="管理 ${escapeHtml(slot.displayName)}">${icon("settings", 18)}</button></div>
+      <div class="account-card-facts">${sessionProtectionBadge(slot.sessionProtection)}${voiceInventoryBadge(slot)}<span>${icon("refresh", 13)} ${escapeHtml(lastUsed)}</span>${concurrentRunning ? `<span class="running">${icon("plug", 13)} ${slot.concurrent.runningPids.length} 个隔离进程</span>` : ""}</div>
       <div class="account-launch-actions ${slot.isActive ? "" : "with-activate"}">${slot.isActive ? "" : `<button class="secondary" data-profile-activate="${slot.id}">${icon("check", 16)} 设为默认</button>`}<button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button>${slot.concurrent.ready ? `<button class="secondary" data-profile-concurrent-launch="${slot.id}" ${isolatedDisabled ? `disabled title="${concurrentRunning ? "该隔离实例已在运行" : escapeHtml(providerDetail)}"` : ""}>${icon("boxes", 16)} ${isolatedLabel}</button>` : `<button class="secondary" data-profile-concurrent-prepare="${slot.id}" ${concurrentProviderAvailable ? "" : `disabled title="${escapeHtml(providerDetail)}"`}>${icon("download", 16)} ${isolatedLabel}</button>`}</div>
     </article>`;
   }).join("");
@@ -577,22 +570,14 @@ function renderAccounts(): string {
     ${activeSlot ? `<p class="account-default-note">桌面快捷方式和 .svp 文件当前使用“${escapeHtml(activeSlot.displayName)}”。账号资料、目录与隔离策略已收进「管理」。</p>` : ""}`;
 }
 
+function sessionFileStatusLabel(status: Sv2ProfileSlot["identity"]["status"]): string {
+  if (status === "sessionPresent") return "检测到 session 文件";
+  if (status === "sessionAbsent") return "未检测到 session";
+  return "状态未知";
+}
+
 function voiceInventoryBadge(slot: Sv2ProfileSlot): string {
-  const inventory = slot.voiceInventory;
-  const catalogVoiceCount = new Set([
-    ...inventory.catalogAvailableVoices,
-    ...inventory.catalogTrialVoices,
-  ]).size;
-  if (inventory.authorizedVoices.length) {
-    return `<span class="voice-inventory confirmed" title="${escapeHtml(inventory.detail)}">${icon("audio", 13)} ${inventory.authorizedVoices.length} 个已确认授权</span>`;
-  }
-  if (catalogVoiceCount) {
-    return `<span class="voice-inventory evidence" title="目录可下载或可试用不代表当前账号已授权。${escapeHtml(inventory.detail)}">${icon("audio", 13)} ${catalogVoiceCount} 个目录项</span>`;
-  }
-  if (inventory.installedOpaqueCount) {
-    return `<span class="voice-inventory evidence" title="安装项标识不透明，无法据此确认产品或账号授权。${escapeHtml(inventory.detail)}">${icon("audio", 13)} ${inventory.installedOpaqueCount} 个不透明安装项</span>`;
-  }
-  return `<span class="voice-inventory unknown" title="${escapeHtml(inventory.detail)}">${icon("audio", 13)} 授权未知</span>`;
+  return `<span class="voice-inventory unknown" title="${escapeHtml(slot.voiceInventory.detail)}">${icon("audio", 13)} 声库授权未验证</span>`;
 }
 
 function renderAccountManager(): string {
@@ -601,25 +586,10 @@ function renderAccountManager(): string {
     ?? profiles.slots.find((slot) => slot.isActive)
     ?? profiles.slots[0];
   if (managedSlot) managedProfileSlotId = managedSlot.id;
-  const detectedIdentity = managedSlot ? [
-    ["用户名", managedSlot.identity.username?.trim() ?? ""],
-    ["邮箱", managedSlot.identity.email?.trim() ?? ""],
-  ] as const : [];
-  const identityKnown = detectedIdentity.some(([, value]) => value);
-  const identityStatusLabel = managedSlot?.identity.status === "credentialDetected"
-    ? identityKnown ? "登录凭证已检测" : "登录凭证已检测 · 身份未知"
-    : managedSlot?.identity.status === "signedOut"
-      ? "未检测到登录凭证"
-      : "登录状态与身份未知";
-  const identityStatusClass = managedSlot?.identity.status === "credentialDetected" ? "recognized" : "unknown";
-  const identityUnknownLabel = managedSlot?.identity.status === "credentialDetected" ? "身份未知" : "尚未识别";
+  const identityStatusLabel = managedSlot ? sessionFileStatusLabel(managedSlot.identity.status) : "状态未知";
   const identityCheckedAt = managedSlot?.identity.checkedAtUtc
     ? new Date(managedSlot.identity.checkedAtUtc).toLocaleString("zh-CN")
     : "检测时间未知";
-  const authorizedVoices = managedSlot?.voiceInventory.authorizedVoices ?? [];
-  const catalogVoices = managedSlot?.voiceInventory.catalogAvailableVoices ?? [];
-  const trialVoices = managedSlot?.voiceInventory.catalogTrialVoices ?? [];
-  const catalogListedVoices = [...new Set([...catalogVoices, ...trialVoices])];
   const selector = profiles.slots.length ? `<div class="account-mini-list" aria-label="选择账号">${profiles.slots.map((slot) => {
     const initial = Array.from(slot.displayName)[0] ?? "S";
     const color = /^#[0-9a-f]{6}$/i.test(slot.color) ? slot.color : "#6D5CE7";
@@ -627,10 +597,10 @@ function renderAccountManager(): string {
   }).join("")}</div>` : "";
   let body = "";
   if (accountManagerSection === "profile") {
-    body = managedSlot ? `${selector}<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(managedSlot.displayName)}</h3><p>账号登录状态与声库目录仅通过本机只读探测显示，不提供手工填写。</p></div>${managedSlot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
-      <section class="profile-auto-detection"><div class="auto-detection-heading"><span>${icon("shield", 17)}</span><div><strong>登录凭证与账号身份</strong><small>只检查普通凭证文件是否存在；不会解析或显示密码、Cookie、令牌及原始凭证内容。</small></div><span class="inventory-status ${identityStatusClass}">${escapeHtml(identityStatusLabel)}</span></div><div class="credential-detection-note"><strong>${escapeHtml(identityStatusLabel)}</strong><small>${escapeHtml(managedSlot.identity.detail)} · ${escapeHtml(identityCheckedAt)}</small></div><dl class="profile-detected-fields">${detectedIdentity.map(([label, value]) => `<div><dt>${label}</dt><dd class="${value ? "" : "unknown"}">${value ? escapeHtml(value) : identityUnknownLabel}</dd></div>`).join("")}</dl></section>
+    body = managedSlot ? `${selector}<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(managedSlot.displayName)}</h3><p>独立工具箱没有已验证的 Dreamtonics token broker；session 文件存在不等于已登录。</p></div>${managedSlot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
+      <section class="profile-auto-detection"><div class="auto-detection-heading"><span>${icon("shield", 17)}</span><div><strong>本地 session 文件</strong><small>这里只检查 session 文件是否存在，不解析或显示密码、Cookie、令牌及原始内容。</small></div><span class="inventory-status">${escapeHtml(identityStatusLabel)}</span></div><div class="session-detection-note"><strong>${escapeHtml(identityStatusLabel)}</strong><small>${escapeHtml(managedSlot.identity.detail)} · ${escapeHtml(identityCheckedAt)}</small></div><dl class="profile-detected-fields"><div><dt>用户名</dt><dd class="unknown">未验证</dd></div><div><dt>邮箱</dt><dd class="unknown">未验证</dd></div></dl></section>
       <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>槽位显示名称<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" required /></label><button class="secondary">重命名</button></form>
-      <section class="voice-detection-card"><div class="voice-license-heading"><div><strong>声库授权与本地目录证据</strong><small>授权、目录可下载项和不透明安装项分别显示，三者不会互相推定。</small></div><span class="inventory-status ${authorizedVoices.length ? "recognized" : "unknown"}">${authorizedVoices.length ? `已确认授权 ${authorizedVoices.length} 个` : "授权未知"}</span></div><div class="voice-detection-group"><strong>账号授权</strong>${authorizedVoices.length ? `<div class="detected-voice-list authorized">${authorizedVoices.map((voice) => `<span>${icon("check", 13)} ${escapeHtml(voice)}</span>`).join("")}</div>` : '<div class="detection-empty">当前没有可安全确认的账号声库授权；最终可用性由 SV2 官方服务验证。</div>'}</div><div class="voice-detection-group catalog"><div class="voice-group-heading"><strong>目录可下载 / 可试用</strong><span>${managedSlot.voiceInventory.catalogScanComplete ? "目录扫描完成" : "目录扫描不完整"}</span></div><small class="voice-group-warning">目录列出可下载或可试用的声库，不代表当前账号已经授权。</small>${catalogListedVoices.length ? `<div class="detected-voice-list catalog">${catalogListedVoices.map((voice) => `<span>${icon("download", 13)} ${escapeHtml(voice)}${trialVoices.includes(voice) ? " · 可试用" : " · 可下载"}</span>`).join("")}</div>` : '<div class="detection-empty">未发现可安全读取的声库目录项。</div>'}</div><div class="opaque-install-evidence"><span>${icon("audio", 16)}</span><div><strong>${managedSlot.voiceInventory.installedOpaqueCount} 个不透明安装项</strong><small>本地安装标识无法安全映射到产品或账号授权，不会用于自动选择账号。</small></div></div><div class="voice-evidence-note">${icon("shield", 16)}<span><strong>只读探测结果</strong><small>${escapeHtml(managedSlot.voiceInventory.detail)}</small></span></div></section>
+      <section class="voice-detection-card"><div class="voice-license-heading"><div><strong>产品与声库授权</strong><small>用户名、邮箱、产品和声库授权都需要官方认可的 token broker 才能验证。</small></div><span class="inventory-status">未验证</span></div><div class="detection-empty">独立工具箱当前没有可验证的账号授权结果。</div><div class="voice-evidence-note">${icon("shield", 16)}<span><strong>授权状态未知</strong><small>${escapeHtml(managedSlot.voiceInventory.detail)}</small></span></div></section>
       <div class="manager-action-row">${managedSlot.isActive ? "" : `<button class="secondary" data-profile-activate="${managedSlot.id}">${icon("check", 15)} 设为默认账号</button>`}<button class="secondary" data-profile-folder="${managedSlot.id}">${icon("folder", 15)} 打开普通数据目录</button>${managedSlot.concurrent.ready ? `<button class="secondary" data-profile-concurrent-folder="${managedSlot.id}">${icon("folder", 15)} 打开隔离目录</button>` : ""}</div>
       <dl class="profile-storage-list compact"><div><dt>普通数据</dt><dd><code title="${escapeHtml(managedSlot.dataPath)}">${escapeHtml(managedSlot.dataPath)}</code></dd></div>${managedSlot.concurrent.ready ? `<div><dt>隔离数据</dt><dd><code title="${escapeHtml(managedSlot.concurrent.dataPath)}">${escapeHtml(managedSlot.concurrent.dataPath)}</code></dd></div>` : ""}</dl></div>` : '<div class="empty-inline">尚无账号，请先添加一个槽位。</div>';
   } else if (accountManagerSection === "isolation") {
@@ -677,18 +647,18 @@ function renderHome(): string {
 
 function sessionProtectionBadge(protection: Sv2SessionProtection, prefix = ""): string {
   const labels: Record<Sv2SessionProtection["status"], string> = {
-    signInRequired: "登录后启用保护",
-    ready: "登录态保护就绪",
-    monitoring: "正在监测登录态",
-    recoveryPending: "登录态等待恢复",
-    restored: "登录态已自动恢复",
-    attention: "登录态保护需处理",
+    sessionAbsent: "本地 session 文件不存在",
+    ready: "session 保护就绪",
+    monitoring: "正在监测 session 文件",
+    recoveryPending: "本地 session 待恢复",
+    restored: "本地 session 已恢复",
+    attention: "session 保护需处理",
   };
   const emphasis = ["recoveryPending", "attention"].includes(protection.status) ? " attention" : protection.status === "monitoring" ? " monitoring" : "";
   return `<span class="session-protection${emphasis}" title="${escapeHtml(protection.detail)}">${icon(protection.status === "recoveryPending" ? "refresh" : "check", 14)} ${prefix}${labels[protection.status]}</span>`;
 }
 
-type AccountUseTone = "clear" | "unknown" | "in-use";
+type AccountUseTone = "unknown" | "in-use";
 
 interface AccountUseState {
   tone: AccountUseTone;
@@ -696,23 +666,20 @@ interface AccountUseState {
 }
 
 function accountUseStateFromPrecheck(check: Sv2AccountPrecheck): AccountUseState {
-  if (check.localUse || check.remoteUse === "detected") {
+  if (check.localUse) {
     return {
       tone: "in-use",
-      label: check.localUse ? "已确认本机正在使用" : "已确认存在其他设备占用迹象",
+      label: "已确认本机正在使用",
     };
   }
-  if (check.remoteUse === "clear") return { tone: "clear", label: "已确认无人使用" };
-  return { tone: "unknown", label: "占用状态未知：无法实时确认其他设备" };
+  return { tone: "unknown", label: "远端占用状态未知" };
 }
 
 function accountUseStateForSlot(slot: Sv2ProfileSlot): AccountUseState {
-  const recoveryPending = slot.sessionProtection.status === "recoveryPending"
-    || slot.concurrentSessionProtection.status === "recoveryPending";
-  if (slot.concurrent.runningPids.length || recoveryPending || (slot.isActive && Boolean(profiles?.blockers.length))) {
+  if (slot.concurrent.runningPids.length || (slot.isActive && Boolean(profiles?.blockers.length))) {
     return {
       tone: "in-use",
-      label: recoveryPending ? "已确认存在其他设备占用迹象" : "已确认本机正在使用",
+      label: "已确认本机正在使用",
     };
   }
   if (accountPrecheck?.slotId === slot.id) return accountUseStateFromPrecheck(accountPrecheck);
@@ -726,7 +693,7 @@ function accountUseDot(state: AccountUseState): string {
 function renderAccountPrecheck(): string {
   if (!app || (app.platform !== "windows" && app.platform !== "preview")) return "";
   if (!accountPrecheck) {
-    return `<section class="account-precheck panel loading"><span class="feature-icon blue">${icon("refresh", 22)}</span><div><span class="eyebrow">ACCOUNT USE PRECHECK</span><h2>正在预检当前账号占用</h2><p>检查本机普通实例、插件、Sandboxie 实例和受保护会话是否失效。</p></div></section>`;
+    return `<section class="account-precheck panel loading"><span class="feature-icon blue">${icon("refresh", 22)}</span><div><span class="eyebrow">ACCOUNT USE PRECHECK</span><h2>正在预检当前账号占用</h2><p>检查本机普通实例、插件、Sandboxie 实例与本地 session 恢复状态。</p></div></section>`;
   }
   const check = accountPrecheck;
   const useState = accountUseStateFromPrecheck(check);
@@ -734,14 +701,18 @@ function renderAccountPrecheck(): string {
   const localDetail = check.localProcesses.length
     ? check.localProcesses.map((process) => `${escapeHtml(process.name)}${process.pid ? ` · PID ${process.pid}` : ""}`).join("；")
     : check.concurrentPids.length ? `Sandboxie PID：${check.concurrentPids.join(", ")}` : "未发现本机进程";
-  const remoteLabel = check.remoteUse === "detected"
-    ? "已检测到远端占用迹象"
-    : check.remoteUse === "clear" ? "已确认远端未占用" : "远端状态等待 SV2 验证";
-  const stateIcon = useState.tone === "in-use" ? "plug" : useState.tone === "clear" ? "check" : "refresh";
-  const stateAccent = useState.tone === "in-use" ? "red" : useState.tone === "clear" ? "emerald" : "orange";
+  const remoteLabel = "远端占用状态未知";
+  const stateIcon = useState.tone === "in-use" ? "plug" : "refresh";
+  const stateAccent = useState.tone === "in-use" ? "red" : "orange";
+  const summary = check.localUse
+    ? "检测到本机正在使用当前槽位。"
+    : check.recoveryPending
+      ? "未发现本机占用；本地 session 待恢复。"
+      : "未发现本机占用；远端状态未知。";
+  const detail = "独立工具箱没有已验证的 Dreamtonics token broker，无法判断其他设备是否正在使用此账号。";
   return `<section class="account-precheck panel ${stateClass}">
     <span class="feature-icon ${stateAccent}">${icon(stateIcon, 22)}</span>
-    <div class="account-precheck-main"><span class="eyebrow">ACCOUNT USE PRECHECK</span><div class="precheck-title-line"><h2>账号占用锁 · ${escapeHtml(check.displayName || "未设置账号")}</h2>${accountUseDot(useState)}</div><p><strong>${escapeHtml(check.summary)}</strong> ${escapeHtml(check.detail)}</p><div class="precheck-facts"><span>${icon("users", 14)} ${localDetail}</span><span class="${check.remoteUse === "detected" ? "remote-detected" : check.remoteUse === "clear" ? "remote-clear" : ""}">${icon("plug", 14)} ${remoteLabel}</span><span>${icon("refresh", 14)} ${new Date(check.checkedAtUtc).toLocaleTimeString("zh-CN")}</span></div></div>
+    <div class="account-precheck-main"><span class="eyebrow">ACCOUNT USE PRECHECK</span><div class="precheck-title-line"><h2>账号占用锁 · ${escapeHtml(check.displayName || "未设置账号")}</h2>${accountUseDot(useState)}</div><p><strong>${summary}</strong> ${detail}</p><div class="precheck-facts"><span>${icon("users", 14)} ${localDetail}</span><span>${icon("plug", 14)} ${remoteLabel}</span>${check.recoveryPending ? `<span class="recovery-pending">${icon("refresh", 14)} 本地 session 待恢复</span>` : ""}<span>${icon("refresh", 14)} ${new Date(check.checkedAtUtc).toLocaleTimeString("zh-CN")}</span></div></div>
     <button class="secondary compact" data-account-precheck>${icon("refresh", 15)} 重新预检</button>
   </section>`;
 }
@@ -1094,7 +1065,7 @@ function renderSettings(): string {
         : "尚未注册为可选打开方式";
   return `<div class="settings-layout"><section class="panel"><div class="section-heading"><div><h2>运行模式</h2><p>切换后导航与 Rust 后端能力会同时更新。</p></div></div><div class="mode-setting"><button class="setting-choice ${app.mode === "toolbox" ? "active" : ""}" data-set-mode="toolbox"><span class="mode-icon slate">${icon("toolbox", 23)}</span><span><strong>纯工具箱</strong><small>确定性基础流程，不启动 AI</small></span>${app.mode === "toolbox" ? icon("check", 20) : ""}</button><button class="setting-choice ${app.mode === "ai" ? "active" : ""}" data-set-mode="ai"><span class="mode-icon purple">${icon("sparkles", 23)}</span><span><strong>AI 模式</strong><small>Copilot、智能增强与 MCP</small></span>${app.mode === "ai" ? icon("check", 20) : ""}</button></div></section>
     ${app.mode === "ai" ? `<section class="panel"><div class="section-heading"><div><h2>模型连接</h2><p>令牌写入本机用户配置，不会返回给前端。</p></div></div><form id="model-form" class="form-stack"><label>Anthropic 兼容 API 地址<input id="model-url" type="url" required value="${escapeHtml(app.model?.baseUrl ?? "https://api.anthropic.com")}" /></label><label>模型 ID<input id="model-id" required value="${escapeHtml(app.model?.model ?? "")}" placeholder="例如 claude-sonnet-4-5" /></label><label>访问令牌<input id="model-token" type="password" placeholder="${app.model?.tokenConfigured ? "已保存；留空则保留" : "输入访问令牌"}" /></label><button class="primary">保存模型设置</button></form></section>` : `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("bot", 24)}</span><div><h2>AI 运行时已关闭</h2><p>当前不会显示 Copilot、模型或 MCP 设置，也不会向模型端点发送请求。</p></div></section>`}
-    ${showSvpRouting ? `<section class="panel smart-route-settings"><div class="section-heading"><div><h2>智能 .svp 启动</h2><p>根据工程所需声库，从空闲账号中建议最合适的启动槽位。</p></div><label class="fluent-switch large"><input id="svp-routing-enabled" type="checkbox" ${app.smartSvpLaunchEnabled ? "checked" : ""} ${association.supported ? "" : "disabled"} aria-label="启用智能 .svp 启动" /><span></span>${app.smartSvpLaunchEnabled ? "已开启" : "已关闭"}</label></div><div class="smart-route-state ${association.isDefault ? "ready" : "pending"}"><span class="feature-icon ${association.isDefault ? "emerald" : "blue"}">${icon("file", 20)}</span><div><strong>${escapeHtml(associationLabel)}</strong><p>${escapeHtml(association.detail)}</p></div><button class="secondary compact" data-open-svp-default-apps ${association.supported ? "" : "disabled"}>打开默认应用设置</button></div><div class="smart-route-boundary">${icon("shield", 17)}<span><strong>智能路由只在工具箱已经运行时生效</strong><small>冷启动或关闭此功能时，工具箱会把工程透明转交给原始 .svp 处理程序；不会监控、终止或劫持已经启动的 SV2。声库匹配只使用可安全确认的授权结果；目录可下载项和不透明安装项都不会作为授权，未知时必须由你选择账号。</small></span></div></section>` : ""}
+    ${showSvpRouting ? `<section class="panel smart-route-settings"><div class="section-heading"><div><h2>智能 .svp 启动</h2><p>根据工程所需声库，从空闲账号中建议最合适的启动槽位。</p></div><label class="fluent-switch large"><input id="svp-routing-enabled" type="checkbox" ${app.smartSvpLaunchEnabled ? "checked" : ""} ${association.supported ? "" : "disabled"} aria-label="启用智能 .svp 启动" /><span></span>${app.smartSvpLaunchEnabled ? "已开启" : "已关闭"}</label></div><div class="smart-route-state ${association.isDefault ? "ready" : "pending"}"><span class="feature-icon ${association.isDefault ? "emerald" : "blue"}">${icon("file", 20)}</span><div><strong>${escapeHtml(associationLabel)}</strong><p>${escapeHtml(association.detail)}</p></div><button class="secondary compact" data-open-svp-default-apps ${association.supported ? "" : "disabled"}>打开默认应用设置</button></div><div class="smart-route-boundary">${icon("shield", 17)}<span><strong>智能路由只在工具箱已经运行时生效</strong><small>冷启动或关闭此功能时，工具箱会把工程透明转交给原始 .svp 处理程序；不会监控、终止或劫持已经启动的 SV2。当前声库授权均未验证，因此路由必须由你确认账号。</small></span></div></section>` : ""}
     <section class="panel"><div class="section-heading"><div><h2>数据与平台</h2><p>配置和历史使用统一的跨平台用户目录。</p></div></div><dl class="detail-list"><div><dt>平台</dt><dd>${escapeHtml(app.platform)}</dd></div><div><dt>配置</dt><dd><code>${escapeHtml(app.configPath)}</code></dd></div><div><dt>应用版本</dt><dd>${escapeHtml(app.appVersion)}</dd></div></dl></section></div>`;
 }
 

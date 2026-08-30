@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -9,9 +9,6 @@ use crate::sv2_profiles::{Sv2ProfileSlotView, Sv2ProfilesState};
 
 const MAX_PROJECT_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_VOICE_REQUIREMENTS: usize = 128;
-const MAX_INSTALLED_DATABASES: usize = 512;
-const MAX_CATALOG_META_FILES: usize = 512;
-const MAX_CATALOG_META_BYTES: u64 = 1024 * 1024;
 
 pub const TOOLBOX_SVP_PROG_ID: &str = "SynthVToolbox.SVP";
 #[cfg(windows)]
@@ -35,46 +32,16 @@ pub struct SvpAssociationView {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub enum Sv2VoiceInventoryStatus {
-    CatalogEvidence,
-    LocalEvidence,
-    Unknown,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub enum Sv2VoiceAuthorizationStatus {
     Unknown,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sv2VoiceInventoryView {
-    pub status: Sv2VoiceInventoryStatus,
     pub authorization_status: Sv2VoiceAuthorizationStatus,
     pub authorized_voices: Vec<String>,
-    pub catalog_available_voices: Vec<String>,
-    pub catalog_trial_voices: Vec<String>,
-    pub catalog_scan_complete: bool,
-    pub installed_opaque_count: usize,
     pub detail: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct VoiceCatalogMetadata {
-    name: String,
-    #[serde(default)]
-    is_download_available: bool,
-    #[serde(default)]
-    is_trialable: bool,
-}
-
-#[derive(Debug, Default)]
-struct VoiceCatalogEvidence {
-    available: BTreeSet<String>,
-    trial: BTreeSet<String>,
-    complete: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -220,42 +187,12 @@ pub fn passthrough_svp_project(
     }
 }
 
-pub fn inspect_voice_inventory(data_root: &Path) -> Sv2VoiceInventoryView {
-    let installed_opaque_count = count_installed_opaque_databases(data_root);
-    let catalog = inspect_catalog_evidence(data_root);
-    let catalog_available_voices = catalog.available.into_iter().collect::<Vec<_>>();
-    let catalog_trial_voices = catalog.trial.into_iter().collect::<Vec<_>>();
-    let (status, detail) = if !catalog_available_voices.is_empty() {
-        (
-            Sv2VoiceInventoryStatus::CatalogEvidence,
-            format!(
-                "SV2 本地目录列出 {} 个可下载声库，另检测到 {} 个不透明安装项。目录缓存与安装痕迹都不是账号授权证明。",
-                catalog_available_voices.len(),
-                installed_opaque_count
-            ),
-        )
-    } else if installed_opaque_count > 0 {
-        (
-            Sv2VoiceInventoryStatus::LocalEvidence,
-            format!(
-                "检测到 {installed_opaque_count} 个本地声库安装项，但本地文件不公开产品映射，无法据此确认账号授权。"
-            ),
-        )
-    } else {
-        (
-            Sv2VoiceInventoryStatus::Unknown,
-            "未发现可安全映射的账号声库授权；不会把商店目录或可下载状态当作已授权。".to_string(),
-        )
-    };
+pub fn inspect_voice_inventory() -> Sv2VoiceInventoryView {
     Sv2VoiceInventoryView {
-        status,
         authorization_status: Sv2VoiceAuthorizationStatus::Unknown,
         authorized_voices: Vec::new(),
-        catalog_available_voices,
-        catalog_trial_voices,
-        catalog_scan_complete: catalog.complete,
-        installed_opaque_count,
-        detail,
+        detail: "没有已验证的官方授权查询结果；本地产品目录、安装项和 session 文件均不用于推断账号声库授权。"
+            .to_string(),
     }
 }
 
@@ -373,8 +310,10 @@ fn route_candidate(
     if launch_mode == Some(SvpLaunchMode::Normal) {
         score += 5;
     }
-    let reason = if !idle {
-        "账号当前正在使用或存在远端冲突证据。".to_string()
+    let reason = if locally_busy {
+        "检测到与该槽位相关的本机进程。".to_string()
+    } else if recovery_pending {
+        "该槽位存在尚未完成的本地 session 恢复状态。".to_string()
     } else if launch_mode.is_none() {
         "当前普通槽位被占用，且该账号的并发隔离副本不可用。".to_string()
     } else if required.is_empty() {
@@ -503,131 +442,6 @@ fn normalized_voice_name(value: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase()
-}
-
-fn inspect_catalog_evidence(data_root: &Path) -> VoiceCatalogEvidence {
-    let mut evidence = VoiceCatalogEvidence::default();
-    let meta_root = data_root.join("databases").join("meta");
-    if !is_safe_directory(&meta_root) {
-        return evidence;
-    }
-    let Ok(entries) = fs::read_dir(&meta_root) else {
-        return evidence;
-    };
-    evidence.complete = true;
-    let mut json_files = 0usize;
-    for entry in entries {
-        let Ok(entry) = entry else {
-            evidence.complete = false;
-            continue;
-        };
-        let path = entry.path();
-        if !path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
-        {
-            continue;
-        }
-        json_files += 1;
-        if json_files > MAX_CATALOG_META_FILES {
-            evidence.complete = false;
-            break;
-        }
-        let Ok(metadata) = fs::symlink_metadata(&path) else {
-            evidence.complete = false;
-            continue;
-        };
-        if !metadata.file_type().is_file()
-            || is_link_or_reparse(&metadata)
-            || metadata.len() == 0
-            || metadata.len() > MAX_CATALOG_META_BYTES
-        {
-            evidence.complete = false;
-            continue;
-        }
-        let Ok(bytes) = fs::read(&path) else {
-            evidence.complete = false;
-            continue;
-        };
-        let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes);
-        let Ok(metadata) = serde_json::from_slice::<VoiceCatalogMetadata>(bytes) else {
-            evidence.complete = false;
-            continue;
-        };
-        let Some(name) = sanitize_catalog_voice_name(&metadata.name) else {
-            evidence.complete = false;
-            continue;
-        };
-        if metadata.is_download_available {
-            evidence.available.insert(name.clone());
-        }
-        if metadata.is_trialable {
-            evidence.trial.insert(name);
-        }
-    }
-    evidence
-}
-
-fn sanitize_catalog_voice_name(value: &str) -> Option<String> {
-    let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    (!value.is_empty() && value.chars().count() <= 160 && !value.chars().any(char::is_control))
-        .then_some(value)
-}
-
-fn is_safe_directory(path: &Path) -> bool {
-    fs::symlink_metadata(path)
-        .is_ok_and(|metadata| metadata.file_type().is_dir() && !is_link_or_reparse(&metadata))
-}
-
-fn is_link_or_reparse(metadata: &fs::Metadata) -> bool {
-    if metadata.file_type().is_symlink() {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
-        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return true;
-        }
-    }
-    false
-}
-
-fn count_installed_opaque_databases(data_root: &Path) -> usize {
-    let databases = data_root.join("databases");
-    if !is_safe_directory(&databases) {
-        return 0;
-    }
-    let Ok(entries) = fs::read_dir(databases) else {
-        return 0;
-    };
-    entries
-        .flatten()
-        .filter(|entry| {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if matches!(name.as_ref(), "meta" | "tmp") || !is_safe_directory(&entry.path()) {
-                return false;
-            }
-            fs::read_dir(entry.path())
-                .ok()
-                .into_iter()
-                .flatten()
-                .flatten()
-                .take(32)
-                .any(|version| {
-                    is_safe_directory(&version.path())
-                        && version
-                            .file_name()
-                            .to_string_lossy()
-                            .chars()
-                            .all(|character| character.is_ascii_digit())
-                })
-        })
-        .take(MAX_INSTALLED_DATABASES)
-        .count()
 }
 
 fn validate_project_path(value: &str) -> Result<PathBuf, String> {
@@ -1024,71 +838,47 @@ mod tests {
     }
 
     #[test]
-    fn catalog_evidence_is_visible_without_becoming_authorization() {
-        let root = std::env::temp_dir().join(format!("svp-catalog-test-{}", Uuid::new_v4()));
+    fn local_product_files_never_change_or_populate_authorization() {
+        let root = std::env::temp_dir().join(format!("svp-zero-guess-test-{}", Uuid::new_v4()));
         let meta = root.join("databases").join("meta");
+        let installed = root
+            .join("databases")
+            .join("private-install-id")
+            .join("104");
         fs::create_dir_all(&meta).unwrap();
+        fs::create_dir_all(&installed).unwrap();
+        let baseline = inspect_voice_inventory();
         fs::write(
             meta.join("voice-a.json"),
             serde_json::to_vec(&serde_json::json!({
-                "name": "  Mai   2 ",
+                "name": "DO NOT EXPOSE PRODUCT NAME",
                 "isDownloadAvailable": true,
                 "isTrialable": true
             }))
             .unwrap(),
         )
         .unwrap();
-        fs::write(
-            meta.join("voice-b.json"),
-            serde_json::to_vec(&serde_json::json!({
-                "name": "SOLARIA",
-                "isDownloadAvailable": true
-            }))
-            .unwrap(),
-        )
-        .unwrap();
+        fs::write(installed.join("model.dnni"), b"opaque").unwrap();
 
-        let inventory = inspect_voice_inventory(&root);
+        let inventory = inspect_voice_inventory();
+        let serialized = serde_json::to_string(&inventory).unwrap();
 
+        assert_eq!(inventory, baseline);
         assert_eq!(
             inventory.authorization_status,
             Sv2VoiceAuthorizationStatus::Unknown
         );
         assert!(inventory.authorized_voices.is_empty());
-        assert_eq!(inventory.catalog_available_voices, vec!["Mai 2", "SOLARIA"]);
-        assert_eq!(inventory.catalog_trial_voices, vec!["Mai 2"]);
-        assert!(inventory.catalog_scan_complete);
-        assert_eq!(inventory.status, Sv2VoiceInventoryStatus::CatalogEvidence);
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn malformed_catalog_entries_fail_closed() {
-        let root = std::env::temp_dir().join(format!("svp-catalog-bad-{}", Uuid::new_v4()));
-        let meta = root.join("databases").join("meta");
-        fs::create_dir_all(&meta).unwrap();
-        fs::write(meta.join("bad.json"), b"not json").unwrap();
-
-        let inventory = inspect_voice_inventory(&root);
-
-        assert!(!inventory.catalog_scan_complete);
-        assert!(inventory.catalog_available_voices.is_empty());
-        assert!(inventory.authorized_voices.is_empty());
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn local_database_count_does_not_expose_opaque_ids() {
-        let root = std::env::temp_dir().join(format!("svp-inventory-test-{}", Uuid::new_v4()));
-        let version = root.join("databases").join("opaque-license-id").join("104");
-        fs::create_dir_all(&version).unwrap();
-        fs::write(version.join("model.dnni"), b"opaque").unwrap();
-
-        let inventory = inspect_voice_inventory(&root);
-
-        assert_eq!(inventory.installed_opaque_count, 1);
-        assert_eq!(inventory.status, Sv2VoiceInventoryStatus::LocalEvidence);
-        assert!(!inventory.detail.contains("opaque-license-id"));
+        assert!(!serialized.contains("DO NOT EXPOSE PRODUCT NAME"));
+        assert!(!serialized.contains("private-install-id"));
+        assert_eq!(
+            serde_json::from_str::<Value>(&serialized)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .len(),
+            3
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
