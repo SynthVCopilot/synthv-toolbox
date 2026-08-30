@@ -1875,13 +1875,21 @@ function wireForms(): void {
     event.preventDefault();
     const displayName = document.querySelector<HTMLInputElement>("#profile-import-name")?.value.trim() ?? "";
     if (!displayName) return;
-    void run(async () => { profiles = await api.importCurrentSv2Profile(displayName); notice = `已导入“${displayName}”。`; });
+    void run(async () => {
+      profiles = await api.importCurrentSv2Profile(displayName);
+      await refreshAccountUsage();
+      notice = `已导入“${displayName}”。`;
+    });
   });
   document.querySelector<HTMLFormElement>("#profile-create-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const displayName = document.querySelector<HTMLInputElement>("#profile-create-name")?.value.trim() ?? "";
     if (!displayName) return;
-    void run(async () => { profiles = await api.createSv2Profile(displayName); notice = `已创建“${displayName}”。`; });
+    void run(async () => {
+      profiles = await api.createSv2Profile(displayName);
+      await refreshAccountUsage();
+      notice = `已创建“${displayName}”。`;
+    });
   });
   document.querySelectorAll<HTMLFormElement>("[data-profile-rename-form]").forEach((form) => form.addEventListener("submit", (event) => {
     event.preventDefault();

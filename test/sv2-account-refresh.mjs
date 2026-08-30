@@ -25,5 +25,7 @@ assert.match(library, /commands::sv2_account_usage_snapshot_for_slot/);
 assert.match(api, /sv2AccountUsageSnapshotForSlot/);
 assert.match(main, /data-profile-refresh-slot/);
 assert.match(main, /refreshAccountUsage\(slotId\)/);
+assert.match(main, /profiles = await api\.importCurrentSv2Profile\(displayName\);\s*await refreshAccountUsage\(\);/);
+assert.match(main, /profiles = await api\.createSv2Profile\(displayName\);\s*await refreshAccountUsage\(\);/);
 
 console.log("SV2 account refresh contracts passed.");
