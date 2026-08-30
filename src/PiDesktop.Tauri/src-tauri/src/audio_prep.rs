@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,6 +20,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use tauri::{http, AppHandle, Runtime as TauriRuntime};
+use tauri_plugin_dialog::DialogExt;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 use tokio::process::Command;
 use uuid::Uuid;
@@ -34,6 +37,7 @@ const DEFAULT_LRA: f64 = 11.0;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 const LOUDNESS_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 const CAPTURE_LIMIT: usize = 8 * 1024 * 1024;
+const MAX_PROTOCOL_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,6 +54,8 @@ pub struct FfmpegRuntimeStatus {
 #[serde(rename_all = "camelCase")]
 pub struct MediaProbe {
     pub path: String,
+    pub source_artifact_id: Option<String>,
+    pub source_mime_type: Option<String>,
     pub container: Option<String>,
     pub codec: Option<String>,
     pub duration_seconds: Option<f64>,
@@ -131,6 +137,27 @@ pub struct AudioJobSnapshot {
     pub completed_at: Option<String>,
 }
 
+/// A capability-style reference to a completed Toolbox audio result.  The
+/// source pathname deliberately never crosses the IPC boundary; callers use
+/// the opaque `artifact_id` for playback, reveal, and safe export instead.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioArtifactInfo {
+    pub artifact_id: String,
+    pub operation: String,
+    pub file_name: String,
+    pub byte_length: u64,
+    pub mime_type: Option<String>,
+    pub media_url: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioArtifactSaveResult {
+    pub saved: bool,
+    pub file_name: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoudnessReport {
@@ -183,6 +210,26 @@ struct JobRecord {
     cancelled: Arc<AtomicBool>,
 }
 
+#[derive(Debug, Clone)]
+struct AudioArtifact {
+    path: PathBuf,
+    location: AudioArtifactLocation,
+    operation: String,
+    mime_type: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+enum AudioArtifactLocation {
+    Generated {
+        canonical_output_root: PathBuf,
+    },
+    Source {
+        canonical_source: PathBuf,
+        byte_length: u64,
+        modified_at: Option<SystemTime>,
+    },
+}
+
 /// Shared state for plans and jobs.  Construct it once per application.
 pub struct AudioPreparationService {
     resource_dir: PathBuf,
@@ -191,6 +238,7 @@ pub struct AudioPreparationService {
     runtime_override: Option<Runtime>,
     plans: Mutex<HashMap<String, StoredPlan>>,
     jobs: Mutex<HashMap<String, JobRecord>>,
+    artifacts: Mutex<HashMap<String, AudioArtifact>>,
     write_active: AtomicBool,
 }
 
@@ -203,6 +251,7 @@ impl AudioPreparationService {
             runtime_override: None,
             plans: Mutex::new(HashMap::new()),
             jobs: Mutex::new(HashMap::new()),
+            artifacts: Mutex::new(HashMap::new()),
             write_active: AtomicBool::new(false),
         })
     }
@@ -221,6 +270,7 @@ impl AudioPreparationService {
             }),
             plans: Mutex::new(HashMap::new()),
             jobs: Mutex::new(HashMap::new()),
+            artifacts: Mutex::new(HashMap::new()),
             write_active: AtomicBool::new(false),
         })
     }
@@ -241,7 +291,12 @@ impl AudioPreparationService {
 
     pub async fn probe_media(&self, path: String) -> Result<MediaProbe, String> {
         let _usage_guard = component_usage_guard()?;
-        probe_media_with_runtime(&self.runtime()?, path).await
+        let mut probe = probe_media_with_runtime(&self.runtime()?, path).await?;
+        let mime_type = audio_mime_for_probe(&probe).map(str::to_string);
+        probe.source_artifact_id =
+            Some(self.register_source_artifact(Path::new(&probe.path), mime_type.clone())?);
+        probe.source_mime_type = mime_type;
+        Ok(probe)
     }
 
     pub async fn analyze_loudness(&self, path: String) -> Result<LoudnessReport, String> {
@@ -263,9 +318,10 @@ impl AudioPreparationService {
     ) -> Result<AudioWritePlan, String> {
         validate_prepare(&request)?;
         let input = canonical_input(&request.input_path)?;
-        let probe = self
-            .probe_media(input.to_string_lossy().into_owned())
-            .await?;
+        let _usage_guard = component_usage_guard()?;
+        let probe =
+            probe_media_with_runtime(&self.runtime()?, input.to_string_lossy().into_owned())
+                .await?;
         let output = self.new_output(&input, "prepared")?;
         let mut effective = request;
         effective.input_path = input.to_string_lossy().into_owned();
@@ -367,6 +423,76 @@ impl AudioPreparationService {
             record.snapshot.status = "cancelling".to_string();
         }
         Ok(record.snapshot.clone())
+    }
+
+    pub fn audio_artifact_info(&self, artifact_id: &str) -> Result<AudioArtifactInfo, String> {
+        let (id, artifact, metadata) = self.validated_artifact(artifact_id)?;
+        let media_url = artifact_media_url(&id);
+        Ok(AudioArtifactInfo {
+            artifact_id: id,
+            operation: artifact.operation,
+            file_name: artifact_file_name(&artifact.path)?,
+            byte_length: metadata.len(),
+            media_url,
+            mime_type: artifact.mime_type,
+        })
+    }
+
+    pub fn reveal_audio_artifact(&self, artifact_id: &str) -> Result<(), String> {
+        let (_, artifact, _) = self.validated_generated_artifact(artifact_id)?;
+        let (program, args) = reveal_command_for_path(&artifact.path)?;
+        std::process::Command::new(program)
+            .args(args)
+            .spawn()
+            .map_err(|error| format!("Unable to reveal the audio result: {error}"))?;
+        Ok(())
+    }
+
+    pub async fn save_audio_artifact<R: TauriRuntime>(
+        &self,
+        artifact_id: &str,
+        app: AppHandle<R>,
+    ) -> Result<AudioArtifactSaveResult, String> {
+        let (_, artifact, _) = self.validated_generated_artifact(artifact_id)?;
+        let suggested_name = artifact_file_name(&artifact.path)?;
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        app.dialog()
+            .file()
+            .set_file_name(&suggested_name)
+            .add_filter("WAV audio", &["wav"])
+            .save_file(move |selection| {
+                let _ = sender.send(selection);
+            });
+        let Some(destination) = receiver
+            .await
+            .map_err(|_| "The save dialog did not return a result.".to_string())?
+        else {
+            return Ok(AudioArtifactSaveResult {
+                saved: false,
+                file_name: None,
+            });
+        };
+        // The operating-system dialog is the only source of this path.  Do
+        // not add an IPC parameter for a save destination.
+        self.validated_generated_artifact(artifact_id)?;
+        let destination = destination.as_path().ok_or_else(|| {
+            "The selected save location is not a local filesystem path.".to_string()
+        })?;
+        safe_copy_artifact(&artifact.path, destination)?;
+        Ok(AudioArtifactSaveResult {
+            saved: true,
+            file_name: destination
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_string),
+        })
+    }
+
+    pub fn serve_audio_artifact_request(
+        &self,
+        request: &http::Request<Vec<u8>>,
+    ) -> http::Response<Vec<u8>> {
+        serve_audio_artifact_request(self, request)
     }
 
     fn store_plan(
@@ -532,6 +658,17 @@ impl AudioPreparationService {
         }
         .await;
         let was_cancelled = cancelled.load(Ordering::SeqCst);
+        let result = match result {
+            Ok(report) if !was_cancelled => self
+                .register_completed_artifact(
+                    &plan.output_path,
+                    &canonical_output_root,
+                    &plan.operation,
+                )
+                .map(|artifact_id| (report, artifact_id)),
+            Ok(_) => Err("Audio operation was cancelled.".to_string()),
+            Err(error) => Err(error),
+        };
         if was_cancelled || result.is_err() {
             let _ = remove_generated_output(&self.output_root, Path::new(&plan.output_path));
         }
@@ -546,10 +683,10 @@ impl AudioPreparationService {
                         snapshot.status = "failed".to_string();
                         snapshot.error = Some(error);
                     }
-                    Ok(report) => {
+                    Ok((report, artifact_id)) => {
                         snapshot.status = "completed".to_string();
                         snapshot.progress_percent = Some(100.0);
-                        snapshot.artifact_id = Some(id.clone());
+                        snapshot.artifact_id = Some(artifact_id);
                         snapshot.loudness_report = report;
                     }
                 }
@@ -775,6 +912,135 @@ impl AudioPreparationService {
         }
     }
 
+    fn register_completed_artifact(
+        &self,
+        output: &str,
+        canonical_output_root: &Path,
+        operation: &str,
+    ) -> Result<String, String> {
+        let output = Path::new(output);
+        validate_completed_output(&self.output_root, output)?;
+        let current_root = fs::canonicalize(&self.output_root).map_err(|error| {
+            format!("Unable to validate the completed output directory: {error}")
+        })?;
+        if current_root != canonical_output_root {
+            return Err(
+                "The audio output directory changed before result registration.".to_string(),
+            );
+        }
+        let id = Uuid::new_v4().to_string();
+        self.artifacts
+            .lock()
+            .map_err(|_| "Audio artifact state is unavailable.".to_string())?
+            .insert(
+                id.clone(),
+                AudioArtifact {
+                    path: output.to_path_buf(),
+                    location: AudioArtifactLocation::Generated {
+                        canonical_output_root: current_root,
+                    },
+                    operation: operation.to_string(),
+                    mime_type: Some("audio/wav".to_string()),
+                },
+            );
+        Ok(id)
+    }
+
+    fn validated_artifact(
+        &self,
+        artifact_id: &str,
+    ) -> Result<(String, AudioArtifact, fs::Metadata), String> {
+        let id = parse_artifact_id(artifact_id)?;
+        let artifact = self
+            .artifacts
+            .lock()
+            .map_err(|_| "Audio artifact state is unavailable.".to_string())?
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| "Audio result was not found or is no longer available.".to_string())?;
+        match &artifact.location {
+            AudioArtifactLocation::Generated {
+                canonical_output_root,
+            } => {
+                validate_completed_output(&self.output_root, &artifact.path)?;
+                let current_root = fs::canonicalize(&self.output_root).map_err(|error| {
+                    format!("Unable to validate the audio output directory: {error}")
+                })?;
+                if current_root != *canonical_output_root {
+                    return Err(
+                        "Audio result is no longer available because its output directory changed."
+                            .to_string(),
+                    );
+                }
+            }
+            AudioArtifactLocation::Source {
+                canonical_source,
+                byte_length,
+                modified_at,
+            } => {
+                let current_source = canonical_input(&artifact.path.to_string_lossy())?;
+                let metadata = fs::metadata(&current_source)
+                    .map_err(|_| "Source audio is no longer available.".to_string())?;
+                if current_source != *canonical_source
+                    || metadata.len() != *byte_length
+                    || metadata.modified().ok() != *modified_at
+                {
+                    return Err("Source audio changed after it was inspected.".to_string());
+                }
+            }
+        }
+        let metadata = fs::metadata(&artifact.path)
+            .map_err(|_| "Audio result is no longer available.".to_string())?;
+        if !metadata.is_file() {
+            return Err("Audio result is no longer a regular file.".to_string());
+        }
+        Ok((id, artifact, metadata))
+    }
+
+    fn validated_generated_artifact(
+        &self,
+        artifact_id: &str,
+    ) -> Result<(String, AudioArtifact, fs::Metadata), String> {
+        let validated = self.validated_artifact(artifact_id)?;
+        if !matches!(
+            &validated.1.location,
+            AudioArtifactLocation::Generated { .. }
+        ) {
+            return Err(
+                "Only completed Toolbox audio results can be revealed or saved.".to_string(),
+            );
+        }
+        Ok(validated)
+    }
+
+    fn register_source_artifact(
+        &self,
+        path: &Path,
+        mime_type: Option<String>,
+    ) -> Result<String, String> {
+        let canonical_source = canonical_input(&path.to_string_lossy())?;
+        let metadata = fs::metadata(&canonical_source)
+            .map_err(|_| "Source audio is no longer available.".to_string())?;
+        let id = Uuid::new_v4().to_string();
+        self.artifacts
+            .lock()
+            .map_err(|_| "Audio artifact state is unavailable.".to_string())?
+            .insert(
+                id.clone(),
+                AudioArtifact {
+                    path: canonical_source.clone(),
+                    location: AudioArtifactLocation::Source {
+                        canonical_source,
+                        byte_length: metadata.len(),
+                        modified_at: metadata.modified().ok(),
+                    },
+                    operation: "source-media".to_string(),
+                    mime_type,
+                },
+            );
+        Ok(id)
+    }
+
     fn new_output(&self, input: &Path, suffix: &str) -> Result<PathBuf, String> {
         ensure_output_root(&self.output_root)?;
         let stem = input
@@ -795,6 +1061,320 @@ impl AudioPreparationService {
         validate_generated_output(&self.output_root, &output, input)?;
         Ok(output)
     }
+}
+
+fn parse_artifact_id(value: &str) -> Result<String, String> {
+    let id = Uuid::parse_str(value).map_err(|_| "Invalid audio result identifier.".to_string())?;
+    let canonical = id.to_string();
+    if value != canonical {
+        return Err("Invalid audio result identifier.".to_string());
+    }
+    Ok(canonical)
+}
+
+fn artifact_file_name(path: &Path) -> Result<String, String> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| "Audio result does not have a safe file name.".to_string())
+}
+
+fn artifact_media_url(artifact_id: &str) -> String {
+    #[cfg(windows)]
+    {
+        // WebView2 custom protocols are exposed through Wry's localhost HTTP
+        // workaround for subresources such as <audio>.
+        format!("http://toolbox-audio.localhost/{artifact_id}")
+    }
+    #[cfg(not(windows))]
+    {
+        format!("toolbox-audio://localhost/{artifact_id}")
+    }
+}
+
+/// MIME values intentionally remain a small reviewed allowlist.  Unknown
+/// containers stay registered (so their opaque capability remains valid) but
+/// are not exposed to a browser audio element.
+fn audio_mime_for_probe(probe: &MediaProbe) -> Option<&'static str> {
+    match probe
+        .path
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("wav" | "wave") => Some("audio/wav"),
+        Some("mp3") => Some("audio/mpeg"),
+        Some("flac") => Some("audio/flac"),
+        Some("ogg" | "oga" | "opus") => Some("audio/ogg"),
+        Some("aac") => Some("audio/aac"),
+        Some("m4a" | "mp4") => Some("audio/mp4"),
+        Some("aif" | "aiff") => Some("audio/aiff"),
+        _ => match probe.codec.as_deref() {
+            Some("mp3") => Some("audio/mpeg"),
+            Some("flac") => Some("audio/flac"),
+            Some("opus" | "vorbis") => Some("audio/ogg"),
+            Some("aac") => Some("audio/aac"),
+            _ => None,
+        },
+    }
+}
+
+fn reveal_command_for_path(path: &Path) -> Result<(&'static OsStr, Vec<OsString>), String> {
+    if !path.is_absolute() {
+        return Err("Audio result path is not absolute.".to_string());
+    }
+    #[cfg(windows)]
+    {
+        Ok((
+            OsStr::new("explorer.exe"),
+            vec![OsString::from("/select,"), path.as_os_str().to_os_string()],
+        ))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Ok((
+            OsStr::new("/usr/bin/open"),
+            vec![OsString::from("-R"), path.as_os_str().to_os_string()],
+        ))
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = path;
+        Err("Revealing audio results is supported on Windows and macOS only.".to_string())
+    }
+}
+
+fn safe_copy_artifact(source: &Path, destination: &Path) -> Result<(), String> {
+    if !destination.is_absolute()
+        || destination
+            .components()
+            .any(|part| matches!(part, Component::ParentDir))
+    {
+        return Err("The selected save location is unsafe.".to_string());
+    }
+    if source == destination {
+        return Err("The selected save location is the same as the source audio.".to_string());
+    }
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "The selected save location has no parent directory.".to_string())?;
+    if !parent.is_dir() {
+        return Err("The selected save directory is unavailable or unsafe.".to_string());
+    }
+    reject_linked_ancestors(parent, "Selected save directory")?;
+    let file_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| "The selected save location has no safe file name.".to_string())?;
+    let temporary = parent.join(format!(".{file_name}.{}.tmp", Uuid::new_v4()));
+    let mut input = fs::File::open(source)
+        .map_err(|error| format!("Unable to read the audio result: {error}"))?;
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|error| format!("Unable to create a temporary audio file: {error}"))?;
+    let copy_result = std::io::copy(&mut input, &mut output)
+        .and_then(|_| output.flush())
+        .and_then(|_| output.sync_all())
+        .map_err(|error| format!("Unable to save the audio result: {error}"));
+    if let Err(error) = copy_result {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    drop(output);
+    // On Windows rename fails when the destination already exists.  On Unix,
+    // hard-linking the same-directory temporary file creates the destination
+    // atomically without replacement, then removes the private temporary.
+    #[cfg(windows)]
+    let commit = fs::rename(&temporary, destination);
+    #[cfg(not(windows))]
+    let commit = fs::hard_link(&temporary, destination).and_then(|_| fs::remove_file(&temporary));
+    if let Err(error) = commit {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!(
+            "Unable to save without overwriting an existing file: {error}"
+        ));
+    }
+    Ok(())
+}
+
+fn serve_audio_artifact_request(
+    service: &AudioPreparationService,
+    request: &http::Request<Vec<u8>>,
+) -> http::Response<Vec<u8>> {
+    let bad_request = || {
+        protocol_response(
+            http::StatusCode::BAD_REQUEST,
+            Vec::new(),
+            None,
+            None,
+            "text/plain",
+        )
+    };
+    let not_found = || {
+        protocol_response(
+            http::StatusCode::NOT_FOUND,
+            Vec::new(),
+            None,
+            None,
+            "text/plain",
+        )
+    };
+    if !matches!(request.method(), &http::Method::GET | &http::Method::HEAD) {
+        return protocol_response(
+            http::StatusCode::METHOD_NOT_ALLOWED,
+            Vec::new(),
+            Some(("allow", "GET, HEAD".to_string())),
+            None,
+            "text/plain",
+        );
+    }
+    let uri = request.uri();
+    if uri.query().is_some()
+        || !matches!(
+            uri.authority().map(|value| value.as_str()),
+            Some("localhost" | "toolbox-audio.localhost")
+        )
+    {
+        return bad_request();
+    }
+    let Some(id) = uri.path().strip_prefix('/') else {
+        return bad_request();
+    };
+    if id.is_empty() || id.contains('/') || parse_artifact_id(id).is_err() {
+        return bad_request();
+    }
+    let (_, artifact, metadata) = match service.validated_artifact(id) {
+        Ok(value) => value,
+        Err(_) => return not_found(),
+    };
+    let Some(mime_type) = artifact.mime_type.as_deref() else {
+        return protocol_response(
+            http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Vec::new(),
+            None,
+            None,
+            "text/plain",
+        );
+    };
+    let length = metadata.len();
+    let range = match request.headers().get(http::header::RANGE) {
+        Some(value) => match value
+            .to_str()
+            .ok()
+            .and_then(|value| parse_single_range(value, length))
+        {
+            Some(range) => range,
+            None => {
+                return protocol_response(
+                    http::StatusCode::RANGE_NOT_SATISFIABLE,
+                    Vec::new(),
+                    Some(("content-range", format!("bytes */{length}"))),
+                    None,
+                    "text/plain",
+                )
+            }
+        },
+        None if request.method() == http::Method::HEAD => 0..length,
+        None => 0..length.min(MAX_PROTOCOL_RESPONSE_BYTES),
+    };
+    let byte_count = range.end.saturating_sub(range.start);
+    let status = if range.start == 0
+        && range.end == length
+        && request.headers().get(http::header::RANGE).is_none()
+    {
+        http::StatusCode::OK
+    } else {
+        http::StatusCode::PARTIAL_CONTENT
+    };
+    let body = if request.method() == http::Method::HEAD {
+        Vec::new()
+    } else {
+        let mut file = match fs::File::open(&artifact.path) {
+            Ok(file) => file,
+            Err(_) => return not_found(),
+        };
+        if file.seek(SeekFrom::Start(range.start)).is_err() {
+            return not_found();
+        }
+        let mut body = vec![0_u8; byte_count as usize];
+        if file.read_exact(&mut body).is_err() {
+            return not_found();
+        }
+        body
+    };
+    let content_range = (status == http::StatusCode::PARTIAL_CONTENT).then(|| {
+        format!(
+            "bytes {}-{}/{}",
+            range.start,
+            range.end.saturating_sub(1),
+            length
+        )
+    });
+    protocol_response(
+        status,
+        body,
+        Some(("content-length", byte_count.to_string())),
+        content_range.map(|value| ("content-range", value)),
+        mime_type,
+    )
+}
+
+fn parse_single_range(value: &str, length: u64) -> Option<std::ops::Range<u64>> {
+    let value = value.strip_prefix("bytes=")?;
+    if value.contains(',') || value.is_empty() || length == 0 {
+        return None;
+    }
+    let (start, end) = value.split_once('-')?;
+    let (start, mut end) = if start.is_empty() {
+        let suffix = end.parse::<u64>().ok()?;
+        if suffix == 0 {
+            return None;
+        }
+        (length.saturating_sub(suffix.min(length)), length)
+    } else {
+        let start = start.parse::<u64>().ok()?;
+        if start >= length {
+            return None;
+        }
+        let end = if end.is_empty() {
+            length
+        } else {
+            end.parse::<u64>().ok()?.checked_add(1)?.min(length)
+        };
+        (start, end)
+    };
+    if end <= start {
+        return None;
+    }
+    end = end.min(start.saturating_add(MAX_PROTOCOL_RESPONSE_BYTES));
+    Some(start..end)
+}
+
+fn protocol_response(
+    status: http::StatusCode,
+    body: Vec<u8>,
+    first_header: Option<(&str, String)>,
+    second_header: Option<(&str, String)>,
+    mime_type: &str,
+) -> http::Response<Vec<u8>> {
+    let mut builder = http::Response::builder()
+        .status(status)
+        .header(http::header::CONTENT_TYPE, mime_type)
+        .header(http::header::ACCEPT_RANGES, "bytes")
+        .header(http::header::CACHE_CONTROL, "no-store");
+    if let Some((name, value)) = first_header {
+        builder = builder.header(name, value);
+    }
+    if let Some((name, value)) = second_header {
+        builder = builder.header(name, value);
+    }
+    builder
+        .body(body)
+        .unwrap_or_else(|_| http::Response::new(Vec::new()))
 }
 
 async fn ffmpeg_status(runtime: Result<Runtime, String>) -> FfmpegRuntimeStatus {
@@ -927,6 +1507,8 @@ fn media_probe_from_json(path: String, value: &Value) -> Result<MediaProbe, Stri
     let format = value.get("format").unwrap_or(&Value::Null);
     Ok(MediaProbe {
         path,
+        source_artifact_id: None,
+        source_mime_type: None,
         container: format
             .get("format_name")
             .and_then(Value::as_str)
@@ -2078,6 +2660,7 @@ fn main() {
         let started = service.start_audio_prepare(request, plan.token).unwrap();
         let failed = wait_for_terminal(&service, &started.id).await;
         assert_eq!(failed.status, "failed");
+        assert!(failed.artifact_id.is_none());
         assert!(fs::read_dir(&external).unwrap().next().is_none());
         fs::remove_file(&service.output_root).unwrap();
         fs::remove_dir_all(case_root).unwrap();
@@ -2284,6 +2867,7 @@ fn main() {
         let plan = service.plan_audio_prepare(request.clone()).await.unwrap();
         let started = service.start_audio_prepare(request, plan.token).unwrap();
         let cancelled = cancel_after_descendant_starts(&service, &started.id, &input).await;
+        assert!(cancelled.artifact_id.is_none());
         assert!(!Path::new(cancelled.output_path.as_deref().unwrap()).exists());
         fs::remove_dir_all(case_root).unwrap();
     }
@@ -2328,5 +2912,176 @@ fn main() {
         assert!(!Path::new(cancelled.output_path.as_deref().unwrap()).exists());
         assert_eq!(fs::read(&input).unwrap(), b"input");
         fs::remove_dir_all(case_root).unwrap();
+    }
+
+    fn registered_output_service(label: &str) -> (Arc<AudioPreparationService>, PathBuf, String) {
+        let (service, case_root) = fake_service(label);
+        fs::create_dir_all(&service.output_root).unwrap();
+        let output = service.output_root.join("prepared.wav");
+        fs::write(&output, b"0123456789").unwrap();
+        let root = fs::canonicalize(&service.output_root).unwrap();
+        let artifact = service
+            .register_completed_artifact(&output.to_string_lossy(), &root, "pcm-prepare")
+            .unwrap();
+        (service, case_root, artifact)
+    }
+
+    #[test]
+    fn artifact_ids_and_ranges_are_strict_and_bounded() {
+        let id = Uuid::new_v4().to_string();
+        assert_eq!(parse_artifact_id(&id).unwrap(), id);
+        assert!(parse_artifact_id(&id.to_uppercase()).is_err());
+        assert!(parse_artifact_id("not-a-uuid").is_err());
+        assert_eq!(parse_single_range("bytes=2-5", 10), Some(2..6));
+        assert_eq!(parse_single_range("bytes=-3", 10), Some(7..10));
+        assert_eq!(parse_single_range("bytes=8-", 10), Some(8..10));
+        assert!(parse_single_range("bytes=0-1,3-4", 10).is_none());
+        assert!(parse_single_range("bytes=11-12", 10).is_none());
+    }
+
+    #[test]
+    fn protocol_only_serves_registered_uuid_paths_and_range_requests() {
+        let (service, case_root, artifact) = registered_output_service("artifact-protocol");
+        let request = http::Request::builder()
+            .method("GET")
+            .uri(format!("toolbox-audio://localhost/{artifact}"))
+            .header("range", "bytes=2-5")
+            .body(Vec::new())
+            .unwrap();
+        let response = service.serve_audio_artifact_request(&request);
+        assert_eq!(response.status(), http::StatusCode::PARTIAL_CONTENT);
+        assert_eq!(response.headers()["content-range"], "bytes 2-5/10");
+        assert_eq!(response.body(), b"2345");
+        assert_eq!(response.headers()["content-type"], "audio/wav");
+        for uri in [
+            format!("toolbox-audio://localhost/{artifact}?x=1"),
+            format!("toolbox-audio://localhost/{artifact}/extra"),
+            "toolbox-audio://localhost/not-a-uuid".to_string(),
+            format!("toolbox-audio://example.test/{artifact}"),
+        ] {
+            let request = http::Request::builder().uri(uri).body(Vec::new()).unwrap();
+            assert_eq!(
+                service.serve_audio_artifact_request(&request).status(),
+                http::StatusCode::BAD_REQUEST
+            );
+        }
+        let mapped = http::Request::builder()
+            .method("HEAD")
+            .uri(format!("http://toolbox-audio.localhost/{artifact}"))
+            .body(Vec::new())
+            .unwrap();
+        let mapped_response = service.serve_audio_artifact_request(&mapped);
+        assert_eq!(mapped_response.status(), http::StatusCode::OK);
+        assert_eq!(mapped_response.headers()["content-length"], "10");
+        assert!(mapped_response.body().is_empty());
+        fs::remove_dir_all(case_root).unwrap();
+    }
+
+    #[test]
+    fn artifacts_only_exist_after_completed_regular_output_and_revalidate_links() {
+        let (service, case_root) = fake_service("artifact-completion");
+        fs::create_dir_all(&service.output_root).unwrap();
+        let root = fs::canonicalize(&service.output_root).unwrap();
+        let missing = service.output_root.join("missing.wav");
+        assert!(service
+            .register_completed_artifact(&missing.to_string_lossy(), &root, "pcm-prepare")
+            .is_err());
+        assert!(service.artifacts.lock().unwrap().is_empty());
+
+        let output = service.output_root.join("complete.wav");
+        fs::write(&output, b"audio").unwrap();
+        let artifact = service
+            .register_completed_artifact(&output.to_string_lossy(), &root, "pcm-prepare")
+            .unwrap();
+        assert!(service.audio_artifact_info(&artifact).is_ok());
+        #[cfg(unix)]
+        {
+            let outside = case_root.join("outside.wav");
+            fs::write(&outside, b"outside").unwrap();
+            fs::remove_file(&output).unwrap();
+            std::os::unix::fs::symlink(&outside, &output).unwrap();
+            assert!(service.audio_artifact_info(&artifact).is_err());
+        }
+        fs::remove_dir_all(case_root).unwrap();
+    }
+
+    #[test]
+    fn source_artifacts_remain_opaque_and_use_allowlisted_mime_types() {
+        let (service, case_root) = fake_service("artifact-source");
+        let aiff_probe = MediaProbe {
+            path: "voice.aiff".to_string(),
+            source_artifact_id: None,
+            source_mime_type: None,
+            container: Some("aiff".to_string()),
+            codec: Some("pcm_s24be".to_string()),
+            duration_seconds: None,
+            sample_rate: None,
+            channels: None,
+            channel_layout: None,
+            bit_depth: None,
+            bit_rate: None,
+        };
+        assert_eq!(audio_mime_for_probe(&aiff_probe), Some("audio/aiff"));
+        let source = case_root.join("original.mp3");
+        fs::write(&source, b"source").unwrap();
+        let artifact = service
+            .register_source_artifact(&source, Some("audio/mpeg".to_string()))
+            .unwrap();
+        let info = service.audio_artifact_info(&artifact).unwrap();
+        assert_eq!(info.mime_type.as_deref(), Some("audio/mpeg"));
+        assert!(service.validated_generated_artifact(&artifact).is_err());
+        #[cfg(windows)]
+        assert_eq!(
+            info.media_url,
+            format!("http://toolbox-audio.localhost/{artifact}")
+        );
+        #[cfg(not(windows))]
+        assert_eq!(
+            info.media_url,
+            format!("toolbox-audio://localhost/{artifact}")
+        );
+        assert!(!serde_json::to_string(&info)
+            .unwrap()
+            .contains(&source.to_string_lossy().to_string()));
+        fs::remove_dir_all(case_root).unwrap();
+    }
+
+    #[test]
+    fn safe_copy_never_overwrites_and_reveal_uses_argument_arrays() {
+        let root = temporary_test_base().join(format!("toolbox-copy-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.wav");
+        let destination = root.join("saved.wav");
+        fs::write(&source, b"result").unwrap();
+        safe_copy_artifact(&source, &destination).unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"result");
+        assert!(safe_copy_artifact(&source, &destination).is_err());
+        assert_eq!(fs::read(&destination).unwrap(), b"result");
+        #[cfg(unix)]
+        {
+            let real_parent = root.join("real-parent");
+            let normal_child = real_parent.join("normal-child");
+            fs::create_dir_all(&normal_child).unwrap();
+            let linked_parent = root.join("linked-parent");
+            std::os::unix::fs::symlink(&real_parent, &linked_parent).unwrap();
+            let escaped_destination = linked_parent.join("normal-child").join("escaped.wav");
+            assert!(safe_copy_artifact(&source, &escaped_destination).is_err());
+            assert!(!escaped_destination.exists());
+        }
+        #[cfg(windows)]
+        {
+            let (program, args) = reveal_command_for_path(&source).unwrap();
+            assert_eq!(program, OsStr::new("explorer.exe"));
+            assert_eq!(args[0], OsStr::new("/select,"));
+            assert_eq!(args[1], source.as_os_str());
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let (program, args) = reveal_command_for_path(&source).unwrap();
+            assert_eq!(program, OsStr::new("/usr/bin/open"));
+            assert_eq!(args[0], OsStr::new("-R"));
+            assert_eq!(args[1], source.as_os_str());
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 }
