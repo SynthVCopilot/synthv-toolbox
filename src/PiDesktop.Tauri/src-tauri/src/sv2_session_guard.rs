@@ -10,7 +10,7 @@ use uuid::Uuid;
 const GUARD_SCHEMA_VERSION: u32 = 1;
 const MAX_SESSION_BYTES: u64 = 1024 * 1024;
 const MISSING_SESSION_GRACE_SECONDS: i64 = 10;
-const REMOTE_CONFLICT_STARTUP_WINDOW_SECONDS: i64 = 10 * 60;
+const SESSION_RECOVERY_WINDOW_SECONDS: i64 = 10 * 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,7 +73,7 @@ impl GuardRecord {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Sv2SessionProtectionStatus {
-    SignInRequired,
+    SessionAbsent,
     Ready,
     Monitoring,
     RecoveryPending,
@@ -156,29 +156,28 @@ impl Sv2SessionGuardStore {
         validate_slot_id(slot_id)?;
         self.validate_paths(slot_id, data_root)?;
         let record = self.reconcile_record(slot_id, environment, data_root, running)?;
-        let session_cached = session_path(data_root).is_file();
+        let session_file_present = session_path(data_root).is_file();
         let snapshot_available = self.snapshot_path(slot_id, environment).is_file();
         let (status, detail) = match record.phase {
             GuardPhase::Monitoring => (
                 Sv2SessionProtectionStatus::Monitoring,
-                "本次启动的登录态已建立保护快照；SV2 退出后会自动检查是否被远端占用流程清除。".to_string(),
+                "本次启动的本地 session 已建立保护快照；SV2 退出后会检查本地文件是否发生变化。".to_string(),
             ),
             GuardPhase::RecoveryPending => (
                 Sv2SessionProtectionStatus::RecoveryPending,
-                "检测到受保护启动后的登录态消失。不会覆盖后来生成的新会话；下次由工具箱启动此槽位前将尝试原样恢复。".to_string(),
+                "检测到受保护启动后的本地 session 文件消失。不会覆盖后来生成的新文件；下次由工具箱启动此槽位前将尝试原样恢复。".to_string(),
             ),
-            GuardPhase::Clean if !session_cached => (
-                Sv2SessionProtectionStatus::SignInRequired,
-                "当前没有登录缓存；首次登录完成后，后续工具箱启动会自动保护该会话。"
-                    .to_string(),
+            GuardPhase::Clean if !session_file_present => (
+                Sv2SessionProtectionStatus::SessionAbsent,
+                "当前没有本地 session 文件；这不用于判断账号是否需要登录。文件出现后，工具箱启动 SV2 时会建立保护快照。".to_string(),
             ),
             GuardPhase::Clean if record.last_restored_at_utc.is_some() => (
                 Sv2SessionProtectionStatus::Restored,
-                "最近一次丢失的登录态已在启动前恢复；后续仍由 SV2 和 Dreamtonics 服务验证其有效性。".to_string(),
+                "最近一次丢失的本地 session 文件已在启动前恢复；其内容与有效性仍由 SV2 和 Dreamtonics 服务判断。".to_string(),
             ),
             GuardPhase::Clean => (
                 Sv2SessionProtectionStatus::Ready,
-                "登录缓存存在；工具箱启动 SV2 时会先建立不透明保护快照。".to_string(),
+                "本地 session 文件存在；工具箱启动 SV2 时会先建立不透明保护快照。".to_string(),
             ),
         };
         Ok(Sv2SessionProtectionView {
@@ -231,7 +230,7 @@ impl Sv2SessionGuardStore {
                 .as_deref()
                 .and_then(parse_utc)
                 .map(|armed| (Utc::now() - armed).num_seconds());
-            if elapsed.is_some_and(|seconds| seconds > REMOTE_CONFLICT_STARTUP_WINDOW_SECONDS) {
+            if elapsed.is_some_and(|seconds| seconds > SESSION_RECOVERY_WINDOW_SECONDS) {
                 record.phase = GuardPhase::Clean;
                 record.armed_at_utc = None;
                 record.baseline_sha256 = None;
@@ -271,23 +270,23 @@ impl Sv2SessionGuardStore {
 
         let snapshot_path = self.snapshot_path(&record.slot_id, record.environment);
         reject_reparse_point(&snapshot_path)?;
-        let snapshot =
-            fs::read(&snapshot_path).map_err(|error| format!("无法读取登录态恢复快照：{error}"))?;
+        let snapshot = fs::read(&snapshot_path)
+            .map_err(|error| format!("无法读取本地 session 恢复快照：{error}"))?;
         if snapshot.is_empty() || snapshot.len() as u64 > MAX_SESSION_BYTES {
-            return Err("登录态恢复快照大小异常，已停止自动恢复。".to_string());
+            return Err("本地 session 恢复快照大小异常，已停止自动恢复。".to_string());
         }
         let expected = record
             .baseline_sha256
             .as_deref()
-            .ok_or_else(|| "登录态恢复记录缺少 SHA-256。".to_string())?;
+            .ok_or_else(|| "本地 session 恢复记录缺少 SHA-256。".to_string())?;
         if sha256(&snapshot) != expected {
-            return Err("登录态恢复快照 SHA-256 不匹配，已停止自动恢复。".to_string());
+            return Err("本地 session 恢复快照 SHA-256 不匹配，已停止自动恢复。".to_string());
         }
         let license = data_root.join("license");
         fs::create_dir_all(&license)
             .map_err(|error| format!("无法创建 SV2 license 目录：{error}"))?;
         reject_reparse_point(&license)?;
-        write_bytes_atomic(&session_path(data_root), &snapshot, "登录态恢复文件")?;
+        write_bytes_atomic(&session_path(data_root), &snapshot, "本地 session 恢复文件")?;
         record.phase = GuardPhase::Clean;
         record.last_restored_at_utc = Some(Utc::now().to_rfc3339());
         record.armed_at_utc = None;
@@ -301,7 +300,7 @@ impl Sv2SessionGuardStore {
         };
         let digest = sha256(&session);
         let snapshot_path = self.snapshot_path(&record.slot_id, record.environment);
-        write_bytes_atomic(&snapshot_path, &session, "登录态保护快照")?;
+        write_bytes_atomic(&snapshot_path, &session, "本地 session 保护快照")?;
         record.phase = GuardPhase::Monitoring;
         record.armed_at_utc = Some(Utc::now().to_rfc3339());
         record.baseline_sha256 = Some(digest);
@@ -320,14 +319,14 @@ impl Sv2SessionGuardStore {
         }
         reject_reparse_point(&path)?;
         let text = fs::read_to_string(&path)
-            .map_err(|error| format!("无法读取登录态保护记录：{error}"))?;
+            .map_err(|error| format!("无法读取本地 session 保护记录：{error}"))?;
         let record: GuardRecord = serde_json::from_str(&text)
-            .map_err(|error| format!("登录态保护记录不是有效 JSON：{error}"))?;
+            .map_err(|error| format!("本地 session 保护记录不是有效 JSON：{error}"))?;
         if record.schema_version != GUARD_SCHEMA_VERSION
             || record.slot_id != slot_id
             || record.environment != environment
         {
-            return Err("登录态保护记录与账号槽位不匹配。".to_string());
+            return Err("本地 session 保护记录与账号槽位不匹配。".to_string());
         }
         Ok(record)
     }
@@ -337,7 +336,7 @@ impl Sv2SessionGuardStore {
         write_bytes_atomic(
             &self.record_path(&record.slot_id, record.environment),
             &bytes,
-            "登录态保护记录",
+            "本地 session 保护记录",
         )
     }
 
@@ -349,7 +348,8 @@ impl Sv2SessionGuardStore {
         let path = self.snapshot_path(slot_id, environment);
         if path.is_file() {
             reject_reparse_point(&path)?;
-            fs::remove_file(path).map_err(|error| format!("无法清理登录态保护快照：{error}"))?;
+            fs::remove_file(path)
+                .map_err(|error| format!("无法清理本地 session 保护快照：{error}"))?;
         }
         Ok(())
     }
@@ -381,13 +381,14 @@ fn read_session(data_root: &Path) -> Result<Option<Vec<u8>>, String> {
         return Ok(None);
     }
     reject_reparse_point(&path)?;
-    let metadata = fs::metadata(&path).map_err(|error| format!("无法检查 SV2 登录态：{error}"))?;
+    let metadata =
+        fs::metadata(&path).map_err(|error| format!("无法检查 SV2 session 文件：{error}"))?;
     if metadata.len() == 0 || metadata.len() > MAX_SESSION_BYTES {
         return Ok(None);
     }
     fs::read(path)
         .map(Some)
-        .map_err(|error| format!("无法读取 SV2 登录态：{error}"))
+        .map_err(|error| format!("无法读取 SV2 session 文件：{error}"))
 }
 
 fn session_path(data_root: &Path) -> PathBuf {
@@ -407,7 +408,7 @@ fn parse_utc(value: &str) -> Option<DateTime<Utc>> {
 fn validate_slot_id(value: &str) -> Result<(), String> {
     match Uuid::parse_str(value) {
         Ok(id) if id.get_version_num() == 4 => Ok(()),
-        _ => Err("登录态保护记录的槽位 ID 非法。".to_string()),
+        _ => Err("本地 session 保护记录的槽位 ID 非法。".to_string()),
     }
 }
 
@@ -487,7 +488,7 @@ fn reject_reparse_point(path: &Path) -> Result<(), String> {
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
         if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
             return Err(format!(
-                "路径 {} 是 reparse point；登录态保护已停止。",
+                "路径 {} 是 reparse point；本地 session 保护已停止。",
                 path.display()
             ));
         }
@@ -574,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn a_session_removed_long_after_startup_is_treated_as_an_explicit_logout() {
+    fn a_session_removed_outside_the_window_is_not_attributed_or_restored() {
         let (root, data, slot_id, store) = fixture();
         fs::write(session_path(&data), b"session").unwrap();
         store
@@ -584,7 +585,7 @@ mod tests {
             .load_record(&slot_id, Sv2SessionEnvironment::Normal)
             .unwrap();
         record.armed_at_utc = Some(
-            (Utc::now() - chrono::Duration::seconds(REMOTE_CONFLICT_STARTUP_WINDOW_SECONDS + 1))
+            (Utc::now() - chrono::Duration::seconds(SESSION_RECOVERY_WINDOW_SECONDS + 1))
                 .to_rfc3339(),
         );
         store.save_record(&record).unwrap();
@@ -593,7 +594,7 @@ mod tests {
         let view = store
             .view(&slot_id, Sv2SessionEnvironment::Normal, &data, false)
             .unwrap();
-        assert_eq!(view.status, Sv2SessionProtectionStatus::SignInRequired);
+        assert_eq!(view.status, Sv2SessionProtectionStatus::SessionAbsent);
         assert!(!view.snapshot_available);
         fs::remove_dir_all(root).unwrap();
     }

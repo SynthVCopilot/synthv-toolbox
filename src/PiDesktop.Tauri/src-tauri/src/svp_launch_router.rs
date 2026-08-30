@@ -1067,7 +1067,6 @@ mod tests {
             concurrent_session_protection: ready_session_protection(),
             concurrent: Sv2ConcurrentSlotView {
                 ready: false,
-                box_name: String::new(),
                 data_path: String::new(),
                 running_pids: Vec::new(),
                 detail: String::new(),
