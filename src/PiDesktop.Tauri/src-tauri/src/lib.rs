@@ -6,6 +6,7 @@ mod config;
 mod creative_history;
 mod creative_tools;
 mod downloads;
+mod lyric_tools;
 mod mcp;
 mod state;
 mod sv2_concurrent;
@@ -138,6 +139,9 @@ pub fn run() {
             commands::list_project_checkpoints,
             commands::restore_project_checkpoint,
             commands::export_workflow_report,
+            commands::lookup_chinese_rhyme,
+            commands::build_lyric_template,
+            commands::generate_lyric_candidates,
             commands::run_project_doctor,
             commands::run_pronunciation_diagnostics,
             commands::run_render_review,

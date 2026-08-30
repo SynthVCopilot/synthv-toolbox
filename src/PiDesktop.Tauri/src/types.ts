@@ -244,6 +244,58 @@ export interface WorkflowResult {
   aiReview?: string;
 }
 
+export type RhymeMatchMode = "family" | "exact";
+
+export interface RhymeCharacter {
+  character: string;
+  pinyin: string[];
+}
+
+export interface ChineseRhymeLookup {
+  language: "zh-CN";
+  query: string;
+  queryPinyin: string[];
+  matchMode: RhymeMatchMode;
+  rhymeKeys: string[];
+  total: number;
+  characters: RhymeCharacter[];
+  coverageNote: string;
+}
+
+export interface LyricSectionRequest {
+  id: string;
+  kind: "intro" | "verse" | "preChorus" | "chorus" | "bridge" | "instrumental" | "outro" | "custom";
+  label: string;
+  lineCount: number;
+  rhymeScheme: string;
+}
+
+export interface LyricCandidateRequest {
+  language: "zh-CN";
+  brief: string;
+  imagery: string;
+  sectionLabel: string;
+  tone: string;
+  targetRhyme: string;
+  candidateCount: number;
+}
+
+export interface LyricCandidate {
+  text: string;
+  rhymeFoot?: string | null;
+  rhymeMatched?: boolean | null;
+  note: string;
+}
+
+export interface LyricCandidateSet {
+  language: "zh-CN";
+  brief: string;
+  imagery: string;
+  sectionLabel: string;
+  targetRhyme?: string | null;
+  candidates: LyricCandidate[];
+}
+
 export interface WorkflowRecipe {
   id: string;
   title: string;
