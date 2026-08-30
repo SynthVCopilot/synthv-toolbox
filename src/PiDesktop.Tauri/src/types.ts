@@ -59,7 +59,7 @@ export interface Sv2ConcurrentSlot {
   content: Sv2ConcurrentContent;
 }
 
-export type Sv2SessionProtectionStatus = "signInRequired" | "ready" | "monitoring" | "recoveryPending" | "restored" | "attention";
+export type Sv2SessionProtectionStatus = "sessionAbsent" | "ready" | "monitoring" | "recoveryPending" | "restored" | "attention";
 
 export interface Sv2SessionProtection {
   status: Sv2SessionProtectionStatus;
@@ -69,7 +69,7 @@ export interface Sv2SessionProtection {
   detail: string;
 }
 
-export type Sv2IdentityStatus = "signedOut" | "credentialDetected" | "unknown";
+export type Sv2IdentityStatus = "sessionPresent" | "sessionAbsent" | "unknown";
 
 export interface Sv2ProfileIdentity {
   status: Sv2IdentityStatus;
@@ -79,17 +79,11 @@ export interface Sv2ProfileIdentity {
   checkedAtUtc: string;
 }
 
-export type Sv2VoiceInventoryStatus = "catalogEvidence" | "localEvidence" | "unknown";
 export type Sv2VoiceAuthorizationStatus = "unknown";
 
 export interface Sv2VoiceInventory {
-  status: Sv2VoiceInventoryStatus;
   authorizationStatus: Sv2VoiceAuthorizationStatus;
   authorizedVoices: string[];
-  catalogAvailableVoices: string[];
-  catalogTrialVoices: string[];
-  catalogScanComplete: boolean;
-  installedOpaqueCount: number;
   detail: string;
 }
 
@@ -101,7 +95,7 @@ export interface Sv2ProfileSlot {
   createdAtUtc: string;
   lastActivatedAtUtc?: string;
   isActive: boolean;
-  sessionCached: boolean;
+  sessionFilePresent: boolean;
   dataPath: string;
   sessionProtection: Sv2SessionProtection;
   concurrentSessionProtection: Sv2SessionProtection;
@@ -124,7 +118,7 @@ export interface Sv2ProfilesState {
   concurrentDefaults: Sv2ConcurrentDefaults;
 }
 
-export type Sv2RemoteUseStatus = "clear" | "detected" | "unknown";
+export type Sv2RemoteUseStatus = "unknown";
 
 export interface Sv2AccountPrecheck {
   supported: boolean;
@@ -135,7 +129,7 @@ export interface Sv2AccountPrecheck {
   localProcesses: Sv2ProcessBlocker[];
   concurrentPids: number[];
   remoteUse: Sv2RemoteUseStatus;
-  sessionCached: boolean;
+  sessionFilePresent: boolean;
   recoveryPending: boolean;
   summary: string;
   detail: string;

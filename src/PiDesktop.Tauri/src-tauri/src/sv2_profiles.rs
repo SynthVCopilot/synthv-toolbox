@@ -117,7 +117,7 @@ pub struct Sv2ProfileSlotView {
     pub created_at_utc: String,
     pub last_activated_at_utc: Option<String>,
     pub is_active: bool,
-    pub session_cached: bool,
+    pub session_file_present: bool,
     pub data_path: String,
     pub session_protection: Sv2SessionProtectionView,
     pub concurrent_session_protection: Sv2SessionProtectionView,
@@ -153,9 +153,6 @@ pub struct Sv2ProfilesState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Sv2RemoteUseStatus {
-    #[allow(dead_code)]
-    Clear,
-    Detected,
     Unknown,
 }
 
@@ -170,7 +167,7 @@ pub struct Sv2AccountPrecheck {
     pub local_processes: Vec<Sv2ProcessBlocker>,
     pub concurrent_pids: Vec<u32>,
     pub remote_use: Sv2RemoteUseStatus,
-    pub session_cached: bool,
+    pub session_file_present: bool,
     pub recovery_pending: bool,
     pub summary: String,
     pub detail: String,
@@ -879,7 +876,7 @@ fn unsupported_precheck(detail: String) -> Sv2AccountPrecheck {
         local_processes: Vec::new(),
         concurrent_pids: Vec::new(),
         remote_use: Sv2RemoteUseStatus::Unknown,
-        session_cached: false,
+        session_file_present: false,
         recovery_pending: false,
         summary: "当前平台不支持 SV2 账号占用预检。".to_string(),
         detail,
@@ -897,7 +894,7 @@ fn build_account_precheck(state: &Sv2ProfilesState) -> Sv2AccountPrecheck {
             local_processes: state.blockers.clone(),
             concurrent_pids: Vec::new(),
             remote_use: Sv2RemoteUseStatus::Unknown,
-            session_cached: false,
+            session_file_present: false,
             recovery_pending: false,
             summary: "尚未设置当前默认账号。".to_string(),
             detail: "请先在“SV2 账号”页面导入或创建账号槽位。".to_string(),
@@ -906,15 +903,16 @@ fn build_account_precheck(state: &Sv2ProfilesState) -> Sv2AccountPrecheck {
     let local_use = !state.blockers.is_empty() || !slot.concurrent.running_pids.is_empty();
     let recovery_pending = slot.session_protection.recovery_pending()
         || slot.concurrent_session_protection.recovery_pending();
-    let remote_use = if recovery_pending {
-        Sv2RemoteUseStatus::Detected
-    } else {
-        Sv2RemoteUseStatus::Unknown
-    };
-    let (summary, detail) = if recovery_pending {
+    let remote_use = Sv2RemoteUseStatus::Unknown;
+    let (summary, detail) = if local_use && recovery_pending {
         (
-            "检测到其他设备占用留下的会话失效迹象。".to_string(),
-            "受保护启动后 license/session 消失；若没有新会话，工具箱会在下次启动该槽位前恢复原快照。".to_string(),
+            "当前槽位存在本机进程，且有本地 session 快照待恢复。".to_string(),
+            "recoveryPending 仅描述本地保护状态；remoteUse 独立保持 unknown。".to_string(),
+        )
+    } else if recovery_pending {
+        (
+            "当前槽位有本地 session 快照待恢复。".to_string(),
+            "这是独立的本地恢复状态；remoteUse 保持 unknown。".to_string(),
         )
     } else if local_use {
         (
@@ -924,8 +922,7 @@ fn build_account_precheck(state: &Sv2ProfilesState) -> Sv2AccountPrecheck {
     } else {
         (
             "本机未发现当前账号正在使用。".to_string(),
-            "工具箱未接入 Dreamtonics 官方实时远端占用查询；其他设备状态只能在 SV2 启动验证后确认。"
-                .to_string(),
+            "没有已验证的官方远端状态查询结果；remoteUse 保持 unknown。".to_string(),
         )
     };
     Sv2AccountPrecheck {
@@ -937,7 +934,7 @@ fn build_account_precheck(state: &Sv2ProfilesState) -> Sv2AccountPrecheck {
         local_processes: state.blockers.clone(),
         concurrent_pids: slot.concurrent.running_pids.clone(),
         remote_use,
-        session_cached: slot.session_cached,
+        session_file_present: slot.session_file_present,
         recovery_pending,
         summary,
         detail,
@@ -950,9 +947,11 @@ fn launch_session_detail(executable: &Path, preparation: SessionLaunchPreparatio
 
 fn append_session_detail(mut detail: String, preparation: SessionLaunchPreparation) -> String {
     if preparation.restored_before_launch {
-        detail.push_str("\n已在启动前恢复上次因账号占用取消而丢失的登录态，并重新建立保护快照。");
+        detail.push_str(
+            "\n已在启动前恢复此前消失的本地 session 文件，并重新建立保护快照；不推断文件消失原因。",
+        );
     } else if preparation.snapshot_armed {
-        detail.push_str("\n已为本次启动建立登录态保护快照。");
+        detail.push_str("\n已为本次启动建立本地 session 保护快照。");
     }
     detail
 }
@@ -1029,7 +1028,7 @@ fn build_state(
                 )
                 .unwrap_or_else(Sv2SessionProtectionView::attention);
             let identity = probe_sv2_identity(&data_path);
-            let session_cached = identity.status == Sv2IdentityStatus::CredentialDetected;
+            let session_file_present = identity.status == Sv2IdentityStatus::SessionPresent;
             Sv2ProfileSlotView {
                 id: slot.id.clone(),
                 display_name: slot.display_name.clone(),
@@ -1038,12 +1037,12 @@ fn build_state(
                 created_at_utc: slot.created_at_utc.clone(),
                 last_activated_at_utc: slot.last_activated_at_utc.clone(),
                 is_active,
-                session_cached,
+                session_file_present,
                 data_path: data_path.to_string_lossy().into_owned(),
                 session_protection,
                 concurrent_session_protection,
                 concurrent,
-                voice_inventory: inspect_voice_inventory(&data_path),
+                voice_inventory: inspect_voice_inventory(),
             }
         })
         .collect();
@@ -2114,7 +2113,7 @@ mod tests {
     }
 
     #[test]
-    fn precheck_reports_a_protected_session_loss_as_remote_conflict_evidence() {
+    fn precheck_keeps_local_recovery_separate_from_remote_status() {
         let (root, paths) = fixture();
         let manifest = import_fixture(&paths, "A");
         let slot_id = manifest.active_slot_id.clone().unwrap();
@@ -2132,7 +2131,10 @@ mod tests {
         let precheck = snapshot.precheck;
 
         assert!(precheck.recovery_pending);
-        assert_eq!(precheck.remote_use, Sv2RemoteUseStatus::Detected);
+        assert_eq!(precheck.remote_use, Sv2RemoteUseStatus::Unknown);
+        assert!(precheck.detail.contains("本地恢复状态"));
+        assert!(!precheck.detail.contains("其他设备"));
+        assert!(!precheck.detail.contains("冲突"));
         assert_eq!(precheck.slot_id.as_deref(), Some(slot_id.as_str()));
         fs::remove_dir_all(root).unwrap();
     }
