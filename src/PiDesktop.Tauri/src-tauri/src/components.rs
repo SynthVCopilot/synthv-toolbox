@@ -1714,7 +1714,10 @@ mod tests {
     use super::*;
 
     fn temporary_test_root(label: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
+        let root = std::env::temp_dir();
+        #[cfg(target_os = "macos")]
+        let root = fs::canonicalize(root).expect("macOS test temp root must be canonicalizable");
+        root.join(format!(
             "synthv-toolbox-components-{label}-{}",
             Uuid::new_v4()
         ))
