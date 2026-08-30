@@ -1145,6 +1145,36 @@ fn reveal_command_for_path(path: &Path) -> Result<(&'static OsStr, Vec<OsString>
     }
 }
 
+#[cfg(windows)]
+fn commit_temporary_no_replace(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::MoveFileW;
+
+    let temporary = temporary
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let destination = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    // Unlike std::fs::rename on Windows, MoveFileW fails if the destination
+    // already exists.  The temporary file shares its destination directory,
+    // so this remains a same-volume, no-replacement commit.
+    if unsafe { MoveFileW(temporary.as_ptr(), destination.as_ptr()) } == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn commit_temporary_no_replace(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::hard_link(temporary, destination).and_then(|_| fs::remove_file(temporary))
+}
+
 fn safe_copy_artifact(source: &Path, destination: &Path) -> Result<(), String> {
     if !destination.is_absolute()
         || destination
@@ -1185,13 +1215,7 @@ fn safe_copy_artifact(source: &Path, destination: &Path) -> Result<(), String> {
         return Err(error);
     }
     drop(output);
-    // On Windows rename fails when the destination already exists.  On Unix,
-    // hard-linking the same-directory temporary file creates the destination
-    // atomically without replacement, then removes the private temporary.
-    #[cfg(windows)]
-    let commit = fs::rename(&temporary, destination);
-    #[cfg(not(windows))]
-    let commit = fs::hard_link(&temporary, destination).and_then(|_| fs::remove_file(&temporary));
+    let commit = commit_temporary_no_replace(&temporary, destination);
     if let Err(error) = commit {
         let _ = fs::remove_file(&temporary);
         return Err(format!(
@@ -3055,6 +3079,7 @@ fn main() {
         fs::write(&source, b"result").unwrap();
         safe_copy_artifact(&source, &destination).unwrap();
         assert_eq!(fs::read(&destination).unwrap(), b"result");
+        fs::write(&source, b"replacement").unwrap();
         assert!(safe_copy_artifact(&source, &destination).is_err());
         assert_eq!(fs::read(&destination).unwrap(), b"result");
         #[cfg(unix)]
