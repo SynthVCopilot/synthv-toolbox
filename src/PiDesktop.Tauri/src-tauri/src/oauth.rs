@@ -915,6 +915,7 @@ fn load_secret(metadata: &OAuthAccountMetadata) -> Result<PersistedOAuthSecret, 
     Ok(secret)
 }
 
+#[allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
 fn parse_legacy_secret(bytes: &[u8]) -> Result<PersistedOAuthSecret, String> {
     if let Ok(secret) = serde_json::from_slice(bytes) {
         return Ok(secret);

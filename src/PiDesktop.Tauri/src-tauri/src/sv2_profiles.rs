@@ -1022,7 +1022,7 @@ fn unsupported_precheck(detail: String) -> Sv2AccountPrecheck {
 }
 
 fn enrich_account_probes(
-    paths: &SlotPaths,
+    _paths: &SlotPaths,
     state: &mut Sv2ProfilesState,
     refresh_sensitive_probe: bool,
     refresh_slot_id: Option<&str>,
@@ -1044,7 +1044,7 @@ fn enrich_account_probes(
             continue;
         }
         #[cfg(windows)]
-        if let Ok(root) = concurrent_folder(&paths.vault, &slot.id) {
+        if let Ok(root) = concurrent_folder(&_paths.vault, &slot.id) {
             targets.push((
                 index,
                 true,

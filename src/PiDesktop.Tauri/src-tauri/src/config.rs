@@ -292,12 +292,14 @@ struct AtomicReplaceError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(windows)]
 enum WindowsReplaceFailureAction {
     RestoreOriginal,
     CleanupTemporary,
     PreserveRecoveryCopies,
 }
 
+#[cfg(windows)]
 fn windows_replace_failure_action(
     error_code: u32,
     target_exists: bool,
@@ -656,6 +658,7 @@ mod tests {
         assert!(MODEL_CONFIG_MUTATION_LOCK.try_lock().is_ok());
     }
 
+    #[cfg(windows)]
     #[test]
     fn windows_replace_failure_paths_preserve_a_recovery_copy() {
         assert_eq!(
