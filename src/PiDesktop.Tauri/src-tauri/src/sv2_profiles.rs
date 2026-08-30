@@ -8,6 +8,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::sv2_account_probe::{probe_sv2_identity, Sv2IdentityStatus, Sv2ProfileIdentityView};
 #[cfg(windows)]
 use crate::sv2_concurrent::concurrent_folder;
 use crate::sv2_concurrent::{
@@ -21,8 +22,7 @@ use crate::sv2_session_guard::{
 };
 use crate::sv2_sync::{self, Sv2SyncCategory, Sv2SyncCategoryId, Sv2SyncManifest, Sv2SyncResult};
 use crate::svp_launch_router::{
-    build_route_plan, inspect_voice_inventory, validate_confirmed_voice_names,
-    Sv2VoiceInventoryView, SvpLaunchMode, SvpRoutePlan,
+    build_route_plan, inspect_voice_inventory, Sv2VoiceInventoryView, SvpLaunchMode, SvpRoutePlan,
 };
 use crate::synthv::{find_sv2_executable, succeeded, OperationResult};
 
@@ -43,12 +43,12 @@ const SLOT_COLORS: [&str; 6] = [
 struct SlotRecord {
     id: String,
     display_name: String,
-    #[serde(default)]
-    username: String,
-    #[serde(default)]
-    email: String,
-    #[serde(default)]
-    manually_confirmed_voices: Vec<String>,
+    #[serde(default, rename = "username", skip_serializing)]
+    legacy_username: Option<String>,
+    #[serde(default, rename = "email", skip_serializing)]
+    legacy_email: Option<String>,
+    #[serde(default, rename = "manuallyConfirmedVoices", skip_serializing)]
+    legacy_manually_confirmed_voices: Option<Vec<String>>,
     color: String,
     created_at_utc: String,
     #[serde(default)]
@@ -112,8 +112,7 @@ struct SwitchJournal {
 pub struct Sv2ProfileSlotView {
     pub id: String,
     pub display_name: String,
-    pub username: String,
-    pub email: String,
+    pub identity: Sv2ProfileIdentityView,
     pub color: String,
     pub created_at_utc: String,
     pub last_activated_at_utc: Option<String>,
@@ -384,9 +383,9 @@ impl Sv2ProfileService {
         manifest.slots.push(SlotRecord {
             id: id.clone(),
             display_name,
-            username: String::new(),
-            email: String::new(),
-            manually_confirmed_voices: Vec::new(),
+            legacy_username: None,
+            legacy_email: None,
+            legacy_manually_confirmed_voices: None,
             color: SLOT_COLORS[0].to_string(),
             created_at_utc: now.clone(),
             last_activated_at_utc: Some(now),
@@ -428,9 +427,9 @@ impl Sv2ProfileService {
         let record = SlotRecord {
             id: id.clone(),
             display_name,
-            username: String::new(),
-            email: String::new(),
-            manually_confirmed_voices: Vec::new(),
+            legacy_username: None,
+            legacy_email: None,
+            legacy_manually_confirmed_voices: None,
             color: SLOT_COLORS[manifest.slots.len() % SLOT_COLORS.len()].to_string(),
             created_at_utc: Utc::now().to_rfc3339(),
             last_activated_at_utc: None,
@@ -466,59 +465,6 @@ impl Sv2ProfileService {
             .find(|slot| slot.id == slot_id)
             .ok_or_else(|| "找不到该 SV2 槽位。".to_string())?;
         slot.display_name = display_name;
-        save_manifest(paths, &manifest)?;
-        build_state(paths, &manifest, false, String::new())
-    }
-
-    pub fn update_identity(
-        &self,
-        slot_id: String,
-        username: String,
-        email: String,
-    ) -> Result<Sv2ProfilesState, String> {
-        validate_slot_id(&slot_id)?;
-        let username = validate_optional_username(&username)?;
-        let email = validate_optional_email(&email)?;
-        let _gate = self
-            .gate
-            .lock()
-            .map_err(|_| "SV2 槽位状态锁已损坏。".to_string())?;
-        let paths = self.paths.as_ref().map_err(Clone::clone)?;
-        let _file_lock = acquire_switch_lock(paths)?;
-        recover_if_needed(paths)?;
-        let mut manifest = load_manifest(paths)?;
-        let slot = manifest
-            .slots
-            .iter_mut()
-            .find(|slot| slot.id == slot_id)
-            .ok_or_else(|| "找不到该 SV2 槽位。".to_string())?;
-        slot.username = username;
-        slot.email = email;
-        save_manifest(paths, &manifest)?;
-        build_state(paths, &manifest, false, String::new())
-    }
-
-    pub fn update_voice_licenses(
-        &self,
-        slot_id: String,
-        voices: Vec<String>,
-    ) -> Result<Sv2ProfilesState, String> {
-        validate_slot_id(&slot_id)?;
-        let voices = validate_confirmed_voice_names(voices)?;
-        let _gate = self
-            .gate
-            .lock()
-            .map_err(|_| "SV2 槽位状态锁已损坏。".to_string())?;
-        let paths = self.paths.as_ref().map_err(Clone::clone)?;
-        let _file_lock = acquire_switch_lock(paths)?;
-        recover_if_needed(paths)?;
-        let mut manifest = load_manifest(paths)?;
-        let slot = manifest
-            .slots
-            .iter_mut()
-            .find(|slot| slot.id == slot_id)
-            .ok_or_else(|| "找不到该 SV2 槽位。".to_string())?;
-        slot.manually_confirmed_voices = voices;
         save_manifest(paths, &manifest)?;
         build_state(paths, &manifest, false, String::new())
     }
@@ -601,6 +547,20 @@ impl Sv2ProfileService {
         reject_blockers(paths)?;
         let mut manifest = load_manifest(paths)?;
         switch_slot(paths, &mut manifest, &slot_id)?;
+        build_state(paths, &manifest, false, String::new())
+    }
+
+    pub fn force_activate_slot(&self, slot_id: String) -> Result<Sv2ProfilesState, String> {
+        validate_slot_id(&slot_id)?;
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| "SV2 槽位状态锁已损坏。".to_string())?;
+        let paths = self.paths.as_ref().map_err(Clone::clone)?;
+        let _file_lock = acquire_switch_lock(paths)?;
+        recover_if_needed(paths)?;
+        let mut manifest = load_manifest(paths)?;
+        force_switch_slot(paths, &mut manifest, &slot_id, terminate_blockers)?;
         build_state(paths, &manifest, false, String::new())
     }
 
@@ -1068,24 +1028,22 @@ fn build_state(
                     !concurrent.running_pids.is_empty(),
                 )
                 .unwrap_or_else(Sv2SessionProtectionView::attention);
+            let identity = probe_sv2_identity(&data_path);
+            let session_cached = identity.status == Sv2IdentityStatus::CredentialDetected;
             Sv2ProfileSlotView {
                 id: slot.id.clone(),
                 display_name: slot.display_name.clone(),
-                username: slot.username.clone(),
-                email: slot.email.clone(),
+                identity,
                 color: slot.color.clone(),
                 created_at_utc: slot.created_at_utc.clone(),
                 last_activated_at_utc: slot.last_activated_at_utc.clone(),
                 is_active,
-                session_cached: data_path.join("license/session").is_file(),
+                session_cached,
                 data_path: data_path.to_string_lossy().into_owned(),
                 session_protection,
                 concurrent_session_protection,
                 concurrent,
-                voice_inventory: inspect_voice_inventory(
-                    &data_path,
-                    &slot.manually_confirmed_voices,
-                ),
+                voice_inventory: inspect_voice_inventory(&data_path),
             }
         })
         .collect();
@@ -1170,6 +1128,22 @@ fn switch_slot(
     save_journal(paths, &journal)?;
     remove_journal(paths)?;
     Ok(())
+}
+
+fn force_switch_slot<F>(
+    paths: &SlotPaths,
+    manifest: &mut SlotManifest,
+    target_slot_id: &str,
+    terminate: F,
+) -> Result<(), String>
+where
+    F: FnOnce(&SlotPaths) -> Result<(), String>,
+{
+    if !manifest.slots.iter().any(|slot| slot.id == target_slot_id) {
+        return Err("找不到目标 SV2 槽位。".to_string());
+    }
+    terminate(paths)?;
+    switch_slot(paths, manifest, target_slot_id)
 }
 
 fn recover_if_needed(paths: &SlotPaths) -> Result<(), String> {
@@ -1327,7 +1301,7 @@ fn load_manifest(paths: &SlotPaths) -> Result<SlotManifest, String> {
     if !paths.manifest.is_file() {
         return Ok(SlotManifest::default());
     }
-    let manifest: SlotManifest = read_json(&paths.manifest, "槽位清单")?;
+    let mut manifest: SlotManifest = read_json(&paths.manifest, "槽位清单")?;
     if manifest.schema_version != SCHEMA_VERSION {
         return Err("槽位清单版本不受支持。".to_string());
     }
@@ -1335,8 +1309,6 @@ fn load_manifest(paths: &SlotPaths) -> Result<SlotManifest, String> {
     for slot in &manifest.slots {
         validate_slot_id(&slot.id)?;
         validate_display_name(&slot.display_name)?;
-        validate_optional_username(&slot.username)?;
-        validate_optional_email(&slot.email)?;
         validate_color(&slot.color)?;
         if !ids.insert(slot.id.as_str()) {
             return Err("槽位清单包含重复 ID。".to_string());
@@ -1348,6 +1320,19 @@ fn load_manifest(paths: &SlotPaths) -> Result<SlotManifest, String> {
         .is_some_and(|id| !ids.contains(id))
     {
         return Err("默认槽位不在槽位清单中。".to_string());
+    }
+    let contains_legacy_account_fields = manifest.slots.iter().any(|slot| {
+        slot.legacy_username.is_some()
+            || slot.legacy_email.is_some()
+            || slot.legacy_manually_confirmed_voices.is_some()
+    });
+    if contains_legacy_account_fields {
+        for slot in &mut manifest.slots {
+            slot.legacy_username = None;
+            slot.legacy_email = None;
+            slot.legacy_manually_confirmed_voices = None;
+        }
+        save_manifest(paths, &manifest)?;
     }
     Ok(manifest)
 }
@@ -1520,36 +1505,6 @@ fn validate_display_name(value: &str) -> Result<String, String> {
     let value = value.trim();
     if value.is_empty() || value.chars().count() > 64 || value.chars().any(char::is_control) {
         return Err("槽位名称必须为 1–64 个可见字符。".to_string());
-    }
-    Ok(value.to_string())
-}
-
-fn validate_optional_username(value: &str) -> Result<String, String> {
-    let value = value.trim();
-    if value.chars().count() > 100 || value.chars().any(char::is_control) {
-        return Err("账号用户名不能超过 100 个可见字符。".to_string());
-    }
-    Ok(value.to_string())
-}
-
-fn validate_optional_email(value: &str) -> Result<String, String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return Ok(String::new());
-    }
-    let mut parts = value.split('@');
-    let local = parts.next().unwrap_or_default();
-    let domain = parts.next().unwrap_or_default();
-    if parts.next().is_some()
-        || local.is_empty()
-        || domain.is_empty()
-        || !domain.contains('.')
-        || value.len() > 254
-        || value
-            .chars()
-            .any(|character| character.is_control() || character.is_whitespace())
-    {
-        return Err("邮箱格式无效。".to_string());
     }
     Ok(value.to_string())
 }
@@ -1931,9 +1886,9 @@ mod tests {
             slots: vec![SlotRecord {
                 id,
                 display_name: name.to_string(),
-                username: String::new(),
-                email: String::new(),
-                manually_confirmed_voices: Vec::new(),
+                legacy_username: None,
+                legacy_email: None,
+                legacy_manually_confirmed_voices: None,
                 color: SLOT_COLORS[0].to_string(),
                 created_at_utc: Utc::now().to_rfc3339(),
                 last_activated_at_utc: None,
@@ -1954,9 +1909,9 @@ mod tests {
         manifest.slots.push(SlotRecord {
             id: id.clone(),
             display_name: name.to_string(),
-            username: String::new(),
-            email: String::new(),
-            manually_confirmed_voices: Vec::new(),
+            legacy_username: None,
+            legacy_email: None,
+            legacy_manually_confirmed_voices: None,
             color: SLOT_COLORS[1].to_string(),
             created_at_utc: Utc::now().to_rfc3339(),
             last_activated_at_utc: None,
@@ -2001,6 +1956,29 @@ mod tests {
         assert_eq!(
             read_marker(&paths.canonical).unwrap().unwrap().slot_id,
             slot
+        );
+        assert!(!paths.journal.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn force_switch_terminates_blockers_then_only_changes_the_default() {
+        let (root, paths) = fixture();
+        let mut manifest = import_fixture(&paths, "A");
+        let target = add_parked(&paths, &mut manifest, "B");
+        let termination_called = std::cell::Cell::new(false);
+
+        force_switch_slot(&paths, &mut manifest, &target, |_| {
+            termination_called.set(true);
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(termination_called.get());
+        assert_eq!(manifest.active_slot_id.as_deref(), Some(target.as_str()));
+        assert_eq!(
+            read_marker(&paths.canonical).unwrap().unwrap().slot_id,
+            target
         );
         assert!(!paths.journal.exists());
         fs::remove_dir_all(root).unwrap();
@@ -2092,16 +2070,6 @@ mod tests {
         assert!(validate_slot_id(&Uuid::new_v4().to_string()).is_ok());
         assert!(validate_color("#6D5CE7").is_ok());
         assert!(validate_color("red;display:none").is_err());
-        assert_eq!(
-            validate_optional_username("  Producer  ").unwrap(),
-            "Producer"
-        );
-        assert!(validate_optional_username(&"x".repeat(101)).is_err());
-        assert_eq!(
-            validate_optional_email(" name@example.com ").unwrap(),
-            "name@example.com"
-        );
-        assert!(validate_optional_email("not-an-email").is_err());
     }
 
     #[test]
@@ -2112,6 +2080,36 @@ mod tests {
         save_manifest(&paths, &manifest).unwrap();
 
         assert!(load_manifest(&paths).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn loading_schema_v1_manifest_atomically_removes_legacy_account_fields() {
+        let (root, paths) = fixture();
+        let manifest = import_fixture(&paths, "A");
+        let mut legacy = serde_json::to_value(&manifest).unwrap();
+        let slot = legacy["slots"][0].as_object_mut().unwrap();
+        slot.insert("username".to_string(), serde_json::json!("Producer"));
+        slot.insert(
+            "email".to_string(),
+            serde_json::json!("producer@example.com"),
+        );
+        slot.insert(
+            "manuallyConfirmedVoices".to_string(),
+            serde_json::json!(["Legacy Voice"]),
+        );
+        write_json_atomic(&paths.manifest, &legacy, "测试槽位清单").unwrap();
+
+        let migrated = load_manifest(&paths).unwrap();
+        let persisted: serde_json::Value = read_json(&paths.manifest, "测试槽位清单").unwrap();
+        let persisted_slot = persisted["slots"][0].as_object().unwrap();
+
+        assert!(migrated.slots[0].legacy_username.is_none());
+        assert!(migrated.slots[0].legacy_email.is_none());
+        assert!(migrated.slots[0].legacy_manually_confirmed_voices.is_none());
+        assert!(!persisted_slot.contains_key("username"));
+        assert!(!persisted_slot.contains_key("email"));
+        assert!(!persisted_slot.contains_key("manuallyConfirmedVoices"));
         fs::remove_dir_all(root).unwrap();
     }
 

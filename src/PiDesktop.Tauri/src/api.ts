@@ -65,8 +65,13 @@ let previewProfiles: Sv2ProfilesState = {
   slots: [{
     id: "11111111-1111-4111-8111-111111111111",
     displayName: "主账号",
-    username: "Producer",
-    email: "producer@example.com",
+    identity: {
+      status: "credentialDetected",
+      username: null,
+      email: null,
+      detail: "检测到登录凭证但身份字段不可安全读取；当前 session 格式不透明，工具箱不会解析或输出原始凭证。",
+      checkedAtUtc: new Date().toISOString(),
+    },
     color: "#6D5CE7",
     createdAtUtc: new Date().toISOString(),
     lastActivatedAtUtc: new Date().toISOString(),
@@ -85,14 +90,17 @@ let previewProfiles: Sv2ProfilesState = {
       detail: "登录缓存存在；工具箱启动 SV2 时会先建立不透明保护快照。",
     },
     voiceInventory: {
-      status: "manual",
-      manuallyConfirmedVoices: ["Mai 2", "SOLARIA"],
+      status: "catalogEvidence",
+      authorizationStatus: "unknown",
+      authorizedVoices: [],
+      catalogAvailableVoices: ["Mai 2", "SOLARIA"],
+      catalogTrialVoices: ["Mai 2"],
+      catalogScanComplete: true,
       installedOpaqueCount: 4,
-      detail: "已手工确认 2 个声库；本地另检测到 4 个不透明安装项。Dreamtonics 官方授权仍以 SV2 启动验证为准。",
+      detail: "SV2 本地目录列出 2 个可下载声库，另检测到 4 个不透明安装项。目录缓存与安装痕迹都不是账号授权证明。",
     },
     concurrent: {
       ready: true,
-      boxName: "SV2TB111111111111411181111111",
       dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\concurrent\\11111111-1111-4111-8111-111111111111\\box\\user\\current\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2",
       runningPids: [],
       detail: "隔离副本已准备；本地变化不会自动覆盖普通槽位。",
@@ -106,17 +114,22 @@ let previewProfiles: Sv2ProfilesState = {
   }, {
     id: "22222222-2222-4222-8222-222222222222",
     displayName: "备用账号",
-    username: "Vocal Editor",
-    email: "editor@example.com",
+    identity: {
+      status: "signedOut",
+      username: null,
+      email: null,
+      detail: "未检测到 license/session 登录凭证。",
+      checkedAtUtc: new Date().toISOString(),
+    },
     color: "#3478C9",
     createdAtUtc: new Date().toISOString(),
     isActive: false,
-    sessionCached: true,
+    sessionCached: false,
     dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\slots\\22222222-2222-4222-8222-222222222222",
     sessionProtection: {
-      status: "ready",
+      status: "signInRequired",
       snapshotAvailable: false,
-      detail: "登录缓存存在；工具箱启动 SV2 时会先建立不透明保护快照。",
+      detail: "当前没有登录缓存；首次登录完成后，后续工具箱启动会自动保护该会话。",
     },
     concurrentSessionProtection: {
       status: "signInRequired",
@@ -125,13 +138,16 @@ let previewProfiles: Sv2ProfilesState = {
     },
     voiceInventory: {
       status: "localEvidence",
-      manuallyConfirmedVoices: [],
+      authorizationStatus: "unknown",
+      authorizedVoices: [],
+      catalogAvailableVoices: [],
+      catalogTrialVoices: [],
+      catalogScanComplete: true,
       installedOpaqueCount: 3,
       detail: "检测到 3 个本地声库安装项，但本地文件不公开产品映射，无法据此确认账号授权。",
     },
     concurrent: {
       ready: false,
-      boxName: "SV2TB222222222222422282222222",
       dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\concurrent\\22222222-2222-4222-8222-222222222222\\box\\user\\current\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2",
       runningPids: [],
       detail: "尚未准备隔离副本。",
@@ -230,8 +246,13 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     previewProfiles.slots.push({
       id,
       displayName: String(args?.displayName ?? "新账号"),
-      username: "",
-      email: "",
+      identity: {
+        status: "signedOut",
+        username: null,
+        email: null,
+        detail: "未检测到 license/session 登录凭证。",
+        checkedAtUtc: new Date().toISOString(),
+      },
       color: "#3478C9",
       createdAtUtc: new Date().toISOString(),
       isActive: false,
@@ -249,13 +270,16 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       },
       voiceInventory: {
         status: "unknown",
-        manuallyConfirmedVoices: [],
+        authorizationStatus: "unknown",
+        authorizedVoices: [],
+        catalogAvailableVoices: [],
+        catalogTrialVoices: [],
+        catalogScanComplete: true,
         installedOpaqueCount: 0,
         detail: "未发现可安全映射的账号声库授权；不会把商店目录或可下载状态当作已授权。",
       },
       concurrent: {
         ready: false,
-        boxName: `SV2TB${id.replaceAll("-", "").slice(0, 24)}`,
         dataPath: `${previewProfiles.vaultPath}\\concurrent\\${id}\\box\\user\\current\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2`,
         runningPids: [],
         detail: "尚未准备隔离副本。",
@@ -273,28 +297,6 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "rename_sv2_profile") {
     const slot = previewProfiles.slots.find((item) => item.id === args?.slotId);
     if (slot) slot.displayName = String(args?.displayName ?? slot.displayName);
-    return previewProfiles as T;
-  }
-  if (command === "update_sv2_profile_identity") {
-    const slot = previewProfiles.slots.find((item) => item.id === args?.slotId);
-    if (slot) {
-      slot.username = String(args?.username ?? "");
-      slot.email = String(args?.email ?? "");
-    }
-    return previewProfiles as T;
-  }
-  if (command === "update_sv2_profile_voice_licenses") {
-    const slot = previewProfiles.slots.find((item) => item.id === args?.slotId);
-    if (slot) {
-      const voices = ((args?.voices as string[] | undefined) ?? []).map((voice) => voice.trim()).filter(Boolean);
-      slot.voiceInventory.manuallyConfirmedVoices = [...new Set(voices)];
-      slot.voiceInventory.status = voices.length ? "manual" : slot.voiceInventory.installedOpaqueCount ? "localEvidence" : "unknown";
-      slot.voiceInventory.detail = voices.length
-        ? `已手工确认 ${voices.length} 个声库；Dreamtonics 官方授权仍以 SV2 启动验证为准。`
-        : slot.voiceInventory.installedOpaqueCount
-          ? `检测到 ${slot.voiceInventory.installedOpaqueCount} 个本地声库安装项，但无法据此确认账号授权。`
-          : "未发现可安全映射的账号声库授权。";
-    }
     return previewProfiles as T;
   }
   if (command === "update_sv2_concurrent_defaults") {
@@ -326,9 +328,10 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     }
     return previewProfiles as T;
   }
-  if (command === "activate_sv2_profile") {
+  if (command === "activate_sv2_profile" || command === "force_activate_sv2_profile") {
     previewProfiles.activeSlotId = String(args?.slotId ?? "");
     previewProfiles.slots.forEach((slot) => { slot.isActive = slot.id === previewProfiles.activeSlotId; });
+    if (command === "force_activate_sv2_profile") previewProfiles.blockers = [];
     return previewProfiles as T;
   }
   if (command === "launch_sv2_profile" || command === "force_launch_sv2_profile") {
@@ -366,9 +369,9 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
         displayName: slot.displayName,
         idle: index > 0,
         launchMode: index > 0 ? "concurrent" as const : undefined,
-        matchedVoices: slot.voiceInventory.manuallyConfirmedVoices.filter((voice) => ["Mai 2", "SOLARIA"].includes(voice)),
-        missingOrUnknownVoices: slot.voiceInventory.manuallyConfirmedVoices.length ? [] : ["Mai 2", "SOLARIA"],
-        exactAuthorizationMatch: slot.voiceInventory.manuallyConfirmedVoices.length === 2,
+        matchedVoices: slot.voiceInventory.authorizedVoices.filter((voice) => ["Mai 2", "SOLARIA"].includes(voice)),
+        missingOrUnknownVoices: slot.voiceInventory.authorizedVoices.length ? [] : ["Mai 2", "SOLARIA"],
+        exactAuthorizationMatch: slot.voiceInventory.authorizedVoices.length === 2,
         reason: index > 0 ? "账号授权不完整或未知，需要人工确认。" : "账号当前正在使用或存在远端冲突证据。",
       })),
       selectedSlotId: previewProfiles.slots[1]?.id,
@@ -536,16 +539,14 @@ export const api = {
     call<Sv2ProfilesState>("create_sv2_profile", { displayName }),
   renameSv2Profile: (slotId: string, displayName: string) =>
     call<Sv2ProfilesState>("rename_sv2_profile", { slotId, displayName }),
-  updateSv2ProfileIdentity: (slotId: string, username: string, email: string) =>
-    call<Sv2ProfilesState>("update_sv2_profile_identity", { slotId, username, email }),
-  updateSv2ProfileVoiceLicenses: (slotId: string, voices: string[]) =>
-    call<Sv2ProfilesState>("update_sv2_profile_voice_licenses", { slotId, voices }),
   updateSv2ConcurrentDefaults: (appSettings: boolean, voiceLibraries: boolean) =>
     call<Sv2ProfilesState>("update_sv2_concurrent_defaults", { appSettings, voiceLibraries }),
   updateSv2ConcurrentContent: (slotId: string, appSettings: Sv2IsolationPreference, voiceLibraries: Sv2IsolationPreference) =>
     call<Sv2ProfilesState>("update_sv2_concurrent_content", { slotId, appSettings, voiceLibraries }),
   activateSv2Profile: (slotId: string) =>
     call<Sv2ProfilesState>("activate_sv2_profile", { slotId }),
+  forceActivateSv2Profile: (slotId: string) =>
+    call<Sv2ProfilesState>("force_activate_sv2_profile", { slotId }),
   launchSv2Profile: (slotId: string, projectPath?: string) =>
     call<OperationResult>("launch_sv2_profile", { slotId, projectPath: projectPath || null }),
   forceLaunchSv2Profile: (slotId: string, projectPath?: string) =>

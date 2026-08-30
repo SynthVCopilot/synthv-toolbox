@@ -53,7 +53,6 @@ export interface Sv2ConcurrentContent {
 
 export interface Sv2ConcurrentSlot {
   ready: boolean;
-  boxName: string;
   dataPath: string;
   runningPids: number[];
   detail: string;
@@ -70,11 +69,26 @@ export interface Sv2SessionProtection {
   detail: string;
 }
 
-export type Sv2VoiceInventoryStatus = "manual" | "localEvidence" | "unknown";
+export type Sv2IdentityStatus = "signedOut" | "credentialDetected" | "unknown";
+
+export interface Sv2ProfileIdentity {
+  status: Sv2IdentityStatus;
+  username?: string | null;
+  email?: string | null;
+  detail: string;
+  checkedAtUtc: string;
+}
+
+export type Sv2VoiceInventoryStatus = "catalogEvidence" | "localEvidence" | "unknown";
+export type Sv2VoiceAuthorizationStatus = "unknown";
 
 export interface Sv2VoiceInventory {
   status: Sv2VoiceInventoryStatus;
-  manuallyConfirmedVoices: string[];
+  authorizationStatus: Sv2VoiceAuthorizationStatus;
+  authorizedVoices: string[];
+  catalogAvailableVoices: string[];
+  catalogTrialVoices: string[];
+  catalogScanComplete: boolean;
   installedOpaqueCount: number;
   detail: string;
 }
@@ -82,8 +96,7 @@ export interface Sv2VoiceInventory {
 export interface Sv2ProfileSlot {
   id: string;
   displayName: string;
-  username: string;
-  email: string;
+  identity: Sv2ProfileIdentity;
   color: string;
   createdAtUtc: string;
   lastActivatedAtUtc?: string;

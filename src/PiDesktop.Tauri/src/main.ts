@@ -42,6 +42,7 @@ const ACCOUNT_USAGE_MIN_SCHEDULE_DELAY_MS = 250;
 
 type Page = "home" | "accounts" | "toolbox" | "copilot" | "components" | "bridge" | "mcp" | "settings";
 type AccountManagerSection = "profile" | "isolation" | "add";
+type BlockedSwitchAction = "activate" | "launch";
 
 type Feature = FeatureCatalogItem;
 const features: Feature[] = featureCatalog;
@@ -82,6 +83,7 @@ let lyricCandidates: LyricCandidateSet | undefined;
 let lyricSectionCounter = 0;
 let lyricSections: LyricSectionRequest[] = createLyricPreset("compact");
 let pendingBlockedSwitchSlot: string | undefined;
+let pendingBlockedSwitchAction: BlockedSwitchAction = "launch";
 let pendingConcurrentLaunchSlot: string | undefined;
 let pendingConcurrentPrepare = false;
 let pendingConcurrentRoute: { slotId: string; projectPath: string; mode: SvpLaunchMode } | undefined;
@@ -408,14 +410,13 @@ function render(): void {
 }
 
 function renderConcurrentDisclaimer(): string {
-  const slot = profiles?.slots.find((item) => item.id === pendingConcurrentLaunchSlot);
   return `<div class="dialog-backdrop" role="presentation">
     <section class="fluent-dialog" role="alertdialog" aria-modal="true" aria-labelledby="concurrent-warning-title">
       <span class="dialog-icon">${icon("boxes", 24)}</span>
-      <div><span class="eyebrow">首次使用风险告知</span><h2 id="concurrent-warning-title">并发隔离未被 Dreamtonics 官方承认</h2></div>
-      <p>并发隔离已作为 SynthV Toolbox 的正式能力提供。本技术方案基于 Sandboxie 实现，会启动“${escapeHtml(slot?.displayName ?? "此槽位")}”的独立 SV2 实例，但 Dreamtonics 尚未公开承认或保证这种多实例使用方式。</p>
-      <ul><li>并发隔离来自 SynthV Toolbox 与 Sandboxie 的进程树虚拟化，不是 Dreamtonics 原生多实例功能。</li><li>工具箱不修改 SV2 二进制、不绕过账户限制，也不拦截官方联网验证；这不等于 Dreamtonics 已确认其符合全部账号政策或服务条款。</li><li>截至当前版本，开发组没有收到因使用本功能而被官方警告或处理的记录；Dreamtonics 仍可能把它认定为不当或违规使用并采取措施。</li><li>启用即表示你已知晓上述情况、自担使用风险，并在适用法律允许的最大范围内不追究 SynthV Toolbox 开发组的直接或连带责任。</li><li>当前只启动 standalone；Sandbox 名称使用普通 <code>/box:名称</code>，不添加 <code>#</code>。</li></ul>
-      <div class="dialog-actions"><button class="secondary" data-cancel-concurrent>取消</button><button class="primary" data-accept-concurrent>已知晓风险，继续启动</button></div>
+      <div><span class="eyebrow">并发隔离</span><h2 id="concurrent-warning-title">潜在风险功能告知</h2></div>
+      <p>并发隔离是 SynthV Toolbox 基于 Sandboxie 提供的功能，会启动相互独立的 SV2 实例。这种多实例使用方式具有潜在风险，Dreamtonics 尚未公开提供兼容性或账号政策保证。</p>
+      <ul><li>并发隔离来自 SynthV Toolbox 与 Sandboxie 的进程树虚拟化，不是 Dreamtonics 原生多实例功能。</li><li>工具箱不修改 SV2 二进制、不绕过账户限制，也不拦截官方联网验证；这不等于 Dreamtonics 已确认其符合全部账号政策或服务条款。</li><li>截至当前版本，开发组没有收到因使用本功能而被官方警告或处理的记录；Dreamtonics 仍可能把它认定为不当或违规使用并采取措施。</li><li>启用即表示你已知晓上述情况、自担使用风险，并在适用法律允许的最大范围内不追究 SynthV Toolbox 开发组的直接或连带责任。</li></ul>
+      <div class="dialog-actions"><button class="secondary" data-cancel-concurrent>取消</button><button class="primary" data-accept-concurrent>已知晓潜在风险，继续</button></div>
     </section>
   </div>`;
 }
@@ -423,6 +424,7 @@ function renderConcurrentDisclaimer(): string {
 function renderBlockedSwitchDialog(): string {
   const slot = profiles?.slots.find((item) => item.id === pendingBlockedSwitchSlot);
   const blockers = profiles?.blockers ?? [];
+  const activationOnly = pendingBlockedSwitchAction === "activate";
   const provider = profiles?.concurrentProvider;
   const concurrentRunning = Boolean(slot?.concurrent.runningPids.length);
   const canRunConcurrent = Boolean(provider?.available && !concurrentRunning);
@@ -430,11 +432,11 @@ function renderBlockedSwitchDialog(): string {
   return `<div class="dialog-backdrop" role="presentation">
     <section class="fluent-dialog switch-dialog" role="alertdialog" aria-modal="true" aria-labelledby="blocked-switch-title">
       <span class="dialog-icon danger">${icon("plug", 24)}</span>
-      <div><span class="eyebrow">检测到运行中的程序</span><h2 id="blocked-switch-title">无法安全切换到“${escapeHtml(slot?.displayName ?? "此槽位")}”</h2></div>
-      <p>下列程序正在使用当前 SV2 槽位。请先保存工程：强制切换会结束这些 PID 的整个进程树，未保存内容可能丢失；并发模式不会关闭当前程序。</p>
+      <div><span class="eyebrow">检测到运行中的程序</span><h2 id="blocked-switch-title">${activationOnly ? "暂时无法更改默认账号" : `无法安全切换到“${escapeHtml(slot?.displayName ?? "此槽位")}”`}</h2></div>
+      <p>${activationOnly ? "下列程序正在使用当前 SV2 槽位。设置默认账号不会启动 SV2；请先保存并关闭这些程序，再重试。" : "下列程序正在使用当前 SV2 槽位。请先保存工程：强制切换会结束这些 PID 的整个进程树，未保存内容可能丢失；并发模式不会关闭当前程序。"}</p>
       <div class="dialog-process-list">${blockers.map((blocker) => `<div><span><strong>${escapeHtml(blocker.name)}</strong><small>${escapeHtml(blocker.reason)}</small></span><code>${blocker.pid ? `PID ${blocker.pid}` : "无可用 PID"}</code></div>`).join("")}</div>
-      <p class="dialog-choice-note">${canRunConcurrent ? `${escapeHtml(provider?.name ?? "Sandboxie")} 已就绪；${slot?.concurrent.ready ? "将直接启动隔离实例。" : "会先复制该槽位的不透明数据副本，再启动隔离实例。"}` : concurrentRunning ? "此槽位的并发实例已经在运行。" : `并发模式不可用：${escapeHtml(provider?.detail ?? "未检测到隔离提供方。")}`}</p>
-      <div class="dialog-actions"><button class="secondary" data-cancel-profile-switch>取消</button><button class="secondary" data-run-blocked-concurrent ${canRunConcurrent ? "" : "disabled"}>${concurrentLabel}</button><button class="danger-action" data-force-profile-switch>强制切换并启动</button></div>
+      <p class="dialog-choice-note">${activationOnly ? "强制设置默认会结束上列占用进程并切换槽位，但不会启动 SV2。" : canRunConcurrent ? `${escapeHtml(provider?.name ?? "Sandboxie")} 已就绪；${slot?.concurrent.ready ? "将直接启动隔离实例。" : "会先复制该槽位的不透明数据副本，再启动隔离实例。"}` : concurrentRunning ? "此槽位的并发实例已经在运行。" : `并发模式不可用：${escapeHtml(provider?.detail ?? "未检测到隔离提供方。")}`}</p>
+      <div class="dialog-actions"><button class="secondary" data-cancel-profile-switch>取消</button>${activationOnly ? '<button class="secondary" data-retry-profile-activate>已关闭程序，重试</button><button class="danger-action" data-force-profile-activate>结束占用并设为默认</button>' : `<button class="secondary" data-run-blocked-concurrent ${canRunConcurrent ? "" : "disabled"}>${concurrentLabel}</button><button class="danger-action" data-force-profile-switch>强制切换并启动</button>`}</div>
     </section>
   </div>`;
 }
@@ -550,15 +552,22 @@ function renderAccounts(): string {
     const lastUsed = slot.lastActivatedAtUtc ? new Date(slot.lastActivatedAtUtc).toLocaleString("zh-CN") : "尚未启动";
     const initial = Array.from(slot.displayName)[0] ?? "S";
     const color = /^#[0-9a-f]{6}$/i.test(slot.color) ? slot.color : "#6D5CE7";
-    const identity = [slot.username, slot.email].filter(Boolean);
+    const identity = [slot.identity.username, slot.identity.email]
+      .filter((value): value is string => Boolean(value?.trim()))
+      .map((value) => value.trim());
+    const identityFallback = slot.identity.status === "credentialDetected"
+      ? "登录凭证已检测 · 身份未知"
+      : slot.identity.status === "signedOut"
+        ? "未检测到登录凭证"
+        : "登录状态与身份未知";
     const useState = accountUseStateForSlot(slot);
     const concurrentRunning = slot.concurrent.runningPids.length > 0;
     const isolatedLabel = concurrentRunning ? "隔离运行中" : slot.concurrent.ready ? "隔离启动" : "准备隔离";
     const isolatedDisabled = concurrentRunning || !concurrentProviderAvailable;
     return `<article class="account-launch-card ${slot.isActive ? "active" : ""}" style="--profile-color:${color}">
-      <div class="account-card-main"><span class="profile-avatar compact">${escapeHtml(initial)}</span><div class="account-card-identity"><div class="profile-title-line"><h2>${escapeHtml(slot.displayName)}</h2>${accountUseDot(useState)}${slot.isActive ? '<span class="profile-active-badge">默认</span>' : ""}</div>${identity.length ? `<span class="profile-identity">${identity.map(escapeHtml).join(" · ")}</span>` : '<span class="profile-identity empty">未设置账号标签</span>'}</div><button class="icon-plain" data-manage-slot="${slot.id}" title="管理账号" aria-label="管理 ${escapeHtml(slot.displayName)}">${icon("settings", 18)}</button></div>
+      <div class="account-card-main"><span class="profile-avatar compact">${escapeHtml(initial)}</span><div class="account-card-identity"><div class="profile-title-line"><h2>${escapeHtml(slot.displayName)}</h2>${accountUseDot(useState)}${slot.isActive ? '<span class="profile-active-badge">默认</span>' : ""}</div>${identity.length ? `<span class="profile-identity">${identity.map(escapeHtml).join(" · ")}</span>` : `<span class="profile-identity empty" title="${escapeHtml(slot.identity.detail)}">${identityFallback}</span>`}</div><button class="icon-plain" data-manage-slot="${slot.id}" title="管理账号" aria-label="管理 ${escapeHtml(slot.displayName)}">${icon("settings", 18)}</button></div>
       <div class="account-card-facts"><span class="${slot.sessionCached ? "cached" : ""}">${slot.sessionCached ? `${icon("check", 13)} 已缓存登录` : `${icon("plug", 13)} 需要登录`}</span>${sessionProtectionBadge(slot.sessionProtection)}${voiceInventoryBadge(slot)}<span>${icon("refresh", 13)} ${escapeHtml(lastUsed)}</span>${concurrentRunning ? `<span class="running">${icon("plug", 13)} ${slot.concurrent.runningPids.length} 个隔离进程</span>` : ""}</div>
-      <div class="account-launch-actions"><button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button>${slot.concurrent.ready ? `<button class="secondary" data-profile-concurrent-launch="${slot.id}" ${isolatedDisabled ? `disabled title="${concurrentRunning ? "该隔离实例已在运行" : escapeHtml(providerDetail)}"` : ""}>${icon("boxes", 16)} ${isolatedLabel}</button>` : `<button class="secondary" data-profile-concurrent-prepare="${slot.id}" ${concurrentProviderAvailable ? "" : `disabled title="${escapeHtml(providerDetail)}"`}>${icon("download", 16)} ${isolatedLabel}</button>`}</div>
+      <div class="account-launch-actions ${slot.isActive ? "" : "with-activate"}">${slot.isActive ? "" : `<button class="secondary" data-profile-activate="${slot.id}">${icon("check", 16)} 设为默认</button>`}<button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button>${slot.concurrent.ready ? `<button class="secondary" data-profile-concurrent-launch="${slot.id}" ${isolatedDisabled ? `disabled title="${concurrentRunning ? "该隔离实例已在运行" : escapeHtml(providerDetail)}"` : ""}>${icon("boxes", 16)} ${isolatedLabel}</button>` : `<button class="secondary" data-profile-concurrent-prepare="${slot.id}" ${concurrentProviderAvailable ? "" : `disabled title="${escapeHtml(providerDetail)}"`}>${icon("download", 16)} ${isolatedLabel}</button>`}</div>
     </article>`;
   }).join("");
   return `<section class="account-hub panel"><div><span class="eyebrow">SV2 ACCOUNT LAUNCHER</span><h2>选择账号并启动</h2><p>普通启动切换默认环境；隔离启动允许多个账号独立运行。</p></div><div class="account-hub-actions"><div class="profile-summary"><span>${profiles.slots.length} 个账号</span><span>${preparedCount} 个隔离就绪</span>${runningSlots.length ? `<span class="running">${icon("plug", 13)} ${runningSlots.length} 个运行中</span>` : ""}</div><div class="button-row"><button class="secondary compact" data-profile-refresh title="刷新状态">${icon("refresh", 16)} 刷新</button><button class="secondary compact" data-account-manager="profile">${icon("settings", 16)} 管理</button><button class="primary compact" data-account-manager="add">${icon("plus", 16)} 添加账号</button></div></div></section>
@@ -570,11 +579,18 @@ function renderAccounts(): string {
 
 function voiceInventoryBadge(slot: Sv2ProfileSlot): string {
   const inventory = slot.voiceInventory;
-  if (inventory.status === "manual") {
-    return `<span class="voice-inventory confirmed" title="${escapeHtml(inventory.detail)}">${icon("audio", 13)} ${inventory.manuallyConfirmedVoices.length} 个确认声库</span>`;
+  const catalogVoiceCount = new Set([
+    ...inventory.catalogAvailableVoices,
+    ...inventory.catalogTrialVoices,
+  ]).size;
+  if (inventory.authorizedVoices.length) {
+    return `<span class="voice-inventory confirmed" title="${escapeHtml(inventory.detail)}">${icon("audio", 13)} ${inventory.authorizedVoices.length} 个已确认授权</span>`;
   }
-  if (inventory.status === "localEvidence") {
-    return `<span class="voice-inventory evidence" title="${escapeHtml(inventory.detail)}">${icon("audio", 13)} ${inventory.installedOpaqueCount} 个本地安装证据</span>`;
+  if (catalogVoiceCount) {
+    return `<span class="voice-inventory evidence" title="目录可下载或可试用不代表当前账号已授权。${escapeHtml(inventory.detail)}">${icon("audio", 13)} ${catalogVoiceCount} 个目录项</span>`;
+  }
+  if (inventory.installedOpaqueCount) {
+    return `<span class="voice-inventory evidence" title="安装项标识不透明，无法据此确认产品或账号授权。${escapeHtml(inventory.detail)}">${icon("audio", 13)} ${inventory.installedOpaqueCount} 个不透明安装项</span>`;
   }
   return `<span class="voice-inventory unknown" title="${escapeHtml(inventory.detail)}">${icon("audio", 13)} 授权未知</span>`;
 }
@@ -585,6 +601,25 @@ function renderAccountManager(): string {
     ?? profiles.slots.find((slot) => slot.isActive)
     ?? profiles.slots[0];
   if (managedSlot) managedProfileSlotId = managedSlot.id;
+  const detectedIdentity = managedSlot ? [
+    ["用户名", managedSlot.identity.username?.trim() ?? ""],
+    ["邮箱", managedSlot.identity.email?.trim() ?? ""],
+  ] as const : [];
+  const identityKnown = detectedIdentity.some(([, value]) => value);
+  const identityStatusLabel = managedSlot?.identity.status === "credentialDetected"
+    ? identityKnown ? "登录凭证已检测" : "登录凭证已检测 · 身份未知"
+    : managedSlot?.identity.status === "signedOut"
+      ? "未检测到登录凭证"
+      : "登录状态与身份未知";
+  const identityStatusClass = managedSlot?.identity.status === "credentialDetected" ? "recognized" : "unknown";
+  const identityUnknownLabel = managedSlot?.identity.status === "credentialDetected" ? "身份未知" : "尚未识别";
+  const identityCheckedAt = managedSlot?.identity.checkedAtUtc
+    ? new Date(managedSlot.identity.checkedAtUtc).toLocaleString("zh-CN")
+    : "检测时间未知";
+  const authorizedVoices = managedSlot?.voiceInventory.authorizedVoices ?? [];
+  const catalogVoices = managedSlot?.voiceInventory.catalogAvailableVoices ?? [];
+  const trialVoices = managedSlot?.voiceInventory.catalogTrialVoices ?? [];
+  const catalogListedVoices = [...new Set([...catalogVoices, ...trialVoices])];
   const selector = profiles.slots.length ? `<div class="account-mini-list" aria-label="选择账号">${profiles.slots.map((slot) => {
     const initial = Array.from(slot.displayName)[0] ?? "S";
     const color = /^#[0-9a-f]{6}$/i.test(slot.color) ? slot.color : "#6D5CE7";
@@ -592,10 +627,10 @@ function renderAccountManager(): string {
   }).join("")}</div>` : "";
   let body = "";
   if (accountManagerSection === "profile") {
-    body = managedSlot ? `${selector}<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(managedSlot.displayName)}</h3><p>这里只保存便于识别的标签，不读取密码、Cookie 或 session。</p></div>${managedSlot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
-      <form class="profile-identity-form compact-form" data-profile-identity-form="${managedSlot.id}"><label>用户名<input name="username" value="${escapeHtml(managedSlot.username)}" maxlength="100" placeholder="用于区分账号" /></label><label>邮箱<input name="email" type="email" value="${escapeHtml(managedSlot.email)}" maxlength="254" placeholder="name@example.com" /></label><button class="secondary">保存标签</button></form>
+    body = managedSlot ? `${selector}<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(managedSlot.displayName)}</h3><p>账号登录状态与声库目录仅通过本机只读探测显示，不提供手工填写。</p></div>${managedSlot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
+      <section class="profile-auto-detection"><div class="auto-detection-heading"><span>${icon("shield", 17)}</span><div><strong>登录凭证与账号身份</strong><small>只检查普通凭证文件是否存在；不会解析或显示密码、Cookie、令牌及原始凭证内容。</small></div><span class="inventory-status ${identityStatusClass}">${escapeHtml(identityStatusLabel)}</span></div><div class="credential-detection-note"><strong>${escapeHtml(identityStatusLabel)}</strong><small>${escapeHtml(managedSlot.identity.detail)} · ${escapeHtml(identityCheckedAt)}</small></div><dl class="profile-detected-fields">${detectedIdentity.map(([label, value]) => `<div><dt>${label}</dt><dd class="${value ? "" : "unknown"}">${value ? escapeHtml(value) : identityUnknownLabel}</dd></div>`).join("")}</dl></section>
       <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>槽位显示名称<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" required /></label><button class="secondary">重命名</button></form>
-      <form class="voice-license-form" data-profile-voice-form="${managedSlot.id}"><div class="voice-license-heading"><div><strong>手工确认可用声库</strong><small>每行一个完整产品名称，仅记录你确认属于此账号的授权。</small></div><span class="inventory-status ${managedSlot.voiceInventory.status}">${managedSlot.voiceInventory.status === "manual" ? "用户已确认" : managedSlot.voiceInventory.status === "localEvidence" ? "仅本地证据" : "未知"}</span></div><textarea name="voices" rows="4" maxlength="16384" placeholder="例如：&#10;Mai 2&#10;SOLARIA">${escapeHtml(managedSlot.voiceInventory.manuallyConfirmedVoices.join("\n"))}</textarea><div class="voice-evidence-note">${icon("shield", 16)}<span><strong>本地安装不等于账号授权</strong><small>${escapeHtml(managedSlot.voiceInventory.detail)}${managedSlot.voiceInventory.installedOpaqueCount ? ` 当前检测到 ${managedSlot.voiceInventory.installedOpaqueCount} 个不透明安装项。` : ""}</small></span></div><button class="secondary" type="submit">保存确认记录</button></form>
+      <section class="voice-detection-card"><div class="voice-license-heading"><div><strong>声库授权与本地目录证据</strong><small>授权、目录可下载项和不透明安装项分别显示，三者不会互相推定。</small></div><span class="inventory-status ${authorizedVoices.length ? "recognized" : "unknown"}">${authorizedVoices.length ? `已确认授权 ${authorizedVoices.length} 个` : "授权未知"}</span></div><div class="voice-detection-group"><strong>账号授权</strong>${authorizedVoices.length ? `<div class="detected-voice-list authorized">${authorizedVoices.map((voice) => `<span>${icon("check", 13)} ${escapeHtml(voice)}</span>`).join("")}</div>` : '<div class="detection-empty">当前没有可安全确认的账号声库授权；最终可用性由 SV2 官方服务验证。</div>'}</div><div class="voice-detection-group catalog"><div class="voice-group-heading"><strong>目录可下载 / 可试用</strong><span>${managedSlot.voiceInventory.catalogScanComplete ? "目录扫描完成" : "目录扫描不完整"}</span></div><small class="voice-group-warning">目录列出可下载或可试用的声库，不代表当前账号已经授权。</small>${catalogListedVoices.length ? `<div class="detected-voice-list catalog">${catalogListedVoices.map((voice) => `<span>${icon("download", 13)} ${escapeHtml(voice)}${trialVoices.includes(voice) ? " · 可试用" : " · 可下载"}</span>`).join("")}</div>` : '<div class="detection-empty">未发现可安全读取的声库目录项。</div>'}</div><div class="opaque-install-evidence"><span>${icon("audio", 16)}</span><div><strong>${managedSlot.voiceInventory.installedOpaqueCount} 个不透明安装项</strong><small>本地安装标识无法安全映射到产品或账号授权，不会用于自动选择账号。</small></div></div><div class="voice-evidence-note">${icon("shield", 16)}<span><strong>只读探测结果</strong><small>${escapeHtml(managedSlot.voiceInventory.detail)}</small></span></div></section>
       <div class="manager-action-row">${managedSlot.isActive ? "" : `<button class="secondary" data-profile-activate="${managedSlot.id}">${icon("check", 15)} 设为默认账号</button>`}<button class="secondary" data-profile-folder="${managedSlot.id}">${icon("folder", 15)} 打开普通数据目录</button>${managedSlot.concurrent.ready ? `<button class="secondary" data-profile-concurrent-folder="${managedSlot.id}">${icon("folder", 15)} 打开隔离目录</button>` : ""}</div>
       <dl class="profile-storage-list compact"><div><dt>普通数据</dt><dd><code title="${escapeHtml(managedSlot.dataPath)}">${escapeHtml(managedSlot.dataPath)}</code></dd></div>${managedSlot.concurrent.ready ? `<div><dt>隔离数据</dt><dd><code title="${escapeHtml(managedSlot.concurrent.dataPath)}">${escapeHtml(managedSlot.concurrent.dataPath)}</code></dd></div>` : ""}</dl></div>` : '<div class="empty-inline">尚无账号，请先添加一个槽位。</div>';
   } else if (accountManagerSection === "isolation") {
@@ -1059,7 +1094,7 @@ function renderSettings(): string {
         : "尚未注册为可选打开方式";
   return `<div class="settings-layout"><section class="panel"><div class="section-heading"><div><h2>运行模式</h2><p>切换后导航与 Rust 后端能力会同时更新。</p></div></div><div class="mode-setting"><button class="setting-choice ${app.mode === "toolbox" ? "active" : ""}" data-set-mode="toolbox"><span class="mode-icon slate">${icon("toolbox", 23)}</span><span><strong>纯工具箱</strong><small>确定性基础流程，不启动 AI</small></span>${app.mode === "toolbox" ? icon("check", 20) : ""}</button><button class="setting-choice ${app.mode === "ai" ? "active" : ""}" data-set-mode="ai"><span class="mode-icon purple">${icon("sparkles", 23)}</span><span><strong>AI 模式</strong><small>Copilot、智能增强与 MCP</small></span>${app.mode === "ai" ? icon("check", 20) : ""}</button></div></section>
     ${app.mode === "ai" ? `<section class="panel"><div class="section-heading"><div><h2>模型连接</h2><p>令牌写入本机用户配置，不会返回给前端。</p></div></div><form id="model-form" class="form-stack"><label>Anthropic 兼容 API 地址<input id="model-url" type="url" required value="${escapeHtml(app.model?.baseUrl ?? "https://api.anthropic.com")}" /></label><label>模型 ID<input id="model-id" required value="${escapeHtml(app.model?.model ?? "")}" placeholder="例如 claude-sonnet-4-5" /></label><label>访问令牌<input id="model-token" type="password" placeholder="${app.model?.tokenConfigured ? "已保存；留空则保留" : "输入访问令牌"}" /></label><button class="primary">保存模型设置</button></form></section>` : `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("bot", 24)}</span><div><h2>AI 运行时已关闭</h2><p>当前不会显示 Copilot、模型或 MCP 设置，也不会向模型端点发送请求。</p></div></section>`}
-    ${showSvpRouting ? `<section class="panel smart-route-settings"><div class="section-heading"><div><h2>智能 .svp 启动</h2><p>根据工程所需声库，从空闲账号中建议最合适的启动槽位。</p></div><label class="fluent-switch large"><input id="svp-routing-enabled" type="checkbox" ${app.smartSvpLaunchEnabled ? "checked" : ""} ${association.supported ? "" : "disabled"} aria-label="启用智能 .svp 启动" /><span></span>${app.smartSvpLaunchEnabled ? "已开启" : "已关闭"}</label></div><div class="smart-route-state ${association.isDefault ? "ready" : "pending"}"><span class="feature-icon ${association.isDefault ? "emerald" : "blue"}">${icon("file", 20)}</span><div><strong>${escapeHtml(associationLabel)}</strong><p>${escapeHtml(association.detail)}</p></div><button class="secondary compact" data-open-svp-default-apps ${association.supported ? "" : "disabled"}>打开默认应用设置</button></div><div class="smart-route-boundary">${icon("shield", 17)}<span><strong>智能路由只在工具箱已经运行时生效</strong><small>冷启动或关闭此功能时，工具箱会把工程透明转交给原始 .svp 处理程序；不会监控、终止或劫持已经启动的 SV2。声库匹配依据仅来自你的确认记录，未知时必须由你选择账号。</small></span></div></section>` : ""}
+    ${showSvpRouting ? `<section class="panel smart-route-settings"><div class="section-heading"><div><h2>智能 .svp 启动</h2><p>根据工程所需声库，从空闲账号中建议最合适的启动槽位。</p></div><label class="fluent-switch large"><input id="svp-routing-enabled" type="checkbox" ${app.smartSvpLaunchEnabled ? "checked" : ""} ${association.supported ? "" : "disabled"} aria-label="启用智能 .svp 启动" /><span></span>${app.smartSvpLaunchEnabled ? "已开启" : "已关闭"}</label></div><div class="smart-route-state ${association.isDefault ? "ready" : "pending"}"><span class="feature-icon ${association.isDefault ? "emerald" : "blue"}">${icon("file", 20)}</span><div><strong>${escapeHtml(associationLabel)}</strong><p>${escapeHtml(association.detail)}</p></div><button class="secondary compact" data-open-svp-default-apps ${association.supported ? "" : "disabled"}>打开默认应用设置</button></div><div class="smart-route-boundary">${icon("shield", 17)}<span><strong>智能路由只在工具箱已经运行时生效</strong><small>冷启动或关闭此功能时，工具箱会把工程透明转交给原始 .svp 处理程序；不会监控、终止或劫持已经启动的 SV2。声库匹配只使用可安全确认的授权结果；目录可下载项和不透明安装项都不会作为授权，未知时必须由你选择账号。</small></span></div></section>` : ""}
     <section class="panel"><div class="section-heading"><div><h2>数据与平台</h2><p>配置和历史使用统一的跨平台用户目录。</p></div></div><dl class="detail-list"><div><dt>平台</dt><dd>${escapeHtml(app.platform)}</dd></div><div><dt>配置</dt><dd><code>${escapeHtml(app.configPath)}</code></dd></div><div><dt>应用版本</dt><dd>${escapeHtml(app.appVersion)}</dd></div></dl></section></div>`;
 }
 
@@ -1255,29 +1290,6 @@ function wireForms(): void {
     const displayName = form.querySelector<HTMLInputElement>("input")?.value.trim() ?? "";
     if (!slotId || !displayName) return;
     void run(async () => { profiles = await api.renameSv2Profile(slotId, displayName); notice = "槽位名称已保存。"; });
-  }));
-  document.querySelectorAll<HTMLFormElement>("[data-profile-identity-form]").forEach((form) => form.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const slotId = form.dataset.profileIdentityForm ?? "";
-    const username = form.querySelector<HTMLInputElement>('[name="username"]')?.value.trim() ?? "";
-    const email = form.querySelector<HTMLInputElement>('[name="email"]')?.value.trim() ?? "";
-    if (!slotId) return;
-    void run(async () => { profiles = await api.updateSv2ProfileIdentity(slotId, username, email); notice = "账号用户名和邮箱标签已保存。"; });
-  }));
-  document.querySelectorAll<HTMLFormElement>("[data-profile-voice-form]").forEach((form) => form.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const slotId = form.dataset.profileVoiceForm ?? "";
-    const voices = (form.querySelector<HTMLTextAreaElement>('[name="voices"]')?.value ?? "")
-      .split(/\r?\n/)
-      .map((voice) => voice.trim())
-      .filter(Boolean);
-    if (!slotId) return;
-    void run(async () => {
-      profiles = await api.updateSv2ProfileVoiceLicenses(slotId, voices);
-      notice = voices.length
-        ? `已保存 ${voices.length} 条用户确认的声库记录。`
-        : "已清除用户确认记录；本地安装证据不会被视为授权。";
-    });
   }));
   document.querySelector<HTMLFormElement>("#concurrent-defaults-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -1517,16 +1529,40 @@ document.addEventListener("click", (event) => {
   }
   if (target.hasAttribute("data-cancel-profile-switch")) {
     pendingBlockedSwitchSlot = undefined;
+    pendingBlockedSwitchAction = "launch";
     render();
     return;
   }
   if (target.hasAttribute("data-force-profile-switch")) {
     const slotId = pendingBlockedSwitchSlot;
-    if (!slotId) return;
+    if (!slotId || pendingBlockedSwitchAction !== "launch") return;
     pendingBlockedSwitchSlot = undefined;
+    pendingBlockedSwitchAction = "launch";
     void run(async () => {
       setFeedback(await api.forceLaunchSv2Profile(slotId));
       profiles = await api.sv2ProfileState();
+    });
+    return;
+  }
+  if (target.hasAttribute("data-retry-profile-activate")) {
+    const slotId = pendingBlockedSwitchSlot;
+    if (!slotId || pendingBlockedSwitchAction !== "activate") return;
+    pendingBlockedSwitchSlot = undefined;
+    pendingBlockedSwitchAction = "launch";
+    void run(async () => {
+      profiles = await api.activateSv2Profile(slotId);
+      notice = "默认账号槽位已切换；未启动 SV2。";
+    });
+    return;
+  }
+  if (target.hasAttribute("data-force-profile-activate")) {
+    const slotId = pendingBlockedSwitchSlot;
+    if (!slotId || pendingBlockedSwitchAction !== "activate") return;
+    pendingBlockedSwitchSlot = undefined;
+    pendingBlockedSwitchAction = "launch";
+    void run(async () => {
+      profiles = await api.forceActivateSv2Profile(slotId);
+      notice = "已结束占用进程并设为默认账号；未启动 SV2。";
     });
     return;
   }
@@ -1536,6 +1572,7 @@ document.addEventListener("click", (event) => {
     if (!slotId || !slot) return;
     const prepare = !slot.concurrent.ready;
     pendingBlockedSwitchSlot = undefined;
+    pendingBlockedSwitchAction = "launch";
     if (!app?.concurrentDisclaimerAccepted) {
       pendingConcurrentLaunchSlot = slotId;
       pendingConcurrentPrepare = prepare;
@@ -1646,13 +1683,28 @@ document.addEventListener("click", (event) => {
     const slot = profiles?.slots.find((item) => item.id === slotId);
     if (slot && !slot.isActive && profiles?.blockers.length) {
       pendingBlockedSwitchSlot = slotId;
+      pendingBlockedSwitchAction = "launch";
       render();
     } else {
       void run(async () => { setFeedback(await api.launchSv2Profile(slotId)); profiles = await api.sv2ProfileState(); });
     }
     return;
   }
-  if (target.dataset.profileActivate) { void run(async () => { profiles = await api.activateSv2Profile(target.dataset.profileActivate ?? ""); notice = "默认账号槽位已切换。"; }); return; }
+  if (target.dataset.profileActivate) {
+    const slotId = target.dataset.profileActivate;
+    const slot = profiles?.slots.find((item) => item.id === slotId);
+    if (slot && !slot.isActive && profiles?.blockers.length) {
+      pendingBlockedSwitchSlot = slotId;
+      pendingBlockedSwitchAction = "activate";
+      render();
+    } else {
+      void run(async () => {
+        profiles = await api.activateSv2Profile(slotId);
+        notice = "默认账号槽位已切换；未启动 SV2。";
+      });
+    }
+    return;
+  }
   if (target.dataset.profileFolder) { void run(async () => { setFeedback(await api.openSv2ProfileFolder(target.dataset.profileFolder ?? "")); }); return; }
   if (target.dataset.profileConcurrentPrepare) { void run(async () => { profiles = await api.prepareSv2ConcurrentProfile(target.dataset.profileConcurrentPrepare ?? ""); notice = "隔离副本已准备，可以并发启动。"; }); return; }
   if (target.dataset.profileConcurrentLaunch) {

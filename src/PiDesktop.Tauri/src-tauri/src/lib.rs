@@ -9,6 +9,7 @@ mod downloads;
 mod lyric_tools;
 mod mcp;
 mod state;
+mod sv2_account_probe;
 mod sv2_concurrent;
 mod sv2_profiles;
 mod sv2_session_guard;
@@ -110,8 +111,6 @@ pub fn run() {
             commands::import_current_sv2_profile,
             commands::create_sv2_profile,
             commands::rename_sv2_profile,
-            commands::update_sv2_profile_identity,
-            commands::update_sv2_profile_voice_licenses,
             commands::preview_svp_route,
             commands::launch_svp_route,
             commands::set_svp_launch_routing,
@@ -119,6 +118,7 @@ pub fn run() {
             commands::update_sv2_concurrent_defaults,
             commands::update_sv2_concurrent_content,
             commands::activate_sv2_profile,
+            commands::force_activate_sv2_profile,
             commands::launch_sv2_profile,
             commands::force_launch_sv2_profile,
             commands::open_sv2_profile_folder,
