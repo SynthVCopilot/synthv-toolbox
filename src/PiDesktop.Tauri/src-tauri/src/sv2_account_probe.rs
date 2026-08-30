@@ -1,3 +1,5 @@
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
+
 //! Explicit inspection of the Synthesizer V Studio 2 account session.
 //!
 //! Secrets stay inside zeroizing, private buffers.  The public view contains
@@ -3361,6 +3363,7 @@ mod tests {
         assert_ne!(account_group_key(&other_subject), Some(first_key));
         assert_eq!(account_group_key(&missing_login), Some(first_key));
         assert_eq!(account_group_key(&missing_subject), None);
+        #[cfg(windows)]
         assert_ne!(
             BatchGroupKey::Account(0, first_key),
             BatchGroupKey::Account(1, first_key),
@@ -3463,6 +3466,7 @@ mod tests {
         assert_eq!(plan.invalid_scope_members, vec![0, 1]);
     }
 
+    #[cfg(windows)]
     #[test]
     fn sync_quarantine_overrides_changed_fingerprints_until_repaired() {
         let unique = uuid::Uuid::new_v4();
@@ -3522,6 +3526,7 @@ mod tests {
         assert!(cached_view_for_fingerprint(&moved_fingerprint, &concurrent_root_key).is_none());
     }
 
+    #[cfg(windows)]
     #[test]
     fn missing_session_does_not_clear_slot_quarantine() {
         let slot_id = format!("slot-{}", uuid::Uuid::new_v4());
@@ -3543,6 +3548,7 @@ mod tests {
         clear_sync_quarantine(&quarantine_key);
     }
 
+    #[cfg(windows)]
     #[test]
     fn slot_quarantine_repair_requires_every_requested_copy() {
         let root_a = PathBuf::from("synthetic-normal");
