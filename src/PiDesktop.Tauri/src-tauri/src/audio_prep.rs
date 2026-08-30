@@ -1285,7 +1285,8 @@ fn serve_audio_artifact_request(
         );
     };
     let length = metadata.len();
-    let range = match request.headers().get(http::header::RANGE) {
+    let requested_range = request.headers().get(http::header::RANGE);
+    let range = match requested_range {
         Some(value) => match value
             .to_str()
             .ok()
@@ -1302,14 +1303,14 @@ fn serve_audio_artifact_request(
                 )
             }
         },
-        None if request.method() == http::Method::HEAD => 0..length,
-        None => 0..length.min(MAX_PROTOCOL_RESPONSE_BYTES),
+        // A normal GET is a request for the whole representation.  Returning
+        // a capped 206 here would be an unsolicited partial response and can
+        // make media clients treat the file as truncated.  The response-size
+        // cap applies only to an explicitly requested byte range.
+        None => 0..length,
     };
     let byte_count = range.end.saturating_sub(range.start);
-    let status = if range.start == 0
-        && range.end == length
-        && request.headers().get(http::header::RANGE).is_none()
-    {
+    let status = if requested_range.is_none() {
         http::StatusCode::OK
     } else {
         http::StatusCode::PARTIAL_CONTENT
@@ -2998,6 +2999,101 @@ fn main() {
         assert_eq!(mapped_response.status(), http::StatusCode::OK);
         assert_eq!(mapped_response.headers()["content-length"], "10");
         assert!(mapped_response.body().is_empty());
+        fs::remove_dir_all(case_root).unwrap();
+    }
+
+    #[test]
+    fn protocol_get_without_range_returns_the_complete_large_representation() {
+        let (service, case_root, _) = registered_output_service("artifact-full-get");
+        let output = service.output_root.join("full-get.wav");
+        let expected_length = MAX_PROTOCOL_RESPONSE_BYTES + 1;
+        let file = fs::File::create(&output).unwrap();
+        file.set_len(expected_length).unwrap();
+        drop(file);
+        let root = fs::canonicalize(&service.output_root).unwrap();
+        let artifact = service
+            .register_completed_artifact(&output.to_string_lossy(), &root, "pcm-prepare")
+            .unwrap();
+
+        let request = http::Request::builder()
+            .method("GET")
+            .uri(format!("toolbox-audio://localhost/{artifact}"))
+            .body(Vec::new())
+            .unwrap();
+        let response = service.serve_audio_artifact_request(&request);
+        assert_eq!(response.status(), http::StatusCode::OK);
+        assert_eq!(
+            response.headers()["content-length"],
+            expected_length.to_string()
+        );
+        assert!(response.headers().get("content-range").is_none());
+        assert_eq!(response.headers()["accept-ranges"], "bytes");
+        assert_eq!(response.body().len(), expected_length as usize);
+
+        let range_request = http::Request::builder()
+            .method("GET")
+            .uri(format!("toolbox-audio://localhost/{artifact}"))
+            .header("range", "bytes=0-")
+            .body(Vec::new())
+            .unwrap();
+        let range_response = service.serve_audio_artifact_request(&range_request);
+        assert_eq!(range_response.status(), http::StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            range_response.headers()["content-length"],
+            MAX_PROTOCOL_RESPONSE_BYTES.to_string()
+        );
+        assert_eq!(
+            range_response.headers()["content-range"],
+            format!(
+                "bytes 0-{}/{}",
+                MAX_PROTOCOL_RESPONSE_BYTES - 1,
+                expected_length
+            )
+        );
+        assert_eq!(
+            range_response.body().len(),
+            MAX_PROTOCOL_RESPONSE_BYTES as usize
+        );
+
+        let range_head_request = http::Request::builder()
+            .method("HEAD")
+            .uri(format!("toolbox-audio://localhost/{artifact}"))
+            .header("range", "bytes=0-")
+            .body(Vec::new())
+            .unwrap();
+        let range_head_response = service.serve_audio_artifact_request(&range_head_request);
+        assert_eq!(
+            range_head_response.status(),
+            http::StatusCode::PARTIAL_CONTENT
+        );
+        assert_eq!(
+            range_head_response.headers()["content-length"],
+            MAX_PROTOCOL_RESPONSE_BYTES.to_string()
+        );
+        assert_eq!(
+            range_head_response.headers()["content-range"],
+            format!(
+                "bytes 0-{}/{}",
+                MAX_PROTOCOL_RESPONSE_BYTES - 1,
+                expected_length
+            )
+        );
+        assert!(range_head_response.body().is_empty());
+
+        let head_request = http::Request::builder()
+            .method("HEAD")
+            .uri(format!("toolbox-audio://localhost/{artifact}"))
+            .body(Vec::new())
+            .unwrap();
+        let head_response = service.serve_audio_artifact_request(&head_request);
+        assert_eq!(head_response.status(), http::StatusCode::OK);
+        assert_eq!(
+            head_response.headers()["content-length"],
+            expected_length.to_string()
+        );
+        assert!(head_response.headers().get("content-range").is_none());
+        assert_eq!(head_response.headers()["accept-ranges"], "bytes");
+        assert!(head_response.body().is_empty());
         fs::remove_dir_all(case_root).unwrap();
     }
 

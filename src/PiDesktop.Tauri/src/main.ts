@@ -161,6 +161,8 @@ let audioInputGeneration = 0;
 let audioPlanRequestGeneration = 0;
 let audioPlanRequestInFlight = false;
 let audioStartInFlight = false;
+let audioLoudnessAnalysisInFlight = false;
+let audioLoudnessAnalysisGeneration = 0;
 let audioArtifactActionInFlight = false;
 let audioCancelInFlight = false;
 let audioUiError = "";
@@ -428,6 +430,11 @@ function selectAudioPreparationInput(path: string): void {
   }
   if (audioStartInFlight || (audioJob && !isTerminalAudioJob(audioJob))) {
     audioUiError = "当前有一个音频写入任务正在运行；完成或取消后才能更换输入。";
+    render();
+    return;
+  }
+  if (audioLoudnessAnalysisInFlight) {
+    audioUiError = "正在检查当前文件响度；完成后才能更换输入文件。";
     render();
     return;
   }
@@ -1572,7 +1579,7 @@ function renderWorkflowPanel(id: string): string {
   if (id === "audio-preparation") {
     const runtime = audioRuntime;
     const running = audioStartInFlight || Boolean(audioJob && !isTerminalAudioJob(audioJob));
-    const controlsLocked = running || audioPlanRequestInFlight;
+    const controlsLocked = running || audioPlanRequestInFlight || audioLoudnessAnalysisInFlight;
     const probe = audioProbe;
     const probeCard = probe
       ? `<section class="audio-probe-card" aria-label="媒体信息"><div class="audio-probe-heading"><div><span class="eyebrow">MEDIA PROBE</span><strong>${escapeHtml(probe.codec ?? "未知编码")}</strong></div><span class="availability ready">已读取</span></div><dl class="audio-metadata"><div><dt>容器</dt><dd>${escapeHtml(probe.container ?? "未知")}</dd></div><div><dt>时长</dt><dd>${formatAudioNumber(probe.durationSeconds, " 秒")}</dd></div><div><dt>采样率</dt><dd>${formatAudioNumber(probe.sampleRate, " Hz")}</dd></div><div><dt>声道</dt><dd>${formatAudioNumber(probe.channels)}${probe.channelLayout ? ` · ${escapeHtml(probe.channelLayout)}` : ""}</dd></div><div><dt>位深</dt><dd>${formatAudioNumber(probe.bitDepth, " bit")}</dd></div><div><dt>码率</dt><dd>${formatAudioNumber(probe.bitRate ? probe.bitRate / 1000 : undefined, " kb/s")}</dd></div></dl>${probe.sourceArtifactId && probe.sourceMimeType ? `<div class="audio-source-preview">${audioSourcePreviewUrl ? `<audio controls preload="metadata" src="${escapeHtml(audioSourcePreviewUrl)}" aria-label="原音试听"></audio>` : `<button class="secondary" data-preview-audio-artifact="${escapeHtml(probe.sourceArtifactId)}" data-audio-preview-kind="source" ${audioArtifactActionInFlight ? "disabled" : ""}>${icon("play", 16)} 试听原音</button>`}</div>` : ""}</section>`
@@ -2401,8 +2408,10 @@ document.addEventListener("click", (event) => {
   }
   if (target.hasAttribute("data-analyze-audio-loudness")) {
     const inputPath = audioPrepareForm.inputPath;
-    if (!inputPath) return;
+    if (!inputPath || audioLoudnessAnalysisInFlight) return;
     const generation = audioInputGeneration;
+    const analysisGeneration = ++audioLoudnessAnalysisGeneration;
+    audioLoudnessAnalysisInFlight = true;
     audioUiError = "";
     audioUiNotice = "正在检查 EBU R128 响度…";
     render();
@@ -2415,6 +2424,9 @@ document.addEventListener("click", (event) => {
       if (generation !== audioInputGeneration || audioPrepareForm.inputPath !== inputPath) return;
       audioUiError = formatError(reason);
       audioUiNotice = "";
+    }).finally(() => {
+      if (analysisGeneration !== audioLoudnessAnalysisGeneration) return;
+      audioLoudnessAnalysisInFlight = false;
       render();
     });
     return;

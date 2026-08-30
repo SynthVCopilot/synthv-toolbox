@@ -95,6 +95,12 @@ assert.match(main, /audioJob\?\.artifactId === artifactId/);
 assert.match(main, /probe\.sourceArtifactId && probe\.sourceMimeType/);
 assert.match(main, /audioArtifactActionInFlight/);
 assert.match(main, /audioCancelInFlight/);
+assert.match(main, /audioLoudnessAnalysisInFlight/);
+assert.match(main, /audioLoudnessAnalysisGeneration/);
+assert.match(main, /if \(!inputPath \|\| audioLoudnessAnalysisInFlight\) return/);
+assert.match(main, /controlsLocked = [^;]*audioLoudnessAnalysisInFlight/);
+assert.match(main, /analysisGeneration !== audioLoudnessAnalysisGeneration/);
+assert.match(main, /if \(audioLoudnessAnalysisInFlight\) \{[\s\S]{0,220}更换输入文件/);
 assert.match(main, /function mergeAudioJobSnapshot[\s\S]{0,420}isTerminalAudioJob\(current\)/);
 assert.ok(
   (main.match(/mergeAudioJobSnapshot\(audioJob,\s*snapshot\)/g) ?? []).length >= 2,
