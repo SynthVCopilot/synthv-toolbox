@@ -52,9 +52,17 @@ pub fn run() {
     let passthrough_only = initial_activation.is_some();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             handle_svp_activation(app.clone(), args, Some(cwd));
         }))
+        .register_uri_scheme_protocol("toolbox-audio", |context, request| {
+            context
+                .app_handle()
+                .state::<AppState>()
+                .audio_preparation
+                .serve_audio_artifact_request(&request)
+        })
         .setup(move |app| {
             let resource_dir = app
                 .path()
@@ -188,6 +196,9 @@ pub fn run() {
             commands::start_loudness_normalize,
             commands::audio_job_snapshot,
             commands::cancel_audio_job,
+            commands::audio_artifact_info,
+            commands::reveal_audio_artifact,
+            commands::save_audio_artifact,
             commands::component_downloads,
             commands::queue_component_install,
             commands::open_downloaded_component,
