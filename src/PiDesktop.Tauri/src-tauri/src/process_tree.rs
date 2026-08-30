@@ -100,6 +100,13 @@ impl ProcessTreeGuard {
                     }
                 }
             }
+
+            // `wait` returns success for a non-zero exit status; that is
+            // expected after cancellation. Its purpose here is reaping, not
+            // validation.
+            let _ = child.wait().await.map_err(|error| error.to_string())?;
+            self.release();
+            Ok(())
         }
         #[cfg(unix)]
         {
@@ -115,14 +122,13 @@ impl ProcessTreeGuard {
                 }
             }
             self.release();
-            return Ok(());
+            Ok(())
         }
-
-        // `wait` returns success for a non-zero exit status; that is expected
-        // after cancellation. Its purpose here is reaping, not validation.
-        let _ = child.wait().await.map_err(|error| error.to_string())?;
-        self.release();
-        Ok(())
+        #[cfg(not(any(windows, unix)))]
+        {
+            let _ = (self, child);
+            Err("Process-tree control is not implemented for this platform.".to_string())
+        }
     }
 
     /// Mark normal completion and relinquish the underlying OS resource.
