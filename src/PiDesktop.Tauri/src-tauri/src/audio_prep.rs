@@ -1589,7 +1589,7 @@ fn main() {
         }
     }
     if args.iter().any(|arg| arg == "-show_format") {
-        println!(r#"{"format":{"format_name":"wav","duration":"2.0","bit_rate":"2304000"},"streams":[{"codec_type":"audio","codec_name":"pcm_s24le","sample_rate":"48000","channels":2,"channel_layout":"stereo","bits_per_sample":24}]}"#);
+        println!("{}", r#"{"format":{"format_name":"wav","duration":"2.0","bit_rate":"2304000"},"streams":[{"codec_type":"audio","codec_name":"pcm_s24le","sample_rate":"48000","channels":2,"channel_layout":"stereo","bits_per_sample":24}]}"#);
         return;
     }
     if let Some(input) = input {
@@ -1599,7 +1599,7 @@ fn main() {
         }
     }
     if args.iter().any(|arg| arg.contains("print_format=json")) {
-        eprintln!(r#"{"input_i":"-21.0","input_tp":"-3.0","input_lra":"4.0","input_thresh":"-31.0","target_offset":"0.2"}"#);
+        eprintln!("{}", r#"{"input_i":"-21.0","input_tp":"-3.0","input_lra":"4.0","input_thresh":"-31.0","target_offset":"0.2"}"#);
         return;
     }
     if let Some(input) = input {
