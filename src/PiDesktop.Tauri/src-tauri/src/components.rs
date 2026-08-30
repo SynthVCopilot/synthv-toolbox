@@ -934,6 +934,7 @@ impl PythonCommand {
         }
     }
 
+    #[cfg(windows)]
     fn with_args(
         program: impl Into<String>,
         args: impl IntoIterator<Item = impl Into<String>>,

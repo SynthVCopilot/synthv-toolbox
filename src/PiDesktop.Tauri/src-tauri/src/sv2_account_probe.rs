@@ -1,4 +1,7 @@
-#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
+#![cfg_attr(
+    not(windows),
+    allow(dead_code, unused_imports, clippy::chunks_exact_to_as_chunks)
+)]
 
 //! Explicit inspection of the Synthesizer V Studio 2 account session.
 //!
