@@ -475,7 +475,6 @@ impl Sv2ProfileService {
             let _ = fs::remove_dir(&parked);
             return Err(error);
         }
-        ensure_shared_voice_databases(paths, &manifest)?;
         build_state(paths, &manifest, false, String::new())
     }
 
@@ -1814,6 +1813,35 @@ fn ensure_shared_voice_databases(paths: &SlotPaths, manifest: &SlotManifest) -> 
     if manifest.slots.is_empty() {
         return Ok(());
     }
+    if shared_database_migration_needed(paths, manifest)? {
+        reject_blockers(paths)?;
+        if let Ok(provider) = detect_concurrent_provider() {
+            let running = manifest
+                .slots
+                .iter()
+                .flat_map(|slot| {
+                    concurrent_slot_view(
+                        &paths.vault,
+                        &slot.id,
+                        Some(&provider),
+                        slot.concurrent_content
+                            .resolve(manifest.concurrent_defaults),
+                    )
+                    .running_pids
+                })
+                .collect::<Vec<_>>();
+            if !running.is_empty() {
+                return Err(format!(
+                    "共享声库迁移前必须关闭所有隔离 SV2 实例（PID：{}）。",
+                    running
+                        .iter()
+                        .map(u32::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+    }
     let roots = manifest
         .slots
         .iter()
@@ -1855,6 +1883,26 @@ fn ensure_shared_voice_databases(paths: &SlotPaths, manifest: &SlotManifest) -> 
         attach_shared_database(root, shared)?;
     }
     Ok(())
+}
+
+fn shared_database_migration_needed(
+    paths: &SlotPaths,
+    manifest: &SlotManifest,
+) -> Result<bool, String> {
+    if !paths.shared_databases.exists() {
+        return Ok(true);
+    }
+    for slot in &manifest.slots {
+        let root = if manifest.active_slot_id.as_deref() == Some(slot.id.as_str()) {
+            &paths.canonical
+        } else {
+            &paths.parked(&slot.id)
+        };
+        if !is_shared_database_link(&root.join("databases"), &paths.shared_databases)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn merge_database_tree(source: &Path, destination: &Path) -> Result<(), String> {
