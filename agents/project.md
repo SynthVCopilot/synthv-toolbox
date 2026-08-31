@@ -4,13 +4,14 @@
 
 ## 项目目标
 
-为 Synthesizer V Studio 2 提供 Windows 桌面工具箱，包括账号槽位、受约束的 Sandboxie 并发启动和可选 AI 工作流。
+为 Synthesizer V Studio 2 提供 Windows 和 macOS 桌面工具箱，包括账号槽位、受约束的并发启动和可选 AI 工作流。
 
 ## 技术栈
 
 - Tauri 2 + Rust 后端
 - TypeScript、Vue 3 和 Vite 前端
 - Windows 上通过 Sandboxie 配置隔离进程树
+- macOS 上通过顺序切换受管数据根提供槽位
 
 ## 模块结构
 
