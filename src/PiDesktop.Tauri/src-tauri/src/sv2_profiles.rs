@@ -34,11 +34,8 @@ use crate::synthv::{find_sv2_executable, succeeded, OperationResult};
 
 const SCHEMA_VERSION: u32 = 1;
 const MARKER_FILE: &str = ".synthv-toolbox-slot.json";
-#[cfg(windows)]
 const MANIFEST_FILE: &str = "manifest.json";
-#[cfg(windows)]
 const JOURNAL_FILE: &str = "switch.journal.json";
-#[cfg(windows)]
 const LOCK_FILE: &str = "switch.lock";
 const SLOT_COLORS: [&str; 6] = [
     "#6D5CE7", "#3478C9", "#2B956C", "#C67336", "#C05278", "#637083",
@@ -200,9 +197,6 @@ struct SlotPaths {
 
 impl SlotPaths {
     fn from_environment() -> Result<Self, String> {
-        #[cfg(not(windows))]
-        return Err("SV2 账号槽位当前仅支持 Windows。".to_string());
-
         #[cfg(windows)]
         {
             let app_data = std::env::var_os("APPDATA")
@@ -225,13 +219,43 @@ impl SlotPaths {
                 metadata,
             })
         }
+
+        #[cfg(target_os = "macos")]
+        {
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .ok_or_else(|| "macOS 用户目录未定义。".to_string())?;
+            Ok(Self::from_macos_home(&home))
+        }
+
+        #[cfg(not(any(windows, target_os = "macos")))]
+        Err("SV2 账号槽位当前仅支持 Windows 和 macOS。".to_string())
     }
 
-    #[cfg(all(test, windows))]
+    #[cfg(test)]
     fn for_test(root: &Path) -> Self {
         let dreamtonics = root.join("roaming").join("Dreamtonics");
         let vault = dreamtonics.join("Synthesizer V Studio 2.toolbox-slots");
         let metadata = root.join("local").join("SynthVToolbox").join("sv2-slots");
+        Self {
+            canonical: dreamtonics.join("Synthesizer V Studio 2"),
+            slots: vault.join("slots"),
+            shared_databases: dreamtonics.join("Synthesizer V Studio 2.shared-databases"),
+            manifest: metadata.join(MANIFEST_FILE),
+            journal: metadata.join(JOURNAL_FILE),
+            lock: metadata.join(LOCK_FILE),
+            vault,
+            metadata,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn from_macos_home(home: &Path) -> Self {
+        let application_support = home.join("Library/Application Support");
+        let dreamtonics = application_support.join("Dreamtonics");
+        let vault = dreamtonics.join("Synthesizer V Studio 2.toolbox-slots");
+        let metadata = application_support.join("SynthVToolbox").join("sv2-slots");
         Self {
             canonical: dreamtonics.join("Synthesizer V Studio 2"),
             slots: vault.join("slots"),
@@ -753,10 +777,7 @@ impl Sv2ProfileService {
             &paths.canonical,
         )?;
 
-        // Keep both the in-process gate and the cross-process file lock held until
-        // CreateProcess has inherited the selected canonical data root. This closes
-        // the otherwise small race where a second toolbox instance could switch the
-        // root between activation and launch.
+        // Keep both locks until the child process inherits the selected data root.
         let mut command = Command::new(&executable);
         if let Some(project) = &project {
             command.arg(project);
@@ -802,10 +823,18 @@ impl Sv2ProfileService {
                 .map_err(|error| format!("无法打开槽位目录：{error}"))?;
             Ok(succeeded("已打开槽位数据目录。", path.to_string_lossy()))
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        {
+            Command::new("/usr/bin/open")
+                .arg(&path)
+                .spawn()
+                .map_err(|error| format!("无法打开槽位目录：{error}"))?;
+            Ok(succeeded("已打开槽位数据目录。", path.to_string_lossy()))
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             Ok(crate::synthv::failed(
-                "SV2 账号槽位当前仅支持 Windows。",
+                "SV2 账号槽位当前仅支持 Windows 和 macOS。",
                 "",
             ))
         }
@@ -1787,7 +1816,22 @@ fn acquire_switch_lock(paths: &SlotPaths) -> Result<File, String> {
             .open(&paths.lock)
             .map_err(|error| format!("另一个工具箱进程正在操作 SV2 槽位：{error}"))
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        use fs2::FileExt;
+
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&paths.lock)
+            .map_err(|error| format!("无法打开 SV2 槽位锁：{error}"))?;
+        file.try_lock_exclusive()
+            .map_err(|error| format!("另一个工具箱进程正在操作 SV2 槽位：{error}"))?;
+        Ok(file)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -1995,10 +2039,14 @@ fn detach_shared_database(root: &Path, shared: &Path) -> Result<(), String> {
     {
         junction::delete(&database).map_err(|error| format!("无法移除共享声库链接：{error}"))
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        fs::remove_file(&database).map_err(|error| format!("无法移除共享声库链接：{error}"))
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = database;
-        Err("共享声库目录当前仅支持 Windows。".to_string())
+        Err("共享声库目录当前仅支持 Windows 和 macOS。".to_string())
     }
 }
 
@@ -2026,10 +2074,15 @@ fn create_directory_junction(target: &Path, junction_path: &Path) -> Result<(), 
         junction::create(target, junction_path)
             .map_err(|error| format!("无法创建共享声库链接：{error}"))
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        std::os::unix::fs::symlink(target, junction_path)
+            .map_err(|error| format!("无法创建共享声库链接：{error}"))
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (target, junction_path);
-        Err("共享声库目录当前仅支持 Windows。".to_string())
+        Err("共享声库目录当前仅支持 Windows 和 macOS。".to_string())
     }
 }
 
@@ -2187,9 +2240,146 @@ fn detect_blockers(paths: &SlotPaths) -> Vec<Sv2ProcessBlocker> {
     windows_guard::detect(paths)
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+fn detect_blockers(paths: &SlotPaths) -> Vec<Sv2ProcessBlocker> {
+    macos_guard::detect(paths)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn detect_blockers(_paths: &SlotPaths) -> Vec<Sv2ProcessBlocker> {
     Vec::new()
+}
+
+#[cfg(target_os = "macos")]
+mod macos_guard {
+    use std::collections::HashSet;
+    use std::path::Path;
+    use std::process::Command;
+
+    use super::{SlotPaths, Sv2ProcessBlocker};
+
+    pub(super) fn detect(paths: &SlotPaths) -> Vec<Sv2ProcessBlocker> {
+        let mut blockers = standalone_blockers();
+        let mut seen = blockers
+            .iter()
+            .filter_map(|blocker| blocker.pid)
+            .collect::<HashSet<_>>();
+        for blocker in file_use_blockers(paths) {
+            if blocker.pid.is_none() || blocker.pid.is_some_and(|pid| seen.insert(pid)) {
+                blockers.push(blocker);
+            }
+        }
+        blockers.sort_by(|left, right| left.name.cmp(&right.name).then(left.pid.cmp(&right.pid)));
+        blockers
+    }
+
+    fn standalone_blockers() -> Vec<Sv2ProcessBlocker> {
+        let Ok(output) = Command::new("/bin/ps")
+            .args(["-axo", "pid=,comm="])
+            .output()
+        else {
+            return Vec::new();
+        };
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(parse_process)
+            .filter(|(_, command)| is_sv2_standalone(command))
+            .map(|(pid, command)| Sv2ProcessBlocker {
+                pid: Some(pid),
+                name: Path::new(command)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("Synthesizer V Studio 2 Pro")
+                    .to_string(),
+                reason: "SV2 standalone 正在运行".to_string(),
+            })
+            .collect()
+    }
+
+    pub(super) fn parse_process(line: &str) -> Option<(u32, &str)> {
+        let line = line.trim();
+        let split_at = line.find(char::is_whitespace)?;
+        let pid = line[..split_at].parse().ok()?;
+        let command = line[split_at..].trim();
+        (!command.is_empty()).then_some((pid, command))
+    }
+
+    pub(super) fn is_sv2_standalone(command: &str) -> bool {
+        Path::new(command)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("synthv-studio"))
+    }
+
+    fn file_use_blockers(paths: &SlotPaths) -> Vec<Sv2ProcessBlocker> {
+        let candidates = [
+            paths.canonical.join("license/session"),
+            paths.canonical.join("settings/settings.xml"),
+            paths.canonical.join("databases"),
+            paths.canonical.join("cache/locks"),
+        ]
+        .into_iter()
+        .filter(|path| path.exists())
+        .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            return Vec::new();
+        }
+        let Ok(output) = Command::new("/usr/sbin/lsof")
+            .args(["-n", "-P", "-Fpcn", "--"])
+            .args(&candidates)
+            .output()
+        else {
+            return Vec::new();
+        };
+
+        let mut blockers = Vec::new();
+        let mut current_pid = None;
+        let mut current_name = String::new();
+        let mut current_uses_slot = false;
+
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            if let Some(pid) = line.strip_prefix('p').and_then(|value| value.parse().ok()) {
+                append_file_use_blocker(
+                    &mut blockers,
+                    current_pid,
+                    &current_name,
+                    current_uses_slot,
+                );
+                current_pid = Some(pid);
+                current_name.clear();
+                current_uses_slot = false;
+            } else if let Some(name) = line.strip_prefix('c') {
+                current_name = name.to_string();
+            } else if line.starts_with('n') {
+                current_uses_slot = true;
+            }
+        }
+        append_file_use_blocker(&mut blockers, current_pid, &current_name, current_uses_slot);
+        blockers
+    }
+
+    fn append_file_use_blocker(
+        blockers: &mut Vec<Sv2ProcessBlocker>,
+        pid: Option<u32>,
+        name: &str,
+        uses_slot: bool,
+    ) {
+        if !uses_slot {
+            return;
+        }
+        let Some(pid) = pid else {
+            return;
+        };
+        blockers.push(Sv2ProcessBlocker {
+            pid: Some(pid),
+            name: if name.is_empty() {
+                format!("PID {pid}")
+            } else {
+                name.to_string()
+            },
+            reason: "正在使用当前 SV2 槽位文件".to_string(),
+        });
+    }
 }
 
 #[cfg(windows)]
@@ -2475,7 +2665,7 @@ mod windows_guard {
     }
 }
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -2501,6 +2691,47 @@ mod tests {
         let paths = SlotPaths::for_test(&root);
         fs::create_dir_all(&paths.metadata).unwrap();
         (root, paths)
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_paths_stay_under_the_current_users_application_support() {
+        let home = PathBuf::from("/private/tmp/sv2-slot-home");
+        let paths = SlotPaths::from_macos_home(&home);
+        let support = home.join("Library/Application Support");
+        assert_eq!(
+            paths.canonical,
+            support.join("Dreamtonics/Synthesizer V Studio 2")
+        );
+        assert_eq!(
+            paths.vault,
+            support.join("Dreamtonics/Synthesizer V Studio 2.toolbox-slots")
+        );
+        assert_eq!(
+            paths.shared_databases,
+            support.join("Dreamtonics/Synthesizer V Studio 2.shared-databases")
+        );
+        assert_eq!(paths.metadata, support.join("SynthVToolbox/sv2-slots"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_standalone_detector_matches_only_the_sv2_executable() {
+        assert_eq!(
+            macos_guard::parse_process(
+                "  812 /Applications/Synthesizer V Studio 2 Pro.app/Contents/MacOS/synthv-studio"
+            ),
+            Some((
+                812,
+                "/Applications/Synthesizer V Studio 2 Pro.app/Contents/MacOS/synthv-studio"
+            ))
+        );
+        assert!(macos_guard::is_sv2_standalone(
+            "/Applications/Synthesizer V Studio 2 Pro.app/Contents/MacOS/synthv-studio"
+        ));
+        assert!(!macos_guard::is_sv2_standalone(
+            "/Applications/Other.app/Contents/MacOS/other"
+        ));
     }
 
     #[test]

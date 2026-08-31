@@ -213,7 +213,7 @@ restoreLyricWorkspace();
 
 const pageMeta: Record<Page, { title: string; subtitle: string }> = {
   home: { title: "概览", subtitle: "查看环境状态与常用能力" },
-  accounts: { title: "SV2 账号", subtitle: "普通切换与并发隔离，集中管理账号环境" },
+  accounts: { title: "SV2 账号", subtitle: "管理本机 SV2 槽位；Windows 还支持可选并发隔离" },
   toolbox: { title: "工具箱", subtitle: "直接使用创作工具，或进入自动化工作流" },
   lyrics: { title: "作词", subtitle: "专注写下歌词，需要时再调用结构、韵脚与 AI 辅助" },
   history: { title: "历史与检查点", subtitle: "回看自动保存的工作流记录，并管理工程检查点" },
@@ -367,7 +367,7 @@ function renderSidebar(): string {
     <nav class="nav" aria-label="主导航">
       <span class="nav-label">工作区</span>
       ${navItem("home", "概览", "home")}
-      ${app.platform === "windows" || app.platform === "preview" ? navItem("accounts", "SV2 账号", "users") : ""}
+      ${app.platform === "windows" || app.platform === "macos" || app.platform === "preview" ? navItem("accounts", "SV2 账号", "users") : ""}
       ${navItem("toolbox", "工具箱", "toolbox")}
       ${navItem("lyrics", "作词", "lyrics")}
       ${navItem("history", "历史与检查点", "history")}
@@ -516,6 +516,17 @@ function renderComponentRemovalDialog(): string {
 function renderBlockedSwitchDialog(): string {
   const slot = profiles?.slots.find((item) => item.id === pendingBlockedSwitchSlot);
   const blockers = profiles?.blockers ?? [];
+  if (!supportsWindowsSv2Extensions()) {
+    return `<div class="dialog-backdrop" role="presentation">
+      <section class="fluent-dialog switch-dialog" role="alertdialog" aria-modal="true" aria-labelledby="blocked-switch-title">
+        <span class="dialog-icon danger">${icon("plug", 24)}</span>
+        <div><span class="eyebrow">检测到运行中的程序</span><h2 id="blocked-switch-title">无法安全切换到“${escapeHtml(slot?.displayName ?? "此槽位")}”</h2></div>
+        <p>请先保存并退出下列程序，然后重新启动目标槽位。macOS v1 不会强制结束进程，也不会启动并发实例。</p>
+        <div class="dialog-process-list">${blockers.map((blocker) => `<div><span><strong>${escapeHtml(blocker.name)}</strong><small>${escapeHtml(blocker.reason)}</small></span><code>${blocker.pid ? `PID ${blocker.pid}` : "无可用 PID"}</code></div>`).join("")}</div>
+        <div class="dialog-actions"><button class="primary" data-cancel-profile-switch>知道了</button></div>
+      </section>
+    </div>`;
+  }
   const provider = profiles?.concurrentProvider;
   const concurrentRunning = Boolean(slot?.concurrent.runningPids.length);
   const canRunConcurrent = Boolean(provider?.available && !concurrentRunning);
@@ -950,43 +961,63 @@ function renderAccounts(): string {
   if (!profiles.supported) {
     return `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("users", 24)}</span><div><h2>当前平台不支持账号槽位</h2><p>${escapeHtml(profiles.recoveryDetail)}</p></div></section>`;
   }
-  const blockerPanel = profiles.blockers.length ? `<div class="warning-card profile-blockers"><span>${icon("plug", 23)}</span><div><strong>普通槽位暂时不能切换</strong><p>请先关闭下列普通 SV2 / 插件进程；已经准备好的隔离实例仍可单独启动。<br />${profiles.blockers.map((blocker) => `${escapeHtml(blocker.name)}${blocker.pid ? ` (PID ${blocker.pid})` : ""}：${escapeHtml(blocker.reason)}`).join("<br />")}</p></div></div>` : "";
+  const windowsExtensions = supportsWindowsSv2Extensions();
+  const accountIndicatorEnabled = windowsExtensions && Boolean(app?.sv2AccountIndicatorEnabled);
+  const blockerCount = profiles.blockers.length;
+  const blockerPanel = profiles.blockers.length ? `<div class="warning-card profile-blockers"><span>${icon("plug", 23)}</span><div><strong>普通槽位暂时不能切换</strong><p>${windowsExtensions ? "请先关闭下列普通 SV2 / 插件进程；已经准备好的隔离实例仍可单独启动。" : "请先保存并关闭下列 SV2 / 插件进程；macOS v1 不会强制结束进程或多开 SV2。"}<br />${profiles.blockers.map((blocker) => `${escapeHtml(blocker.name)}${blocker.pid ? ` (PID ${blocker.pid})` : ""}：${escapeHtml(blocker.reason)}`).join("<br />")}</p></div></div>` : "";
   if (profiles.recoveryRequired) {
     return `${blockerPanel}<div class="warning-card recovery-card"><span>${icon("sync", 23)}</span><div><strong>槽位需要人工恢复</strong><p>${escapeHtml(profiles.recoveryDetail)}</p><p>工具箱没有删除或覆盖任何目录。请先备份下方路径，再检查目录实况。</p></div><button class="secondary" data-profile-refresh>${icon("sync", 16)} 重新检查</button></div>
       <section class="panel"><dl class="detail-list"><div><dt>官方路径</dt><dd><code>${escapeHtml(profiles.canonicalPath)}</code></dd></div><div><dt>保管区</dt><dd><code>${escapeHtml(profiles.vaultPath)}</code></dd></div></dl></section>`;
   }
-  const concurrentProviderAvailable = profiles.concurrentProvider.available;
+  const concurrentProviderAvailable = windowsExtensions && profiles.concurrentProvider.available;
   const providerDetail = profiles.concurrentProvider.detail;
   const cards = profiles.slots.map((slot) => {
     const lastUsed = slot.lastActivatedAtUtc ? new Date(slot.lastActivatedAtUtc).toLocaleString("zh-CN") : "尚未启动";
     const initial = Array.from(slot.displayName)[0] ?? "S";
     const color = /^#[0-9a-f]{6}$/i.test(slot.color) ? slot.color : "#6D5CE7";
-    const officialIdentity = officialAccountIdentity(slot);
+    const officialIdentity = windowsExtensions ? officialAccountIdentity(slot) : {};
     const identity = accountIdentityLabels(slot);
-    const identityFromActiveSession = [slot.accountProbe, slot.concurrentAccountProbe]
+    const identityFromActiveSession = windowsExtensions && [slot.accountProbe, slot.concurrentAccountProbe]
       .some((probe) => probe.sessionStatus === "inUse" && (probe.accountDisplayName || probe.accountEmail));
     const identityTitle = officialIdentity.name || officialIdentity.email
       ? identityFromActiveSession
         ? "账号正在使用；姓名与邮箱来自上次预检，关闭客户端后可手工刷新。"
         : "账号姓名与邮箱优先显示本次预检读取的标准 JWT name/email 声明；其后为本地自定义标签。"
       : "当前仅显示本地自定义账号标签。";
-    const useState = accountUseStateForSlot(slot);
-    const concurrentRunning = slot.concurrent.runningPids.length > 0;
+    const useState = windowsExtensions
+      ? accountUseStateForSlot(slot)
+      : blockerCount
+        ? { tone: "in-use" as const, label: "当前 SV2 环境正在本机使用" }
+        : { tone: "unknown" as const, label: "仅管理本地数据槽位" };
+    const concurrentRunning = windowsExtensions && slot.concurrent.runningPids.length > 0;
     const isolatedLabel = concurrentRunning ? "隔离运行中" : slot.concurrent.ready ? "隔离启动" : "准备隔离";
-    const concurrentEnabled = Boolean(app?.sv2ConcurrentEnabled);
+    const concurrentEnabled = windowsExtensions && Boolean(app?.sv2ConcurrentEnabled);
     const isolatedDisabled = concurrentRunning || !concurrentProviderAvailable || !concurrentEnabled;
     const isolatedTitle = concurrentRunning
       ? "该隔离实例已在运行"
       : !concurrentEnabled
         ? "隔离功能已在全局设置中关闭"
         : providerDetail;
+    const localVoiceFact = slot.voiceInventory.manuallyConfirmedVoices.length
+      ? `<span class="voice-inventory confirmed" title="手工确认记录仅用于工程路由，不替代官方授权。">${icon("audio", 13)} 手工确认 ${slot.voiceInventory.manuallyConfirmedVoices.length} 个声库</span>`
+      : `<span class="voice-inventory unknown" title="macOS v1 不读取或解密登录缓存。">${icon("shield", 13)} 未读取账号授权</span>`;
+    const windowsLaunchActions = concurrentEnabled && slot.concurrent.ready
+      ? `<button class="primary" data-profile-concurrent-launch="${slot.id}" ${isolatedDisabled ? `disabled title="${escapeHtml(isolatedTitle)}"` : ""}>${icon("boxes", 16)} ${isolatedLabel}</button><button class="secondary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button>`
+      : `<button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button><button class="secondary" data-profile-concurrent-prepare="${slot.id}" ${isolatedDisabled ? `disabled title="${escapeHtml(isolatedTitle)}"` : ""}>${icon("download", 16)} ${isolatedLabel}</button>`;
+    const launchActions = windowsExtensions
+      ? windowsLaunchActions
+      : `<button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button>`;
     return `<article class="account-launch-card ${slot.isActive ? "active" : ""}" style="--profile-color:${color}">
-      <div class="account-card-main"><span class="profile-avatar compact">${escapeHtml(initial)}</span><div class="account-card-identity"><div class="profile-title-line"><h2>${escapeHtml(slot.displayName)}</h2>${accountUseDot(useState)}${slot.isActive ? '<span class="profile-active-badge">默认</span>' : ""}</div>${identity.length ? `<span class="profile-identity" title="${escapeHtml(identityTitle)}">${identity.map(escapeHtml).join(" · ")}</span>` : `<span class="profile-identity empty">${app?.sv2AccountIndicatorEnabled ? "尚未读取 JWT 姓名/邮箱" : "未设置账号标签"}</span>`}</div><div class="account-card-actions"><button class="icon-plain" data-profile-refresh-slot="${slot.id}" title="刷新此账号状态" aria-label="刷新 ${escapeHtml(slot.displayName)}">${icon("refresh", 18)}</button><button class="icon-plain" data-manage-slot="${slot.id}" title="设置" aria-label="设置 ${escapeHtml(slot.displayName)}">${icon("settings", 18)}</button><button class="icon-plain danger" data-delete-profile="${slot.id}" title="删除" aria-label="删除 ${escapeHtml(slot.displayName)}">${icon("trash", 18)}</button><button class="icon-plain" data-profile-activate="${slot.id}" title="切换默认账户" aria-label="将 ${escapeHtml(slot.displayName)} 设为默认账户" ${slot.isActive ? "disabled" : ""}>${icon("check", 18)}</button></div></div>
-      <div class="account-card-facts">${accountProbeBadge(slot)}${voiceInventoryBadge(slot)}<span>${icon("sync", 13)} ${escapeHtml(lastUsed)}</span>${concurrentRunning ? `<span class="running">${icon("plug", 13)} ${slot.concurrent.runningPids.length} 个隔离进程</span>` : ""}</div>
-      <div class="account-launch-actions">${concurrentEnabled && slot.concurrent.ready ? `<button class="primary" data-profile-concurrent-launch="${slot.id}" ${isolatedDisabled ? `disabled title="${escapeHtml(isolatedTitle)}"` : ""}>${icon("boxes", 16)} ${isolatedLabel}</button><button class="secondary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button>` : `<button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button><button class="secondary" data-profile-concurrent-prepare="${slot.id}" ${isolatedDisabled ? `disabled title="${escapeHtml(isolatedTitle)}"` : ""}>${icon("download", 16)} ${isolatedLabel}</button>`}</div>
+      <div class="account-card-main"><span class="profile-avatar compact">${escapeHtml(initial)}</span><div class="account-card-identity"><div class="profile-title-line"><h2>${escapeHtml(slot.displayName)}</h2>${accountUseDot(useState)}${slot.isActive ? '<span class="profile-active-badge">默认</span>' : ""}</div>${identity.length ? `<span class="profile-identity" title="${escapeHtml(identityTitle)}">${identity.map(escapeHtml).join(" · ")}</span>` : `<span class="profile-identity empty">${accountIndicatorEnabled ? "尚未读取 JWT 姓名/邮箱" : "未设置账号标签"}</span>`}</div><div class="account-card-actions">${windowsExtensions ? `<button class="icon-plain" data-profile-refresh-slot="${slot.id}" title="刷新此账号状态" aria-label="刷新 ${escapeHtml(slot.displayName)}">${icon("refresh", 18)}</button>` : ""}<button class="icon-plain" data-manage-slot="${slot.id}" title="设置" aria-label="设置 ${escapeHtml(slot.displayName)}">${icon("settings", 18)}</button><button class="icon-plain danger" data-delete-profile="${slot.id}" title="删除" aria-label="删除 ${escapeHtml(slot.displayName)}">${icon("trash", 18)}</button><button class="icon-plain" data-profile-activate="${slot.id}" title="切换默认账户" aria-label="将 ${escapeHtml(slot.displayName)} 设为默认账户" ${slot.isActive ? "disabled" : ""}>${icon("check", 18)}</button></div></div>
+      <div class="account-card-facts">${windowsExtensions ? `${accountProbeBadge(slot)}${voiceInventoryBadge(slot)}` : localVoiceFact}<span>${icon("sync", 13)} ${escapeHtml(lastUsed)}</span>${concurrentRunning ? `<span class="running">${icon("plug", 13)} ${slot.concurrent.runningPids.length} 个隔离进程</span>` : ""}</div>
+      <div class="account-launch-actions">${launchActions}</div>
     </article>`;
   }).join("");
   return `${blockerPanel}<div class="account-launch-grid">${cards || `<button class="empty-account-card" data-account-manager="add">${icon("plus", 22)}<strong>添加第一个账号</strong><span>导入当前环境或创建空槽位</span></button>`}</div>`;
+}
+
+function supportsWindowsSv2Extensions(): boolean {
+  return app?.platform === "windows" || app?.platform === "preview";
 }
 
 function renderAccountManager(): string {
@@ -996,7 +1027,14 @@ function renderAccountManager(): string {
     ?? profiles.slots[0];
   if (managedSlot) managedProfileSlotId = managedSlot.id;
   let body = "";
-  if (accountManagerSection === "profile") {
+  if (accountManagerSection === "profile" && !supportsWindowsSv2Extensions()) {
+    body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(managedSlot.displayName)}</h3><p>macOS v1 只切换本机完整 SV2 数据目录；不会读取、解密或刷新登录缓存，也不会同时运行多个实例。</p></div>${managedSlot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
+      <form class="profile-identity-form compact-form" data-profile-identity-form="${managedSlot.id}"><label>自定义用户名标签<input name="username" value="${escapeHtml(managedSlot.username)}" maxlength="100" placeholder="用于区分槽位" /></label><label>自定义邮箱标签<input name="email" type="email" value="${escapeHtml(managedSlot.email)}" maxlength="254" placeholder="name@example.com" /></label><button class="secondary">保存标签</button><small>这些本地标签仅用于区分槽位，不会修改或推断 Dreamtonics 账号身份。</small></form>
+      <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>槽位显示名称<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" required /></label><button class="secondary">重命名</button></form>
+      <form class="voice-license-form" data-profile-voice-form="${managedSlot.id}"><div class="voice-license-heading"><div><strong>补充手工确认声库</strong><small>每行记录一个完整产品名称；仅用于补充工程路由，不替代官方授权。</small></div></div><textarea name="voices" rows="4" maxlength="16384" placeholder="例如：&#10;Mai 2&#10;SOLARIA">${escapeHtml(managedSlot.voiceInventory.manuallyConfirmedVoices.join("\n"))}</textarea><button class="secondary" type="submit">保存确认记录</button></form>
+      <div class="manager-action-row">${managedSlot.isActive ? "" : `<button class="secondary" data-profile-activate="${managedSlot.id}">${icon("check", 15)} 设为默认账号</button>`}<button class="secondary" data-profile-folder="${managedSlot.id}">${icon("folder", 15)} 打开槽位数据目录</button><button class="secondary component-remove-action" data-delete-profile="${managedSlot.id}">${icon("trash", 15)} 删除账号</button></div>
+      <dl class="profile-storage-list compact"><div><dt>槽位数据</dt><dd><code title="${escapeHtml(managedSlot.dataPath)}">${escapeHtml(managedSlot.dataPath)}</code></dd></div></dl></div>` : '<div class="empty-inline">尚无账号，请先添加一个槽位。</div>';
+  } else if (accountManagerSection === "profile") {
     const authorizationProbe = managedSlot?.accountProbe.authorizationStatus === "verified"
       ? managedSlot.accountProbe
       : managedSlot?.concurrentAccountProbe.authorizationStatus === "verified"
@@ -1048,6 +1086,8 @@ function renderAccountManager(): string {
       <form class="voice-license-form" data-profile-voice-form="${managedSlot.id}"><div class="voice-license-heading"><div><strong>补充手工确认声库</strong><small>每行记录一个完整产品名称；仅用于补充工程路由，不替代官方授权。</small></div></div><textarea name="voices" rows="4" maxlength="16384" placeholder="例如：&#10;Mai 2&#10;SOLARIA">${escapeHtml(managedSlot.voiceInventory.manuallyConfirmedVoices.join("\n"))}</textarea><button class="secondary" type="submit">保存确认记录</button></form>
       <div class="manager-action-row">${managedSlot.isActive ? "" : `<button class="secondary" data-profile-activate="${managedSlot.id}">${icon("check", 15)} 设为默认账号</button>`}<button class="secondary" data-profile-folder="${managedSlot.id}">${icon("folder", 15)} 打开普通数据目录</button>${managedSlot.concurrent.ready ? `<button class="secondary" data-profile-concurrent-folder="${managedSlot.id}">${icon("folder", 15)} 打开隔离目录</button>` : ""}<button class="secondary component-remove-action" data-delete-profile="${managedSlot.id}">${icon("trash", 15)} 删除账号</button></div>
       <dl class="profile-storage-list compact"><div><dt>普通数据</dt><dd><code title="${escapeHtml(managedSlot.dataPath)}">${escapeHtml(managedSlot.dataPath)}</code></dd></div>${managedSlot.concurrent.ready ? `<div><dt>隔离数据</dt><dd><code title="${escapeHtml(managedSlot.concurrent.dataPath)}">${escapeHtml(managedSlot.concurrent.dataPath)}</code></dd></div>` : ""}</dl></div>` : '<div class="empty-inline">尚无账号，请先添加一个槽位。</div>';
+  } else if (accountManagerSection === "global" && !supportsWindowsSv2Extensions()) {
+    body = `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("shield", 24)}</span><div><h3>macOS 槽位范围</h3><p>当前版本只支持顺序切换数据槽位。账号登录预检、授权读取和并发隔离仍仅在 Windows 提供。</p></div></section>`;
   } else if (accountManagerSection === "global") {
     body = `<form id="sv2-global-settings-form" class="isolation-defaults-form manager-defaults"><div><strong>全局设置</strong><small>声库数据库由所有槽位和隔离实例共享；登录态、WebView 与应用设置仍分别隔离。</small></div><label class="fluent-switch"><input name="accountProbeEnabled" type="checkbox" ${app?.sv2AccountIndicatorEnabled ? "checked" : ""} /><span></span>启用账号登录指示器</label><label class="fluent-switch"><input name="concurrentEnabled" type="checkbox" ${app?.sv2ConcurrentEnabled ? "checked" : ""} /><span></span>启用隔离功能</label><button class="secondary" type="submit">保存全局设置</button></form>`;
   } else {
@@ -2354,8 +2394,8 @@ document.addEventListener("click", (event) => {
     error = "";
     if (page === "copilot") void run(async () => { conversations = await api.listConversations(); });
     else if (page === "history") void run(async () => { [creativeHistory, projectCheckpoints] = await Promise.all([api.listCreativeHistory(), api.listProjectCheckpoints()]); });
-    else if (enteringAccounts && (app?.platform === "windows" || app?.platform === "preview")) void run(async () => {
-      if (app?.sv2AccountIndicatorEnabled) await refreshAccountUsage();
+    else if (enteringAccounts && (app?.platform === "windows" || app?.platform === "macos" || app?.platform === "preview")) void run(async () => {
+      if (supportsWindowsSv2Extensions() && app?.sv2AccountIndicatorEnabled) await refreshAccountUsage();
       else profiles = await api.sv2ProfileState();
     });
     else render();
