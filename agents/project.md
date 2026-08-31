@@ -1,0 +1,21 @@
+# Pi Desktop 项目索引
+
+> 最后更新：2026-08-31
+
+## 项目目标
+
+为 Synthesizer V Studio 2 提供 Windows 桌面工具箱，包括账号槽位、受约束的 Sandboxie 并发启动和可选 AI 工作流。
+
+## 技术栈
+
+- Tauri 2 + Rust 后端
+- TypeScript、Vue 3 和 Vite 前端
+- Windows 上通过 Sandboxie 配置隔离进程树
+
+## 模块结构
+
+- `src/PiDesktop.Tauri/src-tauri/src/sv2_profiles.rs`：账号槽位、切换和启动编排。
+- `src/PiDesktop.Tauri/src-tauri/src/sv2_concurrent.rs`：Sandboxie 副本与共享内容配置。
+- `src/PiDesktop.Tauri/src-tauri/src/sv2_account_probe.rs`：显式账号预检与授权摘要。
+- `src/PiDesktop.Tauri/src-tauri/src/sv2_sync.rs`：安全的槽位资源同步。
+- `src/PiDesktop.Tauri/src`：Tauri 前端。
