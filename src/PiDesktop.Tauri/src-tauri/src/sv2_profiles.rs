@@ -191,6 +191,7 @@ struct SlotPaths {
     canonical: PathBuf,
     vault: PathBuf,
     slots: PathBuf,
+    shared_databases: PathBuf,
     metadata: PathBuf,
     manifest: PathBuf,
     journal: PathBuf,
@@ -216,6 +217,7 @@ impl SlotPaths {
             Ok(Self {
                 canonical: dreamtonics.join("Synthesizer V Studio 2"),
                 slots: vault.join("slots"),
+                shared_databases: dreamtonics.join("Synthesizer V Studio 2.shared-databases"),
                 manifest: metadata.join(MANIFEST_FILE),
                 journal: metadata.join(JOURNAL_FILE),
                 lock: metadata.join(LOCK_FILE),
@@ -233,6 +235,7 @@ impl SlotPaths {
         Self {
             canonical: dreamtonics.join("Synthesizer V Studio 2"),
             slots: vault.join("slots"),
+            shared_databases: dreamtonics.join("Synthesizer V Studio 2.shared-databases"),
             manifest: metadata.join(MANIFEST_FILE),
             journal: metadata.join(JOURNAL_FILE),
             lock: metadata.join(LOCK_FILE),
@@ -426,6 +429,7 @@ impl Sv2ProfileService {
             let _ = fs::remove_file(paths.canonical.join(MARKER_FILE));
             return Err(error);
         }
+        ensure_shared_voice_databases(paths, &manifest)?;
         build_state(paths, &manifest, false, String::new())
     }
 
@@ -471,6 +475,7 @@ impl Sv2ProfileService {
             let _ = fs::remove_dir(&parked);
             return Err(error);
         }
+        ensure_shared_voice_databases(paths, &manifest)?;
         build_state(paths, &manifest, false, String::new())
     }
 
@@ -589,6 +594,7 @@ impl Sv2ProfileService {
                 switch_slot(paths, &mut manifest, &replacement)?;
             } else {
                 verify_marker(&paths.canonical, &slot_id)?;
+                detach_shared_database(&paths.canonical, &paths.shared_databases)?;
                 remove_owned_directory(&paths.canonical, "当前账号数据")?;
                 manifest.active_slot_id = None;
             }
@@ -597,6 +603,7 @@ impl Sv2ProfileService {
         let parked = paths.parked(&slot_id);
         if parked.exists() {
             verify_marker(&parked, &slot_id)?;
+            detach_shared_database(&parked, &paths.shared_databases)?;
             remove_owned_directory(&parked, "账号槽位数据")?;
         }
         remove_concurrent_slot_data(&paths.vault, &slot_id)?;
@@ -692,6 +699,7 @@ impl Sv2ProfileService {
         recover_if_needed(paths)?;
         reject_blockers(paths)?;
         let mut manifest = load_manifest(paths)?;
+        ensure_shared_voice_databases(paths, &manifest)?;
         switch_slot(paths, &mut manifest, &slot_id)?;
         build_state(paths, &manifest, false, String::new())
     }
@@ -738,6 +746,7 @@ impl Sv2ProfileService {
             reject_blockers(paths)?;
         }
         let mut manifest = load_manifest(paths)?;
+        ensure_shared_voice_databases(paths, &manifest)?;
         switch_slot(paths, &mut manifest, &slot_id)?;
         let session_preparation = Sv2SessionGuardStore::new(&paths.metadata).prepare_launch(
             &slot_id,
@@ -813,6 +822,7 @@ impl Sv2ProfileService {
         let _file_lock = acquire_switch_lock(paths)?;
         recover_if_needed(paths)?;
         let manifest = load_manifest(paths)?;
+        ensure_shared_voice_databases(paths, &manifest)?;
         let slot = manifest
             .slots
             .iter()
@@ -836,7 +846,7 @@ impl Sv2ProfileService {
             &provider,
             &paths.vault,
             &source,
-            &paths.canonical,
+            &paths.canonical.join("databases"),
             &slot_id,
             content,
         )?;
@@ -863,6 +873,7 @@ impl Sv2ProfileService {
         let _file_lock = acquire_switch_lock(paths)?;
         recover_if_needed(paths)?;
         let manifest = load_manifest(paths)?;
+        ensure_shared_voice_databases(paths, &manifest)?;
         let slot = manifest
             .slots
             .iter()
@@ -897,7 +908,7 @@ impl Sv2ProfileService {
             &slot_id,
             &executable,
             project.as_deref(),
-            &paths.canonical,
+            &paths.canonical.join("databases"),
             content,
         )?;
         result.detail = append_session_detail(result.detail, session_preparation);
@@ -1073,13 +1084,12 @@ fn enrich_account_probes(
             let authority = targets
                 .iter()
                 .enumerate()
-                .find(|(_, (index, concurrent, _, _, _))| {
-                    *index == slot_index && *concurrent
-                })
+                .find(|(_, (index, concurrent, _, _, _))| *index == slot_index && *concurrent)
                 .or_else(|| {
-                    targets.iter().enumerate().find(|(_, (index, _, _, _, _))| {
-                        *index == slot_index
-                    })
+                    targets
+                        .iter()
+                        .enumerate()
+                        .find(|(_, (index, _, _, _, _))| *index == slot_index)
                 });
             if let Some(authority) = authority {
                 selected.push(authority);
@@ -1800,6 +1810,181 @@ fn validate_managed_roots(paths: &SlotPaths) -> Result<(), String> {
     Ok(())
 }
 
+fn ensure_shared_voice_databases(paths: &SlotPaths, manifest: &SlotManifest) -> Result<(), String> {
+    if manifest.slots.is_empty() {
+        return Ok(());
+    }
+    let roots = manifest
+        .slots
+        .iter()
+        .map(|slot| {
+            let root = if manifest.active_slot_id.as_deref() == Some(slot.id.as_str()) {
+                paths.canonical.clone()
+            } else {
+                paths.parked(&slot.id)
+            };
+            verify_marker(&root, &slot.id)?;
+            Ok(root)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let shared = &paths.shared_databases;
+    if shared.exists() {
+        reject_reparse_point(shared)?;
+        for root in &roots {
+            merge_database_tree(&root.join("databases"), shared)?;
+        }
+    } else {
+        let parent = shared
+            .parent()
+            .ok_or_else(|| "共享声库目录没有父目录。".to_string())?;
+        fs::create_dir_all(parent).map_err(|error| format!("无法创建共享声库父目录：{error}"))?;
+        let staging = parent.join(format!(".shared-databases-{}", Uuid::new_v4()));
+        fs::create_dir(&staging).map_err(|error| format!("无法创建共享声库暂存目录：{error}"))?;
+        let result = (|| {
+            for root in &roots {
+                merge_database_tree(&root.join("databases"), &staging)?;
+            }
+            fs::rename(&staging, shared).map_err(|error| format!("无法提交共享声库目录：{error}"))
+        })();
+        if result.is_err() && staging.exists() {
+            let _ = remove_owned_directory(&staging, "共享声库暂存目录");
+        }
+        result?;
+    }
+    for root in &roots {
+        attach_shared_database(root, shared)?;
+    }
+    Ok(())
+}
+
+fn merge_database_tree(source: &Path, destination: &Path) -> Result<(), String> {
+    if !source.exists() || is_shared_database_link(source, destination)? {
+        return Ok(());
+    }
+    reject_reparse_point(source)?;
+    if !source.is_dir() {
+        return Err(format!("声库路径 {} 不是目录。", source.display()));
+    }
+    fs::create_dir_all(destination).map_err(|error| format!("无法创建共享声库目录：{error}"))?;
+    for entry in fs::read_dir(source).map_err(|error| format!("无法读取声库目录：{error}"))?
+    {
+        let entry = entry.map_err(|error| format!("无法读取声库目录项：{error}"))?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let metadata = fs::symlink_metadata(&source_path)
+            .map_err(|error| format!("无法检查声库目录项：{error}"))?;
+        reject_reparse_metadata(&source_path, &metadata)?;
+        if metadata.is_dir() {
+            merge_database_tree(&source_path, &destination_path)?;
+        } else if metadata.is_file() {
+            if destination_path.exists() {
+                if !files_match(&source_path, &destination_path)? {
+                    return Err(format!(
+                        "共享声库迁移遇到内容冲突：{}。为避免覆盖，操作已停止。",
+                        source_path.display()
+                    ));
+                }
+            } else {
+                fs::copy(&source_path, &destination_path)
+                    .map_err(|error| format!("无法合并声库文件：{error}"))?;
+            }
+        } else {
+            return Err(format!(
+                "声库目录包含不支持的目录项：{}",
+                source_path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn files_match(left: &Path, right: &Path) -> Result<bool, String> {
+    let left_metadata = fs::metadata(left).map_err(|error| format!("无法读取声库文件：{error}"))?;
+    let right_metadata =
+        fs::metadata(right).map_err(|error| format!("无法读取共享声库文件：{error}"))?;
+    if left_metadata.len() != right_metadata.len() {
+        return Ok(false);
+    }
+    let mut left_file = File::open(left).map_err(|error| format!("无法打开声库文件：{error}"))?;
+    let mut right_file =
+        File::open(right).map_err(|error| format!("无法打开共享声库文件：{error}"))?;
+    let mut left_buffer = [0_u8; 64 * 1024];
+    let mut right_buffer = [0_u8; 64 * 1024];
+    loop {
+        use std::io::Read;
+        let left_read = left_file
+            .read(&mut left_buffer)
+            .map_err(|error| format!("无法读取声库文件：{error}"))?;
+        let right_read = right_file
+            .read(&mut right_buffer)
+            .map_err(|error| format!("无法读取共享声库文件：{error}"))?;
+        if left_read != right_read || left_buffer[..left_read] != right_buffer[..right_read] {
+            return Ok(false);
+        }
+        if left_read == 0 {
+            return Ok(true);
+        }
+    }
+}
+
+fn attach_shared_database(root: &Path, shared: &Path) -> Result<(), String> {
+    let database = root.join("databases");
+    if is_shared_database_link(&database, shared)? {
+        return Ok(());
+    }
+    if database.exists() {
+        remove_owned_directory(&database, "槽位声库数据库")?;
+    }
+    create_directory_junction(shared, &database)
+}
+
+fn detach_shared_database(root: &Path, shared: &Path) -> Result<(), String> {
+    let database = root.join("databases");
+    if !is_shared_database_link(&database, shared)? {
+        return Ok(());
+    }
+    #[cfg(windows)]
+    {
+        junction::delete(&database).map_err(|error| format!("无法移除共享声库链接：{error}"))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = database;
+        Err("共享声库目录当前仅支持 Windows。".to_string())
+    }
+}
+
+fn is_shared_database_link(path: &Path, shared: &Path) -> Result<bool, String> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    let metadata =
+        fs::symlink_metadata(path).map_err(|error| format!("无法检查声库路径：{error}"))?;
+    if !is_reparse_metadata(&metadata) {
+        return Ok(false);
+    }
+    let resolved = path
+        .canonicalize()
+        .map_err(|error| format!("无法解析受管声库链接：{error}"))?;
+    let expected = shared
+        .canonicalize()
+        .map_err(|error| format!("无法解析共享声库目录：{error}"))?;
+    Ok(resolved == expected)
+}
+
+fn create_directory_junction(target: &Path, junction_path: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        junction::create(target, junction_path)
+            .map_err(|error| format!("无法创建共享声库链接：{error}"))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (target, junction_path);
+        Err("共享声库目录当前仅支持 Windows。".to_string())
+    }
+}
+
 fn remove_owned_directory(path: &Path, label: &str) -> Result<(), String> {
     reject_reparse_point(path)?;
     let metadata =
@@ -1913,22 +2098,36 @@ fn reject_reparse_point(path: &Path) -> Result<(), String> {
     }
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("无法检查目录 {}：{error}", path.display()))?;
+    if is_reparse_metadata(&metadata) {
+        return Err(format!(
+            "目录 {} 是 reparse point；为避免越界移动，操作已停止。",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn reject_reparse_metadata(path: &Path, metadata: &fs::Metadata) -> Result<(), String> {
+    if is_reparse_metadata(metadata) {
+        return Err(format!(
+            "目录 {} 是 reparse point；为避免越界移动，操作已停止。",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn is_reparse_metadata(metadata: &fs::Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
-        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            return Err(format!(
-                "目录 {} 是 reparse point；为避免越界移动，操作已停止。",
-                path.display()
-            ));
-        }
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
     }
     #[cfg(not(windows))]
-    if metadata.file_type().is_symlink() {
-        return Err(format!("目录 {} 是符号链接。", path.display()));
+    {
+        metadata.file_type().is_symlink()
     }
-    Ok(())
 }
 
 fn schema_version() -> u32 {
@@ -2338,6 +2537,55 @@ mod tests {
         );
         assert_eq!(manifest.active_slot_id.as_deref(), Some(b.as_str()));
         assert!(!paths.journal.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn shared_voice_databases_merge_once_and_follow_slot_switches() {
+        let (root, paths) = fixture();
+        let mut manifest = import_fixture(&paths, "A");
+        let a = manifest.active_slot_id.clone().unwrap();
+        let b = add_parked(&paths, &mut manifest, "B");
+        fs::create_dir_all(paths.canonical.join("databases/voice-a")).unwrap();
+        fs::write(paths.canonical.join("databases/voice-a/model"), b"a").unwrap();
+        fs::create_dir_all(paths.parked(&b).join("databases/voice-b")).unwrap();
+        fs::write(paths.parked(&b).join("databases/voice-b/model"), b"b").unwrap();
+
+        ensure_shared_voice_databases(&paths, &manifest).unwrap();
+
+        assert_eq!(
+            fs::read(paths.shared_databases.join("voice-a/model")).unwrap(),
+            b"a"
+        );
+        assert_eq!(
+            fs::read(paths.shared_databases.join("voice-b/model")).unwrap(),
+            b"b"
+        );
+        assert!(is_shared_database_link(
+            &paths.canonical.join("databases"),
+            &paths.shared_databases
+        )
+        .unwrap());
+        assert!(is_shared_database_link(
+            &paths.parked(&b).join("databases"),
+            &paths.shared_databases
+        )
+        .unwrap());
+
+        switch_slot(&paths, &mut manifest, &b).unwrap();
+
+        assert!(is_shared_database_link(
+            &paths.canonical.join("databases"),
+            &paths.shared_databases
+        )
+        .unwrap());
+        assert!(is_shared_database_link(
+            &paths.parked(&a).join("databases"),
+            &paths.shared_databases
+        )
+        .unwrap());
+        detach_shared_database(&paths.canonical, &paths.shared_databases).unwrap();
+        detach_shared_database(&paths.parked(&a), &paths.shared_databases).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 

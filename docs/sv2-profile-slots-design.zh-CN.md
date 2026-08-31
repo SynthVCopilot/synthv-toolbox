@@ -8,7 +8,7 @@
 
 工具箱提供类似游戏启动器的“账号档案”体验：用户选择一个槽位，工具箱将该槽位设为当前默认环境并启动 SV2。用户直接从开始菜单、资源管理器或 `.svp` 文件启动 SV2 时，也自然使用最近激活的默认槽位。
 
-槽位事务不解析或单独切换 `license\session`，而是把整个 SV2 用户数据根视为不可分割的槽位：
+槽位事务不解析或单独切换 `license\session`，而是切换完整的账号私有数据根。唯一例外是受工具箱管理的 `databases` junction：它指向同一份全局声库数据，不随账号切换。
 
 ```text
 %APPDATA%\Dreamtonics\Synthesizer V Studio 2
@@ -40,7 +40,7 @@ Synthesizer V Studio 2\
 
 因此：
 
-1. 槽位必须包含完整数据根，不能只切换 `license\session`。
+1. 槽位必须保留完整的账号私有数据，不能只切换 `license\session`；受管 `databases` junction 是唯一允许的共享项。
 2. 切换前必须确认 standalone、DAW 插件和相关 WebView2 子进程均已退出。
 3. 槽位切换只解决快速顺序切换，不声称支持两个 standalone 并发。
 4. 账号登录指示器关闭时，在线会话过期仍完全交还 SV2；开启且显式预检时，工具箱可以复刻官方 refresh 流程并原子更新加密 session。
@@ -117,7 +117,7 @@ Windows 对全局和会话级命名对象的区别见 [Kernel object namespaces]
 
 启用隔离功能后，工具箱会为现有和新建槽位自动准备一份持久化、不透明的隔离副本。账号卡默认从该隔离副本启动 SV2 standalone；普通槽位仍保留为用户主动选择的回退路径，不做运行中合并。
 
-应用设置和声库数据库始终共享：工具箱为宿主官方数据根下的 `settings\` 和 `databases\` 写入 Sandboxie `OpenFilePath` 规则。`license`、`webview2`、其他文件、注册表和 IPC 继续使用槽位自己的隔离空间；共享目录可能承受多个实例并发写入。
+所有槽位和隔离实例共享一份受管声库数据库。每个普通槽位的 `databases\` 都是指向该稳定目录的 junction；Sandboxie 通过 box 级 `OpenFilePath` 访问当前官方根的同一 junction。`settings`、`license`、`webview2`、其他文件、注册表和 IPC 继续使用各自环境的私有空间；并发下载或更新声库时仍可能争写共享目录，因此不保证该场景。
 
 普通槽位被 SV2 / 插件占用时只阻止普通切换，不应错误阻止已经准备好的其他隔离实例启动。同一个 Sandboxie box 已运行时，界面显示“运行中”并禁用重复启动。
 
@@ -144,10 +144,11 @@ SV2 在发现同一账号仍由其他设备占用时，会由官方界面询问�
 
 ```text
 %APPDATA%\Dreamtonics\
-├─ Synthesizer V Studio 2\                    # 当前激活槽位
+├─ Synthesizer V Studio 2\                    # 当前激活槽位，databases 为 junction
+├─ Synthesizer V Studio 2.shared-databases\   # 所有槽位共用的实际声库数据
 └─ Synthesizer V Studio 2.toolbox-slots\
    ├─ slots\
-   │  ├─ 0c8f...\                             # 停放槽位的完整数据根
+   │  ├─ 0c8f...\                             # 停放槽位的账号私有数据根，databases 为 junction
    │  └─ a01d...\
    └─ trash\                                  # 后续版本的可恢复移除区
 
@@ -330,7 +331,7 @@ synthv-studio.exe
 
 ### 9.1 第一版：不拦截
 
-顺序切换不需要文件拦截。保持官方路径不变并轮换完整数据根，兼容性比以下方案更高：
+顺序切换不需要文件拦截。保持官方路径不变并轮换账号私有数据根；仅受管 `databases` junction 固定指向全局声库目录，兼容性比以下方案更高：
 
 - 注入并 Hook `SHGetKnownFolderPath`、`CreateFileW`；
 - 给 WebView2 子进程追加私有数据目录；
@@ -354,10 +355,10 @@ synthv-studio.exe
 因此实现没有编写 DLL 注入或文件系统驱动，而是把共享同一隔离核心的 Sandboxie Plus / Classic 作为可选提供方。每个槽位使用确定性的 sandbox 名称，并把 `FileRootPath` 指向：
 
 ```text
-%APPDATA%\Dreamtonics\Synthesizer V Studio 2.toolbox-slots\concurrent\<slot-id>\box
+%APPDATA%\Dreamtonics\Synthesizer V Studio 2.toolbox-slots\c\<slot-id-prefix>
 ```
 
-工具箱同时为该 sandbox 配置独立 `KeyRootPath` 和 `IpcRootPath`，从而覆盖 SV2 进程树、WebView2 子进程以及命名对象，而不是只改主进程看到的文件路径。启动使用 Sandboxie `Start.exe /box:<name> /silent` 接口，box 名称前不添加 `#`；配置通过 `SbieIni.exe` 写入并回读校验 `FileRootPath`。选择共享的隔离内容使用 box 级 `OpenFilePath`，不会扩大为整个 SV2 数据根或其他账户目录。
+工具箱同时为该 sandbox 配置独立 `KeyRootPath` 和 `IpcRootPath`，从而覆盖 SV2 进程树、WebView2 子进程以及命名对象，而不是只改主进程看到的文件路径。`FileRootPath` 保持绝对路径以便回读验证，但使用短目录名控制长度；启动使用 Sandboxie `Start.exe /box:<name> /silent` 接口，box 名称前不添加 `#`。选择共享的隔离内容只为受管声库 junction 写入 box 级 `OpenFilePath`，不会扩大为整个 SV2 数据根或其他账户目录。
 
 当前入口只并发启动 SV2 standalone。工具箱不会把已有 DAW 宿主强行移入 sandbox，因此不承诺隔离 DAW 内的 SV2 插件实例。
 
@@ -483,7 +484,7 @@ src/PiDesktop.Tauri/src/styles.css
 8. 工具箱卸载后，当前槽位仍位于官方路径，SV2 可正常直接启动。
 9. 并发副本只能由与槽位 UUID 匹配的工具箱标记识别，未知目录不得覆盖。
 10. 并发配置写入后必须回读并确认 `FileRootPath` 指向该槽位的受管目录。
-11. 普通槽位与并发副本之间不得做运行中合并；官方联网验证保持由 SV2 自身负责。
+11. 普通槽位与并发副本之间不得做运行中合并；只有受管声库数据库可共享，官方联网验证保持由 SV2 自身负责。
 12. 强制切换不得接收前端指定的 PID；结束进程后必须重新扫描占用，仍有占用时不得开始目录事务。
 13. 登录态恢复快照必须与槽位 UUID、普通/隔离环境及 SHA-256 全部匹配，目标已有非空 session 时不得覆盖。
 14. 工具箱不得把缺乏证据的远端占用显示为“无人使用”；只有 `enroll_device(false)` 在本次检查中被接受时才显示 `Clear`，明确冲突显示 `Detected`，其余一律为 `Unknown`。

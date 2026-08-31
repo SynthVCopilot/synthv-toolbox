@@ -71,10 +71,10 @@ pub struct Sv2ConcurrentContentView {
 impl Sv2ConcurrentContentPreferences {
     pub fn resolve(self, _defaults: Sv2ConcurrentDefaults) -> Sv2ConcurrentContentView {
         Sv2ConcurrentContentView {
-            // Settings and voice databases stay on the host for every box.
-            app_settings: Sv2IsolationPreference::Off,
+            // Sessions and settings remain per-environment; only voice data is shared.
+            app_settings: Sv2IsolationPreference::On,
             voice_libraries: Sv2IsolationPreference::Off,
-            effective_app_settings: false,
+            effective_app_settings: true,
             effective_voice_libraries: false,
         }
     }
@@ -173,7 +173,7 @@ pub fn slot_view(
     content: Sv2ConcurrentContentView,
 ) -> Sv2ConcurrentSlotView {
     let box_name = box_name(slot_id).unwrap_or_else(|_| "invalid".to_string());
-    let box_root = box_root(vault, slot_id);
+    let box_root = existing_box_root(vault, slot_id);
     let data_path = virtual_data_root(&box_root);
     let status = validate_prepared(&box_root, slot_id, &box_name);
     let (ready, detail) = match status {
@@ -209,12 +209,15 @@ pub fn prepare_slot(
     content: Sv2ConcurrentContentView,
 ) -> Result<(), String> {
     let name = box_name(slot_id)?;
-    let concurrent_root = vault.join("concurrent");
-    let slot_root = concurrent_root.join(slot_id);
-    let final_root = slot_root.join("box");
+    migrate_legacy_box(vault, slot_id, &name)?;
+    let concurrent_root = vault.join("c");
+    let final_root = box_root(vault, slot_id);
+    let slot_root = final_root
+        .parent()
+        .ok_or_else(|| "隔离副本路径无效。".to_string())?;
     reject_reparse_point(vault)?;
     reject_reparse_point(&concurrent_root)?;
-    reject_reparse_point(&slot_root)?;
+    reject_reparse_point(slot_root)?;
     reject_reparse_point(&final_root)?;
     reject_reparse_point(source)?;
     if !source.is_dir() {
@@ -223,16 +226,17 @@ pub fn prepare_slot(
 
     if final_root.exists() {
         validate_prepared(&final_root, slot_id, &name)?;
+        remove_copied_database(&final_root)?;
         configure_box(provider, &name, &final_root, shared_data_root, content)?;
         return Ok(());
     }
 
-    fs::create_dir_all(&slot_root).map_err(|error| format!("无法创建并发槽位目录：{error}"))?;
-    reject_reparse_point(&slot_root)?;
+    fs::create_dir_all(slot_root).map_err(|error| format!("无法创建并发槽位目录：{error}"))?;
+    reject_reparse_point(slot_root)?;
     let staging = slot_root.join(format!(".staging-{}", Uuid::new_v4()));
     let staged_data = virtual_data_root(&staging);
     let result = (|| {
-        copy_tree(source, &staged_data)?;
+        copy_slot_tree(source, &staged_data)?;
         write_marker(
             &staging,
             &ConcurrentMarker {
@@ -243,10 +247,11 @@ pub fn prepare_slot(
         )?;
         fs::rename(&staging, &final_root)
             .map_err(|error| format!("无法提交并发槽位副本：{error}"))?;
+        remove_copied_database(&final_root)?;
         configure_box(provider, &name, &final_root, shared_data_root, content)
     })();
     if result.is_err() {
-        cleanup_staging(&staging, &slot_root);
+        cleanup_staging(&staging, slot_root);
     }
     result
 }
@@ -261,8 +266,10 @@ pub fn launch_slot(
     content: Sv2ConcurrentContentView,
 ) -> Result<OperationResult, String> {
     let name = box_name(slot_id)?;
+    migrate_legacy_box(vault, slot_id, &name)?;
     let root = box_root(vault, slot_id);
     validate_prepared(&root, slot_id, &name)?;
+    remove_copied_database(&root)?;
     configure_box(provider, &name, &root, shared_data_root, content)?;
     let pids = list_pids(provider, &name)?;
     if !pids.is_empty() {
@@ -302,25 +309,60 @@ pub fn launch_slot(
 #[cfg(windows)]
 pub fn concurrent_folder(vault: &Path, slot_id: &str) -> Result<PathBuf, String> {
     let name = box_name(slot_id)?;
-    let root = box_root(vault, slot_id);
+    let root = existing_box_root(vault, slot_id);
     validate_prepared(&root, slot_id, &name)?;
     Ok(virtual_data_root(&root))
 }
 
 pub fn remove_slot_data(vault: &Path, slot_id: &str) -> Result<(), String> {
     let name = box_name(slot_id)?;
-    let root = box_root(vault, slot_id);
-    let slot_root = root
-        .parent()
-        .ok_or_else(|| "隔离副本路径无效。".to_string())?;
-    if !slot_root.exists() {
+    remove_prepared_box(&box_root(vault, slot_id), slot_id, &name)?;
+    remove_prepared_box(&legacy_box_root(vault, slot_id), slot_id, &name)
+}
+
+fn migrate_legacy_box(vault: &Path, slot_id: &str, box_name: &str) -> Result<(), String> {
+    let legacy = legacy_box_root(vault, slot_id);
+    let short = box_root(vault, slot_id);
+    if !legacy.exists() || short.exists() {
         return Ok(());
     }
-    reject_reparse_point(slot_root)?;
-    if root.exists() {
-        validate_prepared(&root, slot_id, &name)?;
+    validate_prepared(&legacy, slot_id, box_name)?;
+    let parent = short
+        .parent()
+        .ok_or_else(|| "隔离副本路径无效。".to_string())?;
+    fs::create_dir_all(parent).map_err(|error| format!("无法创建短隔离路径：{error}"))?;
+    fs::rename(&legacy, &short).map_err(|error| format!("无法迁移隔离副本到短路径：{error}"))
+}
+
+fn remove_prepared_box(root: &Path, slot_id: &str, box_name: &str) -> Result<(), String> {
+    if !root.exists() {
+        return Ok(());
     }
-    fs::remove_dir_all(slot_root).map_err(|error| format!("无法删除隔离副本：{error}"))
+    validate_prepared(root, slot_id, box_name)?;
+    fs::remove_dir_all(root).map_err(|error| format!("无法删除隔离副本：{error}"))
+}
+
+fn remove_copied_database(root: &Path) -> Result<(), String> {
+    let database = virtual_data_root(root).join("databases");
+    if !database.exists() {
+        return Ok(());
+    }
+    assert_tree_has_no_reparse_points(&database)?;
+    fs::remove_dir_all(&database).map_err(|error| format!("无法移除隔离副本中的重复声库：{error}"))
+}
+
+fn assert_tree_has_no_reparse_points(path: &Path) -> Result<(), String> {
+    let metadata =
+        fs::symlink_metadata(path).map_err(|error| format!("无法检查隔离副本内容：{error}"))?;
+    reject_reparse_metadata(path, &metadata)?;
+    if metadata.is_dir() {
+        for entry in fs::read_dir(path).map_err(|error| format!("无法读取隔离副本内容：{error}"))?
+        {
+            let entry = entry.map_err(|error| format!("无法读取隔离副本目录项：{error}"))?;
+            assert_tree_has_no_reparse_points(&entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 fn configure_box(
@@ -403,20 +445,9 @@ fn configure_shared_content(
     provider: &SandboxieProvider,
     box_name: &str,
     shared_data_root: &Path,
-    content: Sv2ConcurrentContentView,
+    _content: Sv2ConcurrentContentView,
 ) -> Result<(), String> {
-    reject_reparse_point(shared_data_root)?;
-    let mut shared_paths = Vec::new();
-    if !content.effective_app_settings {
-        let settings = shared_data_root.join("settings");
-        reject_reparse_point(&settings)?;
-        shared_paths.push(sandbox_directory_rule(&settings)?);
-    }
-    if !content.effective_voice_libraries {
-        let databases = shared_data_root.join("databases");
-        reject_reparse_point(&databases)?;
-        shared_paths.push(sandbox_directory_rule(&databases)?);
-    }
+    let shared_paths = [sandbox_directory_rule(shared_data_root)?];
 
     let mut clear = quiet_command(&provider.sbie_ini);
     clear.arg("set").arg(box_name).arg("OpenFilePath");
@@ -568,7 +599,11 @@ fn write_marker(root: &Path, marker: &ConcurrentMarker) -> Result<(), String> {
         .map_err(|error| format!("无法刷新隔离副本标记：{error}"))
 }
 
-fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
+fn copy_slot_tree(source: &Path, destination: &Path) -> Result<(), String> {
+    copy_tree(source, destination, true)
+}
+
+fn copy_tree(source: &Path, destination: &Path, skip_databases: bool) -> Result<(), String> {
     reject_reparse_point(source)?;
     let metadata =
         fs::symlink_metadata(source).map_err(|error| format!("无法读取槽位源数据：{error}"))?;
@@ -579,13 +614,16 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
     for entry in fs::read_dir(source).map_err(|error| format!("无法枚举槽位源数据：{error}"))?
     {
         let entry = entry.map_err(|error| format!("无法读取槽位目录项：{error}"))?;
+        if skip_databases && entry.file_name() == "databases" {
+            continue;
+        }
         let source_path = entry.path();
         let destination_path = destination.join(entry.file_name());
         let metadata = fs::symlink_metadata(&source_path)
             .map_err(|error| format!("无法检查槽位目录项：{error}"))?;
         reject_reparse_metadata(&source_path, &metadata)?;
         if metadata.is_dir() {
-            copy_tree(&source_path, &destination_path)?;
+            copy_tree(&source_path, &destination_path, false)?;
         } else if metadata.is_file() {
             fs::copy(&source_path, &destination_path)
                 .map_err(|error| format!("无法复制 {}：{error}", source_path.display()))?;
@@ -636,7 +674,31 @@ fn cleanup_staging(staging: &Path, slot_root: &Path) {
 }
 
 fn box_root(vault: &Path, slot_id: &str) -> PathBuf {
+    vault.join("c").join(compact_slot_id(slot_id))
+}
+
+fn existing_box_root(vault: &Path, slot_id: &str) -> PathBuf {
+    let short = box_root(vault, slot_id);
+    if short.exists() {
+        short
+    } else {
+        let legacy = legacy_box_root(vault, slot_id);
+        if legacy.exists() {
+            legacy
+        } else {
+            short
+        }
+    }
+}
+
+fn legacy_box_root(vault: &Path, slot_id: &str) -> PathBuf {
     vault.join("concurrent").join(slot_id).join("box")
+}
+
+fn compact_slot_id(slot_id: &str) -> String {
+    Uuid::parse_str(slot_id)
+        .map(|id| id.simple().to_string()[..16].to_string())
+        .unwrap_or_else(|_| "invalid".to_string())
 }
 
 fn virtual_data_root(box_root: &Path) -> PathBuf {
@@ -770,6 +832,7 @@ mod tests {
         assert_eq!(sandbox_box_argument(&name), format!("/box:{name}"));
         assert!(!sandbox_box_argument(&name).contains('#'));
         assert_eq!(BOX_NAME_TITLE_SETTING, "-");
+        assert_eq!(compact_slot_id(id), "1111111111114111");
     }
 
     #[test]
@@ -779,13 +842,13 @@ mod tests {
     }
 
     #[test]
-    fn content_preferences_always_share_settings_and_voice_libraries() {
+    fn content_preferences_isolate_settings_and_share_voice_libraries() {
         let defaults = Sv2ConcurrentDefaults {
             app_settings: true,
             voice_libraries: false,
         };
         let inherited = Sv2ConcurrentContentPreferences::default().resolve(defaults);
-        assert!(!inherited.effective_app_settings);
+        assert!(inherited.effective_app_settings);
         assert!(!inherited.effective_voice_libraries);
 
         let overridden = Sv2ConcurrentContentPreferences {
@@ -793,7 +856,7 @@ mod tests {
             voice_libraries: Sv2IsolationPreference::On,
         }
         .resolve(defaults);
-        assert!(!overridden.effective_app_settings);
+        assert!(overridden.effective_app_settings);
         assert!(!overridden.effective_voice_libraries);
     }
 
@@ -814,7 +877,7 @@ mod tests {
         fs::write(source.join("license/session"), [0_u8, 1, 2, 255]).unwrap();
         fs::write(source.join("webview2/Default/Cookies"), b"opaque").unwrap();
 
-        copy_tree(&source, &destination).unwrap();
+        copy_tree(&source, &destination, false).unwrap();
 
         assert_eq!(
             fs::read(destination.join("license/session")).unwrap(),
@@ -823,6 +886,27 @@ mod tests {
         assert_eq!(
             fs::read(destination.join("webview2/Default/Cookies")).unwrap(),
             b"opaque"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn slot_copy_skips_the_shared_voice_database() {
+        let root =
+            std::env::temp_dir().join(format!("sv2-concurrent-copy-test-{}", Uuid::new_v4()));
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(source.join("databases/voice")).unwrap();
+        fs::create_dir_all(source.join("license")).unwrap();
+        fs::write(source.join("databases/voice/model"), b"voice").unwrap();
+        fs::write(source.join("license/session"), b"session").unwrap();
+
+        copy_slot_tree(&source, &destination).unwrap();
+
+        assert!(!destination.join("databases").exists());
+        assert_eq!(
+            fs::read(destination.join("license/session")).unwrap(),
+            b"session"
         );
         fs::remove_dir_all(root).unwrap();
     }
