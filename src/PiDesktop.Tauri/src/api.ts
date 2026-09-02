@@ -35,6 +35,8 @@ import type {
   SvpLaunchMode,
   SvpRoutePlan,
   SynthVInstallation,
+  SynthVProcess,
+  SynthVShortcutProfile,
   ToolboxUpdateCheck,
   WorkflowRecipe,
   WorkflowResult,
@@ -417,6 +419,13 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "connect_bridge") {
     previewBridgeConnected = true;
     return { succeeded: true, summary: "SynthV Bridge 已连接。", detail: "预览模式" } as T;
+  }
+  if (command === "list_synthv_processes") return [{ processId: 4201, name: "Synthesizer V Studio 2 Pro", command: "/Applications/Synthesizer V Studio 2 Pro.app/Contents/MacOS/synthv-studio" }] as T;
+  if (command === "synthv_shortcut_profile") return { bridgeStart: "F13", bridgeStop: "F14", detail: "F13 触发 Bridge 启动或重连，F14 触发停止。" } as T;
+  if (command === "send_synthv_bridge_shortcut") return { succeeded: true, summary: `已向预览 SynthV 进程发送 ${String(args?.action === "stop" ? "F14" : "F13")}。`, detail: "预览模式" } as T;
+  if (command === "auto_connect_synthv_bridge") {
+    previewBridgeConnected = true;
+    return { succeeded: true, summary: "已连接预览 SynthV Bridge。", detail: "F13 已触发。" } as T;
   }
   if (command === "audio_capture_capability") return {
     supported: true,
@@ -920,6 +929,12 @@ export const api = {
   installBridge: (scriptsPath: string) => call<OperationResult>("install_bridge", { scriptsPath }),
   diagnoseBridge: (scriptsPath: string) => call<OperationResult>("diagnose_bridge", { scriptsPath }),
   connectBridge: () => call<OperationResult>("connect_bridge"),
+  listSynthvProcesses: () => call<SynthVProcess[]>("list_synthv_processes"),
+  synthvShortcutProfile: () => call<SynthVShortcutProfile>("synthv_shortcut_profile"),
+  sendSynthvBridgeShortcut: (processId: number, action: "start" | "stop") =>
+    call<OperationResult>("send_synthv_bridge_shortcut", { processId, action }),
+  autoConnectSynthvBridge: (processId: number) =>
+    call<OperationResult>("auto_connect_synthv_bridge", { processId }),
   audioCaptureCapability: () => call<AudioCaptureCapability>("audio_capture_capability"),
   listSynthvCaptureTargets: () => call<AudioCaptureTarget[]>("list_synthv_capture_targets"),
   captureSynthvClip: (processId: number | undefined, startSeconds: number, endSeconds: number, preRollSeconds: number, postRollSeconds: number, label: string) =>
