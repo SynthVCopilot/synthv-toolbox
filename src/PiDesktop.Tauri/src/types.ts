@@ -330,6 +330,18 @@ export interface AudioCaptureTarget {
   name: string;
 }
 
+export interface SynthVProcess {
+  processId: number;
+  name: string;
+  command: string;
+}
+
+export interface SynthVShortcutProfile {
+  bridgeStart: string;
+  bridgeStop: string;
+  detail: string;
+}
+
 export type RhymeMatchMode = "family" | "exact";
 
 export interface RhymeCharacter {

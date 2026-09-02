@@ -13,6 +13,8 @@ use uuid::Uuid;
 use crate::agent::{AgentError, ToolCall, ToolDefinition, ToolExecutor, ToolResult};
 use crate::mcp::McpToolExecutor;
 use crate::mcp::{extract_mcp_json, McpManager};
+use crate::synthv::{bridge_is_bundled, find_node};
+use crate::synthv_control::{self, BridgeShortcutAction};
 use tokio::runtime::Handle;
 
 const MAX_CLIP_SECONDS: f64 = 30.0;
@@ -455,14 +457,21 @@ pub struct ToolboxAudioToolExecutor {
     mcp: McpToolExecutor,
     manager: Arc<McpManager>,
     runtime: Handle,
+    bridge_dir: PathBuf,
 }
 
 impl ToolboxAudioToolExecutor {
-    pub fn new(mcp: McpToolExecutor, manager: Arc<McpManager>, runtime: Handle) -> Self {
+    pub fn new(
+        mcp: McpToolExecutor,
+        manager: Arc<McpManager>,
+        runtime: Handle,
+        bridge_dir: PathBuf,
+    ) -> Self {
         Self {
             mcp,
             manager,
             runtime,
+            bridge_dir,
         }
     }
 
@@ -481,6 +490,41 @@ impl ToolboxAudioToolExecutor {
                 "additionalProperties": false
             }).to_string(),
         }];
+        tools.extend([
+            ToolDefinition {
+                name: "list_synthv_processes".to_string(),
+                description: "List every running local SynthV process. This is read-only and returns PID, executable name, and command line.".to_string(),
+                input_schema_json: json!({ "type": "object", "additionalProperties": false }).to_string(),
+            },
+            ToolDefinition {
+                name: "read_synthv_bridge_shortcuts".to_string(),
+                description: "Read the Toolbox Bridge shortcut profile. The defaults are F13 for start/reconnect and F14 for stop.".to_string(),
+                input_schema_json: json!({ "type": "object", "additionalProperties": false }).to_string(),
+            },
+            ToolDefinition {
+                name: "send_synthv_bridge_shortcut".to_string(),
+                description: "Focus one listed SynthV PID and send its configured Bridge shortcut. Use start to send F13 or stop to send F14.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": {
+                        "processId": { "type": "integer", "minimum": 1 },
+                        "action": { "type": "string", "enum": ["start", "stop"] }
+                    },
+                    "required": ["processId", "action"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
+                name: "auto_connect_synthv_bridge".to_string(),
+                description: "Focus one listed SynthV PID, send F13 to start or reconnect its Bridge, then retry the local MCP connection for up to four seconds. Only one SynthV Bridge session can be connected at a time.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": { "processId": { "type": "integer", "minimum": 1 } },
+                    "required": ["processId"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+        ]);
         if capability().supported {
             tools.push(ToolDefinition {
                 name: "capture_synthv_clip".to_string(),
@@ -521,6 +565,45 @@ impl ToolboxAudioToolExecutor {
                         serde_json::to_string(&value).map_err(|error| error.to_string())
                     }),
             ),
+            "list_synthv_processes" => Some(synthv_control::list_processes().and_then(|value| {
+                serde_json::to_string(&value).map_err(|error| error.to_string())
+            })),
+            "read_synthv_bridge_shortcuts" => Some(
+                serde_json::to_string(&synthv_control::shortcut_profile())
+                    .map_err(|error| error.to_string()),
+            ),
+            "send_synthv_bridge_shortcut" => Some(
+                serde_json::from_str::<SynthVShortcutRequest>(&call.arguments_json)
+                    .map_err(|error| format!("快捷键参数无效：{error}"))
+                    .and_then(|request| {
+                        synthv_control::send_shortcut(request.process_id, request.action)
+                    })
+                    .and_then(|value| {
+                        serde_json::to_string(&value).map_err(|error| error.to_string())
+                    }),
+            ),
+            "auto_connect_synthv_bridge" => Some(
+                serde_json::from_str::<SynthVProcessRequest>(&call.arguments_json)
+                    .map_err(|error| format!("自动连接参数无效：{error}"))
+                    .and_then(|request| {
+                        if !bridge_is_bundled(&self.bridge_dir) {
+                            return Err("当前构建未包含完整的 SynthV Bridge。".to_string());
+                        }
+                        let node =
+                            find_node().ok_or_else(|| "未找到 Node.js 22.19+。".to_string())?;
+                        self.runtime
+                            .block_on(synthv_control::start_bridge_and_connect(
+                                request.process_id,
+                                &self.manager,
+                                node,
+                                self.bridge_dir.clone(),
+                            ))
+                    })
+                    .and_then(|(process, tools)| {
+                        serde_json::to_string(&json!({ "process": process, "tools": tools }))
+                            .map_err(|error| error.to_string())
+                    }),
+            ),
             _ => None,
         }?;
         Some(match result {
@@ -536,6 +619,19 @@ impl ToolboxAudioToolExecutor {
             },
         })
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SynthVProcessRequest {
+    process_id: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SynthVShortcutRequest {
+    process_id: u32,
+    action: BridgeShortcutAction,
 }
 
 impl ToolExecutor for ToolboxAudioToolExecutor {
