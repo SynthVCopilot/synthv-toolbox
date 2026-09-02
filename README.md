@@ -28,6 +28,8 @@ Windows 和 macOS 都提供可选的 SV2 本地数据槽位，可在 SV2 完全�
 
 构建、测试和发布说明请参阅项目内的开发文档与工作流配置。发布版本请从项目的 GitHub Releases 页面获取。
 
+作词、平台音频导入、下载组件和内部工具的评估与操作指导请参阅 [作词与音频导入工作流指导](docs/lyric-and-audio-workflow-guide.zh-CN.md)。
+
 ## License
 
 [Apache-2.0](LICENSE)
