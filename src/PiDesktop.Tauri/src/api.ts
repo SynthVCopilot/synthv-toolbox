@@ -18,6 +18,8 @@ import type {
   OpenCodeCatalog,
   LyricCandidateRequest,
   LyricCandidateSet,
+  LyricProject,
+  LyricProjectSummary,
   LyricSectionRequest,
   OperationResult,
   ProjectCheckpoint,
@@ -48,6 +50,7 @@ let previewSv2AccountIndicatorEnabled = false;
 let previewSmartSvpLaunchEnabled = false;
 let previewBridgeConnected = true;
 let previewDownloads: ComponentDownload[] = [];
+let previewLyricProjects: LyricProject[] = [];
 const previewManagedComponentIds = new Set(["pi-audio", "cvrs"]);
 const previewInstalledManagedComponentIds = new Set(["cvrs"]);
 let previewActiveAiProvider: AiProviderId = "anthropic";
@@ -728,6 +731,51 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     const totalLines = sections.reduce((sum, section) => sum + section.lineCount, 0);
     return { kind: "lyric-template", summary: `已建立《${title}》的歌词结构：${sections.length} 个段落，共 ${totalLines} 行。`, data: { language: "zh-CN", title, totalLines, rhymeTargets, sections: built } } as T;
   }
+  if (command === "list_lyric_projects") {
+    const limit = Math.min(Math.max(Number(args?.limit ?? 50), 1), 200);
+    return previewLyricProjects
+      .map(({ id, title, revision, draft, updatedAtUtc }) => ({ id, title, revision, lineCount: draft.split(/\r?\n/).filter((line) => line.trim()).length, updatedAtUtc }))
+      .sort((left, right) => right.updatedAtUtc.localeCompare(left.updatedAtUtc))
+      .slice(0, limit) as T;
+  }
+  if (command === "create_lyric_project") {
+    const now = new Date().toISOString();
+    const project: LyricProject = {
+      schemaVersion: 1,
+      id: crypto.randomUUID(),
+      title: String(args?.title ?? "").trim() || "未命名歌曲",
+      draft: String(args?.draft ?? ""),
+      rhymeTargets: { ...((args?.rhymeTargets as Record<string, string> | undefined) ?? {}) },
+      sections: [...((args?.sections as LyricSectionRequest[] | undefined) ?? [])],
+      revision: 1,
+      createdAtUtc: now,
+      updatedAtUtc: now,
+    };
+    previewLyricProjects = [project, ...previewLyricProjects];
+    return project as T;
+  }
+  if (command === "save_lyric_project") {
+    const id = String(args?.id ?? "");
+    const index = previewLyricProjects.findIndex((project) => project.id === id);
+    if (index < 0) throw new Error("找不到该歌词项目。");
+    const existing = previewLyricProjects[index];
+    const project: LyricProject = {
+      ...existing,
+      title: String(args?.title ?? "").trim() || "未命名歌曲",
+      draft: String(args?.draft ?? ""),
+      rhymeTargets: { ...((args?.rhymeTargets as Record<string, string> | undefined) ?? {}) },
+      sections: [...((args?.sections as LyricSectionRequest[] | undefined) ?? [])],
+      revision: existing.revision + 1,
+      updatedAtUtc: new Date().toISOString(),
+    };
+    previewLyricProjects[index] = project;
+    return project as T;
+  }
+  if (command === "load_lyric_project") {
+    const project = previewLyricProjects.find((item) => item.id === String(args?.id ?? ""));
+    if (!project) throw new Error("找不到该歌词项目。");
+    return { ...project, rhymeTargets: { ...project.rhymeTargets }, sections: [...project.sections] } as T;
+  }
   if (command === "generate_lyric_candidates") return {
     language: "zh-CN",
     brief: String((args?.request as LyricCandidateRequest | undefined)?.brief ?? ""),
@@ -897,6 +945,12 @@ export const api = {
     call<WorkflowResult>("build_lyric_template", { language, title, sections, rhymeTargets }),
   generateLyricCandidates: (request: LyricCandidateRequest) =>
     call<LyricCandidateSet>("generate_lyric_candidates", { request }),
+  listLyricProjects: (limit = 50) => call<LyricProjectSummary[]>("list_lyric_projects", { limit }),
+  createLyricProject: (title: string, draft: string, sections: LyricSectionRequest[], rhymeTargets: Record<string, string>) =>
+    call<LyricProject>("create_lyric_project", { title, draft, sections, rhymeTargets }),
+  saveLyricProject: (id: string, title: string, draft: string, sections: LyricSectionRequest[], rhymeTargets: Record<string, string>) =>
+    call<LyricProject>("save_lyric_project", { id, title, draft, sections, rhymeTargets }),
+  loadLyricProject: (id: string) => call<LyricProject>("load_lyric_project", { id }),
   runProjectDoctor: (projectPath: string) =>
     call<WorkflowResult>("run_project_doctor", { projectPath }),
   runPronunciationDiagnostics: (projectPath?: string, lyrics?: string) =>

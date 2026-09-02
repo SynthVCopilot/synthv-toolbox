@@ -18,6 +18,8 @@ import type {
   ConversationSummary,
   CreativeHistoryEntry,
   LyricCandidateSet,
+  LyricProject,
+  LyricProjectSummary,
   LyricSectionRequest,
   McpServerConfig,
   OperationResult,
@@ -97,6 +99,10 @@ let lyricCandidateCount = 4;
 let lyricCandidates: LyricCandidateSet | undefined;
 let lyricSectionCounter = 0;
 let lyricSections: LyricSectionRequest[] = createLyricPreset("compact");
+let lyricProjects: LyricProjectSummary[] = [];
+let lyricProjectId: string | undefined;
+let lyricProjectRevision = 0;
+let lyricSavedSnapshot = "";
 let pendingBlockedSwitchSlot: string | undefined;
 let pendingConcurrentLaunchSlot: string | undefined;
 let pendingConcurrentPrepare = false;
@@ -167,6 +173,8 @@ function createLyricPreset(preset: "compact" | "pop" | "rap" | "blank"): LyricSe
 function persistLyricWorkspace(): void {
   try {
     localStorage.setItem("pi.lyric.workspace.v1", JSON.stringify({
+      projectId: lyricProjectId,
+      projectRevision: lyricProjectRevision,
       title: lyricSongTitle,
       rhymeTargets: lyricRhymeTargets,
       draft: lyricDraft,
@@ -180,6 +188,8 @@ function restoreLyricWorkspace(): void {
     const raw = localStorage.getItem("pi.lyric.workspace.v1");
     if (!raw) return;
     const saved = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof saved.projectId === "string" && /^[0-9a-f-]{36}$/i.test(saved.projectId)) lyricProjectId = saved.projectId;
+    if (typeof saved.projectRevision === "number" && Number.isInteger(saved.projectRevision) && saved.projectRevision > 0) lyricProjectRevision = saved.projectRevision;
     if (typeof saved.title === "string") lyricSongTitle = saved.title.slice(0, 120);
     if (typeof saved.draft === "string") lyricDraft = saved.draft.slice(0, 200_000);
     if (saved.rhymeTargets && typeof saved.rhymeTargets === "object" && !Array.isArray(saved.rhymeTargets)) {
@@ -206,10 +216,53 @@ function restoreLyricWorkspace(): void {
         lyricSectionCounter = Math.max(lyricSectionCounter, restored.length + 100);
       }
     }
+    lyricSavedSnapshot = lyricWorkspaceSnapshot();
   } catch { /* ignore invalid local drafts */ }
 }
 
+function lyricWorkspaceSnapshot(): string {
+  return JSON.stringify({
+    title: lyricSongTitle,
+    draft: lyricDraft,
+    rhymeTargets: lyricRhymeTargets,
+    sections: lyricSections,
+  });
+}
+
+function lyricProjectHasUnsavedChanges(): boolean {
+  return lyricWorkspaceSnapshot() !== lyricSavedSnapshot;
+}
+
+function applyLyricProject(project: LyricProject): void {
+  lyricProjectId = project.id;
+  lyricProjectRevision = project.revision;
+  lyricSongTitle = project.title;
+  lyricDraft = project.draft;
+  lyricRhymeTargets = { A: "", B: "", C: "", D: "", ...project.rhymeTargets };
+  lyricSections = project.sections.map((section) => ({ ...section }));
+  lyricSectionCounter = Math.max(lyricSectionCounter, lyricSections.length + 100);
+  lyricCandidates = undefined;
+  workflowResult = undefined;
+  lyricSavedSnapshot = lyricWorkspaceSnapshot();
+  persistLyricWorkspace();
+}
+
+function startNewLyricProject(): void {
+  lyricProjectId = undefined;
+  lyricProjectRevision = 0;
+  lyricSongTitle = "";
+  lyricDraft = "";
+  lyricRhymeTargets = { A: "ang", B: "ai", C: "", D: "" };
+  lyricSections = createLyricPreset("compact");
+  lyricCandidateSection = lyricSections.find((section) => section.kind === "chorus")?.label ?? lyricSections[0]?.label ?? "";
+  lyricCandidates = undefined;
+  workflowResult = undefined;
+  lyricSavedSnapshot = lyricWorkspaceSnapshot();
+  persistLyricWorkspace();
+}
+
 restoreLyricWorkspace();
+if (!lyricSavedSnapshot) lyricSavedSnapshot = lyricWorkspaceSnapshot();
 
 const pageMeta: Record<Page, { title: string; subtitle: string }> = {
   home: { title: "概览", subtitle: "查看环境状态与常用能力" },
@@ -304,6 +357,7 @@ async function run(task: () => Promise<void>): Promise<void> {
 
 async function refresh(): Promise<void> {
   app = await api.bootstrap();
+  lyricProjects = await api.listLyricProjects();
 }
 
 async function refreshAccountUsage(slotId?: string): Promise<void> {
@@ -1328,9 +1382,16 @@ function renderLyricCandidates(): string {
 function renderLyricStudio(ai: boolean): string {
   const sectionOptions = lyricSections.map((section) => `<option value="${escapeHtml(section.label)}" ${section.label === lyricCandidateSection ? "selected" : ""}>${escapeHtml(section.label)}</option>`).join("");
   const lineCount = lyricDraft.trim() ? lyricDraft.trim().split(/\r?\n/).length : 0;
+  const projectOptions = lyricProjects.map((project) => `<option value="${escapeHtml(project.id)}" ${project.id === lyricProjectId ? "selected" : ""}>${escapeHtml(project.title)} · ${project.lineCount} 行 · r${project.revision}</option>`).join("");
+  const projectStatus = lyricProjectId === undefined
+    ? "未保存草稿"
+    : lyricProjectHasUnsavedChanges()
+      ? `本地项目 r${lyricProjectRevision} · 有未保存修改`
+      : `本地项目 r${lyricProjectRevision} · 已保存`;
+  const projectToolbar = `<section class="lyric-project-toolbar panel-inset"><div><span class="eyebrow">LOCAL SONG PROJECT</span><strong>${escapeHtml(projectStatus)}</strong><small>项目保存在本机；输入时的临时草稿仍会自动保存。</small></div><div class="lyric-project-actions"><button type="button" class="secondary compact" data-new-lyric-project>新项目</button><select id="lyric-project-select" ${lyricProjects.length ? "" : "disabled"}><option value="">${lyricProjects.length ? "选择已保存项目" : "尚无已保存项目"}</option>${projectOptions}</select><button type="button" class="secondary compact" data-load-lyric-project ${lyricProjects.length ? "" : "disabled"}>打开</button><button type="button" class="primary compact" data-save-lyric-project>${lyricProjectId === undefined ? "保存为项目" : "保存"}</button></div></section>`;
   const structureRows = lyricSections.map((section, index) => `<article class="lyric-section-row" data-lyric-section-id="${escapeHtml(section.id)}"><span class="section-index">${index + 1}</span><label>段落名称<input data-lyric-section-field="label" maxlength="60" value="${escapeHtml(section.label)}" /></label><label>行数<input data-lyric-section-field="lineCount" type="number" min="1" max="32" value="${section.lineCount}" /></label><label>格式<input data-lyric-section-field="rhymeScheme" maxlength="32" value="${escapeHtml(section.rhymeScheme)}" placeholder="可选，如 ABAB" /></label><input type="hidden" data-lyric-section-field="kind" value="${escapeHtml(section.kind)}" /><div class="lyric-row-actions"><button type="button" class="icon-plain" data-move-lyric-section="up" data-section-id="${escapeHtml(section.id)}" title="上移" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" class="icon-plain" data-move-lyric-section="down" data-section-id="${escapeHtml(section.id)}" title="下移" ${index === lyricSections.length - 1 ? "disabled" : ""}>↓</button><button type="button" class="icon-plain danger" data-remove-lyric-section="${escapeHtml(section.id)}" title="删除">×</button></div></article>`).join("");
   const copilot = ai ? `<section class="lyric-copilot panel-inset"><div class="lyric-subhead"><div><span class="eyebrow">COPILOT</span><h3>${icon("sparkles", 17)} 帮我续写</h3></div><span class="availability ready">只给候选，不会改稿</span></div><form id="lyric-candidate-form" class="lyric-candidate-form"><label class="wide">这一句 / 这一段想表达什么<textarea id="lyric-brief" rows="3" maxlength="2000" placeholder="例如：夜车离开故乡时，想起没说出口的告别">${escapeHtml(lyricCandidateBrief)}</textarea></label><label class="wide">画面或关键词<input id="lyric-imagery" maxlength="1000" value="${escapeHtml(lyricCandidateImagery)}" placeholder="月台、旧信、雨后的路灯、车窗倒影" /></label><label>写到哪一段<select id="lyric-candidate-section">${sectionOptions}</select></label><label>语气<input id="lyric-candidate-tone" maxlength="80" value="${escapeHtml(lyricCandidateTone)}" placeholder="克制、口语化、明亮" /></label><label>句尾提示（可空）<input id="lyric-candidate-rhyme" maxlength="24" value="${escapeHtml(lyricCandidateRhyme)}" placeholder="如：ang / 光" /></label><label>候选数量<select id="lyric-candidate-count">${[2, 3, 4, 5, 6].map((count) => `<option value="${count}" ${lyricCandidateCount === count ? "selected" : ""}>${count} 条</option>`).join("")}</select></label><button class="primary wide">${icon("sparkles", 16)} 给我几个写法</button></form>${renderLyricCandidates()}</section>` : `<section class="lyric-copilot locked panel-inset"><div class="lyric-subhead"><div><span class="eyebrow">COPILOT</span><h3>${icon("sparkles", 17)} 帮我续写</h3></div><span class="availability blocked">AI 模式</span></div><p>这里始终是你的草稿。开启 AI 后，可以为某一段索取原创写法，选择后再手动加入。</p><button type="button" class="secondary" data-enable-ai>开启 Copilot</button></section>`;
-  return `<div class="lyric-mode-banner"><span class="feature-icon ${ai ? "violet" : "emerald"}">${icon(ai ? "sparkles" : "lyrics", 21)}</span><div><strong>把注意力放在歌词上</strong><p>草稿会自动保存在本机；结构、韵脚和 Copilot 都是按需打开的辅助工具。</p></div><span class="lyric-save-state">本机自动保存</span></div><div class="lyric-workbench-grid lyric-writing-layout"><main class="lyric-editor panel-inset"><div class="lyric-editor-head"><label class="lyric-title">歌名<input id="lyric-song-title" maxlength="120" value="${escapeHtml(lyricSongTitle)}" placeholder="未命名歌词" /></label><div class="lyric-editor-actions"><button type="button" class="secondary compact" data-copy-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>复制</button><button type="button" class="secondary compact" data-clear-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>清空</button></div></div><label class="lyric-draft-label">歌词草稿<textarea id="lyric-draft" rows="22" spellcheck="false" placeholder="从这里开始写。\n\n你可以直接写完整歌词，也可以先写几个句子或画面。">${escapeHtml(lyricDraft)}</textarea></label><footer class="lyric-editor-footer"><span>${lineCount} 行 · ${lyricDraft.length.toLocaleString()} 字</span><span>输入时自动保存</span></footer></main><aside class="lyric-helper-stack">${copilot}<details class="lyric-tools panel-inset"><summary><span><span class="eyebrow">OPTIONAL TOOLS</span><strong>${icon("recipe", 16)} 段落结构</strong></span><small>${lyricSections.length} 段 · ${lyricSections.reduce((sum, section) => sum + section.lineCount, 0)} 行</small></summary><form id="lyric-structure-form"><div class="lyric-presets"><span>快速开始</span><button type="button" data-lyric-preset="compact">流行</button><button type="button" data-lyric-preset="pop">完整歌曲</button><button type="button" data-lyric-preset="rap">说唱</button><button type="button" data-lyric-preset="blank">空白</button></div><div class="lyric-section-list">${structureRows}</div><div class="lyric-structure-actions"><button type="button" class="secondary" data-add-lyric-section>${icon("plus", 15)} 添加段落</button><button class="primary">${icon("recipe", 15)} 插入段落骨架</button></div></form></details><details class="lyric-tools panel-inset"><summary><span><span class="eyebrow">OPTIONAL TOOLS</span><strong>${icon("pronunciation", 16)} 韵脚助手</strong></span><small>只在需要时查询</small></summary><form id="rhyme-lookup-form" class="rhyme-search"><input id="rhyme-query" required maxlength="24" value="${escapeHtml(lyricRhymeQuery)}" placeholder="输入一个字或韵母，如 光 / ang" /><select id="rhyme-match-mode"><option value="family" ${lyricRhymeMode === "family" ? "selected" : ""}>同韵部</option><option value="exact" ${lyricRhymeMode === "exact" ? "selected" : ""}>精确韵母</option></select><button class="secondary">查找同韵字</button></form>${renderRhymeLookupResult()}</details></aside></div>`;
+  return `<div class="lyric-mode-banner"><span class="feature-icon ${ai ? "violet" : "emerald"}">${icon(ai ? "sparkles" : "lyrics", 21)}</span><div><strong>把注意力放在歌词上</strong><p>草稿会自动保存在本机；结构、韵脚和 Copilot 都是按需打开的辅助工具。</p></div><span class="lyric-save-state">本机自动保存</span></div>${projectToolbar}<div class="lyric-workbench-grid lyric-writing-layout"><main class="lyric-editor panel-inset"><div class="lyric-editor-head"><label class="lyric-title">歌名<input id="lyric-song-title" maxlength="120" value="${escapeHtml(lyricSongTitle)}" placeholder="未命名歌词" /></label><div class="lyric-editor-actions"><button type="button" class="secondary compact" data-copy-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>复制</button><button type="button" class="secondary compact" data-clear-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>清空</button></div></div><label class="lyric-draft-label">歌词草稿<textarea id="lyric-draft" rows="22" spellcheck="false" placeholder="从这里开始写。\n\n你可以直接写完整歌词，也可以先写几个句子或画面。">${escapeHtml(lyricDraft)}</textarea></label><footer class="lyric-editor-footer"><span>${lineCount} 行 · ${lyricDraft.length.toLocaleString()} 字</span><span>输入时自动保存</span></footer></main><aside class="lyric-helper-stack">${copilot}<details class="lyric-tools panel-inset"><summary><span><span class="eyebrow">OPTIONAL TOOLS</span><strong>${icon("recipe", 16)} 段落结构</strong></span><small>${lyricSections.length} 段 · ${lyricSections.reduce((sum, section) => sum + section.lineCount, 0)} 行</small></summary><form id="lyric-structure-form"><div class="lyric-presets"><span>快速开始</span><button type="button" data-lyric-preset="compact">流行</button><button type="button" data-lyric-preset="pop">完整歌曲</button><button type="button" data-lyric-preset="rap">说唱</button><button type="button" data-lyric-preset="blank">空白</button></div><div class="lyric-section-list">${structureRows}</div><div class="lyric-structure-actions"><button type="button" class="secondary" data-add-lyric-section>${icon("plus", 15)} 添加段落</button><button class="primary">${icon("recipe", 15)} 插入段落骨架</button></div></form></details><details class="lyric-tools panel-inset"><summary><span><span class="eyebrow">OPTIONAL TOOLS</span><strong>${icon("pronunciation", 16)} 韵脚助手</strong></span><small>只在需要时查询</small></summary><form id="rhyme-lookup-form" class="rhyme-search"><input id="rhyme-query" required maxlength="24" value="${escapeHtml(lyricRhymeQuery)}" placeholder="输入一个字或韵母，如 光 / ang" /><select id="rhyme-match-mode"><option value="family" ${lyricRhymeMode === "family" ? "selected" : ""}>同韵部</option><option value="exact" ${lyricRhymeMode === "exact" ? "selected" : ""}>精确韵母</option></select><button class="secondary">查找同韵字</button></form>${renderRhymeLookupResult()}</details></aside></div>`;
 }
 
 function renderLyricsPage(): string {
@@ -2116,6 +2177,40 @@ document.addEventListener("click", (event) => {
     }).catch(() => {
       error = "无法访问剪贴板，请直接从草稿框复制。";
       render();
+    });
+    return;
+  }
+  if (target.hasAttribute("data-new-lyric-project")) {
+    if (lyricProjectHasUnsavedChanges() && !window.confirm("当前项目有未保存修改。新建项目会清空当前工作区，是否继续？")) return;
+    startNewLyricProject();
+    notice = "已建立新的本地歌词草稿；保存后会成为独立歌曲项目。";
+    render();
+    return;
+  }
+  if (target.hasAttribute("data-save-lyric-project")) {
+    void run(async () => {
+      syncLyricDraftFromDom();
+      const project = lyricProjectId
+        ? await api.saveLyricProject(lyricProjectId, lyricSongTitle, lyricDraft, lyricSections, lyricRhymeTargets)
+        : await api.createLyricProject(lyricSongTitle, lyricDraft, lyricSections, lyricRhymeTargets);
+      applyLyricProject(project);
+      lyricProjects = await api.listLyricProjects();
+      notice = `《${project.title}》已保存到本机项目（r${project.revision}）。`;
+    });
+    return;
+  }
+  if (target.hasAttribute("data-load-lyric-project")) {
+    const id = document.querySelector<HTMLSelectElement>("#lyric-project-select")?.value;
+    if (!id) {
+      error = "请选择要打开的歌词项目。";
+      render();
+      return;
+    }
+    if (lyricProjectHasUnsavedChanges() && !window.confirm("当前项目有未保存修改。打开其他项目会丢弃这些修改，是否继续？")) return;
+    void run(async () => {
+      const project = await api.loadLyricProject(id);
+      applyLyricProject(project);
+      notice = `已打开《${project.title}》的本地项目。`;
     });
     return;
   }

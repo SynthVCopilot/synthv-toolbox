@@ -382,6 +382,26 @@ export interface LyricCandidateSet {
   candidates: LyricCandidate[];
 }
 
+export interface LyricProject {
+  schemaVersion: number;
+  id: string;
+  title: string;
+  draft: string;
+  rhymeTargets: Record<string, string>;
+  sections: LyricSectionRequest[];
+  revision: number;
+  createdAtUtc: string;
+  updatedAtUtc: string;
+}
+
+export interface LyricProjectSummary {
+  id: string;
+  title: string;
+  revision: number;
+  lineCount: number;
+  updatedAtUtc: string;
+}
+
 export interface WorkflowRecipe {
   id: string;
   title: string;

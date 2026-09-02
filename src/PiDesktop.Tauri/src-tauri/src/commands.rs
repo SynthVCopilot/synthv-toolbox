@@ -37,6 +37,7 @@ use crate::creative_tools::{
     self, ProjectDoctorRequest, PronunciationRequest, RenderReviewExpectations, RenderReviewRequest,
 };
 use crate::downloads::ComponentDownload;
+use crate::lyric_projects::{self, LyricProject, LyricProjectSummary};
 use crate::lyric_tools::{
     self, ChineseRhymeLookup, LyricCandidateRequest, LyricCandidateSet, LyricSectionRequest,
     RhymeMatchMode,
@@ -1242,6 +1243,49 @@ pub async fn generate_lyric_candidates(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn list_lyric_projects(limit: Option<usize>) -> Result<Vec<LyricProjectSummary>, String> {
+    tauri::async_runtime::spawn_blocking(move || lyric_projects::list(limit.unwrap_or(50)))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn create_lyric_project(
+    title: String,
+    draft: String,
+    sections: Vec<LyricSectionRequest>,
+    rhyme_targets: BTreeMap<String, String>,
+) -> Result<LyricProject, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        lyric_projects::create(title, draft, sections, rhyme_targets)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn save_lyric_project(
+    id: String,
+    title: String,
+    draft: String,
+    sections: Vec<LyricSectionRequest>,
+    rhyme_targets: BTreeMap<String, String>,
+) -> Result<LyricProject, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        lyric_projects::save(&id, title, draft, sections, rhyme_targets)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn load_lyric_project(id: String) -> Result<LyricProject, String> {
+    tauri::async_runtime::spawn_blocking(move || lyric_projects::load(&id))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
