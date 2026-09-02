@@ -1,6 +1,6 @@
 # Pi Desktop 项目索引
 
-> 最后更新：2026-08-31
+> 最后更新：2026-09-02
 
 ## 项目目标
 
@@ -20,3 +20,4 @@
 - `src/PiDesktop.Tauri/src-tauri/src/sv2_account_probe.rs`：显式账号预检与授权摘要。
 - `src/PiDesktop.Tauri/src-tauri/src/sv2_sync.rs`：安全的槽位资源同步。
 - `src/PiDesktop.Tauri/src`：Tauri 前端。
+- `docs/lyric-and-audio-workflow-guide.zh-CN.md`：作词、平台音频导入、下载组件和内部工具的评估与实施指导。
