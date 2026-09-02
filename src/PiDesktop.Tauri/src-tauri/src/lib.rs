@@ -22,6 +22,7 @@ mod sv2_session_guard;
 mod sv2_sync;
 mod svp_launch_router;
 mod synthv;
+mod synthv_control;
 mod update_checker;
 mod workflows;
 
@@ -176,6 +177,10 @@ pub fn run() {
             commands::install_bridge,
             commands::diagnose_bridge,
             commands::connect_bridge,
+            commands::list_synthv_processes,
+            commands::synthv_shortcut_profile,
+            commands::send_synthv_bridge_shortcut,
+            commands::auto_connect_synthv_bridge,
             commands::audio_capture_capability,
             commands::list_synthv_capture_targets,
             commands::capture_synthv_clip,

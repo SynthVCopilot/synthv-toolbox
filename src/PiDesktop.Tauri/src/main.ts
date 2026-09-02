@@ -35,6 +35,8 @@ import type {
   SvpLaunchMode,
   SvpRouteCandidate,
   SvpRoutePlan,
+  SynthVProcess,
+  SynthVShortcutProfile,
   ToolboxUpdateCheck,
   WorkflowRecipe,
   WorkflowResult,
@@ -67,6 +69,8 @@ let activeWorkflow: Feature["id"] | undefined;
 let workflowResult: WorkflowResult | undefined;
 let audioCaptureCapability: AudioCaptureCapability | undefined;
 let audioCaptureTargets: AudioCaptureTarget[] = [];
+let synthvProcesses: SynthVProcess[] = [];
+let synthvShortcutProfile: SynthVShortcutProfile | undefined;
 let abProcessId: number | undefined;
 let abStartSeconds = 10;
 let abEndSeconds = 15;
@@ -357,7 +361,11 @@ async function run(task: () => Promise<void>): Promise<void> {
 
 async function refresh(): Promise<void> {
   app = await api.bootstrap();
-  lyricProjects = await api.listLyricProjects();
+  [lyricProjects, synthvProcesses, synthvShortcutProfile] = await Promise.all([
+    api.listLyricProjects(),
+    api.listSynthvProcesses(),
+    api.synthvShortcutProfile(),
+  ]);
 }
 
 async function refreshAccountUsage(slotId?: string): Promise<void> {
@@ -1591,6 +1599,11 @@ function renderBridge(): string {
   const scriptsList = scriptsLocations.length
     ? scriptsLocations.map((item) => `<button class="installation-item" data-scripts="${escapeHtml(item.scriptsPath ?? "")}" title="选择此 scripts 目录作为 Bridge 安装目标"><span class="status-dot online"></span><span><strong>${escapeHtml(item.displayName)}</strong><small title="${escapeHtml(item.scriptsPath ?? "")}">${escapeHtml(item.scriptsPath ?? "")}</small></span><span class="location-action">选择</span></button>`).join("")
     : '<div class="empty-inline compact-empty">没有发现 scripts 目录，可以在右侧手动填写。</div>';
+  const shortcuts = synthvShortcutProfile ?? { bridgeStart: "F13", bridgeStop: "F14", detail: "正在读取快捷键配置…" };
+  const processList = synthvProcesses.length
+    ? synthvProcesses.map((process) => `<article class="synthv-process-row"><div><strong>${escapeHtml(process.name)}</strong><small>PID ${process.processId} · ${escapeHtml(process.command)}</small></div><div class="button-row"><button class="primary compact" data-auto-connect-synthv="${process.processId}">F13 启动并连接</button><button class="secondary compact" data-send-synthv-stop="${process.processId}">F14 停止</button></div></article>`).join("")
+    : '<div class="empty-inline compact-empty">没有发现正在运行的 SynthV 进程。</div>';
+  const processControls = `<section class="panel"><div class="panel-heading"><span class="feature-icon violet">${icon("bridge", 25)}</span><div><h2>运行中的 SynthV</h2><p>${escapeHtml(shortcuts.detail)}</p></div><button class="secondary compact" data-refresh-synthv-processes>${icon("sync", 16)} 刷新</button></div><div class="shortcut-tags"><span>启动 / 重连：${escapeHtml(shortcuts.bridgeStart)}</span><span>停止：${escapeHtml(shortcuts.bridgeStop)}</span></div><div class="synthv-process-list">${processList}</div></section>`;
   return `<div class="bridge-grid"><section class="panel"><div class="panel-heading"><span class="feature-icon orange">${icon("bridge", 25)}</span><div><h2>Synthesizer V 探测</h2><p>Windows 与 macOS 使用各自的标准路径，只进行只读检查。</p></div><button class="secondary compact" data-scan>${icon("sync", 16)} 重新探测</button></div>
     <div class="detection-groups">
       <section class="detection-group"><div class="detection-group-title"><strong>应用安装</strong><span>${applicationLocations.length}</span></div><div class="installation-list">${applicationList}</div></section>
@@ -1599,7 +1612,7 @@ function renderBridge(): string {
     <section class="panel"><div class="panel-heading"><span class="feature-icon blue">${icon("plug", 25)}</span><div><h2>Bridge 管理</h2><p>安装器只写入你指定的 scripts 目录，不开放网络端口。</p></div></div>
       <form id="bridge-form" class="form-stack"><label>Scripts 目录<input id="scripts-path" value="${escapeHtml(app.scriptsPath ?? app.installations.find((item) => item.scriptsPath)?.scriptsPath ?? "")}" placeholder="选择或粘贴 SynthV scripts 目录" /></label><div class="button-row"><button class="primary" value="install">安装 / 更新</button><button class="secondary" value="diagnose">检查安装</button><button class="secondary" value="connect">测试连接</button></div></form>
       <div class="inline-status"><span class="status-dot ${app.bridgeBundled ? "online" : ""}"></span><span>${app.bridgeBundled ? "内置 Bridge 资源已就绪" : "当前构建未包含 Bridge 资源"}</span></div>
-    </section></div>`;
+    </section>${processControls}</div>`;
 }
 
 function renderMcp(): string {
@@ -2617,6 +2630,33 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (target.hasAttribute("data-scan")) { void run(async () => { if (app) app.installations = await api.scanSynthV(); notice = "探测完成。"; }); return; }
+  if (target.hasAttribute("data-refresh-synthv-processes")) {
+    void run(async () => {
+      [synthvProcesses, synthvShortcutProfile] = await Promise.all([api.listSynthvProcesses(), api.synthvShortcutProfile()]);
+      notice = synthvProcesses.length ? `发现 ${synthvProcesses.length} 个运行中的 SynthV 进程。` : "没有发现运行中的 SynthV 进程。";
+    });
+    return;
+  }
+  if (target.dataset.autoConnectSynthv) {
+    const processId = Number(target.dataset.autoConnectSynthv);
+    if (Number.isInteger(processId) && processId > 0) {
+      void run(async () => {
+        setFeedback(await api.autoConnectSynthvBridge(processId));
+        await refresh();
+      });
+    }
+    return;
+  }
+  if (target.dataset.sendSynthvStop) {
+    const processId = Number(target.dataset.sendSynthvStop);
+    if (Number.isInteger(processId) && processId > 0) {
+      void run(async () => {
+        setFeedback(await api.sendSynthvBridgeShortcut(processId, "stop"));
+        synthvProcesses = await api.listSynthvProcesses();
+      });
+    }
+    return;
+  }
   if (target.hasAttribute("data-profile-refresh")) {
     if (!app?.sv2AccountIndicatorEnabled) {
       pendingAccountIndicatorConsent = { refreshAfterEnable: true };
