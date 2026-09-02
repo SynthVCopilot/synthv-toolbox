@@ -8,6 +8,7 @@ mod config;
 mod creative_history;
 mod creative_tools;
 mod downloads;
+mod lyric_projects;
 mod lyric_tools;
 mod mcp;
 mod oauth;
@@ -201,6 +202,10 @@ pub fn run() {
             commands::lookup_chinese_rhyme,
             commands::build_lyric_template,
             commands::generate_lyric_candidates,
+            commands::list_lyric_projects,
+            commands::create_lyric_project,
+            commands::save_lyric_project,
+            commands::load_lyric_project,
             commands::run_project_doctor,
             commands::run_pronunciation_diagnostics,
             commands::run_render_review,
