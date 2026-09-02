@@ -870,6 +870,13 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .download-title span { color: var(--primary); font-size: 11px; }
 .download-item.failed .download-title span { color: var(--danger); }
 .download-item small { display: block; margin-top: 5px; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.shortcut-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+.shortcut-tags span { padding: 5px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--surface-subtle); font-size: 10px; }
+.synthv-process-list { display: flex; flex-direction: column; gap: 8px; }
+.synthv-process-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-subtle); }
+.synthv-process-row strong, .synthv-process-row small { display: block; }
+.synthv-process-row small { max-width: 420px; margin-top: 4px; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.synthv-process-row .button-row { margin: 0; flex: 0 0 auto; }
 .progress-track { height: 3px; overflow: hidden; margin-top: 8px; border-radius: 999px; background: var(--line); }
 .progress-track span { display: block; height: 100%; border-radius: inherit; background: var(--primary); transition: width 180ms ease; }
 .bridge-grid, .mcp-layout, .settings-layout { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); align-items: start; gap: 12px; }
@@ -1139,6 +1146,7 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
   .brand { justify-content: center; padding-inline: 0; }
   .lyric-project-toolbar, .lyric-project-actions { align-items: stretch; flex-direction: column; }
   .lyric-project-actions select { width: 100%; }
+  .synthv-process-row { align-items: stretch; flex-direction: column; }
   .brand > div:last-child, .nav-item span, .nav-label, .sidebar-footer .mode-pill, .version { display: none; }
   .nav-item { justify-content: center; padding: 0; }
   .nav-item::before { left: 1px; }

@@ -59,6 +59,7 @@ use crate::synthv::{
     install_bridge as install_bridge_impl, normalized_path_string, scan_installations, succeeded,
     OperationResult, SynthVInstallation,
 };
+use crate::synthv_control::{self, BridgeShortcutAction, SynthVProcess, SynthVShortcutProfile};
 use crate::workflows::{self, WorkflowResult};
 
 #[derive(Debug, Clone, Serialize)]
@@ -990,6 +991,72 @@ pub async fn connect_bridge(state: State<'_, AppState>) -> Result<OperationResul
             format!("已发现工具：{}", tools.join("、")),
         )),
         Err(error) => Ok(failed("SynthV Bridge 连接失败。", error)),
+    }
+}
+
+#[tauri::command]
+pub async fn list_synthv_processes() -> Result<Vec<SynthVProcess>, String> {
+    tauri::async_runtime::spawn_blocking(synthv_control::list_processes)
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub fn synthv_shortcut_profile() -> SynthVShortcutProfile {
+    synthv_control::shortcut_profile()
+}
+
+#[tauri::command]
+pub async fn send_synthv_bridge_shortcut(
+    process_id: u32,
+    action: BridgeShortcutAction,
+) -> Result<OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || synthv_control::send_shortcut(process_id, action))
+        .await
+        .map_err(|error| error.to_string())?
+        .map(|process| {
+            succeeded(
+                format!(
+                    "已向 {}（PID {}）发送 {}。",
+                    process.name,
+                    process.process_id,
+                    action.label()
+                ),
+                "快捷键已发送到被聚焦的 SynthV 窗口。",
+            )
+        })
+}
+
+#[tauri::command]
+pub async fn auto_connect_synthv_bridge(
+    process_id: u32,
+    state: State<'_, AppState>,
+) -> Result<OperationResult, String> {
+    if !bridge_is_bundled(&state.bridge_dir) {
+        return Ok(failed("当前构建未包含完整的 SynthV Bridge。", ""));
+    }
+    let Some(node) = find_node() else {
+        return Ok(failed(
+            "未找到 Node.js。",
+            "可设置 SYNTHV_TOOLBOX_NODE 指向 Node.js 22.19+。",
+        ));
+    };
+    match synthv_control::start_bridge_and_connect(
+        process_id,
+        &state.mcp,
+        node,
+        state.bridge_dir.clone(),
+    )
+    .await
+    {
+        Ok((process, tools)) => Ok(succeeded(
+            format!(
+                "已连接 {}（PID {}）的 SynthV Bridge。",
+                process.name, process.process_id
+            ),
+            format!("F13 已触发，已发现工具：{}", tools.join("、")),
+        )),
+        Err(error) => Ok(failed("SynthV Bridge 自动连接失败。", error)),
     }
 }
 
@@ -2037,13 +2104,14 @@ pub async fn send_message(
     let bindings = state.mcp.bindings().await;
     let runtime = Handle::current();
     let state_mcp = state.mcp.clone();
+    let bridge_dir = state.bridge_dir.clone();
     let session = state.agent.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let provider = build_ai_provider(&ai_settings)?;
         let mut session = session.lock().map_err(|_| "会话状态锁已损坏".to_string())?;
         ensure_session(&mut session);
         let mcp_executor = McpToolExecutor::new(bindings, runtime.clone());
-        let executor = ToolboxAudioToolExecutor::new(mcp_executor, state_mcp, runtime);
+        let executor = ToolboxAudioToolExecutor::new(mcp_executor, state_mcp, runtime, bridge_dir);
         let added = AgentLoop::new(&provider, &executor)
             .run_turn(&mut session.messages, &input)
             .map_err(|error| error.to_string())?;
