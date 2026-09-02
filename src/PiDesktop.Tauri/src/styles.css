@@ -644,6 +644,14 @@ button.full { width: 100%; }
 .lyric-mode-banner p { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
 .lyric-mode-banner label { color: var(--muted); font-size: 10px; font-weight: 600; }
 .lyric-mode-banner select { display: block; min-width: 150px; height: 32px; margin-top: 5px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 4px; color: inherit; background: var(--control); }
+.lyric-project-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 12px; padding: 12px 14px; }
+.lyric-project-toolbar > div:first-child { min-width: 0; }
+.lyric-project-toolbar .eyebrow, .lyric-project-toolbar strong, .lyric-project-toolbar small { display: block; }
+.lyric-project-toolbar strong { margin-top: 3px; font-size: 12px; }
+.lyric-project-toolbar small { margin-top: 4px; color: var(--muted); font-size: 10px; }
+.lyric-project-actions { display: flex; align-items: center; gap: 6px; }
+.lyric-project-actions select { min-width: 190px; height: 32px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 4px; color: inherit; background: var(--control); font-size: 10px; }
+.lyric-project-actions button { min-height: 32px; padding: 5px 9px; font-size: 10px; white-space: nowrap; }
 .lyric-workbench-grid { display: grid; grid-template-columns: minmax(300px,.8fr) minmax(470px,1.2fr); align-items: start; gap: 12px; margin-top: 12px; }
 .panel-inset { min-width: 0; padding: 15px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-subtle); }
 .lyric-structure { grid-row: span 2; }
@@ -1129,6 +1137,8 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
   .app-shell { grid-template-columns: 68px minmax(0,1fr); }
   .sidebar { padding-inline: 8px; }
   .brand { justify-content: center; padding-inline: 0; }
+  .lyric-project-toolbar, .lyric-project-actions { align-items: stretch; flex-direction: column; }
+  .lyric-project-actions select { width: 100%; }
   .brand > div:last-child, .nav-item span, .nav-label, .sidebar-footer .mode-pill, .version { display: none; }
   .nav-item { justify-content: center; padding: 0; }
   .nav-item::before { left: 1px; }

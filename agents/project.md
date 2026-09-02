@@ -20,4 +20,5 @@
 - `src/PiDesktop.Tauri/src-tauri/src/sv2_account_probe.rs`：显式账号预检与授权摘要。
 - `src/PiDesktop.Tauri/src-tauri/src/sv2_sync.rs`：安全的槽位资源同步。
 - `src/PiDesktop.Tauri/src`：Tauri 前端。
+- `src/PiDesktop.Tauri/src-tauri/src/lyric_projects.rs`：歌词项目的本地创建、保存、读取和列表，写入范围固定在 Toolbox 数据根。
 - `docs/lyric-and-audio-workflow-guide.zh-CN.md`：作词、平台音频导入、下载组件和内部工具的评估与实施指导。
