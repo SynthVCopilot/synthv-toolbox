@@ -33,7 +33,7 @@ assert.match(unified, /HostKind::OfficialSv2/);
 assert.match(unified, /writeIntent/);
 assert.match(unified, /normalize_sv2/);
 assert.match(unified, /normalize_direct/);
-assert.match(unified, /BridgeShortcutAction::Start/);
+assert.match(unified, /synthv_control::start_bridge/);
 assert.match(unified, /BridgeShortcutAction::Stop/);
 assert.match(unified, /capture_playback/);
 assert.match(unified, /synthv-snapshots/);
