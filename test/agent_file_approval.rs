@@ -29,6 +29,22 @@ fn approval_is_format_aware_session_bound_and_fingerprint_bound() {
     let manager = FileApprovalManager::default();
     let session = "conversation-a";
 
+    let edit_listing = manager
+        .list(root.to_str().unwrap(), AgentWorkMode::Edit)
+        .expect("edit listing");
+    assert_eq!(
+        edit_listing
+            .iter()
+            .find(|entry| entry.path.ends_with("notes.docx"))
+            .unwrap()
+            .decision,
+        "human-approval-required"
+    );
+    let solo_listing = manager
+        .list(root.to_str().unwrap(), AgentWorkMode::Solo)
+        .expect("solo listing");
+    assert!(solo_listing.iter().all(|entry| entry.decision == "pass"));
+
     assert_eq!(
         manager
             .admit_or_request(
