@@ -41,6 +41,7 @@ import type {
   SynthVProcess,
   SynthVShortcutProfile,
   ToolboxUpdateCheck,
+  TuningProfile,
   WorkflowRecipe,
   WorkflowResult,
 } from "./types";
@@ -73,6 +74,7 @@ let workflowResult: WorkflowResult | undefined;
 let mediaSourceInput = "";
 let mediaSourcePreview: MediaSourcePreview | undefined;
 let mediaTasks: MediaTaskSnapshot[] = [];
+let tuningProfiles: TuningProfile[] = [];
 let audioCaptureCapability: AudioCaptureCapability | undefined;
 let audioCaptureTargets: AudioCaptureTarget[] = [];
 let synthvProcesses: SynthVProcess[] = [];
@@ -368,11 +370,12 @@ async function run(task: () => Promise<void>): Promise<void> {
 
 async function refresh(): Promise<void> {
   app = await api.bootstrap();
-  [lyricProjects, synthvProcesses, synthvShortcutProfile, mediaTasks] = await Promise.all([
+  [lyricProjects, synthvProcesses, synthvShortcutProfile, mediaTasks, tuningProfiles] = await Promise.all([
     api.listLyricProjects(),
     api.listSynthvProcesses(),
     api.synthvShortcutProfile(),
     api.mediaTasks(),
+    api.listTuningProfiles(),
   ]);
 }
 
@@ -1485,6 +1488,9 @@ function renderWorkflowPanel(id: string): string {
     }).join("");
     const taskList = taskCards ? `<section class="download-queue"><div class="section-heading"><div><h3>Cover 任务</h3><p>下载、分离与旋律提取均可取消；Bridge 写入开始后以宿主实际结果为准。</p></div></div><div class="download-list">${taskCards}</div></section>` : "";
     form = `<div class="mode-limit"><strong>声库边界：</strong>Toolbox 会记录指定声库并自动连接/导入，但 SynthV 官方脚本 API 当前不能分配 singer 身份；不会伪报已切换。</div><form id="cover-form" class="workflow-form workflow-wide"><label>BV 或 YouTube 来源<input id="cover-source" required placeholder="BV1... 或 https://www.youtube.com/watch?v=..." /></label><div class="workflow-pair"><label>目标声库<input id="cover-voice" required maxlength="200" placeholder="例如 Mai 2" /></label><label>SynthV 进程<select id="cover-process">${processOptions}</select></label></div><label>完整歌词（可选；CJK 按字、拉丁词按词映射）<textarea id="cover-lyrics" rows="7" placeholder="留空时使用 MIDI/SynthV 默认歌词；歌词 token 多于音符会明确失败"></textarea></label><div class="workflow-pair"><label>目标轨道编号<input id="cover-track" type="number" min="1" max="10000" value="1" required /></label><label>音符组名称<input id="cover-group" value="Toolbox Cover" maxlength="200" required /></label></div><label class="checkbox workflow-check"><input id="cover-rights" type="checkbox" /> 我拥有来源内容或已取得足够授权，并会遵守来源平台规则</label><button class="primary">${icon("sparkles", 16)} 开始完整 Cover</button></form>${taskList}`;
+  } else if (id === "tuning-learning") {
+    const profiles = tuningProfiles.length ? `<div class="download-list">${tuningProfiles.map((profile) => `<article class="download-item completed"><span class="component-status ready">${icon("waveform", 17)}</span><div><div class="download-title"><strong>${escapeHtml(profile.voiceName)}</strong><span>${profile.sourceSamples} 个参考 · ${profile.outcomeSamples} 个反馈</span></div><small>响度 ${profile.parameters.loudness.toFixed(2)} · 张力 ${profile.parameters.tension.toFixed(3)} · 气声 ${profile.parameters.breathiness.toFixed(3)} · 颤音 ${profile.parameters.vibratoStrength.toFixed(3)}</small></div></article>`).join("")}</div>` : `<div class="mode-limit">尚无调声档案。每个精确声库名称使用独立本地档案，不会互相污染。</div>`;
+    form = `<div class="workflow-split"><form id="tuning-learn-form" class="workflow-form"><h3>从参考人声学习</h3><label>参考人声音频路径<input id="tuning-audio" required /></label><label>精确声库名称<input id="tuning-voice" required maxlength="200" /></label><button class="primary">${icon("waveform", 16)} 分析并更新档案</button></form><form id="tuning-apply-form" class="workflow-form"><h3>应用已学习参数</h3><label>声库档案<select id="tuning-profile" required>${tuningProfiles.map((profile) => `<option value="${escapeHtml(profile.voiceName)}">${escapeHtml(profile.voiceName)}</option>`).join("")}</select></label><div class="workflow-pair"><label>轨道<input id="tuning-track" type="number" min="1" value="1" required /></label><label>音符组<input id="tuning-group" type="number" min="1" value="1" required /></label></div><button class="primary" ${app.bridgeConnected && tuningProfiles.length ? "" : "disabled"}>${icon("sparkles", 16)} ${app.bridgeConnected ? "应用到 SynthV" : "请先连接 Bridge"}</button></form></div>${profiles}`;
   } else if (id === "media-import") {
     const sourcePreview = mediaSourcePreview
       ? `<section class="media-source-preview"><div><span class="availability ready">${escapeHtml(mediaSourcePreview.platform)}</span><h3>${escapeHtml(mediaSourcePreview.title)}</h3><p>${escapeHtml(mediaSourcePreview.uploader)} · ${mediaSourcePreview.durationSeconds ? `${Math.round(mediaSourcePreview.durationSeconds)} 秒` : "时长未知"}</p><code>${escapeHtml(mediaSourcePreview.canonicalUrl)}</code></div></section>`
@@ -1853,6 +1859,21 @@ function renderSettings(): string {
 }
 
 function wireForms(): void {
+  document.querySelector<HTMLFormElement>("#tuning-learn-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void run(async () => {
+      const profile = await api.learnTuningProfile(document.querySelector<HTMLInputElement>("#tuning-audio")?.value.trim() ?? "", document.querySelector<HTMLInputElement>("#tuning-voice")?.value.trim() ?? "");
+      tuningProfiles = [...tuningProfiles.filter((item) => item.normalizedVoiceName !== profile.normalizedVoiceName), profile].sort((left, right) => left.voiceName.localeCompare(right.voiceName));
+      notice = `已更新 ${profile.voiceName} 的调声档案。`;
+    });
+  });
+  document.querySelector<HTMLFormElement>("#tuning-apply-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void run(async () => {
+      workflowResult = await api.applyTuningProfile(document.querySelector<HTMLSelectElement>("#tuning-profile")?.value ?? "", Number(document.querySelector<HTMLInputElement>("#tuning-track")?.value ?? 1), Number(document.querySelector<HTMLInputElement>("#tuning-group")?.value ?? 1));
+      notice = workflowResult.summary;
+    });
+  });
   document.querySelector<HTMLFormElement>("#cover-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const processText = document.querySelector<HTMLSelectElement>("#cover-process")?.value ?? "";

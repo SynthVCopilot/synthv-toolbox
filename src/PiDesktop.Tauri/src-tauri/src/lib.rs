@@ -26,6 +26,7 @@ mod sv2_sync;
 mod svp_launch_router;
 mod synthv;
 mod synthv_control;
+mod tuning_profiles;
 mod update_checker;
 mod workflows;
 
@@ -225,6 +226,11 @@ pub fn run() {
             commands::run_retake_workbench,
             commands::run_batch_workflow,
             commands::run_audio_probe,
+            commands::learn_tuning_profile,
+            commands::list_tuning_profiles,
+            commands::get_tuning_profile,
+            commands::record_tuning_outcome,
+            commands::apply_tuning_profile,
             commands::preview_media_source,
             commands::media_tasks,
             commands::queue_media_import,
