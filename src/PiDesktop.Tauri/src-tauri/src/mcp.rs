@@ -10,6 +10,8 @@ use crate::agent::{AgentError, ToolCall, ToolDefinition, ToolExecutor, ToolResul
 use crate::config::McpServerConfig;
 
 mod client;
+#[allow(dead_code)]
+pub(crate) mod http_client;
 
 use client::{McpServerSpec, McpStdioClient};
 
