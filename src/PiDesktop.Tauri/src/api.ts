@@ -38,6 +38,7 @@ import type {
   Sv2SyncResult,
   SvpLaunchMode,
   SvpRoutePlan,
+  SoloTuningRequest,
   SynthVInstallation,
   SynthVProcess,
   SynthVShortcutProfile,
@@ -1113,6 +1114,7 @@ export const api = {
   learnTuningProfile: (audioPath: string, voiceName: string) => call<TuningProfile>("learn_tuning_profile", { audioPath, voiceName }),
   recordTuningOutcome: (voiceName: string, candidate: TuningParameters, improvement: number) => call<TuningProfile>("record_tuning_outcome", { voiceName, candidate, improvement }),
   applyTuningProfile: (voiceName: string, trackIndex: number, groupIndex: number) => call<WorkflowResult>("apply_tuning_profile", { voiceName, trackIndex, groupIndex }),
+  runSoloTuning: (request: SoloTuningRequest) => call<Record<string, unknown>>("run_solo_tuning", { request }),
   runGameToMidi: (vocalPath: string, instrumentalPath: string, outputName: string, tolerance: number, advanced: boolean) =>
     call<WorkflowResult>("run_game_to_midi", { vocalPath, instrumentalPath, outputName, tolerance, advanced }),
   runProjectProbe: (projectPath: string) =>

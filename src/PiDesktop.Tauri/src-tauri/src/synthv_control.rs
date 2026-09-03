@@ -33,6 +33,7 @@ pub enum BridgeShortcutAction {
     Start,
     Stop,
     Save,
+    Undo,
 }
 
 impl BridgeShortcutAction {
@@ -45,6 +46,13 @@ impl BridgeShortcutAction {
                     "⌘S"
                 } else {
                     "Ctrl+S"
+                }
+            }
+            Self::Undo => {
+                if cfg!(target_os = "macos") {
+                    "⌘Z"
+                } else {
+                    "Ctrl+Z"
                 }
             }
         }
@@ -152,6 +160,7 @@ mod platform {
             BridgeShortcutAction::Start => "key code 105".to_string(),
             BridgeShortcutAction::Stop => "key code 107".to_string(),
             BridgeShortcutAction::Save => "keystroke \"s\" using command down".to_string(),
+            BridgeShortcutAction::Undo => "keystroke \"z\" using command down".to_string(),
         };
         let focus = format!(
             "tell application \"System Events\" to tell (first process whose unix id is {process_id}) to set frontmost to true"
@@ -260,6 +269,12 @@ mod platform {
                 keyboard_input(0x11, 0),
                 keyboard_input(0x53, 0),
                 keyboard_input(0x53, KEYEVENTF_KEYUP),
+                keyboard_input(0x11, KEYEVENTF_KEYUP),
+            ],
+            BridgeShortcutAction::Undo => vec![
+                keyboard_input(0x11, 0),
+                keyboard_input(0x5A, 0),
+                keyboard_input(0x5A, KEYEVENTF_KEYUP),
                 keyboard_input(0x11, KEYEVENTF_KEYUP),
             ],
         };
