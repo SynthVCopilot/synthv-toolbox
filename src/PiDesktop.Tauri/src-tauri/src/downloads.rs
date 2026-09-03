@@ -249,6 +249,7 @@ fn component_display_name(id: &str) -> Option<&'static str> {
         "pi-audio" => Some("pi-audio"),
         "cvrs" => Some("CVRS"),
         "sandboxie" => Some("Sandboxie Plus"),
+        "media-fetcher" => Some("媒体导入器"),
         _ => None,
     }
 }
