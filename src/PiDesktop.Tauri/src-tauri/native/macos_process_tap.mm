@@ -39,6 +39,8 @@ struct WavHeader {
     uint32_t data_size = 0;
 };
 
+static_assert(sizeof(WavHeader) == 44, "PCM WAV header must be 44 bytes");
+
 struct Capture {
     std::mutex mutex;
     std::atomic<bool> stopped{false};
@@ -95,7 +97,9 @@ static void destroy_container_resources(Capture* capture) {
         capture->aggregate = kAudioObjectUnknown;
     }
     if (capture->tap != kAudioObjectUnknown) {
-        AudioHardwareDestroyProcessTap(capture->tap);
+        if (@available(macOS 14.2, *)) {
+            AudioHardwareDestroyProcessTap(capture->tap);
+        }
         capture->tap = kAudioObjectUnknown;
     }
 }
@@ -123,7 +127,7 @@ static int finish_capture(Capture* capture) {
     return result;
 }
 
-static OSStatus capture_io(AudioObjectID, const AudioTimeStamp*, const AudioBufferList*, const AudioTimeStamp*, AudioBufferList* input, const AudioTimeStamp*, void* client) {
+static OSStatus capture_io(AudioObjectID, const AudioTimeStamp*, const AudioBufferList* input, const AudioTimeStamp*, AudioBufferList*, const AudioTimeStamp*, void* client) {
     auto* capture = static_cast<Capture*>(client);
     if (!capture || capture->stopped.load(std::memory_order_relaxed) || !input) return noErr;
     std::lock_guard<std::mutex> guard(capture->mutex);
