@@ -220,6 +220,7 @@ pub fn run() {
             commands::run_retake_workbench,
             commands::run_batch_workflow,
             commands::run_audio_probe,
+            commands::run_source_separation,
             commands::preview_media_source,
             commands::import_media_audio,
             commands::run_game_to_midi,
