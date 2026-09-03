@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -79,7 +79,7 @@ const SV1_APP: &str = "/Applications/Synthesizer V Studio Pro.app";
 const SV2_APP: &str = "/Applications/Synthesizer V Studio 2 Pro.app";
 const FLAT_APP: &str = "/Applications/Synthesizer V Flat.app";
 const SYNTHV_EXECUTABLE: &str = "synthv-studio";
-const FLAT_EXECUTABLE_PATH: &str = "/Applications/Synthesizer V Flat.app/Contents/Resources/Synthesizer V Studio/Contents/MacOS/Synthesizer V Flat";
+const FLAT_EXECUTABLE_PATH: &str = "/Applications/Synthesizer V Flat.app/Contents/Resources/Synthesizer V Studio Pro/Contents/MacOS/Synthesizer V Flat";
 
 fn capabilities(kind: HostKind) -> HostCapabilities {
     HostCapabilities {
@@ -95,7 +95,7 @@ fn capabilities(kind: HostKind) -> HostCapabilities {
         },
         singer_list: matches!(kind, HostKind::Flat),
         singer_assignment: matches!(kind, HostKind::Flat),
-        retakes: matches!(kind, HostKind::OfficialSv2 | HostKind::Flat),
+        retakes: matches!(kind, HostKind::OfficialSv2),
         computed_pitch: matches!(kind, HostKind::OfficialSv2),
         export_snapshot: true,
         audio_capture: true,
@@ -225,26 +225,21 @@ fn matches_process(
     application: Option<&ApplicationRecord>,
 ) -> bool {
     match kind {
-        HostKind::Flat => {
-            process.args.starts_with(FLAT_EXECUTABLE_PATH)
-                && command_has_exact_executable(process.args.as_str(), "Synthesizer V Flat")
-        }
+        HostKind::Flat => command_has_exact_executable(process.args.as_str(), FLAT_EXECUTABLE_PATH),
         HostKind::OfficialSv1 | HostKind::OfficialSv2 => application.is_some_and(|app| {
-            process
-                .args
-                .starts_with(app.path.to_string_lossy().as_ref())
-                && command_has_exact_executable(process.args.as_str(), SYNTHV_EXECUTABLE)
+            command_has_exact_executable(
+                process.args.as_str(),
+                &format!("{}/Contents/MacOS/{SYNTHV_EXECUTABLE}", app.path.display()),
+            )
         }),
     }
 }
 
-fn command_has_exact_executable(args: &str, executable: &str) -> bool {
-    args.split_whitespace().any(|value| {
-        Path::new(value)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name == executable)
-    }) || args.ends_with(executable)
+fn command_has_exact_executable(args: &str, full_path: &str) -> bool {
+    args == full_path
+        || args
+            .strip_prefix(full_path)
+            .is_some_and(|rest| rest.chars().next().is_some_and(char::is_whitespace))
 }
 
 fn build_hosts(
@@ -252,68 +247,77 @@ fn build_hosts(
     applications: &[ApplicationRecord],
     flat_status: Option<&str>,
 ) -> Vec<StandardSynthVHost> {
-    [
+    let candidates = [
         (HostKind::OfficialSv1, "Synthesizer V Studio Pro"),
         (HostKind::Flat, "Synthesizer V Flat"),
         (HostKind::OfficialSv2, "Synthesizer V Studio 2 Pro"),
-    ]
-    .into_iter()
-    .filter_map(|(kind, display_name)| {
+    ];
+    let mut hosts = Vec::new();
+    for (kind, display_name) in candidates {
         let application = applications.iter().find(|app| app.kind == kind);
-        let process = processes
+        let mut matching_processes = processes
             .iter()
-            .find(|process| matches_process(kind, process, application));
-        if application.is_none() && process.is_none() {
-            return None;
+            .filter(|process| matches_process(kind, process, application))
+            .map(Some)
+            .collect::<Vec<_>>();
+        if matching_processes.is_empty() {
+            if application.is_none() {
+                continue;
+            }
+            matching_processes.push(None);
         }
-        let running = process.is_some();
-        let process_id = process.map(|process| process.pid);
-        let endpoint = (kind == HostKind::Flat)
-            .then(|| valid_flat_status(flat_status.unwrap_or(""), process_id))
-            .flatten();
-        let connected = kind == HostKind::Flat && endpoint.is_some();
-        let script_directories = match kind {
-            HostKind::OfficialSv1 => vec![
-                "/Library/Application Support/Dreamtonics/Synthesizer V Studio/scripts".to_string(),
-            ],
-            HostKind::OfficialSv2 => vec![
-                "~/Library/Application Support/Dreamtonics/Synthesizer V Studio 2/scripts"
-                    .to_string(),
-            ],
-            HostKind::Flat => Vec::new(),
-        };
-        Some(StandardSynthVHost {
-            id: match kind {
+        for process in matching_processes {
+            let process_id = process.map(|process| process.pid);
+            let running = process_id.is_some();
+            let endpoint = (kind == HostKind::Flat)
+                .then(|| valid_flat_status(flat_status.unwrap_or(""), process_id))
+                .flatten();
+            let connected = kind == HostKind::Flat && endpoint.is_some();
+            let script_directories = match kind {
+                HostKind::OfficialSv1 => vec![
+                    "/Library/Application Support/Dreamtonics/Synthesizer V Studio/scripts"
+                        .to_string(),
+                ],
+                HostKind::OfficialSv2 => vec![
+                    "~/Library/Application Support/Dreamtonics/Synthesizer V Studio 2/scripts"
+                        .to_string(),
+                ],
+                HostKind::Flat => Vec::new(),
+            };
+            let kind_id = match kind {
                 HostKind::OfficialSv1 => "official-sv1",
                 HostKind::Flat => "flat",
                 HostKind::OfficialSv2 => "official-sv2",
-            }
-            .to_string(),
-            kind,
-            display_name: display_name.to_string(),
-            bundle_id: application.and_then(|a| a.bundle_id.clone()),
-            version: application.and_then(|a| a.version.clone()),
-            executable_name: if kind == HostKind::Flat {
-                "Synthesizer V Flat".to_string()
-            } else {
-                SYNTHV_EXECUTABLE.to_string()
-            },
-            application_path: application.map(|a| a.path.to_string_lossy().into_owned()),
-            script_directories,
-            process_id,
-            connection: if kind == HostKind::Flat {
-                ConnectionKind::LoopbackHttp
-            } else {
-                ConnectionKind::Bridge
-            },
-            endpoint,
-            installed: application.is_some(),
-            running,
-            connected,
-            capabilities: capabilities(kind),
-        })
-    })
-    .collect()
+            };
+            hosts.push(StandardSynthVHost {
+                id: process_id
+                    .map_or_else(|| kind_id.to_string(), |pid| format!("{kind_id}:{pid}")),
+                kind,
+                display_name: display_name.to_string(),
+                bundle_id: application.and_then(|a| a.bundle_id.clone()),
+                version: application.and_then(|a| a.version.clone()),
+                executable_name: if kind == HostKind::Flat {
+                    "Synthesizer V Flat".to_string()
+                } else {
+                    SYNTHV_EXECUTABLE.to_string()
+                },
+                application_path: application.map(|a| a.path.to_string_lossy().into_owned()),
+                script_directories,
+                process_id,
+                connection: if kind == HostKind::Flat {
+                    ConnectionKind::LoopbackHttp
+                } else {
+                    ConnectionKind::Bridge
+                },
+                endpoint,
+                installed: application.is_some(),
+                running,
+                connected,
+                capabilities: capabilities(kind),
+            });
+        }
+    }
+    hosts
 }
 
 fn valid_flat_status(status: &str, expected_pid: Option<u32>) -> Option<String> {
@@ -406,7 +410,7 @@ mod tests {
         ];
         let hosts = build_hosts(&processes, &apps, None);
         assert_eq!(hosts[0].process_id, Some(12));
-        assert_eq!(hosts[2].process_id, Some(13));
+        assert_eq!(hosts[1].process_id, Some(13));
     }
     #[test]
     fn flat_has_no_scripts_and_requires_complete_ready_status() {
@@ -422,16 +426,16 @@ mod tests {
         );
         let hosts = build_hosts(&processes, &apps, Some(&good));
         assert!(
-            hosts[1].connected
-                && hosts[1].script_directories.is_empty()
-                && hosts[1].capabilities.singer_assignment
-                && !hosts[1].capabilities.retakes
-                && !hosts[1].capabilities.computed_pitch
-                && !hosts[1].capabilities.voice_parameters.write
-                && hosts[1].capabilities.export_snapshot
+            hosts[0].connected
+                && hosts[0].script_directories.is_empty()
+                && hosts[0].capabilities.singer_assignment
+                && !hosts[0].capabilities.retakes
+                && !hosts[0].capabilities.computed_pitch
+                && !hosts[0].capabilities.voice_parameters.write
+                && hosts[0].capabilities.export_snapshot
         );
         let bad = good.replace("\"runtimeReady\":true", "\"runtimeReady\":false");
-        assert!(!build_hosts(&processes, &apps, Some(&bad))[1].connected);
+        assert!(!build_hosts(&processes, &apps, Some(&bad))[0].connected);
     }
 
     #[test]
@@ -439,10 +443,29 @@ mod tests {
         let apps = vec![app(HostKind::Flat, FLAT_APP, None, "1.4.3")];
         let args = format!("{FLAT_EXECUTABLE_PATH} --open song.svp");
         let hosts = build_hosts(&[process(21, &args)], &apps, None);
-        assert_eq!(hosts[0].id, "flat");
+        assert_eq!(hosts[0].id, "flat:21");
         assert_eq!(hosts[0].process_id, Some(21));
         assert!(hosts[0].running && !hosts[0].connected);
     }
+
+    #[test]
+    fn emits_every_matching_process_and_connects_only_status_pid() {
+        let apps = vec![app(HostKind::Flat, FLAT_APP, None, "1.4.3")];
+        let processes = vec![
+            process(21, FLAT_EXECUTABLE_PATH),
+            process(22, FLAT_EXECUTABLE_PATH),
+        ];
+        let status = format!(
+            r#"{{"pid":22,"running":true,"nativeHostReady":true,"bridgeReady":true,"runtimeReady":true,"endpoint":"http://127.0.0.1:17580/mcp"}}"#
+        );
+        let hosts = build_hosts(&processes, &apps, Some(&status));
+        assert_eq!(hosts.len(), 2);
+        assert_eq!(hosts[0].id, "flat:21");
+        assert_eq!(hosts[1].id, "flat:22");
+        assert!(!hosts[0].connected);
+        assert!(hosts[1].connected);
+    }
+
     #[test]
     fn capabilities_do_not_depend_on_running_state() {
         let hosts = build_hosts(
