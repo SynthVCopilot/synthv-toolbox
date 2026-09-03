@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::agent::{AgentError, ToolCall, ToolDefinition, ToolExecutor, ToolResult};
+use crate::bridge_workflows;
 use crate::components::component_list;
 use crate::config::AgentWorkMode;
 use crate::creative_history;
@@ -21,6 +22,8 @@ use crate::media_import;
 use crate::media_tasks::{CoverTaskRequest, MediaTaskManager};
 use crate::synthv::{bridge_is_bundled, find_node};
 use crate::synthv_control::{self, BridgeShortcutAction};
+use crate::tuning_profiles::{self, TuningParameters};
+use crate::workflows;
 use tokio::runtime::Handle;
 
 const MAX_CLIP_SECONDS: f64 = 30.0;
@@ -602,6 +605,59 @@ impl ToolboxAudioToolExecutor {
                 }).to_string(),
             },
             ToolDefinition {
+                name: "learn_tuning_from_source".to_string(),
+                description: "Analyze one local reference vocal offline and update the isolated tuning profile for an exact voice-library name.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": {
+                        "audioPath": { "type": "string" },
+                        "voiceName": { "type": "string", "maxLength": 200 }
+                    },
+                    "required": ["audioPath", "voiceName"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
+                name: "list_tuning_profiles".to_string(),
+                description: "List every local per-voice tuning profile and its source/A-B sample counts.".to_string(),
+                input_schema_json: json!({ "type": "object", "additionalProperties": false }).to_string(),
+            },
+            ToolDefinition {
+                name: "record_tuning_outcome".to_string(),
+                description: "Update one voice-specific profile from a bounded A/B improvement score after comparing a candidate.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": {
+                        "voiceName": { "type": "string" },
+                        "candidate": { "type": "object", "properties": {
+                            "loudness": { "type": "number", "minimum": -48, "maximum": 12 },
+                            "tension": { "type": "number", "minimum": -1, "maximum": 1 },
+                            "breathiness": { "type": "number", "minimum": -1, "maximum": 1 },
+                            "gender": { "type": "number", "minimum": -1, "maximum": 1 },
+                            "toneShift": { "type": "number", "minimum": -1, "maximum": 1 },
+                            "vibratoStrength": { "type": "number", "minimum": 0, "maximum": 2 }
+                        }, "required": ["loudness", "tension", "breathiness", "gender", "toneShift", "vibratoStrength"], "additionalProperties": false },
+                        "improvement": { "type": "number", "minimum": -1, "maximum": 1 }
+                    },
+                    "required": ["voiceName", "candidate", "improvement"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
+                name: "apply_learned_tuning".to_string(),
+                description: "Apply one voice-specific learned Group Voice profile to a fingerprint-guarded SynthV group. This changes parameters, never singer identity.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": {
+                        "voiceName": { "type": "string" },
+                        "trackIndex": { "type": "integer", "minimum": 1 },
+                        "groupIndex": { "type": "integer", "minimum": 1, "default": 1 }
+                    },
+                    "required": ["voiceName", "trackIndex", "groupIndex"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
                 name: "separate_vocals_and_instrumental".to_string(),
                 description: "Queue a cancellable managed Demucs separation for one local audio file. Returns a persisted media task; use list_media_tasks to observe vocals.wav and instrumental.wav outputs.".to_string(),
                 input_schema_json: json!({
@@ -770,6 +826,53 @@ impl ToolboxAudioToolExecutor {
                             state.checkpoint_created = true;
                         }
                         serde_json::to_string(&checkpoint).map_err(|error| error.to_string())
+                    }),
+            ),
+            "learn_tuning_from_source" => Some(
+                serde_json::from_str::<LearnTuningToolRequest>(&call.arguments_json)
+                    .map_err(|error| format!("调声学习参数无效：{error}"))
+                    .and_then(|request| {
+                        let features =
+                            workflows::source_style(request.audio_path, &self.resource_dir)?;
+                        tuning_profiles::learn(&request.voice_name, features)
+                    })
+                    .and_then(|profile| {
+                        serde_json::to_string(&profile).map_err(|error| error.to_string())
+                    }),
+            ),
+            "list_tuning_profiles" => Some(tuning_profiles::list().and_then(|profiles| {
+                serde_json::to_string(&profiles).map_err(|error| error.to_string())
+            })),
+            "record_tuning_outcome" => Some(
+                serde_json::from_str::<TuningOutcomeToolRequest>(&call.arguments_json)
+                    .map_err(|error| format!("调声反馈参数无效：{error}"))
+                    .and_then(|request| {
+                        tuning_profiles::record_outcome(
+                            &request.voice_name,
+                            request.candidate,
+                            request.improvement,
+                        )
+                    })
+                    .and_then(|profile| {
+                        serde_json::to_string(&profile).map_err(|error| error.to_string())
+                    }),
+            ),
+            "apply_learned_tuning" => Some(
+                serde_json::from_str::<ApplyTuningToolRequest>(&call.arguments_json)
+                    .map_err(|error| format!("调声应用参数无效：{error}"))
+                    .and_then(|request| {
+                        self.admit_project_mutation()?;
+                        let profile = tuning_profiles::get(&request.voice_name)?;
+                        self.runtime
+                            .block_on(bridge_workflows::apply_tuning_profile(
+                                &self.manager,
+                                &profile,
+                                request.track_index,
+                                request.group_index,
+                            ))
+                    })
+                    .and_then(|result| {
+                        serde_json::to_string(&result).map_err(|error| error.to_string())
                     }),
             ),
             "separate_vocals_and_instrumental" => Some(
@@ -948,6 +1051,29 @@ struct TaskIdRequest {
 struct CheckpointToolRequest {
     project_path: String,
     label: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LearnTuningToolRequest {
+    audio_path: String,
+    voice_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TuningOutcomeToolRequest {
+    voice_name: String,
+    candidate: TuningParameters,
+    improvement: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApplyTuningToolRequest {
+    voice_name: String,
+    track_index: u32,
+    group_index: u32,
 }
 
 #[derive(Debug, Deserialize)]

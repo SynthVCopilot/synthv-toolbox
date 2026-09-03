@@ -26,6 +26,7 @@ export interface ToolGroup {
 
 export const featureCatalog: FeatureCatalogItem[] = [
   { id: "cover", title: "一键 Cover", description: "从 BV 或 YouTube 来源自动下载、分离、提取旋律、映射歌词并导入当前 SynthV 工程。", icon: "sparkles", accent: "violet", homePriority: 1, base: ["来源到双轨", "旋律 MIDI 与歌词", "自动 F13 Bridge 连接"], ai: ["快捷指令编排", "指定声库授权提示", "失败阶段解释与重试"], requirements: ["媒体导入器", "人声伴奏分离", "pi-audio", "SynthV Bridge"], componentIds: ["media-fetcher", "vocal-separation", "pi-audio", "ffmpeg"], requiresConnectedBridge: false },
+  { id: "tuning-learning", title: "分声库调声学习", description: "从参考人声提取演唱特征，为每个声库独立学习并应用有边界的调声参数。", icon: "waveform", accent: "emerald", homePriority: 2, base: ["离线演唱特征", "分声库档案", "A/B 反馈更新"], ai: ["自动参数建议", "Bridge 安全应用", "Solo 迭代基础"], requirements: ["pi-audio", "SynthV Bridge（应用时）"], componentIds: ["pi-audio"] },
   { id: "media-import", title: "BV / YouTube 音频导入", description: "预览明确提供的 Bilibili 或 YouTube 来源，并在权利确认后下载为受管理 WAV。", icon: "download", accent: "blue", homePriority: 2, base: ["BV / URL 元数据预览", "受管 WAV 与 SHA-256", "来源与权利确认记录"], ai: ["后续自动分离与 Cover 编排", "来源结构说明", "失败原因归类"], requirements: ["media-fetcher", "FFmpeg", "Node.js 22+"], componentIds: ["media-fetcher", "ffmpeg"] },
   { id: "source-separation", title: "人声 / 伴奏分离", description: "使用受管 Demucs htdemucs 将单个混音源分离为 vocals 与 instrumental WAV。", icon: "audio", accent: "violet", homePriority: 3, base: ["两轨 Demucs 分离", "稳定 vocals / inst 输出", "受管本地目录"], ai: ["自动接入 Cover 工作流", "分离结果复检", "模型运行失败解释"], requirements: ["人声伴奏分离组件", "FFmpeg"], componentIds: ["vocal-separation", "ffmpeg"] },
   { id: "score-to-synthv", title: "曲谱导入 SynthV", description: "把本地 MIDI 或 MusicXML 曲谱安全转换为当前 SynthV 工程中的单声部音符组。", icon: "file", accent: "emerald", homePriority: 1, base: ["MIDI / MusicXML 读取", "单声部音符转换", "导入前文件指纹校验"], ai: ["声部选择建议", "导入结果复核", "后续调声规划"], requirements: ["SynthV Bridge"], requiresConnectedBridge: true },
@@ -56,7 +57,7 @@ export const toolGroups: ToolGroup[] = [
     description: "集中完成音频分析、工程诊断、发音检查与交付复检。",
     icon: "doctor",
     accent: "emerald",
-    featureIds: ["audio-insight", "project-doctor", "pronunciation-doctor", "render-review"],
+    featureIds: ["tuning-learning", "audio-insight", "project-doctor", "pronunciation-doctor", "render-review"],
   },
   {
     id: "iteration",
