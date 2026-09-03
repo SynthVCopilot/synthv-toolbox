@@ -13,3 +13,4 @@
 | 005 | [Feature] SynthV进程与快捷键控制 | 列出所有运行中的 SynthV 进程，读取默认 F13/F14 快捷键并主动触发 Bridge 连接。 | 减少手动启动 Bridge 的步骤，使 Agent 可在受控边界内发现并连接指定实例。 | ✅ 已完成 |
 | 006 | [Feature] 媒体下载组件 | 将固定版本 yt-dlp 作为受管 media-fetcher 接入组件目录和串行下载队列。 | 为 BV/YouTube 元数据预览与音频导入提供可验证、可删除的本地运行时。 | ✅ 已完成 |
 | 007 | [Feature] 平台音频导入 | 实现 BV/YouTube 元数据预览、权利确认、受管 WAV 下载和来源记录。 | 打通 URL 到后续人声/伴奏分离与 SVP Cover 的真实输入链。 | ✅ 已完成 |
+| 008 | [Feature] 人声伴奏分离 | 将单个本地或平台导入音频分离为 vocals 与 inst，并输出受管结果。 | 为任意来源到 MIDI/SVP Cover 提供必要的双轨输入。 | ✅ 已完成 |
