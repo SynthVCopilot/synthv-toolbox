@@ -11,7 +11,7 @@ def data_root() -> pathlib.Path:
     return pathlib.Path.home() / ".SynthVcopilot"
 
 
-def separate(source_text: str) -> dict:
+def separate(source_text: str, output_id_text: str | None = None) -> dict:
     requested_source = pathlib.Path(source_text).expanduser()
     if requested_source.is_symlink():
         raise ValueError("输入必须是存在且非符号链接的本地音频文件")
@@ -21,7 +21,7 @@ def separate(source_text: str) -> dict:
     if source.suffix.lower() not in {".wav", ".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus"}:
         raise ValueError("输入音频格式不受支持")
 
-    output_id = str(uuid.uuid4())
+    output_id = str(uuid.UUID(output_id_text)) if output_id_text else str(uuid.uuid4())
     output = data_root() / "output" / "separations" / output_id
     raw = output / "raw"
     output.mkdir(parents=True, exist_ok=False)
@@ -69,9 +69,10 @@ def separate(source_text: str) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("source")
+    parser.add_argument("--output-id")
     args = parser.parse_args()
     try:
-        print(json.dumps(separate(args.source), ensure_ascii=False))
+        print(json.dumps(separate(args.source, args.output_id), ensure_ascii=False))
         return 0
     except Exception as error:
         print(json.dumps({"error": str(error)}, ensure_ascii=False))
