@@ -1,5 +1,6 @@
 export type AppMode = "toolbox" | "ai";
 export type AgentWorkMode = "edit" | "solo";
+export interface AgentFileApproval { id: string; path: string; purpose: string; createdAtUtc: string; }
 
 export type AiProviderId = "anthropic" | "openai-codex";
 

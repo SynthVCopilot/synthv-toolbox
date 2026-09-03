@@ -1012,6 +1012,10 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .detail-list dd { margin: 0; overflow-wrap: anywhere; font-size: 12px; }
 
 .copilot-layout { height: 100%; display: grid; grid-template-columns: 248px minmax(0,1fr); }
+.file-approvals { margin: 12px 18px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.file-approvals article { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.file-approvals code { max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-approvals small { flex: 1 1 18ch; color: var(--muted); }
 .sessions-panel { min-height: 0; overflow: auto; padding: 14px 12px; border-right: 1px solid var(--line); background: rgba(243,243,243,.52); }
 .session-list { display: flex; flex-direction: column; gap: 2px; }
 .session-item { width: 100%; padding: 10px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; text-align: left; }
@@ -1020,7 +1024,7 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .session-item strong, .session-item small { display: block; }
 .session-item strong { overflow: hidden; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .session-item small { margin-top: 4px; color: var(--muted); font-size: 10px; }
-.chat-panel { min-height: 0; display: grid; grid-template-rows: 58px minmax(0,1fr) auto; background: var(--surface); }
+.chat-panel { min-height: 0; display: grid; grid-template-rows: 58px auto minmax(0,1fr) auto; background: var(--surface); }
 .chat-header { display: flex; align-items: center; justify-content: space-between; padding: 0 22px; border-bottom: 1px solid var(--line); }
 .chat-header strong, .chat-header small { display: block; }
 .chat-header strong { font-size: 14px; font-weight: 600; }
@@ -1160,6 +1164,7 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
   .topbar h1 { font-size: 25px; }
   .mode-card { min-height: 330px; }
   .copilot-layout { grid-template-columns: 190px minmax(0,1fr); }
+  .file-approvals { margin: 8px 10px 0; }
   .profile-intro { align-items: flex-start; flex-direction: column; }
   .account-hub { align-items: flex-start; flex-direction: column; }
   .account-hub-actions { width: 100%; justify-items: start; }
