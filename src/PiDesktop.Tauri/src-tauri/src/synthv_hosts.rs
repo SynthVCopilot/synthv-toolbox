@@ -39,6 +39,8 @@ pub struct HostCapabilities {
     pub computed_pitch: bool,
     pub export_snapshot: bool,
     pub audio_capture: bool,
+    pub read_operations: Vec<&'static str>,
+    pub write_operations: Vec<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -82,6 +84,76 @@ const SYNTHV_EXECUTABLE: &str = "synthv-studio";
 const FLAT_EXECUTABLE_PATH: &str = "/Applications/Synthesizer V Flat.app/Contents/Resources/Synthesizer V Studio Pro/Contents/MacOS/Synthesizer V Flat";
 
 fn capabilities(kind: HostKind) -> HostCapabilities {
+    let common_reads = vec![
+        "status",
+        "project",
+        "sequence",
+        "transport",
+        "tracks",
+        "track",
+        "parts",
+        "part",
+        "notes",
+    ];
+    let common_edits = vec![
+        "transport.play",
+        "transport.pause",
+        "transport.stop",
+        "track.create",
+        "track.update",
+        "track.delete",
+        "part.create",
+        "part.update",
+        "part.delete",
+        "note.create",
+        "note.update",
+        "note.delete",
+    ];
+    let (read_operations, write_operations) = match kind {
+        HostKind::OfficialSv1 => {
+            let mut writes = common_edits.clone();
+            writes.insert(3, "transport.seek");
+            (common_reads, writes)
+        }
+        HostKind::Flat => {
+            let mut reads = common_reads;
+            reads.extend(["singers", "voice"]);
+            let mut writes = vec![
+                "project.open",
+                "sequence.set_tempo",
+                "sequence.remove_tempo",
+                "sequence.set_time_signature",
+                "sequence.remove_time_signature",
+            ];
+            writes.extend(common_edits);
+            writes.push("voice.assign");
+            (reads, writes)
+        }
+        HostKind::OfficialSv2 => {
+            let mut reads = common_reads;
+            reads.push("voice");
+            let writes = vec![
+                "sequence.set_tempo",
+                "sequence.remove_tempo",
+                "sequence.set_time_signature",
+                "sequence.remove_time_signature",
+                "transport.play",
+                "transport.pause",
+                "transport.stop",
+                "transport.seek",
+                "track.create",
+                "track.update",
+                "track.delete",
+                "part.update",
+                "part.delete",
+                "voice.parameters.update",
+                "note.create",
+                "note.update",
+                "note.delete",
+            ];
+            (reads, writes)
+        }
+    };
     HostCapabilities {
         project: true,
         sequence: true,
@@ -98,7 +170,9 @@ fn capabilities(kind: HostKind) -> HostCapabilities {
         retakes: matches!(kind, HostKind::OfficialSv2),
         computed_pitch: matches!(kind, HostKind::OfficialSv2),
         export_snapshot: true,
-        audio_capture: true,
+        audio_capture: !matches!(kind, HostKind::Flat),
+        read_operations,
+        write_operations,
     }
 }
 
@@ -479,5 +553,22 @@ mod tests {
         assert!(serde_json::to_value(&hosts[0]).unwrap()["installed"]
             .as_bool()
             .unwrap());
+    }
+
+    #[test]
+    fn operation_capabilities_expose_only_real_host_differences() {
+        let sv1 = capabilities(HostKind::OfficialSv1);
+        assert!(sv1.write_operations.contains(&"transport.seek"));
+        assert!(!sv1.read_operations.contains(&"singers"));
+
+        let flat = capabilities(HostKind::Flat);
+        assert!(flat.write_operations.contains(&"voice.assign"));
+        assert!(!flat.write_operations.contains(&"transport.seek"));
+        assert!(!flat.audio_capture);
+
+        let sv2 = capabilities(HostKind::OfficialSv2);
+        assert!(sv2.write_operations.contains(&"voice.parameters.update"));
+        assert!(!sv2.write_operations.contains(&"voice.assign"));
+        assert!(sv2.audio_capture);
     }
 }
