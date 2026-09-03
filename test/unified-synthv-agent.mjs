@@ -39,8 +39,8 @@ assert.match(unified, /capture_playback/);
 assert.match(unified, /synthv-snapshots/);
 assert.doesNotMatch(unified, /http:\/\/0\.0\.0\.0/);
 assert.equal(
-  bundle.bundle.resources["../../../external/synthv-agent-bridge/legacy-sv1"],
-  "synthv-agent-bridge/legacy-sv1",
+  bundle.bundle.resources["components/synthv-agent-bridge/legacy-sv1"],
+  "components/synthv-agent-bridge/legacy-sv1",
 );
 
 console.log("Unified SynthV Agent contracts passed.");
