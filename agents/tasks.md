@@ -22,4 +22,4 @@
 | 014 | [Feature] 分声库调声学习 | 从参考人声与 A/B 结果学习，并为每个声库维护独立调声参数档案。 | 让自动调校能够适配来源演唱和不同声库模型。 | ✅ 已完成 |
 | 015 | [Feature] macOS进程音频捕获 | 使用 Core Audio Process Tap 为指定 SynthV PID 提供应用级音频捕获。 | 让 Solo 自动调声在 macOS 上也能执行真实双捕获闭环。 | ✅ 已完成 |
 | 016 | [BugFix] 分离组件打包 | 将 vocal-separation 脚本与依赖清单纳入发布包并在 CI 校验。 | 修复源码可用但安装包缺少分离组件的发布态断链。 | ✅ 已完成 |
-| 017 | [Feature] 组件原生下载 | 使用 ureq 内置流式下载替换 aria2，覆盖媒体导入器、组件源码、Windows FFmpeg 与 Sandboxie。 | 修复发布包依赖外部 aria2c 导致的组件下载断链。 | ✅ 已完成 |
+| 017 | [BugFix] 组件原生下载 | 使用 ureq 内置流式下载替换 aria2，覆盖媒体导入器、组件源码、Windows FFmpeg 与 Sandboxie。 | 修复发布包依赖外部 aria2c 导致的组件下载断链。 | ✅ 已完成 |
