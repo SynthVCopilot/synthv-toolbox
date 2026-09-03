@@ -24,6 +24,8 @@ pub enum ComponentKind {
     AudioProbe,
     /// CVRS 工程工具：.svp 探测、安全副本、无参导出与 LRC。
     Cvrs,
+    /// 受管 yt-dlp：显式 URL 的元数据读取与媒体导入。
+    MediaFetcher,
 }
 
 /// 谁能用这个组件：AI agent、人工（桌面 UI 直接点），或两者。
@@ -139,6 +141,9 @@ pub fn default_catalog() -> Vec<ComponentSpec> {
         spec("cvrs", ComponentKind::Cvrs, "CVRS 工程工具",
              "Toolbox 内置 components/cvrs：.svp 文件级工具。支持版本/轨道探测、静音参考轨副本、无参工程副本，\
               以及按选定轨道生成普通 LRC 和逐字 LRC；所有写入均生成副本，不覆盖源工程。",
+             Audience::Both),
+        spec("media-fetcher", ComponentKind::MediaFetcher, "媒体导入器",
+             "固定版本 yt-dlp，用于用户明确提供的 Bilibili/YouTube URL 元数据预览与受管音频导入。",
              Audience::Both),
     ]
 }
