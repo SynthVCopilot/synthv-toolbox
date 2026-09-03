@@ -105,8 +105,8 @@ pub async fn apply_tuning_profile(
         manager,
         "sv_query",
         json!({
-            "action": "get_group_voice",
-            "args": { "trackIndex": track_index, "groupIndex": group_index },
+            "action": "get_track_notes",
+            "args": { "trackIndex": track_index, "groupIndex": group_index, "offset": 0, "limit": 512 },
             "contextMode": "writeIntent",
             "dense": "never",
             "debug": false
@@ -114,28 +114,41 @@ pub async fn apply_tuning_profile(
     )
     .await?;
     let context_id = find_string(&context, "contextId")
-        .ok_or_else(|| "Bridge 没有返回可安全写入的 Group Voice Context。".to_string())?;
+        .ok_or_else(|| "Bridge 没有返回可安全写入的音符组 Context。".to_string())?;
     let parameters = &profile.parameters;
+    let note_edits = collect_note_indices(&context)
+        .into_iter()
+        .map(|note_index| {
+            json!({
+                "noteIndex": note_index,
+                "changes": { "attributes": { "dF0VbrMod": parameters.vibrato_strength } }
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut args = json!({
+        "trackIndex": track_index,
+        "groupIndex": group_index,
+        "summary": format!("应用 {} 的本地学习调声档案", profile.voice_name),
+        "requireCurrentEditorGroup": false,
+        "voice": {
+            "parameters": {
+                "loudness": parameters.loudness,
+                "tension": parameters.tension,
+                "breathiness": parameters.breathiness,
+                "gender": parameters.gender,
+                "toneShift": parameters.tone_shift
+            }
+        }
+    });
+    if !note_edits.is_empty() {
+        args["noteEdits"] = Value::Array(note_edits);
+    }
     let applied = call_json(
         manager,
         "sv_command",
         json!({
             "action": "apply_group_tuning",
-            "args": {
-                "trackIndex": track_index,
-                "groupIndex": group_index,
-                "summary": format!("应用 {} 的本地学习调声档案", profile.voice_name),
-                "requireCurrentEditorGroup": false,
-                "voice": {
-                    "parameters": {
-                        "loudness": parameters.loudness,
-                        "tension": parameters.tension,
-                        "breathiness": parameters.breathiness,
-                        "gender": parameters.gender,
-                        "toneShift": parameters.tone_shift
-                    }
-                }
-            },
+            "args": args,
             "contextId": context_id,
             "expectedEffect": "allowAlreadySatisfied"
         }),
@@ -146,9 +159,41 @@ pub async fn apply_tuning_profile(
         "context": context,
         "applied": applied,
         "vibratoStrength": parameters.vibrato_strength,
-        "vibratoApplied": false,
-        "vibratoNote": "Vibrato requires fingerprinted note scope and is applied by the Solo note pass, not Group Voice."
+        "vibratoApplied": !collect_note_indices(&context).is_empty(),
+        "vibratoNoteCount": collect_note_indices(&context).len()
     }))
+}
+
+fn collect_note_indices(value: &Value) -> Vec<u64> {
+    let mut output = Vec::new();
+    collect_note_indices_into(value, &mut output);
+    output.sort_unstable();
+    output.dedup();
+    output.truncate(512);
+    output
+}
+
+fn collect_note_indices_into(value: &Value, output: &mut Vec<u64>) {
+    match value {
+        Value::Object(object) => {
+            if let Some(notes) = object.get("notes").and_then(Value::as_array) {
+                output.extend(
+                    notes
+                        .iter()
+                        .filter_map(|note| note.get("noteIndex")?.as_u64()),
+                );
+            }
+            for child in object.values() {
+                collect_note_indices_into(child, output);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_note_indices_into(item, output);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn validate_score_import(request: ScoreImportRequest) -> Result<ValidatedScoreImport, String> {
