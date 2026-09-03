@@ -20,6 +20,7 @@ use crate::mcp::McpToolExecutor;
 use crate::mcp::{extract_mcp_json, McpManager};
 use crate::media_import;
 use crate::media_tasks::{CoverTaskRequest, MediaTaskManager};
+use crate::solo_tuning::{self, SoloTuningRequest};
 use crate::synthv::{bridge_is_bundled, find_node};
 use crate::synthv_control::{self, BridgeShortcutAction};
 use crate::tuning_profiles::{self, TuningParameters};
@@ -658,6 +659,25 @@ impl ToolboxAudioToolExecutor {
                 }).to_string(),
             },
             ToolDefinition {
+                name: "run_solo_tuning".to_string(),
+                description: "Run one bounded Solo tuning round: checkpoint, baseline capture, learned profile application, candidate capture, source-feature scoring, save on improvement or verified Undo on regression. Windows process-loopback capture is required.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": {
+                        "referenceAudioPath": { "type": "string" },
+                        "voiceName": { "type": "string" },
+                        "projectPath": { "type": "string" },
+                        "processId": { "type": "integer", "minimum": 1 },
+                        "trackIndex": { "type": "integer", "minimum": 1 },
+                        "groupIndex": { "type": "integer", "minimum": 1 },
+                        "startSeconds": { "type": "number", "minimum": 0 },
+                        "endSeconds": { "type": "number", "exclusiveMinimum": 0 }
+                    },
+                    "required": ["referenceAudioPath", "voiceName", "projectPath", "processId", "trackIndex", "groupIndex", "startSeconds", "endSeconds"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
                 name: "separate_vocals_and_instrumental".to_string(),
                 description: "Queue a cancellable managed Demucs separation for one local audio file. Returns a persisted media task; use list_media_tasks to observe vocals.wav and instrumental.wav outputs.".to_string(),
                 input_schema_json: json!({
@@ -870,6 +890,21 @@ impl ToolboxAudioToolExecutor {
                                 request.track_index,
                                 request.group_index,
                             ))
+                    })
+                    .and_then(|result| {
+                        serde_json::to_string(&result).map_err(|error| error.to_string())
+                    }),
+            ),
+            "run_solo_tuning" => Some(
+                serde_json::from_str::<SoloTuningRequest>(&call.arguments_json)
+                    .map_err(|error| format!("Solo 调声参数无效：{error}"))
+                    .and_then(|request| {
+                        self.runtime.block_on(solo_tuning::run(
+                            request,
+                            self.work_mode,
+                            &self.manager,
+                            &self.resource_dir,
+                        ))
                     })
                     .and_then(|result| {
                         serde_json::to_string(&result).map_err(|error| error.to_string())

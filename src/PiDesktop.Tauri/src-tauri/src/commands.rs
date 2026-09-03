@@ -48,6 +48,7 @@ use crate::media_import::{self, MediaSourcePreview};
 use crate::media_tasks::{CoverTaskRequest, MediaTaskSnapshot};
 use crate::oauth::{self, AiProviderId, OAuthAccountMetadata};
 use crate::opencode_catalog::{self, OpenCodeCatalog};
+use crate::solo_tuning::{self, SoloTuningRequest, SoloTuningResult};
 use crate::state::{AgentSession, AppState};
 use crate::sv2_concurrent::Sv2IsolationPreference;
 use crate::sv2_profiles::{Sv2AccountPrecheck, Sv2AccountUsageSnapshot, Sv2ProfilesState};
@@ -1829,6 +1830,21 @@ pub async fn apply_tuning_profile(
             data: result,
         },
     ))
+}
+
+#[tauri::command]
+pub async fn run_solo_tuning(
+    request: SoloTuningRequest,
+    state: State<'_, AppState>,
+) -> Result<SoloTuningResult, String> {
+    let settings = state.settings.read().await.clone();
+    solo_tuning::run(
+        request,
+        settings.agent_work_mode,
+        &state.mcp,
+        &state.resource_dir,
+    )
+    .await
 }
 
 #[tauri::command]
