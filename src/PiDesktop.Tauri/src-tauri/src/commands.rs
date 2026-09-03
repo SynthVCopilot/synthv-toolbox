@@ -43,6 +43,7 @@ use crate::lyric_tools::{
     RhymeMatchMode,
 };
 use crate::mcp::McpToolExecutor;
+use crate::media_import::{self, MediaImportResult, MediaSourcePreview};
 use crate::oauth::{self, AiProviderId, OAuthAccountMetadata};
 use crate::opencode_catalog::{self, OpenCodeCatalog};
 use crate::state::{AgentSession, AppState};
@@ -1723,6 +1724,27 @@ pub async fn run_audio_probe(
 }
 
 #[tauri::command]
+pub async fn preview_media_source(source: String) -> Result<MediaSourcePreview, String> {
+    tauri::async_runtime::spawn_blocking(move || media_import::preview(&source))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn import_media_audio(
+    source: String,
+    rights_confirmed: bool,
+    state: State<'_, AppState>,
+) -> Result<MediaImportResult, String> {
+    let resource_dir = state.resource_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        media_import::import_audio(&source, rights_confirmed, &resource_dir)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 pub async fn run_game_to_midi(
     vocal_path: String,
     instrumental_path: String,
@@ -2105,13 +2127,20 @@ pub async fn send_message(
     let runtime = Handle::current();
     let state_mcp = state.mcp.clone();
     let bridge_dir = state.bridge_dir.clone();
+    let resource_dir = state.resource_dir.clone();
     let session = state.agent.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let provider = build_ai_provider(&ai_settings)?;
         let mut session = session.lock().map_err(|_| "会话状态锁已损坏".to_string())?;
         ensure_session(&mut session);
         let mcp_executor = McpToolExecutor::new(bindings, runtime.clone());
-        let executor = ToolboxAudioToolExecutor::new(mcp_executor, state_mcp, runtime, bridge_dir);
+        let executor = ToolboxAudioToolExecutor::new(
+            mcp_executor,
+            state_mcp,
+            runtime,
+            bridge_dir,
+            resource_dir,
+        );
         let added = AgentLoop::new(&provider, &executor)
             .run_turn(&mut session.messages, &input)
             .map_err(|error| error.to_string())?;
