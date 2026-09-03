@@ -2098,13 +2098,22 @@ mod platform {
                 let (pid, command) = line.trim().split_once(char::is_whitespace)?;
                 let process_id = pid.parse().ok()?;
                 let name = command.rsplit('/').next()?.to_string();
-                let lower = name.to_ascii_lowercase();
-                (lower.contains("synthv") || lower.contains("synthesizer v"))
-                    .then_some(AudioCaptureTarget { process_id, name })
+                is_synthv_standalone(&name).then_some(AudioCaptureTarget { process_id, name })
             })
             .collect::<Vec<_>>();
         targets.sort_by_key(|target| target.process_id);
         Ok(targets)
+    }
+
+    fn is_synthv_standalone(name: &str) -> bool {
+        [
+            "synthv-studio",
+            "synthesizer v studio 2 pro",
+            "synthesizer v studio pro",
+            "synthesizer v studio",
+        ]
+        .iter()
+        .any(|candidate| name.eq_ignore_ascii_case(candidate))
     }
 }
 
