@@ -1,10 +1,15 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 use serde::Serialize;
 use serde_json::Value;
+use tokio::process::Command as AsyncCommand;
+use uuid::Uuid;
 
+use crate::agent::data_root;
 use crate::audio_prep::configure_ffmpeg_environment;
 use crate::components::{component_usage_guard, ComponentUsageGuard};
 use crate::config::model_config_path;
@@ -43,11 +48,62 @@ pub fn audio_probe(
     })
 }
 
-pub fn separate_audio(audio_path: String, resource_dir: &Path) -> Result<WorkflowResult, String> {
+pub async fn separate_audio_cancellable(
+    audio_path: String,
+    resource_dir: PathBuf,
+    cancelled: Arc<AtomicBool>,
+    output_id: String,
+) -> Result<WorkflowResult, String> {
+    Uuid::parse_str(&output_id).map_err(|_| "分离任务 ID 无效。".to_string())?;
     let audio = validate_input(&audio_path, "待分离音频", AUDIO_EXTENSIONS)?;
     let runtime = python_component("separation", None)?;
-    let args = vec![audio.to_string_lossy().into_owned()];
-    let data = run_python(&runtime, &args, "人声伴奏分离", resource_dir)?;
+    let args = vec![
+        runtime.script.to_string_lossy().into_owned(),
+        audio.to_string_lossy().into_owned(),
+        "--output-id".to_string(),
+        output_id.clone(),
+    ];
+    let mut command = AsyncCommand::new(&runtime.python);
+    command
+        .args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_ffmpeg_environment(command.as_std_mut(), &resource_dir)?;
+    let output =
+        crate::managed_process::run_managed_command(command, &cancelled, "人声伴奏分离").await;
+    let output_directory = data_root()
+        .join("output")
+        .join("separations")
+        .join(&output_id);
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&output_directory);
+            return Err(error);
+        }
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let data: Value = serde_json::from_str(stdout.trim()).map_err(|error| {
+        let _ = fs::remove_dir_all(&output_directory);
+        format!(
+            "人声伴奏分离未返回有效结果：{error}\n{}",
+            tail(&String::from_utf8_lossy(&output.stderr), 1200)
+        )
+    })?;
+    if !output.status.success() || data.get("error").is_some() {
+        let _ = fs::remove_dir_all(&output_directory);
+        let detail = data
+            .get("error")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| tail(&String::from_utf8_lossy(&output.stderr), 1600));
+        return Err(format!("人声伴奏分离失败：{detail}"));
+    }
+    separation_result(data)
+}
+
+fn separation_result(data: Value) -> Result<WorkflowResult, String> {
     let vocal_path = data.get("vocalPath").and_then(Value::as_str);
     let instrumental_path = data.get("instrumentalPath").and_then(Value::as_str);
     if vocal_path.is_none() || instrumental_path.is_none() {

@@ -22,7 +22,8 @@ assert.match(separator, /--two-stems/);
 assert.match(separator, /htdemucs/);
 assert.match(separator, /vocals\.wav/);
 assert.match(separator, /instrumental\.wav/);
-assert.match(workflows, /pub fn separate_audio/);
+assert.match(workflows, /pub async fn separate_audio_cancellable/);
+assert.match(separator, /--output-id/);
 assert.match(agent, /separate_vocals_and_instrumental/);
 assert.match(features, /id: "source-separation"/);
 

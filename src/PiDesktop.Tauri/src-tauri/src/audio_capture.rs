@@ -16,9 +16,9 @@ use crate::downloads::ComponentDownloadManager;
 use crate::mcp::McpToolExecutor;
 use crate::mcp::{extract_mcp_json, McpManager};
 use crate::media_import;
+use crate::media_tasks::MediaTaskManager;
 use crate::synthv::{bridge_is_bundled, find_node};
 use crate::synthv_control::{self, BridgeShortcutAction};
-use crate::workflows;
 use tokio::runtime::Handle;
 
 const MAX_CLIP_SECONDS: f64 = 30.0;
@@ -465,6 +465,7 @@ pub struct ToolboxAudioToolExecutor {
     resource_dir: PathBuf,
     components_dir: PathBuf,
     downloads: Arc<ComponentDownloadManager>,
+    media_tasks: Arc<MediaTaskManager>,
 }
 
 impl ToolboxAudioToolExecutor {
@@ -476,6 +477,7 @@ impl ToolboxAudioToolExecutor {
         resource_dir: PathBuf,
         components_dir: PathBuf,
         downloads: Arc<ComponentDownloadManager>,
+        media_tasks: Arc<MediaTaskManager>,
     ) -> Self {
         Self {
             mcp,
@@ -485,6 +487,7 @@ impl ToolboxAudioToolExecutor {
             resource_dir,
             components_dir,
             downloads,
+            media_tasks,
         }
     }
 
@@ -516,7 +519,7 @@ impl ToolboxAudioToolExecutor {
             },
             ToolDefinition {
                 name: "import_media_audio".to_string(),
-                description: "Download one explicitly supplied Bilibili/YouTube source into a managed local WAV with metadata, manifest, and SHA-256. rightsConfirmed must be true.".to_string(),
+                description: "Queue one explicitly supplied Bilibili/YouTube source for a cancellable managed WAV import. rightsConfirmed must be true. Returns a persisted media task.".to_string(),
                 input_schema_json: json!({
                     "type": "object",
                     "properties": {
@@ -528,8 +531,33 @@ impl ToolboxAudioToolExecutor {
                 }).to_string(),
             },
             ToolDefinition {
+                name: "list_media_tasks".to_string(),
+                description: "List persisted media import and processing tasks.".to_string(),
+                input_schema_json: json!({ "type": "object", "additionalProperties": false }).to_string(),
+            },
+            ToolDefinition {
+                name: "cancel_media_task".to_string(),
+                description: "Cancel a queued or running media task. Running child process trees are terminated.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": { "taskId": { "type": "string", "format": "uuid" } },
+                    "required": ["taskId"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
+                name: "retry_media_task".to_string(),
+                description: "Retry one failed or cancelled media task from its persisted request.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": { "taskId": { "type": "string", "format": "uuid" } },
+                    "required": ["taskId"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
                 name: "separate_vocals_and_instrumental".to_string(),
-                description: "Run the managed Demucs htdemucs component on one local audio file and return managed vocals.wav and instrumental.wav paths.".to_string(),
+                description: "Queue a cancellable managed Demucs separation for one local audio file. Returns a persisted media task; use list_media_tasks to observe vocals.wav and instrumental.wav outputs.".to_string(),
                 input_schema_json: json!({
                     "type": "object",
                     "properties": { "audioPath": { "type": "string" } },
@@ -647,24 +675,42 @@ impl ToolboxAudioToolExecutor {
                 serde_json::from_str::<MediaSourceToolRequest>(&call.arguments_json)
                     .map_err(|error| format!("媒体导入参数无效：{error}"))
                     .and_then(|request| {
-                        media_import::import_audio(
-                            &request.source,
-                            request.rights_confirmed,
-                            &self.resource_dir,
-                        )
-                    })
-                    .and_then(|value| {
-                        serde_json::to_string(&value).map_err(|error| error.to_string())
+                        let (snapshot, start_worker) = self
+                            .media_tasks
+                            .enqueue_import(request.source, request.rights_confirmed)?;
+                        self.start_media_worker(start_worker);
+                        serde_json::to_string(&snapshot).map_err(|error| error.to_string())
+                    }),
+            ),
+            "list_media_tasks" => Some(
+                serde_json::to_string(&self.media_tasks.snapshot())
+                    .map_err(|error| error.to_string()),
+            ),
+            "cancel_media_task" => Some(
+                serde_json::from_str::<TaskIdRequest>(&call.arguments_json)
+                    .map_err(|error| format!("媒体任务参数无效：{error}"))
+                    .and_then(|request| self.media_tasks.cancel(&request.task_id))
+                    .and_then(|snapshot| {
+                        serde_json::to_string(&snapshot).map_err(|error| error.to_string())
+                    }),
+            ),
+            "retry_media_task" => Some(
+                serde_json::from_str::<TaskIdRequest>(&call.arguments_json)
+                    .map_err(|error| format!("媒体任务参数无效：{error}"))
+                    .and_then(|request| self.media_tasks.retry(&request.task_id))
+                    .and_then(|(snapshot, start_worker)| {
+                        self.start_media_worker(start_worker);
+                        serde_json::to_string(&snapshot).map_err(|error| error.to_string())
                     }),
             ),
             "separate_vocals_and_instrumental" => Some(
                 serde_json::from_str::<AudioPathToolRequest>(&call.arguments_json)
                     .map_err(|error| format!("分离参数无效：{error}"))
                     .and_then(|request| {
-                        workflows::separate_audio(request.audio_path, &self.resource_dir)
-                    })
-                    .and_then(|value| {
-                        serde_json::to_string(&value).map_err(|error| error.to_string())
+                        let (snapshot, start_worker) =
+                            self.media_tasks.enqueue_separation(request.audio_path)?;
+                        self.start_media_worker(start_worker);
+                        serde_json::to_string(&snapshot).map_err(|error| error.to_string())
                     }),
             ),
             "list_managed_components" => Some(
@@ -782,6 +828,16 @@ impl ToolboxAudioToolExecutor {
         let resource_dir = self.resource_dir.clone();
         self.runtime.spawn(async move {
             manager.run_worker(components_dir, resource_dir).await;
+        });
+    }
+
+    fn start_media_worker(&self, start_worker: bool) {
+        if !start_worker {
+            return;
+        }
+        let manager = self.media_tasks.clone();
+        self.runtime.spawn(async move {
+            manager.run_worker().await;
         });
     }
 }
