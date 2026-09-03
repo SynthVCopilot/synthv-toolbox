@@ -638,6 +638,10 @@ button.full { width: 100%; }
 .workflow-nested { padding: 13px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-subtle); }
 .workflow-nested[hidden] { display: none; }
 .workflow-nested > .workflow-check { margin-top: 11px; }
+.media-source-preview { margin-top: 13px; padding: 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-subtle); }
+.media-source-preview h3 { margin: 9px 0 4px; font-size: 15px; }
+.media-source-preview p { margin: 0; color: var(--muted); font-size: 11px; }
+.media-source-preview code { display: block; margin-top: 9px; overflow: hidden; color: var(--primary); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .lyric-mode-banner { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 12px; margin-top: 17px; padding: 13px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-subtle); }
 .lyric-page .lyric-mode-banner { margin-top: 0; }
 .lyric-mode-banner strong, .lyric-mode-banner p { display: block; }

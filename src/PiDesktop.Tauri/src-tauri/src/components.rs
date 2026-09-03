@@ -705,6 +705,11 @@ fn resolve_ffmpeg_binary(resource_root: &Path, managed_data_root: &Path) -> Opti
     system_ffmpeg_pair().map(|(ffmpeg, _)| ffmpeg)
 }
 
+pub(crate) fn resolved_ffmpeg_directory(resource_root: &Path) -> Option<PathBuf> {
+    resolve_ffmpeg_binary(resource_root, &data_root())
+        .and_then(|binary| binary.parent().map(Path::to_path_buf))
+}
+
 pub(crate) fn find_ffmpeg_pair(root: &Path) -> Option<(PathBuf, PathBuf)> {
     let ffmpeg_name = if cfg!(windows) {
         "ffmpeg.exe"

@@ -21,6 +21,8 @@ import type {
   LyricProject,
   LyricProjectSummary,
   LyricSectionRequest,
+  MediaImportResult,
+  MediaSourcePreview,
   McpServerConfig,
   OperationResult,
   OpenCodeCatalog,
@@ -67,6 +69,9 @@ let conversation: ConversationSnapshot | undefined;
 let profiles: Sv2ProfilesState | undefined;
 let activeWorkflow: Feature["id"] | undefined;
 let workflowResult: WorkflowResult | undefined;
+let mediaSourceInput = "";
+let mediaSourcePreview: MediaSourcePreview | undefined;
+let mediaImportResult: MediaImportResult | undefined;
 let audioCaptureCapability: AudioCaptureCapability | undefined;
 let audioCaptureTargets: AudioCaptureTarget[] = [];
 let synthvProcesses: SynthVProcess[] = [];
@@ -1443,7 +1448,15 @@ function renderWorkflowPanel(id: string): string {
   const feature = features.find((item) => item.id === id);
   const group = toolGroups.find((item) => item.featureIds.includes(id));
   let form = "";
-  if (id === "audio-insight") {
+  if (id === "media-import") {
+    const sourcePreview = mediaSourcePreview
+      ? `<section class="media-source-preview"><div><span class="availability ready">${escapeHtml(mediaSourcePreview.platform)}</span><h3>${escapeHtml(mediaSourcePreview.title)}</h3><p>${escapeHtml(mediaSourcePreview.uploader)} · ${mediaSourcePreview.durationSeconds ? `${Math.round(mediaSourcePreview.durationSeconds)} 秒` : "时长未知"}</p><code>${escapeHtml(mediaSourcePreview.canonicalUrl)}</code></div></section>`
+      : `<div class="mode-limit">支持裸 BV 号、Bilibili URL、YouTube URL 与 youtu.be 短链接。不会读取浏览器 Cookie、播放列表或付费内容。</div>`;
+    const importResult = mediaImportResult
+      ? `<div class="result-dashboard compact">${resultMetric("导入编号", mediaImportResult.importId)}${resultMetric("WAV", mediaImportResult.audioPath)}${resultMetric("SHA-256", mediaImportResult.sha256)}</div>`
+      : "";
+    form = `<form id="media-import-form" class="workflow-form workflow-wide"><label>BV 或媒体 URL<input id="media-source" required value="${escapeHtml(mediaSourceInput)}" placeholder="BV1... 或 https://www.youtube.com/watch?v=..." /></label><label class="checkbox workflow-check"><input id="media-rights" type="checkbox" /> 我拥有该内容或已取得足够授权，并会遵守来源平台规则</label><div class="button-row"><button class="secondary" value="preview">${icon("waveform", 16)} 预览来源</button><button class="primary" value="import" ${mediaSourcePreview ? "" : "disabled"}>${icon("download", 16)} 下载受管 WAV</button></div></form>${sourcePreview}${importResult}`;
+  } else if (id === "audio-insight") {
     form = `<form id="audio-probe-form" class="workflow-form">
       <label>音频文件路径<input id="audio-path" required placeholder="选择待分析的 WAV、FLAC、MP3、M4A、AAC、OGG 或 OPUS" /></label>
       ${ai ? `<label class="checkbox workflow-check"><input id="audio-advanced" type="checkbox" checked /> 启用音符统计、PANNs 乐器/风格倾向和人声置信判断</label>` : `<div class="mode-limit">纯工具箱只输出 BPM、调性、能量与频谱趋势；不下载或运行高级模型。</div>`}
@@ -1777,6 +1790,25 @@ function renderSettings(): string {
 }
 
 function wireForms(): void {
+  document.querySelector<HTMLFormElement>("#media-import-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;
+    const action = submitter?.value ?? "preview";
+    const source = document.querySelector<HTMLInputElement>("#media-source")?.value.trim() ?? "";
+    const rightsConfirmed = document.querySelector<HTMLInputElement>("#media-rights")?.checked ?? false;
+    mediaSourceInput = source;
+    void run(async () => {
+      if (action === "import") {
+        mediaImportResult = await api.importMediaAudio(source, rightsConfirmed);
+        mediaSourcePreview = mediaImportResult.source;
+        notice = `《${mediaImportResult.source.title}》已下载为受管 WAV。`;
+      } else {
+        mediaSourcePreview = await api.previewMediaSource(source);
+        mediaImportResult = undefined;
+        notice = `已读取《${mediaSourcePreview.title}》的来源元数据。`;
+      }
+    });
+  });
   document.querySelector<HTMLFormElement>("#audio-probe-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const audioPath = document.querySelector<HTMLInputElement>("#audio-path")?.value.trim() ?? "";

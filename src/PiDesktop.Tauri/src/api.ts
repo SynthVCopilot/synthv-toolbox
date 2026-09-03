@@ -21,6 +21,8 @@ import type {
   LyricProject,
   LyricProjectSummary,
   LyricSectionRequest,
+  MediaImportResult,
+  MediaSourcePreview,
   OperationResult,
   ProjectCheckpoint,
   Sv2AccountProbe,
@@ -422,6 +424,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     return { succeeded: true, summary: "SynthV Bridge 已连接。", detail: "预览模式" } as T;
   }
   if (command === "list_synthv_processes") return [{ processId: 4201, name: "Synthesizer V Studio 2 Pro", command: "/Applications/Synthesizer V Studio 2 Pro.app/Contents/MacOS/synthv-studio" }] as T;
+  if (command === "preview_media_source") return { sourceUrl: String(args?.source ?? ""), canonicalUrl: String(args?.source ?? ""), platform: "BiliBili", mediaId: "BV1Preview", title: "预览媒体", uploader: "预览作者", durationSeconds: 183.2, thumbnailUrl: null } as T;
+  if (command === "import_media_audio") return { importId: crypto.randomUUID(), source: { sourceUrl: String(args?.source ?? ""), canonicalUrl: String(args?.source ?? ""), platform: "BiliBili", mediaId: "BV1Preview", title: "预览媒体", uploader: "预览作者", durationSeconds: 183.2, thumbnailUrl: null }, audioPath: "~/.SynthVcopilot/media-imports/preview/source.wav", metadataPath: "~/.SynthVcopilot/media-imports/preview/source.json", manifestPath: "~/.SynthVcopilot/media-imports/preview/manifest.json", sha256: "preview", importedAtUtc: new Date().toISOString() } as T;
   if (command === "synthv_shortcut_profile") return { bridgeStart: "F13", bridgeStop: "F14", detail: "F13 触发 Bridge 启动或重连，F14 触发停止。" } as T;
   if (command === "send_synthv_bridge_shortcut") return { succeeded: true, summary: `已向预览 SynthV 进程发送 ${String(args?.action === "stop" ? "F14" : "F13")}。`, detail: "预览模式" } as T;
   if (command === "auto_connect_synthv_bridge") {
@@ -983,6 +987,9 @@ export const api = {
     call<BatchWorkflowResult>("run_batch_workflow", { recipeId, inputPaths, options }),
   runAudioProbe: (audioPath: string, advanced: boolean) =>
     call<WorkflowResult>("run_audio_probe", { audioPath, advanced }),
+  previewMediaSource: (source: string) => call<MediaSourcePreview>("preview_media_source", { source }),
+  importMediaAudio: (source: string, rightsConfirmed: boolean) =>
+    call<MediaImportResult>("import_media_audio", { source, rightsConfirmed }),
   runGameToMidi: (vocalPath: string, instrumentalPath: string, outputName: string, tolerance: number, advanced: boolean) =>
     call<WorkflowResult>("run_game_to_midi", { vocalPath, instrumentalPath, outputName, tolerance, advanced }),
   runProjectProbe: (projectPath: string) =>

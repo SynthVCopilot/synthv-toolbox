@@ -318,6 +318,27 @@ export interface WorkflowResult {
   aiReview?: string;
 }
 
+export interface MediaSourcePreview {
+  sourceUrl: string;
+  canonicalUrl: string;
+  platform: string;
+  mediaId: string;
+  title: string;
+  uploader: string;
+  durationSeconds?: number | null;
+  thumbnailUrl?: string | null;
+}
+
+export interface MediaImportResult {
+  importId: string;
+  source: MediaSourcePreview;
+  audioPath: string;
+  metadataPath: string;
+  manifestPath: string;
+  sha256: string;
+  importedAtUtc: string;
+}
+
 export interface AudioCaptureCapability {
   supported: boolean;
   backend: string;
