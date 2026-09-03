@@ -9,6 +9,7 @@ use crate::audio_prep::AudioPreparationService;
 use crate::config::ToolboxSettings;
 use crate::downloads::ComponentDownloadManager;
 use crate::mcp::McpManager;
+use crate::media_tasks::MediaTaskManager;
 use crate::sv2_profiles::Sv2ProfileService;
 
 #[derive(Default)]
@@ -27,6 +28,7 @@ pub struct AppState {
     pub bridge_dir: PathBuf,
     pub components_dir: PathBuf,
     pub downloads: Arc<ComponentDownloadManager>,
+    pub media_tasks: Arc<MediaTaskManager>,
     pub audio_preparation: Arc<AudioPreparationService>,
     pub sv2_profiles: Arc<Sv2ProfileService>,
     pub svp_passthrough_only: AtomicBool,
@@ -41,6 +43,7 @@ impl AppState {
         settings: ToolboxSettings,
     ) -> Self {
         let audio_preparation = AudioPreparationService::new(resource_dir.clone());
+        let media_tasks = MediaTaskManager::persistent(resource_dir.clone());
         Self {
             settings: Arc::new(RwLock::new(settings)),
             agent: Arc::new(Mutex::new(AgentSession::default())),
@@ -49,6 +52,7 @@ impl AppState {
             bridge_dir,
             components_dir,
             downloads: Arc::new(ComponentDownloadManager::persistent()),
+            media_tasks,
             audio_preparation,
             sv2_profiles: Arc::new(Sv2ProfileService::new()),
             svp_passthrough_only: AtomicBool::new(svp_passthrough_only),

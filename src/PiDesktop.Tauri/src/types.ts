@@ -339,6 +339,20 @@ export interface MediaImportResult {
   importedAtUtc: string;
 }
 
+export type MediaTaskStatus = "queued" | "running" | "cancelling" | "completed" | "failed" | "cancelled";
+
+export interface MediaTaskSnapshot {
+  id: string;
+  kind: string;
+  status: MediaTaskStatus;
+  progress: number;
+  detail: string;
+  result?: Record<string, unknown> | null;
+  error?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AudioCaptureCapability {
   supported: boolean;
   backend: string;

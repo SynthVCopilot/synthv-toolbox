@@ -25,6 +25,9 @@
 - `src/PiDesktop.Tauri/src-tauri/src/components.rs`：包含固定版本 FFmpeg 与 media-fetcher 等组件的下载、校验、安装和删除边界。
 - `src/PiDesktop.Tauri/src-tauri/src/downloads.rs`：组件任务串行队列、持久化、恢复、排队取消与失败重试。
 - `src/PiDesktop.Tauri/src-tauri/src/media_import.rs`：BV/YouTube 来源规范化、元数据预览、受管 WAV 下载与来源 manifest。
+- `src/PiDesktop.Tauri/src-tauri/src/media_tasks.rs`：平台导入与人声分离的持久化串行任务、取消和重试。
+- `src/PiDesktop.Tauri/src-tauri/src/managed_process.rs`：受限 stdout/stderr 的跨平台可终止进程树执行器。
+- `external/synthv-agent-bridge`：SynthV 内部查询、编辑与能力边界；明确报告歌手身份不可由官方脚本 API 读取或分配。
 - `src/PiDesktop.Tauri/src-tauri/components/vocal-separation`：固定依赖的 Demucs 双轨分离运行时入口。
 - `src/PiDesktop.Tauri/src-tauri/src/workflows.rs`：音频分析、分离、MIDI 与工程处理工作流编排。
 - `docs/lyric-and-audio-workflow-guide.zh-CN.md`：作词、平台音频导入、下载组件和内部工具的评估与实施指导。

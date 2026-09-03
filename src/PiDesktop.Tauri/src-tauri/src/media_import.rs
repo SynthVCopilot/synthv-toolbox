@@ -2,6 +2,10 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use chrono::Utc;
 use serde::Serialize;
@@ -85,85 +89,140 @@ pub fn preview(source: &str) -> Result<MediaSourcePreview, String> {
     })
 }
 
-pub fn import_audio(
-    source: &str,
+pub async fn import_audio_cancellable(
+    source: String,
     rights_confirmed: bool,
-    resource_root: &Path,
+    resource_root: PathBuf,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<MediaImportResult, String> {
     if !rights_confirmed {
         return Err("下载前必须确认你拥有该内容或已取得足够授权。".to_string());
     }
-    let source_preview = preview(source)?;
+    if cancelled.load(Ordering::Acquire) {
+        return Err("媒体导入已取消。".to_string());
+    }
+
+    let source_preview = preview_cancellable(&source, &cancelled).await?;
     let runtime = media_fetcher()?;
     let import_id = Uuid::new_v4().to_string();
     let directory = imports_root()?.join(&import_id);
     fs::create_dir(&directory).map_err(|error| format!("无法创建媒体导入目录：{error}"))?;
-    let mut args = match safe_common_args() {
-        Ok(args) => args,
-        Err(error) => {
-            let _ = fs::remove_dir(&directory);
-            return Err(error);
+
+    let result = async {
+        let mut args = safe_common_args()?;
+        args.extend([
+            "--extract-audio".to_string(),
+            "--audio-format".to_string(),
+            "wav".to_string(),
+            "--format".to_string(),
+            "bestaudio/best".to_string(),
+            "--max-filesize".to_string(),
+            "2G".to_string(),
+            "--output".to_string(),
+            directory
+                .join("source.%(ext)s")
+                .to_string_lossy()
+                .into_owned(),
+        ]);
+        if let Some(ffmpeg) = resolved_ffmpeg_directory(&resource_root) {
+            args.push("--ffmpeg-location".to_string());
+            args.push(ffmpeg.to_string_lossy().into_owned());
         }
-    };
-    args.extend([
-        "--extract-audio".to_string(),
-        "--audio-format".to_string(),
-        "wav".to_string(),
-        "--format".to_string(),
-        "bestaudio/best".to_string(),
-        "--max-filesize".to_string(),
-        "2G".to_string(),
-        "--output".to_string(),
-        directory
-            .join("source.%(ext)s")
-            .to_string_lossy()
-            .into_owned(),
-    ]);
-    if let Some(ffmpeg) = resolved_ffmpeg_directory(resource_root) {
-        args.push("--ffmpeg-location".to_string());
-        args.push(ffmpeg.to_string_lossy().into_owned());
-    }
-    args.push(source_preview.source_url.clone());
-    if let Err(error) = run_fetcher(&runtime, &args, "下载并抽取音频") {
-        let _ = fs::remove_dir_all(&directory);
-        return Err(error);
-    }
-    let audio_path = fs::read_dir(&directory)
-        .map_err(|error| error.to_string())?
-        .flatten()
-        .map(|entry| entry.path())
-        .find(|path| {
-            path.extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("wav"))
+        args.push(source_preview.source_url.clone());
+
+        run_fetcher_cancellable(&runtime, &args, "下载并抽取音频", &cancelled).await?;
+        if cancelled.load(Ordering::Acquire) {
+            return Err("媒体导入已取消。".to_string());
+        }
+        let audio_path = fs::read_dir(&directory)
+            .map_err(|error| error.to_string())?
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("wav"))
+            })
+            .ok_or_else(|| "媒体导入完成，但没有找到输出 WAV。".to_string())?;
+        let sha256 = sha256_file(&audio_path)?;
+        let imported_at_utc = Utc::now().to_rfc3339();
+        let metadata_path = directory.join("source.json");
+        let manifest_path = directory.join("manifest.json");
+        write_json(&metadata_path, &source_preview)?;
+        write_json(
+            &manifest_path,
+            &json!({
+                "schemaVersion": 1,
+                "importId": import_id,
+                "sourceUrl": source_preview.source_url,
+                "canonicalUrl": source_preview.canonical_url,
+                "rightsConfirmed": true,
+                "rightsConfirmedAtUtc": imported_at_utc,
+                "audio": audio_path.file_name().and_then(|name| name.to_str()).unwrap_or("source.wav"),
+                "sha256": sha256,
+            }),
+        )?;
+        Ok(MediaImportResult {
+            import_id,
+            source: source_preview,
+            audio_path: audio_path.to_string_lossy().into_owned(),
+            metadata_path: metadata_path.to_string_lossy().into_owned(),
+            manifest_path: manifest_path.to_string_lossy().into_owned(),
+            sha256,
+            imported_at_utc,
         })
-        .ok_or_else(|| "媒体导入完成，但没有找到输出 WAV。".to_string())?;
-    let sha256 = sha256_file(&audio_path)?;
-    let imported_at_utc = Utc::now().to_rfc3339();
-    let metadata_path = directory.join("source.json");
-    let manifest_path = directory.join("manifest.json");
-    write_json(&metadata_path, &source_preview)?;
-    write_json(
-        &manifest_path,
-        &json!({
-            "schemaVersion": 1,
-            "importId": import_id,
-            "sourceUrl": source_preview.source_url,
-            "canonicalUrl": source_preview.canonical_url,
-            "rightsConfirmed": true,
-            "rightsConfirmedAtUtc": imported_at_utc,
-            "audio": audio_path.file_name().and_then(|name| name.to_str()).unwrap_or("source.wav"),
-            "sha256": sha256,
-        }),
-    )?;
-    Ok(MediaImportResult {
-        import_id,
-        source: source_preview,
-        audio_path: audio_path.to_string_lossy().into_owned(),
-        metadata_path: metadata_path.to_string_lossy().into_owned(),
-        manifest_path: manifest_path.to_string_lossy().into_owned(),
-        sha256,
-        imported_at_utc,
+    }
+    .await;
+
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&directory);
+    }
+    result
+}
+
+async fn preview_cancellable(
+    source: &str,
+    cancelled: &Arc<AtomicBool>,
+) -> Result<MediaSourcePreview, String> {
+    let source_url = normalize_source(source)?;
+    let runtime = media_fetcher()?;
+    let mut args = safe_common_args()?;
+    args.extend(["--dump-single-json".to_string(), source_url.clone()]);
+    let output = run_fetcher_cancellable(&runtime, &args, "读取媒体元数据", cancelled).await?;
+    if output.stdout.len() > MAX_METADATA_BYTES {
+        return Err("媒体元数据超过 4 MiB 限制。".to_string());
+    }
+    let value: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("无法解析媒体元数据：{error}"))?;
+    if value.get("is_live").and_then(Value::as_bool) == Some(true) {
+        return Err("当前不支持直播或进行中的媒体。".to_string());
+    }
+    Ok(MediaSourcePreview {
+        source_url: source_url.clone(),
+        canonical_url: value
+            .get("webpage_url")
+            .and_then(Value::as_str)
+            .unwrap_or(&source_url)
+            .to_string(),
+        platform: value
+            .get("extractor_key")
+            .or_else(|| value.get("extractor"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string(),
+        media_id: required_text(&value, "id", "媒体 ID")?,
+        title: required_text(&value, "title", "标题")?,
+        uploader: value
+            .get("uploader")
+            .or_else(|| value.get("channel"))
+            .and_then(Value::as_str)
+            .unwrap_or("未知作者")
+            .to_string(),
+        duration_seconds: value.get("duration").and_then(Value::as_f64),
+        thumbnail_url: value
+            .get("thumbnail")
+            .and_then(Value::as_str)
+            .map(str::to_string),
     })
 }
 
@@ -227,6 +286,33 @@ fn run_fetcher(
         .map_err(|error| format!("无法启动媒体导入器：{error}"))?;
     if output.status.success() {
         Ok(output)
+    } else {
+        let detail = String::from_utf8_lossy(&output.stderr)
+            .chars()
+            .take(2_000)
+            .collect::<String>();
+        Err(format!(
+            "{operation}失败（退出码 {:?}）：{}",
+            output.status.code(),
+            detail.trim()
+        ))
+    }
+}
+
+async fn run_fetcher_cancellable(
+    runtime: &Path,
+    args: &[String],
+    operation: &str,
+    cancelled: &AtomicBool,
+) -> Result<std::process::Output, String> {
+    let output =
+        crate::managed_process::run_managed_process(runtime, args, cancelled, "媒体导入器").await?;
+    if output.status.success() {
+        Ok(std::process::Output {
+            status: output.status,
+            stdout: output.stdout,
+            stderr: output.stderr,
+        })
     } else {
         let detail = String::from_utf8_lossy(&output.stderr)
             .chars()

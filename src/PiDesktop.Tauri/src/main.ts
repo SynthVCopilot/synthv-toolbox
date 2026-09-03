@@ -21,8 +21,8 @@ import type {
   LyricProject,
   LyricProjectSummary,
   LyricSectionRequest,
-  MediaImportResult,
   MediaSourcePreview,
+  MediaTaskSnapshot,
   McpServerConfig,
   OperationResult,
   OpenCodeCatalog,
@@ -71,7 +71,7 @@ let activeWorkflow: Feature["id"] | undefined;
 let workflowResult: WorkflowResult | undefined;
 let mediaSourceInput = "";
 let mediaSourcePreview: MediaSourcePreview | undefined;
-let mediaImportResult: MediaImportResult | undefined;
+let mediaTasks: MediaTaskSnapshot[] = [];
 let audioCaptureCapability: AudioCaptureCapability | undefined;
 let audioCaptureTargets: AudioCaptureTarget[] = [];
 let synthvProcesses: SynthVProcess[] = [];
@@ -129,6 +129,7 @@ let openCodeCatalog: OpenCodeCatalog | undefined;
 let openCodeCatalogLoading = false;
 let openCodeCatalogError = "";
 let downloadPollTimer: number | undefined;
+let mediaTaskPollTimer: number | undefined;
 let toastDismissTimer: number | undefined;
 let toastSignature = "";
 let accountUsageRefreshInFlight: Promise<void> | undefined;
@@ -366,10 +367,11 @@ async function run(task: () => Promise<void>): Promise<void> {
 
 async function refresh(): Promise<void> {
   app = await api.bootstrap();
-  [lyricProjects, synthvProcesses, synthvShortcutProfile] = await Promise.all([
+  [lyricProjects, synthvProcesses, synthvShortcutProfile, mediaTasks] = await Promise.all([
     api.listLyricProjects(),
     api.listSynthvProcesses(),
     api.synthvShortcutProfile(),
+    api.mediaTasks(),
   ]);
 }
 
@@ -404,6 +406,20 @@ function scheduleDownloadPoll(): void {
       app.downloads = await api.componentDownloads();
       const isActive = app.downloads.some((item) => ["queued", "downloading", "installing"].includes(item.status));
       if (wasActive && !isActive) await refresh();
+      render();
+    } catch (reason) {
+      error = formatError(reason);
+      render();
+    }
+  }, 700);
+}
+
+function scheduleMediaTaskPoll(): void {
+  if (!mediaTasks.some((item) => ["queued", "running", "cancelling"].includes(item.status)) || mediaTaskPollTimer !== undefined) return;
+  mediaTaskPollTimer = window.setTimeout(async () => {
+    mediaTaskPollTimer = undefined;
+    try {
+      mediaTasks = await api.mediaTasks();
       render();
     } catch (reason) {
       error = formatError(reason);
@@ -512,6 +528,7 @@ function render(): void {
     shellController.afterUpdate(wireForms);
   }
   scheduleDownloadPoll();
+  scheduleMediaTaskPoll();
 }
 
 function renderConcurrentDisclaimer(): string {
@@ -1452,12 +1469,34 @@ function renderWorkflowPanel(id: string): string {
     const sourcePreview = mediaSourcePreview
       ? `<section class="media-source-preview"><div><span class="availability ready">${escapeHtml(mediaSourcePreview.platform)}</span><h3>${escapeHtml(mediaSourcePreview.title)}</h3><p>${escapeHtml(mediaSourcePreview.uploader)} · ${mediaSourcePreview.durationSeconds ? `${Math.round(mediaSourcePreview.durationSeconds)} 秒` : "时长未知"}</p><code>${escapeHtml(mediaSourcePreview.canonicalUrl)}</code></div></section>`
       : `<div class="mode-limit">支持裸 BV 号、Bilibili URL、YouTube URL 与 youtu.be 短链接。不会读取浏览器 Cookie、播放列表或付费内容。</div>`;
-    const importResult = mediaImportResult
-      ? `<div class="result-dashboard compact">${resultMetric("导入编号", mediaImportResult.importId)}${resultMetric("WAV", mediaImportResult.audioPath)}${resultMetric("SHA-256", mediaImportResult.sha256)}</div>`
-      : "";
-    form = `<form id="media-import-form" class="workflow-form workflow-wide"><label>BV 或媒体 URL<input id="media-source" required value="${escapeHtml(mediaSourceInput)}" placeholder="BV1... 或 https://www.youtube.com/watch?v=..." /></label><label class="checkbox workflow-check"><input id="media-rights" type="checkbox" /> 我拥有该内容或已取得足够授权，并会遵守来源平台规则</label><div class="button-row"><button class="secondary" value="preview">${icon("waveform", 16)} 预览来源</button><button class="primary" value="import" ${mediaSourcePreview ? "" : "disabled"}>${icon("download", 16)} 下载受管 WAV</button></div></form>${sourcePreview}${importResult}`;
+    const taskCards = mediaTasks.filter((item) => item.kind === "media-import").slice(-5).reverse().map((task) => {
+      const result = asObject(task.result) ?? {};
+      const audioPath = typeof result.audioPath === "string" ? result.audioPath : "";
+      const action = ["queued", "running", "cancelling"].includes(task.status)
+        ? `<button class="secondary compact" data-cancel-media-task="${escapeHtml(task.id)}" ${task.status === "cancelling" ? "disabled" : ""}>${task.status === "cancelling" ? "终止中…" : "取消"}</button>`
+        : ["failed", "cancelled"].includes(task.status)
+          ? `<button class="secondary compact" data-retry-media-task="${escapeHtml(task.id)}">重试</button>`
+          : "";
+      return `<article class="download-item ${task.status}"><span class="component-status ${task.status === "completed" ? "ready" : ""}">${icon(task.status === "failed" ? "plug" : "download", 17)}</span><div><div class="download-title"><strong>平台音频导入</strong><span>${escapeHtml(task.status)}</span></div><div class="progress-track"><span style="width:${Math.max(2, Math.min(100, task.progress))}%"></span></div><small>${escapeHtml(task.error || task.detail)}</small>${audioPath ? `<small>WAV：${escapeHtml(audioPath)}</small>` : ""}</div>${action}</article>`;
+    }).join("");
+    const taskList = taskCards ? `<section class="download-queue"><div class="section-heading"><div><h3>媒体任务</h3><p>状态会持久化；取消会终止 yt-dlp 及其帮助进程。</p></div></div><div class="download-list">${taskCards}</div></section>` : "";
+    form = `<form id="media-import-form" class="workflow-form workflow-wide"><label>BV 或媒体 URL<input id="media-source" required value="${escapeHtml(mediaSourceInput)}" placeholder="BV1... 或 https://www.youtube.com/watch?v=..." /></label><label class="checkbox workflow-check"><input id="media-rights" type="checkbox" /> 我拥有该内容或已取得足够授权，并会遵守来源平台规则</label><div class="button-row"><button class="secondary" value="preview">${icon("waveform", 16)} 预览来源</button><button class="primary" value="import" ${mediaSourcePreview ? "" : "disabled"}>${icon("download", 16)} 下载受管 WAV</button></div></form>${sourcePreview}${taskList}`;
   } else if (id === "source-separation") {
-    form = `<div class="mode-limit">首次运行会由 Demucs 获取 htdemucs 模型；输出始终写入 Toolbox 受管目录，不覆盖源音频。</div><form id="source-separation-form" class="workflow-form workflow-wide"><label>混音音频路径<input id="separation-source" required placeholder="选择平台导入的 source.wav 或其他本地音频" /></label><button class="primary">${icon("audio", 16)} 分离 vocals / inst</button></form>`;
+    const taskCards = mediaTasks.filter((item) => item.kind === "source-separation").slice(-5).reverse().map((task) => {
+      const wrapped = asObject(task.result) ?? {};
+      const data = asObject(wrapped.data) ?? {};
+      const vocalPath = typeof data.vocalPath === "string" ? data.vocalPath : "";
+      const instrumentalPath = typeof data.instrumentalPath === "string" ? data.instrumentalPath : "";
+      const action = ["queued", "running", "cancelling"].includes(task.status)
+        ? `<button class="secondary compact" data-cancel-media-task="${escapeHtml(task.id)}" ${task.status === "cancelling" ? "disabled" : ""}>${task.status === "cancelling" ? "终止中…" : "取消"}</button>`
+        : ["failed", "cancelled"].includes(task.status)
+          ? `<button class="secondary compact" data-retry-media-task="${escapeHtml(task.id)}">重试</button>`
+          : "";
+      const outputs = vocalPath && instrumentalPath ? `<small>Vocals：${escapeHtml(vocalPath)}</small><small>Inst：${escapeHtml(instrumentalPath)}</small>` : "";
+      return `<article class="download-item ${task.status}"><span class="component-status ${task.status === "completed" ? "ready" : ""}">${icon(task.status === "failed" ? "plug" : "audio", 17)}</span><div><div class="download-title"><strong>人声伴奏分离</strong><span>${escapeHtml(task.status)}</span></div><div class="progress-track"><span style="width:${Math.max(2, Math.min(100, task.progress))}%"></span></div><small>${escapeHtml(task.error || task.detail)}</small>${outputs}</div>${action}</article>`;
+    }).join("");
+    const taskList = taskCards ? `<section class="download-queue"><div class="section-heading"><div><h3>分离任务</h3><p>状态会持久化；取消会终止 Python、Demucs 及模型帮助进程。</p></div></div><div class="download-list">${taskCards}</div></section>` : "";
+    form = `<div class="mode-limit">首次运行会由 Demucs 获取 htdemucs 模型；输出始终写入 Toolbox 受管目录，不覆盖源音频。</div><form id="source-separation-form" class="workflow-form workflow-wide"><label>混音音频路径<input id="separation-source" required placeholder="选择平台导入的 source.wav 或其他本地音频" /></label><button class="primary">${icon("audio", 16)} 分离 vocals / inst</button></form>${taskList}`;
   } else if (id === "audio-insight") {
     form = `<form id="audio-probe-form" class="workflow-form">
       <label>音频文件路径<input id="audio-path" required placeholder="选择待分析的 WAV、FLAC、MP3、M4A、AAC、OGG 或 OPUS" /></label>
@@ -1802,12 +1841,11 @@ function wireForms(): void {
     mediaSourceInput = source;
     void run(async () => {
       if (action === "import") {
-        mediaImportResult = await api.importMediaAudio(source, rightsConfirmed);
-        mediaSourcePreview = mediaImportResult.source;
-        notice = `《${mediaImportResult.source.title}》已下载为受管 WAV。`;
+        const task = await api.queueMediaImport(source, rightsConfirmed);
+        mediaTasks = [...mediaTasks.filter((item) => item.id !== task.id), task];
+        notice = "平台音频导入已加入可取消任务队列。";
       } else {
         mediaSourcePreview = await api.previewMediaSource(source);
-        mediaImportResult = undefined;
         notice = `已读取《${mediaSourcePreview.title}》的来源元数据。`;
       }
     });
@@ -1822,8 +1860,9 @@ function wireForms(): void {
     event.preventDefault();
     const audioPath = document.querySelector<HTMLInputElement>("#separation-source")?.value.trim() ?? "";
     void run(async () => {
-      workflowResult = await api.runSourceSeparation(audioPath);
-      notice = workflowResult.summary;
+      const task = await api.queueMediaSeparation(audioPath);
+      mediaTasks = [...mediaTasks.filter((item) => item.id !== task.id), task];
+      notice = "人声伴奏分离已加入可取消任务队列。";
     });
   });
   document.querySelector<HTMLFormElement>("#score-to-synthv-form")?.addEventListener("submit", (event) => {
@@ -2815,6 +2854,22 @@ document.addEventListener("click", (event) => {
     void run(async () => {
       if (app) app.downloads = await api.retryComponentInstall(target.dataset.retryComponentTask ?? "");
       notice = "组件任务已重新加入队列。";
+    });
+    return;
+  }
+  if (target.dataset.cancelMediaTask) {
+    void run(async () => {
+      const task = await api.cancelMediaTask(target.dataset.cancelMediaTask ?? "");
+      mediaTasks = mediaTasks.map((item) => item.id === task.id ? task : item);
+      notice = task.status === "cancelled" ? "媒体任务已取消。" : "正在终止媒体进程树。";
+    });
+    return;
+  }
+  if (target.dataset.retryMediaTask) {
+    void run(async () => {
+      const task = await api.retryMediaTask(target.dataset.retryMediaTask ?? "");
+      mediaTasks = mediaTasks.map((item) => item.id === task.id ? task : item);
+      notice = "媒体任务已重新加入队列。";
     });
     return;
   }
