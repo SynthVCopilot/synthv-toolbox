@@ -1571,13 +1571,14 @@ function renderMessage(message: ChatMessage): string {
 
 function renderComponents(): string {
   if (!app) return "";
-  const statusLabel = { queued: "排队中", downloading: "aria2 下载中", installing: "安装中", completed: "已完成", failed: "失败" } as const;
+  const statusLabel = { queued: "排队中", downloading: "aria2 下载中", installing: "安装中", completed: "已完成", failed: "失败", cancelled: "已取消" } as const;
   const activeDownloads = app.downloads.filter((item) => item.status !== "completed");
   const queue = activeDownloads.length ? `<section class="download-queue panel">
     <div class="section-heading"><div><h2>下载队列</h2><p>队列串行执行；远程组件固定版本并由 aria2 + SHA-256 校验。</p></div><span class="queue-count">${activeDownloads.length}</span></div>
     <div class="download-list">${activeDownloads.map((item) => `<article class="download-item ${item.status}">
       <span class="component-status ${item.status === "completed" ? "ready" : ""}">${item.status === "failed" ? icon("plug", 17) : icon("download", 17)}</span>
       <div><div class="download-title"><strong>${escapeHtml(item.displayName)}</strong><span>${statusLabel[item.status]}</span></div><div class="progress-track"><span style="width:${Math.max(2, Math.min(100, item.progress))}%"></span></div><small>${escapeHtml(item.detail)}</small></div>
+      ${item.status === "queued" ? `<button class="secondary compact" data-cancel-component-task="${escapeHtml(item.id)}">取消</button>` : ["failed", "cancelled"].includes(item.status) ? `<button class="secondary compact" data-retry-component-task="${escapeHtml(item.id)}">重试</button>` : ""}
     </article>`).join("")}</div>
   </section>` : "";
   return `${queue}<div class="section-heading"><div><h2>本地组件</h2><p>下载任务会加入队列；无固定来源与 SHA-256 的组件会拒绝安装。</p></div></div>
@@ -2800,6 +2801,20 @@ document.addEventListener("click", (event) => {
     void run(async () => {
       if (app) app.downloads = await api.queueComponentInstall(target.dataset.installComponent ?? "");
       notice = "组件已加入下载队列。";
+    });
+    return;
+  }
+  if (target.dataset.cancelComponentTask) {
+    void run(async () => {
+      if (app) app.downloads = await api.cancelComponentInstall(target.dataset.cancelComponentTask ?? "");
+      notice = "排队中的组件任务已取消。";
+    });
+    return;
+  }
+  if (target.dataset.retryComponentTask) {
+    void run(async () => {
+      if (app) app.downloads = await api.retryComponentInstall(target.dataset.retryComponentTask ?? "");
+      notice = "组件任务已重新加入队列。";
     });
     return;
   }
