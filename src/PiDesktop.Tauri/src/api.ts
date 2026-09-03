@@ -55,7 +55,7 @@ let previewSmartSvpLaunchEnabled = false;
 let previewBridgeConnected = true;
 let previewDownloads: ComponentDownload[] = [];
 let previewLyricProjects: LyricProject[] = [];
-const previewManagedComponentIds = new Set(["pi-audio", "cvrs", "media-fetcher"]);
+const previewManagedComponentIds = new Set(["pi-audio", "cvrs", "media-fetcher", "vocal-separation"]);
 const previewInstalledManagedComponentIds = new Set(["cvrs"]);
 let previewActiveAiProvider: AiProviderId = "anthropic";
 let previewAiAccountSequence = 2;
@@ -291,6 +291,7 @@ const previewState = (): BootstrapState => ({
     { id: "pi-audio", displayName: "pi-audio 音频探针", description: "特征指纹、BPM、乐器与风格倾向。", audience: "AI 与人工", installed: previewInstalledManagedComponentIds.has("pi-audio"), downloaded: false, installable: true, removable: previewInstalledManagedComponentIds.has("pi-audio"), status: previewInstalledManagedComponentIds.has("pi-audio") ? "已就绪" : "可通过 aria2 下载" },
     { id: "cvrs", displayName: "CVRS 工程工具", description: "工程探测、安全副本、无参导出与 LRC。", audience: "AI 与人工", installed: previewInstalledManagedComponentIds.has("cvrs"), downloaded: false, installable: true, removable: previewInstalledManagedComponentIds.has("cvrs"), status: previewInstalledManagedComponentIds.has("cvrs") ? "已就绪" : "可通过 aria2 下载" },
     { id: "media-fetcher", displayName: "媒体导入器", description: "固定版本 yt-dlp，用于显式 Bilibili/YouTube URL 导入。", audience: "AI 与人工", installed: previewInstalledManagedComponentIds.has("media-fetcher"), downloaded: false, installable: true, removable: previewInstalledManagedComponentIds.has("media-fetcher"), status: previewInstalledManagedComponentIds.has("media-fetcher") ? "已就绪" : "可通过 aria2 下载" },
+    { id: "vocal-separation", displayName: "人声伴奏分离", description: "使用 Demucs htdemucs 把单个混音分成 vocals 与 inst。", audience: "AI 与人工", installed: previewInstalledManagedComponentIds.has("vocal-separation"), downloaded: false, installable: true, removable: previewInstalledManagedComponentIds.has("vocal-separation"), status: previewInstalledManagedComponentIds.has("vocal-separation") ? "已就绪" : "可安装本地运行环境" },
     { id: "sandboxie", displayName: "Sandboxie Plus 1.18.2", description: "SynthV Toolbox 并发隔离提供方；下载官方安装包后由用户交互安装。", audience: "Windows 并发隔离", installed: false, downloaded: false, installable: true, removable: false, status: "可通过 aria2 下载官方 x64 安装包" },
   ],
   downloads: previewDownloads,
@@ -832,6 +833,18 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       ],
     },
   } as T;
+  if (command === "run_source_separation") return {
+    kind: "source-separation",
+    summary: "人声与伴奏分离完成，已生成受管 vocals/inst WAV。",
+    outputPath: "~/.SynthVcopilot/output/separations/preview/vocals.wav",
+    data: {
+      separationId: "preview",
+      sourcePath: String(args?.audioPath ?? ""),
+      vocalPath: "~/.SynthVcopilot/output/separations/preview/vocals.wav",
+      instrumentalPath: "~/.SynthVcopilot/output/separations/preview/instrumental.wav",
+      model: "htdemucs",
+    },
+  } as T;
   if (command === "run_render_review") return {
     kind: "render-quality-check",
     summary: "渲染复检通过，未发现交付阻断项。",
@@ -987,6 +1000,8 @@ export const api = {
     call<BatchWorkflowResult>("run_batch_workflow", { recipeId, inputPaths, options }),
   runAudioProbe: (audioPath: string, advanced: boolean) =>
     call<WorkflowResult>("run_audio_probe", { audioPath, advanced }),
+  runSourceSeparation: (audioPath: string) =>
+    call<WorkflowResult>("run_source_separation", { audioPath }),
   previewMediaSource: (source: string) => call<MediaSourcePreview>("preview_media_source", { source }),
   importMediaAudio: (source: string, rightsConfirmed: boolean) =>
     call<MediaImportResult>("import_media_audio", { source, rightsConfirmed }),

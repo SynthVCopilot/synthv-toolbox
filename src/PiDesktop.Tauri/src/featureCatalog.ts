@@ -26,6 +26,7 @@ export interface ToolGroup {
 
 export const featureCatalog: FeatureCatalogItem[] = [
   { id: "media-import", title: "BV / YouTube 音频导入", description: "预览明确提供的 Bilibili 或 YouTube 来源，并在权利确认后下载为受管理 WAV。", icon: "download", accent: "blue", homePriority: 2, base: ["BV / URL 元数据预览", "受管 WAV 与 SHA-256", "来源与权利确认记录"], ai: ["后续自动分离与 Cover 编排", "来源结构说明", "失败原因归类"], requirements: ["media-fetcher", "FFmpeg", "Node.js 22+"], componentIds: ["media-fetcher", "ffmpeg"] },
+  { id: "source-separation", title: "人声 / 伴奏分离", description: "使用受管 Demucs htdemucs 将单个混音源分离为 vocals 与 instrumental WAV。", icon: "audio", accent: "violet", homePriority: 3, base: ["两轨 Demucs 分离", "稳定 vocals / inst 输出", "受管本地目录"], ai: ["自动接入 Cover 工作流", "分离结果复检", "模型运行失败解释"], requirements: ["人声伴奏分离组件", "FFmpeg"], componentIds: ["vocal-separation", "ffmpeg"] },
   { id: "score-to-synthv", title: "曲谱导入 SynthV", description: "把本地 MIDI 或 MusicXML 曲谱安全转换为当前 SynthV 工程中的单声部音符组。", icon: "file", accent: "emerald", homePriority: 1, base: ["MIDI / MusicXML 读取", "单声部音符转换", "导入前文件指纹校验"], ai: ["声部选择建议", "导入结果复核", "后续调声规划"], requirements: ["SynthV Bridge"], requiresConnectedBridge: true },
   { id: "audio-to-project", title: "演唱音频 → MIDI / SynthV", description: "从时间轴一致的演唱版与伴奏版提取单音旋律；可只导出 MIDI，也可继续导入当前 SynthV 工程。", icon: "pipeline", accent: "violet", homePriority: 4, base: ["配对音频差分", "标准 MIDI 导出", "可选 Bridge 导入"], ai: ["候选参数寻优", "低置信音符纠正", "导入结果复核"], requirements: ["FFmpeg", "pi-audio", "Bridge（可选）"], componentIds: ["ffmpeg", "pi-audio"] },
   { id: "audio-insight", title: "音频结构分析", description: "提取速度、拍点、调性、能量和频谱趋势，为编曲、调声与复检建立可追溯依据。", icon: "waveform", accent: "blue", homePriority: 3, base: ["BPM / 拍点 / 调性", "能量与频谱曲线", "结构化分析报告"], ai: ["段落与风格归纳", "异常片段解释", "制作方向建议"], requirements: ["FFmpeg", "pi-audio"], componentIds: ["ffmpeg", "pi-audio"] },
@@ -46,7 +47,7 @@ export const toolGroups: ToolGroup[] = [
     description: "把曲谱或演唱音频变成可继续编辑的 MIDI 与 SynthV 音符。",
     icon: "pipeline",
     accent: "violet",
-    featureIds: ["media-import", "audio-to-project", "score-to-synthv"],
+    featureIds: ["media-import", "source-separation", "audio-to-project", "score-to-synthv"],
   },
   {
     id: "quality",

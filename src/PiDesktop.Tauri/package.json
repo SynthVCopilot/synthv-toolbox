@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "tsc && vite build",
-    "test:contracts": "node ../../test/sv2-account-refresh.mjs && node ../../test/macos-sv2-slots.mjs && node ../../test/lyric-projects.mjs && node ../../test/synthv-bridge-control.mjs && node ../../test/media-fetcher-component.mjs && node ../../test/media-import.mjs",
+    "test:contracts": "node ../../test/sv2-account-refresh.mjs && node ../../test/macos-sv2-slots.mjs && node ../../test/lyric-projects.mjs && node ../../test/synthv-bridge-control.mjs && node ../../test/media-fetcher-component.mjs && node ../../test/media-import.mjs && node ../../test/source-separation.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

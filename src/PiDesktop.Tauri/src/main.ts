@@ -1456,6 +1456,8 @@ function renderWorkflowPanel(id: string): string {
       ? `<div class="result-dashboard compact">${resultMetric("导入编号", mediaImportResult.importId)}${resultMetric("WAV", mediaImportResult.audioPath)}${resultMetric("SHA-256", mediaImportResult.sha256)}</div>`
       : "";
     form = `<form id="media-import-form" class="workflow-form workflow-wide"><label>BV 或媒体 URL<input id="media-source" required value="${escapeHtml(mediaSourceInput)}" placeholder="BV1... 或 https://www.youtube.com/watch?v=..." /></label><label class="checkbox workflow-check"><input id="media-rights" type="checkbox" /> 我拥有该内容或已取得足够授权，并会遵守来源平台规则</label><div class="button-row"><button class="secondary" value="preview">${icon("waveform", 16)} 预览来源</button><button class="primary" value="import" ${mediaSourcePreview ? "" : "disabled"}>${icon("download", 16)} 下载受管 WAV</button></div></form>${sourcePreview}${importResult}`;
+  } else if (id === "source-separation") {
+    form = `<div class="mode-limit">首次运行会由 Demucs 获取 htdemucs 模型；输出始终写入 Toolbox 受管目录，不覆盖源音频。</div><form id="source-separation-form" class="workflow-form workflow-wide"><label>混音音频路径<input id="separation-source" required placeholder="选择平台导入的 source.wav 或其他本地音频" /></label><button class="primary">${icon("audio", 16)} 分离 vocals / inst</button></form>`;
   } else if (id === "audio-insight") {
     form = `<form id="audio-probe-form" class="workflow-form">
       <label>音频文件路径<input id="audio-path" required placeholder="选择待分析的 WAV、FLAC、MP3、M4A、AAC、OGG 或 OPUS" /></label>
@@ -1814,6 +1816,14 @@ function wireForms(): void {
     const audioPath = document.querySelector<HTMLInputElement>("#audio-path")?.value.trim() ?? "";
     const advanced = app?.mode === "ai" && (document.querySelector<HTMLInputElement>("#audio-advanced")?.checked ?? false);
     void run(async () => { workflowResult = await api.runAudioProbe(audioPath, advanced); notice = workflowResult.summary; });
+  });
+  document.querySelector<HTMLFormElement>("#source-separation-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const audioPath = document.querySelector<HTMLInputElement>("#separation-source")?.value.trim() ?? "";
+    void run(async () => {
+      workflowResult = await api.runSourceSeparation(audioPath);
+      notice = workflowResult.summary;
+    });
   });
   document.querySelector<HTMLFormElement>("#score-to-synthv-form")?.addEventListener("submit", (event) => {
     event.preventDefault();

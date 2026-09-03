@@ -1724,6 +1724,25 @@ pub async fn run_audio_probe(
 }
 
 #[tauri::command]
+pub async fn run_source_separation(
+    audio_path: String,
+    state: State<'_, AppState>,
+) -> Result<WorkflowResult, String> {
+    let resource_dir = state.resource_dir.clone();
+    let path_for_run = audio_path.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        workflows::separate_audio(path_for_run, &resource_dir)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    Ok(record_workflow_result(
+        "人声伴奏分离",
+        json!({ "audioPath": audio_path }),
+        result,
+    ))
+}
+
+#[tauri::command]
 pub async fn preview_media_source(source: String) -> Result<MediaSourcePreview, String> {
     tauri::async_runtime::spawn_blocking(move || media_import::preview(&source))
         .await

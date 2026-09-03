@@ -16,6 +16,7 @@ use crate::mcp::{extract_mcp_json, McpManager};
 use crate::media_import;
 use crate::synthv::{bridge_is_bundled, find_node};
 use crate::synthv_control::{self, BridgeShortcutAction};
+use crate::workflows;
 use tokio::runtime::Handle;
 
 const MAX_CLIP_SECONDS: f64 = 30.0;
@@ -519,6 +520,16 @@ impl ToolboxAudioToolExecutor {
                 }).to_string(),
             },
             ToolDefinition {
+                name: "separate_vocals_and_instrumental".to_string(),
+                description: "Run the managed Demucs htdemucs component on one local audio file and return managed vocals.wav and instrumental.wav paths.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": { "audioPath": { "type": "string" } },
+                    "required": ["audioPath"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
                 name: "list_synthv_processes".to_string(),
                 description: "List every running local SynthV process. This is read-only and returns PID, executable name, and command line.".to_string(),
                 input_schema_json: json!({ "type": "object", "additionalProperties": false }).to_string(),
@@ -593,6 +604,16 @@ impl ToolboxAudioToolExecutor {
                             request.rights_confirmed,
                             &self.resource_dir,
                         )
+                    })
+                    .and_then(|value| {
+                        serde_json::to_string(&value).map_err(|error| error.to_string())
+                    }),
+            ),
+            "separate_vocals_and_instrumental" => Some(
+                serde_json::from_str::<AudioPathToolRequest>(&call.arguments_json)
+                    .map_err(|error| format!("分离参数无效：{error}"))
+                    .and_then(|request| {
+                        workflows::separate_audio(request.audio_path, &self.resource_dir)
                     })
                     .and_then(|value| {
                         serde_json::to_string(&value).map_err(|error| error.to_string())
@@ -682,6 +703,12 @@ struct MediaSourceToolRequest {
     source: String,
     #[serde(default)]
     rights_confirmed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AudioPathToolRequest {
+    audio_path: String,
 }
 
 #[derive(Debug, Deserialize)]
