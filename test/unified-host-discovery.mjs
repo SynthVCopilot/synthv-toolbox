@@ -17,11 +17,11 @@ for (const field of ["project", "sequence", "transport", "tracks", "parts", "not
 assert.match(source, /pub voice_parameters: CapabilityAccess/);
 assert.match(source, /Synthesizer V Studio Pro\.app/);
 assert.match(source, /synthv-studio/);
-assert.match(source, /Contents\/Resources\/Synthesizer V Studio\/Contents\/MacOS\/Synthesizer V Flat/);
-assert.match(source, /starts_with\(FLAT_EXECUTABLE_PATH\)/);
+assert.match(source, /Contents\/Resources\/Synthesizer V Studio Pro\/Contents\/MacOS\/Synthesizer V Flat/);
+assert.match(source, /command_has_exact_executable\(process\.args\.as_str\(\), FLAT_EXECUTABLE_PATH\)/);
+assert.match(source, /format!\("\{kind_id\}:\{pid\}"\)/);
 assert.match(source, /com\.dreamtonics\.svstudio2\.pro/);
 assert.match(source, /org\.anthronics\.svflat\.macos/);
-assert.doesNotMatch(source, /com\.dreamtonics\.synthesizervstudio/);
 assert.match(source, /Library\/Application Support\/Dreamtonics\/Synthesizer V Studio\/scripts/);
 assert.match(source, /HostKind::Flat => Vec::new\(\)/);
 assert.match(source, /HostKind::Flat => "Synthesizer V Flat"/);
