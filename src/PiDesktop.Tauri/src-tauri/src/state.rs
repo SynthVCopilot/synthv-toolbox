@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
 
 use crate::agent::ChatMessage;
+use crate::agent_files::FileApprovalManager;
 use crate::audio_prep::AudioPreparationService;
 use crate::config::ToolboxSettings;
 use crate::downloads::ComponentDownloadManager;
@@ -23,6 +24,7 @@ pub struct AgentSession {
 pub struct AppState {
     pub settings: Arc<RwLock<ToolboxSettings>>,
     pub agent: Arc<Mutex<AgentSession>>,
+    pub file_approvals: Arc<FileApprovalManager>,
     pub mcp: Arc<McpManager>,
     pub resource_dir: PathBuf,
     pub bridge_dir: PathBuf,
@@ -49,6 +51,7 @@ impl AppState {
         Self {
             settings: Arc::new(RwLock::new(settings)),
             agent: Arc::new(Mutex::new(AgentSession::default())),
+            file_approvals: Arc::new(FileApprovalManager::default()),
             mcp,
             resource_dir,
             bridge_dir,

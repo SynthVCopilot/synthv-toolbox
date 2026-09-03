@@ -8,6 +8,7 @@ import { mountShell, type ShellController } from "./vue/shell";
 import type {
   AiProviderId,
   AgentWorkMode,
+  AgentFileApproval,
   AiProviderSummary,
   AppMode,
   AudioCaptureCapability,
@@ -68,6 +69,7 @@ let notice = "";
 let error = "";
 let conversations: ConversationSummary[] = [];
 let conversation: ConversationSnapshot | undefined;
+let fileApprovals: AgentFileApproval[] = [];
 let profiles: Sv2ProfilesState | undefined;
 let activeWorkflow: Feature["id"] | undefined;
 let workflowResult: WorkflowResult | undefined;
@@ -1619,10 +1621,12 @@ function renderToolboxUpdateResult(): string {
 
 function renderCopilot(): string {
   const messages = conversation?.messages.filter((message) => message.role === "user" || message.role === "assistant") ?? [];
+  const approvals = fileApprovals.length ? `<section class="file-approvals"><strong>需要文件访问批准</strong>${fileApprovals.map((item) => `<article><code>${escapeHtml(item.path)}</code><small>${escapeHtml(item.purpose)}</small><button class="primary compact" data-approve-file="${escapeHtml(item.id)}">通过</button><button class="secondary compact" data-deny-file="${escapeHtml(item.id)}">拒绝</button></article>`).join("")}</section>` : "";
   return `<div class="copilot-layout">
     <aside class="sessions-panel"><button class="primary full" data-new-conversation>${icon("plus", 17)} 新建对话</button><span class="nav-label">历史对话</span><div class="session-list">${conversations.length ? conversations.map((item) => `<button class="session-item ${conversation?.id === item.id ? "active" : ""}" data-conversation="${escapeHtml(item.id)}"><strong>${escapeHtml(item.title)}</strong><small>${item.messageCount} 条消息 · ${escapeHtml(item.updatedAt.slice(0, 10))}</small></button>`).join("") : '<p class="empty-small">还没有历史对话</p>'}</div></aside>
     <section class="chat-panel">
       <div class="chat-header"><div><strong>${escapeHtml(conversation?.title ?? "新对话")}</strong><small>Copilot 只会调用已启用的能力</small></div><span class="mode-pill ai">${icon("sparkles", 14)} AI</span></div>
+      ${approvals}
       <div class="messages">${messages.length ? messages.map(renderMessage).join("") : `<div class="empty-chat"><span class="mode-icon purple">${icon("bot", 30)}</span><h2>今天想完成什么？</h2><p>可以从分析音频、检查工程或连接 SynthV 开始。</p><div class="prompt-chips"><button data-prompt="分析这段音频的 BPM、调性和能量变化">分析音频特征</button><button data-prompt="检查当前 SynthV 工程并总结轨道结构">检查 SynthV 工程</button><button data-prompt="帮我规划从演唱音频到 MIDI 或 SynthV 工程的工作流">规划音频到 SynthV</button></div></div>`}</div>
       <form id="chat-form" class="composer"><textarea id="chat-input" rows="2" placeholder="向 Copilot 描述任务…（Ctrl/⌘ + Enter 发送）"></textarea><button class="primary icon-button" title="发送">${icon("send", 19)}</button><span>Copilot 可能出错，重要修改请在 SynthV 中复核。</span></form>
     </section>
@@ -2208,6 +2212,7 @@ function wireForms(): void {
     if (!input) return;
     void sendPrompt(input);
   });
+  document.querySelectorAll<HTMLButtonElement>("[data-approve-file], [data-deny-file]").forEach((button) => button.addEventListener("click", () => void run(async () => { await api.decideAgentFileApproval(button.dataset.approveFile ?? button.dataset.denyFile ?? "", button.hasAttribute("data-approve-file")); fileApprovals = await api.agentFileApprovals(); notice = button.hasAttribute("data-approve-file") ? "文件访问已批准。" : "文件访问已拒绝。"; })));
   document.querySelector<HTMLTextAreaElement>("#chat-input")?.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
@@ -2270,7 +2275,10 @@ async function sendPrompt(input: string): Promise<void> {
     const added = await withAiProviderStateRefresh(() => api.sendMessage(input));
     conversation.messages = conversation.messages.filter((message) => message !== optimistic);
     conversation.messages.push(...added);
-    conversations = await api.listConversations();
+    [conversations, fileApprovals] = await Promise.all([
+      api.listConversations(),
+      api.agentFileApprovals(),
+    ]);
   });
 }
 
@@ -2644,7 +2652,7 @@ document.addEventListener("click", (event) => {
     accountManagerOpen = false;
     notice = "";
     error = "";
-    if (page === "copilot") void run(async () => { conversations = await api.listConversations(); });
+    if (page === "copilot") void run(async () => { [conversations, fileApprovals] = await Promise.all([api.listConversations(), api.agentFileApprovals()]); });
     else if (page === "history") void run(async () => { [creativeHistory, projectCheckpoints] = await Promise.all([api.listCreativeHistory(), api.listProjectCheckpoints()]); });
     else if (enteringAccounts && (app?.platform === "windows" || app?.platform === "macos" || app?.platform === "preview")) void run(async () => {
       if (supportsWindowsSv2Extensions() && app?.sv2AccountIndicatorEnabled) await refreshAccountUsage();
@@ -2937,8 +2945,8 @@ document.addEventListener("click", (event) => {
     });
     return;
   }
-  if (target.hasAttribute("data-new-conversation")) { void run(async () => { conversation = await api.newConversation(); conversations = await api.listConversations(); }); return; }
-  if (target.dataset.conversation) { void run(async () => { conversation = await api.openConversation(target.dataset.conversation ?? ""); }); return; }
+  if (target.hasAttribute("data-new-conversation")) { void run(async () => { conversation = await api.newConversation(); [conversations, fileApprovals] = await Promise.all([api.listConversations(), api.agentFileApprovals()]); }); return; }
+  if (target.dataset.conversation) { void run(async () => { conversation = await api.openConversation(target.dataset.conversation ?? ""); fileApprovals = await api.agentFileApprovals(); }); return; }
   if (target.dataset.prompt) { void sendPrompt(target.dataset.prompt); return; }
   if (target.dataset.testMcp) { void run(async () => { setFeedback(await api.testMcpServer(target.dataset.testMcp ?? "")); }); return; }
   if (target.dataset.deleteMcp) { void run(async () => { app = await api.deleteMcpServer(target.dataset.deleteMcp ?? ""); notice = "MCP 配置已删除。"; }); }
