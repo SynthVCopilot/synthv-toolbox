@@ -353,6 +353,18 @@ export interface MediaTaskSnapshot {
   updatedAt: string;
 }
 
+export interface CoverTaskRequest {
+  source: string;
+  lyrics?: string | null;
+  voiceName: string;
+  processId?: number | null;
+  trackIndex: number;
+  groupName: string;
+  rightsConfirmed: boolean;
+  tolerance: number;
+  advanced: boolean;
+}
+
 export interface AudioCaptureCapability {
   supported: boolean;
   backend: string;
@@ -374,6 +386,7 @@ export interface SynthVProcess {
 export interface SynthVShortcutProfile {
   bridgeStart: string;
   bridgeStop: string;
+  projectSave: string;
   detail: string;
 }
 

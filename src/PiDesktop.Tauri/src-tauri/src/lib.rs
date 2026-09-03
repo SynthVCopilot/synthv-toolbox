@@ -228,6 +228,7 @@ pub fn run() {
             commands::media_tasks,
             commands::queue_media_import,
             commands::queue_media_separation,
+            commands::queue_cover,
             commands::cancel_media_task,
             commands::retry_media_task,
             commands::run_game_to_midi,
