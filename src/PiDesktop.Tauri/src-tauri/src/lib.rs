@@ -5,7 +5,7 @@ mod audio_prep;
 mod bridge_workflows;
 mod commands;
 mod components;
-pub mod config;
+mod config;
 mod creative_history;
 mod creative_tools;
 mod downloads;

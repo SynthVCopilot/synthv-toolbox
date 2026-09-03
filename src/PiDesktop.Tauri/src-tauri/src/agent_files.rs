@@ -10,11 +10,12 @@ use chrono::Utc;
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::config::AgentWorkMode;
+pub use crate::config::AgentWorkMode;
 
 const AUDIO_AND_SCORE: &[&str] = &[
     "svp", "svprj", "mid", "midi", "wav", "flac", "mp3", "m4a", "aac", "ogg", "opus", "aiff",
-    "aif", "caf", "alac", "musicxml", "mxl", "lrc", "klrc", "srt", "vtt", "lab", "ust", "vsqx",
+    "aif", "caf", "alac", "mp4", "webm", "mkv", "mov", "avi", "mpeg", "mpg", "musicxml", "mxl",
+    "lrc", "klrc", "srt", "vtt", "lab", "ust", "ustx", "vsq", "vsqx",
 ];
 const MAX_PENDING: usize = 64;
 const MAX_DECISIONS: usize = 128;
@@ -203,20 +204,19 @@ impl FileApprovalManager {
         requests
     }
     pub fn decide(&self, id: &str, approve: bool, session_id: &str) -> Result<(), String> {
-        let req = self
+        let mut pending = self
             .pending
             .lock()
-            .map_err(|_| "审批队列不可用".to_string())?
+            .map_err(|_| "审批队列不可用".to_string())?;
+        let req = pending
             .get(id)
             .cloned()
             .ok_or_else(|| "审批请求不存在或已处理。".to_string())?;
         if req.session_id != session_id {
             return Err("不能处理其他会话的文件审批请求。".into());
         }
-        self.pending
-            .lock()
-            .map_err(|_| "审批队列不可用".to_string())?
-            .remove(id);
+        pending.remove(id);
+        drop(pending);
         let key = format!("{}:{}", req.session_id, req.path);
         let grant = Grant {
             fingerprint: req.fingerprint,
