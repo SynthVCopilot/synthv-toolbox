@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use serde_json::{json, Value};
 
 use crate::mcp::{extract_mcp_json, McpManager};
+use crate::synthv::find_node;
 use crate::tuning_profiles::TuningProfile;
 
 const LOCAL_SCORE_EXTENSIONS: &[&str] = &["xml", "musicxml", "mxl", "mid", "midi"];
@@ -86,10 +88,56 @@ pub async fn import_monophonic_midi(
 
 pub async fn current_project_file(manager: &McpManager) -> Result<String, String> {
     let status = call_json(manager, "sv_status", json!({})).await?;
-    find_string(&status, "projectFile")
-        .filter(|path| !path.trim().is_empty())
+    current_project_file_from_standard_reads(&status, &Value::Null)
+}
+
+pub fn current_project_file_from_standard_reads(
+    project: &Value,
+    status: &Value,
+) -> Result<String, String> {
+    [project, status]
+        .into_iter()
+        .find_map(find_standard_project_file)
         .map(str::to_string)
         .ok_or_else(|| "当前 SynthV 工程尚未保存为 .svp；无法验证 Cover 工程输出。".to_string())
+}
+
+pub fn parse_cover_midi(bridge_dir: &Path, midi_path: &str) -> Result<Value, String> {
+    let path = Path::new(midi_path);
+    if !path.is_absolute() || !path.is_file() {
+        return Err("Cover MIDI 路径必须是存在的绝对本地文件。".to_string());
+    }
+    let node = find_node().ok_or_else(|| "未找到兼容的本地扩展运行时。".to_string())?;
+    let script = bridge_dir.join("scripts/cover-score-notes.mjs");
+    if !script.is_file() || !bridge_dir.join("dist/src/score-import.js").is_file() {
+        return Err("当前应用包不包含 Cover 曲谱转换器。".to_string());
+    }
+    let output = Command::new(node)
+        .arg(script)
+        .arg(path)
+        .current_dir(bridge_dir)
+        .output()
+        .map_err(|error| format!("无法启动 Cover 曲谱转换器：{error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if detail.is_empty() {
+            "Cover 曲谱转换器失败。".to_string()
+        } else {
+            format!("Cover 曲谱转换器失败：{detail}")
+        });
+    }
+    let parsed: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Cover 曲谱转换器输出无效：{error}"))?;
+    let note_count = parsed
+        .get("notes")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .filter(|count| (1..=512).contains(count))
+        .ok_or_else(|| "Cover 曲谱转换器没有返回 1–512 个可写入音符。".to_string())?;
+    if parsed.get("noteCount").and_then(Value::as_u64) != Some(note_count as u64) {
+        return Err("Cover 曲谱转换器返回的音符计数不一致。".to_string());
+    }
+    Ok(parsed)
 }
 
 pub async fn apply_tuning_profile(
@@ -342,6 +390,22 @@ fn find_string<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     }
 }
 
+fn find_standard_project_file(value: &Value) -> Option<&str> {
+    match value {
+        Value::Object(object) => ["projectFile", "fileName", "filePath"]
+            .into_iter()
+            .find_map(|key| {
+                object
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .filter(|path| !path.trim().is_empty())
+            })
+            .or_else(|| object.values().find_map(find_standard_project_file)),
+        Value::Array(items) => items.iter().find_map(find_standard_project_file),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -353,6 +417,16 @@ mod tests {
     fn recursively_finds_bridge_projection_fields() {
         let value = json!({ "result": { "fileFingerprint": "sha256:abc" } });
         assert_eq!(find_string(&value, "fileFingerprint"), Some("sha256:abc"));
+    }
+
+    #[test]
+    fn finds_project_path_from_standard_project_or_status_reads() {
+        let path = current_project_file_from_standard_reads(
+            &json!({ "fileName": "" }),
+            &json!({ "project": { "filePath": "/tmp/cover.svp" } }),
+        )
+        .expect("standard host path");
+        assert_eq!(path, "/tmp/cover.svp");
     }
 
     #[test]

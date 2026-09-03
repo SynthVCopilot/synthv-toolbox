@@ -23,3 +23,4 @@
 | 015 | [Feature] macOS进程音频捕获 | 使用 Core Audio Process Tap 为指定 SynthV PID 提供应用级音频捕获。 | 让 Solo 自动调声在 macOS 上也能执行真实双捕获闭环。 | ✅ 已完成 |
 | 016 | [BugFix] 分离组件打包 | 将 vocal-separation 脚本与依赖清单纳入发布包并在 CI 校验。 | 修复源码可用但安装包缺少分离组件的发布态断链。 | ✅ 已完成 |
 | 017 | [BugFix] 组件原生下载 | 使用 ureq 内置流式下载替换 aria2，覆盖媒体导入器、组件源码、Windows FFmpeg 与 Sandboxie。 | 修复发布包依赖外部 aria2c 导致的组件下载断链。 | ✅ 已完成 |
+| 018 | [Feature] 统一SynthV宿主MCP | 将官方 SV1、Flat 与官方 SV2 收敛为内置 Agent 的标准宿主连接和创作工具。 | 隐藏连接协议、索引与能力差异，同时保留真实的不支持边界。 | ✅ 已完成 |

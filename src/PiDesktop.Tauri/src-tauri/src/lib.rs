@@ -27,6 +27,8 @@ mod sv2_sync;
 mod svp_launch_router;
 mod synthv;
 mod synthv_control;
+mod synthv_hosts;
+mod synthv_unified;
 mod tuning_profiles;
 mod update_checker;
 mod workflows;
