@@ -2316,11 +2316,16 @@ pub async fn send_message(
     let components_dir = state.components_dir.clone();
     let downloads = state.downloads.clone();
     let media_tasks = state.media_tasks.clone();
+    let file_approvals = state.file_approvals.clone();
     let session = state.agent.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let provider = build_ai_provider(&ai_settings)?;
         let mut session = session.lock().map_err(|_| "会话状态锁已损坏".to_string())?;
         ensure_session(&mut session);
+        let conversation_id = session
+            .id
+            .clone()
+            .ok_or_else(|| "会话尚未初始化".to_string())?;
         apply_agent_work_mode(&mut session.messages, agent_work_mode);
         let mcp_executor = McpToolExecutor::new(bindings, runtime.clone());
         let executor = ToolboxAudioToolExecutor::new(
@@ -2333,6 +2338,8 @@ pub async fn send_message(
             downloads,
             media_tasks,
             agent_work_mode,
+            file_approvals,
+            conversation_id,
         );
         let added = AgentLoop::new(&provider, &executor)
             .run_turn(&mut session.messages, &input)
@@ -2346,6 +2353,34 @@ pub async fn send_message(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub fn agent_file_approvals(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::agent_files::FileApprovalRequest>, String> {
+    let session = state
+        .agent
+        .lock()
+        .map_err(|_| "会话状态锁已损坏".to_string())?;
+    Ok(state
+        .file_approvals
+        .pending(session.id.as_deref().unwrap_or("")))
+}
+
+#[tauri::command]
+pub fn decide_agent_file_approval(
+    id: String,
+    approve: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let session = state
+        .agent
+        .lock()
+        .map_err(|_| "会话状态锁已损坏".to_string())?;
+    state
+        .file_approvals
+        .decide(&id, approve, session.id.as_deref().unwrap_or(""))
 }
 
 fn record_workflow_result(

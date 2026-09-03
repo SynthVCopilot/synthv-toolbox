@@ -1,10 +1,11 @@
 pub mod agent;
+pub mod agent_files;
 mod audio_capture;
 mod audio_prep;
 mod bridge_workflows;
 mod commands;
 mod components;
-mod config;
+pub mod config;
 mod creative_history;
 mod creative_tools;
 mod downloads;
@@ -248,6 +249,8 @@ pub fn run() {
             commands::new_conversation,
             commands::open_conversation,
             commands::send_message,
+            commands::agent_file_approvals,
+            commands::decide_agent_file_approval,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run SynthV Toolbox");
