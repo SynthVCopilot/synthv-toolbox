@@ -4,9 +4,12 @@
   "version": "0.1.6",
   "type": "module",
   "scripts": {
+    "build:bridge": "node scripts/ensure-bridge.mjs",
+    "predev": "npm run build:bridge",
+    "prebuild": "npm run build:bridge",
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "tsc && vite build",
-    "test:contracts": "node ../../test/sv2-account-refresh.mjs && node ../../test/macos-sv2-slots.mjs && node ../../test/lyric-projects.mjs && node ../../test/synthv-bridge-control.mjs && node ../../test/media-fetcher-component.mjs && node ../../test/media-import.mjs && node ../../test/source-separation.mjs && node ../../test/component-task-management.mjs && node ../../test/media-task-management.mjs && node ../../test/cover-pipeline.mjs && node ../../test/unified-cover-routing.mjs && node ../../test/agent-work-modes.mjs && node ../../test/tuning-profiles.mjs && node ../../test/solo-tuning.mjs && node ../../test/bundled-components.mjs && node ../../test/macos-process-tap.mjs && node ../../test/native-component-download.mjs && node ../../test/mcp-http-client.mjs && node ../../test/unified-host-discovery.mjs && node ../../test/unified-synthv-agent.mjs",
+    "test:contracts": "node ../../test/sv2-account-refresh.mjs && node ../../test/macos-sv2-slots.mjs && node ../../test/lyric-projects.mjs && node ../../test/synthv-bridge-control.mjs && node ../../test/media-fetcher-component.mjs && node ../../test/media-import.mjs && node ../../test/source-separation.mjs && node ../../test/component-task-management.mjs && node ../../test/media-task-management.mjs && node ../../test/cover-pipeline.mjs && node ../../test/unified-cover-routing.mjs && node ../../test/agent-work-modes.mjs && node ../../test/tuning-profiles.mjs && node ../../test/solo-tuning.mjs && node ../../test/bundled-components.mjs && node ../../test/formal-bridge-component.mjs && node ../../test/macos-process-tap.mjs && node ../../test/native-component-download.mjs && node ../../test/mcp-http-client.mjs && node ../../test/unified-host-discovery.mjs && node ../../test/unified-synthv-agent.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

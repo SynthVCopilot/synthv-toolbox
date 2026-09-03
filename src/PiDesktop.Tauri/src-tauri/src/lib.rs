@@ -69,14 +69,6 @@ pub fn run() {
                 .path()
                 .resource_dir()
                 .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
-            let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
-            let bundled_bridge = resource_dir.join("synthv-agent-bridge");
-            let development_bridge = repository.join("external/synthv-agent-bridge");
-            let bridge_dir = if bundled_bridge.join("dist/src/cli.js").is_file() {
-                bundled_bridge
-            } else {
-                development_bridge
-            };
             let bundled_components = resource_dir.join("components");
             let development_components =
                 PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("components");
@@ -85,6 +77,7 @@ pub fn run() {
             } else {
                 development_components
             };
+            let bridge_dir = components_dir.join("synthv-agent-bridge");
             let settings = match crate::config::load_settings() {
                 Ok(settings) => settings,
                 Err(error) => {
