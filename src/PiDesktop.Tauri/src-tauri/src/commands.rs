@@ -44,7 +44,7 @@ use crate::lyric_tools::{
 };
 use crate::mcp::McpToolExecutor;
 use crate::media_import::{self, MediaSourcePreview};
-use crate::media_tasks::MediaTaskSnapshot;
+use crate::media_tasks::{CoverTaskRequest, MediaTaskSnapshot};
 use crate::oauth::{self, AiProviderId, OAuthAccountMetadata};
 use crate::opencode_catalog::{self, OpenCodeCatalog};
 use crate::state::{AgentSession, AppState};
@@ -1783,6 +1783,21 @@ pub fn queue_media_separation(
     state: State<'_, AppState>,
 ) -> Result<MediaTaskSnapshot, String> {
     let (snapshot, start_worker) = state.media_tasks.enqueue_separation(audio_path)?;
+    if start_worker {
+        let manager = state.media_tasks.clone();
+        tauri::async_runtime::spawn(async move {
+            manager.run_worker().await;
+        });
+    }
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn queue_cover(
+    request: CoverTaskRequest,
+    state: State<'_, AppState>,
+) -> Result<MediaTaskSnapshot, String> {
+    let (snapshot, start_worker) = state.media_tasks.enqueue_cover(request)?;
     if start_worker {
         let manager = state.media_tasks.clone();
         tauri::async_runtime::spawn(async move {
