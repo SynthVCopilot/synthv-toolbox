@@ -85,17 +85,21 @@ pub fn send_shortcut(
     Ok(process)
 }
 
+pub async fn start_bridge(process_id: u32) -> Result<SynthVProcess, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        send_shortcut(process_id, BridgeShortcutAction::Start)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 pub async fn start_bridge_and_connect(
     process_id: u32,
     manager: &McpManager,
     node: String,
     bridge_dir: PathBuf,
 ) -> Result<(SynthVProcess, Vec<String>), String> {
-    let process = tauri::async_runtime::spawn_blocking(move || {
-        send_shortcut(process_id, BridgeShortcutAction::Start)
-    })
-    .await
-    .map_err(|error| error.to_string())??;
+    let process = start_bridge(process_id).await?;
     let mut last_error = "Bridge 尚未就绪。".to_string();
     for _ in 0..16 {
         manager.disconnect("synthv").await;
@@ -116,8 +120,23 @@ pub async fn start_bridge_and_connect(
 }
 
 fn is_synthv_process(name: &str, command: &str) -> bool {
+    if is_flat_executable_name(name) || is_flat_executable_name(command) {
+        return true;
+    }
     let text = format!("{name}\n{command}").to_ascii_lowercase();
     text.contains("synthv-studio") || text.contains("synthesizer v studio")
+}
+
+fn is_flat_executable_name(value: &str) -> bool {
+    let trimmed = value.trim().trim_matches('"');
+    let file_name = std::path::Path::new(trimmed)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(trimmed);
+    matches!(
+        file_name.to_ascii_lowercase().as_str(),
+        "synthesizer v flat" | "synthesizer v flat.exe" | "synthesizer-v-flat.exe"
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -186,6 +205,31 @@ mod platform {
                 }
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matches_flat_only_by_exact_executable_name() {
+        assert!(is_synthv_process(
+            "Synthesizer V Flat.exe",
+            "C:\\Apps\\Synthesizer V Flat.exe"
+        ));
+        assert!(is_synthv_process(
+            "Synthesizer V Flat",
+            "/Applications/Synthesizer V Flat"
+        ));
+        assert!(!is_synthv_process(
+            "flat-helper.exe",
+            "C:\\Apps\\flat-helper.exe"
+        ));
+        assert!(!is_synthv_process(
+            "Synthesizer V Flat Helper.exe",
+            "C:\\Apps\\Synthesizer V Flat Helper.exe"
+        ));
     }
 }
 

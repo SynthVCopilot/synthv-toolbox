@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import type {
   AiProviderId,
   AgentWorkMode,
+  AgentFileApproval,
   AiProviderSummary,
   AppMode,
   AudioCaptureCapability,
@@ -954,6 +955,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "list_conversations") return [] as T;
   if (command === "new_conversation") return { id: "preview", title: "新对话", messages: [] } as T;
   if (command === "open_conversation") return { id: "preview", title: "预览对话", messages: [] } as T;
+  if (command === "agent_file_approvals") return [] as T;
   if (command === "send_message") return [{ role: "assistant", content: "这是本地视觉预览回复。" }] as T;
   if (command.startsWith("run_") || ["add_project_reference", "export_project_without_parameters", "export_project_lyrics"].includes(command)) return {
     kind: command.replace(/^run_/, "").replaceAll("_", "-"),
@@ -1131,6 +1133,8 @@ export const api = {
   newConversation: () => call<ConversationSnapshot>("new_conversation"),
   openConversation: (id: string) => call<ConversationSnapshot>("open_conversation", { id }),
   sendMessage: (input: string) => call<ChatMessage[]>("send_message", { input }),
+  agentFileApprovals: () => call<AgentFileApproval[]>("agent_file_approvals"),
+  decideAgentFileApproval: (id: string, approve: boolean) => call<void>("decide_agent_file_approval", { id, approve }),
   saveMcpServer: (server: McpServerConfig) => call<BootstrapState>("save_mcp_server", { server }),
   deleteMcpServer: (id: string) => call<BootstrapState>("delete_mcp_server", { id }),
   testMcpServer: (id: string) => call<OperationResult>("test_mcp_server", { id }),
