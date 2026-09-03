@@ -1636,10 +1636,10 @@ function renderMessage(message: ChatMessage): string {
 
 function renderComponents(): string {
   if (!app) return "";
-  const statusLabel = { queued: "排队中", downloading: "aria2 下载中", installing: "安装中", completed: "已完成", failed: "失败", cancelled: "已取消" } as const;
+  const statusLabel = { queued: "排队中", downloading: "下载中", installing: "安装中", completed: "已完成", failed: "失败", cancelled: "已取消" } as const;
   const activeDownloads = app.downloads.filter((item) => item.status !== "completed");
   const queue = activeDownloads.length ? `<section class="download-queue panel">
-    <div class="section-heading"><div><h2>下载队列</h2><p>队列串行执行；远程组件固定版本并由 aria2 + SHA-256 校验。</p></div><span class="queue-count">${activeDownloads.length}</span></div>
+    <div class="section-heading"><div><h2>下载队列</h2><p>队列串行执行；内置下载器只获取固定版本，并在安装前校验 SHA-256。</p></div><span class="queue-count">${activeDownloads.length}</span></div>
     <div class="download-list">${activeDownloads.map((item) => `<article class="download-item ${item.status}">
       <span class="component-status ${item.status === "completed" ? "ready" : ""}">${item.status === "failed" ? icon("plug", 17) : icon("download", 17)}</span>
       <div><div class="download-title"><strong>${escapeHtml(item.displayName)}</strong><span>${statusLabel[item.status]}</span></div><div class="progress-track"><span style="width:${Math.max(2, Math.min(100, item.progress))}%"></span></div><small>${escapeHtml(item.detail)}</small></div>
