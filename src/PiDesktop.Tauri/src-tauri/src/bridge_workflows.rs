@@ -83,6 +83,14 @@ pub async fn import_monophonic_midi(
     .await
 }
 
+pub async fn current_project_file(manager: &McpManager) -> Result<String, String> {
+    let status = call_json(manager, "sv_status", json!({})).await?;
+    find_string(&status, "projectFile")
+        .filter(|path| !path.trim().is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| "当前 SynthV 工程尚未保存为 .svp；无法验证 Cover 工程输出。".to_string())
+}
+
 fn validate_score_import(request: ScoreImportRequest) -> Result<ValidatedScoreImport, String> {
     if !request.rights_confirmed {
         return Err("导入 SynthV 前必须确认你有权使用该本地曲谱。".to_string());
