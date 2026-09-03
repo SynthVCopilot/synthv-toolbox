@@ -32,7 +32,7 @@
 - `src/PiDesktop.Tauri/src-tauri/src/audio_capture.rs`：Windows 进程回环与 macOS Core Audio Process Tap 的 SynthV 指定进程短片段捕获、连续性检查和本地 A/B 指标。
 - `src/PiDesktop.Tauri/src-tauri/src/mcp/http_client.rs`：仅 loopback 的 Flat Streamable HTTP MCP 客户端，支持 2025-06-18 握手、工具列表/调用、JSON/SSE 响应和有界错误处理。
 - `src/PiDesktop.Tauri/src-tauri/native/macos_process_tap.mm`：macOS 14.2+ 私有 Process Tap、aggregate device、IOProc 与 PCM WAV 原生实现。
-- `external/synthv-agent-bridge`：SynthV 内部查询、编辑与能力边界；明确报告歌手身份不可由官方脚本 API 读取或分配。
+- `src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge`：随桌面应用统一版本管理的 SynthV 内部查询、编辑与能力边界组件；明确报告歌手身份不可由官方脚本 API 读取或分配。
 - `src/PiDesktop.Tauri/src-tauri/components/vocal-separation`：固定依赖的 Demucs 双轨分离运行时入口。
 - `src/PiDesktop.Tauri/src-tauri/src/workflows.rs`：音频分析、分离、MIDI 与工程处理工作流编排。
 - `docs/lyric-and-audio-workflow-guide.zh-CN.md`：作词、平台音频导入、下载组件和内部工具的评估与实施指导。
