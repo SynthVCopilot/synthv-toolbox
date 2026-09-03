@@ -350,7 +350,7 @@ impl ComponentDownloadManager {
         };
         item.status = ComponentDownloadStatus::Downloading;
         item.progress = 2;
-        item.detail = "正在准备 aria2 下载。".to_string();
+        item.detail = "正在准备内置组件下载。".to_string();
         item.updated_at = Utc::now().to_rfc3339();
         let next = (item.id.clone(), item.component_id.clone());
         if let Err(error) = self.persist(&queue) {

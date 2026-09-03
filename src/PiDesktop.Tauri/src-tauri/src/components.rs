@@ -32,6 +32,8 @@ const FFMPEG_MANIFEST_SCHEMA: u32 = 1;
 const FFMPEG_MANAGED_BY: &str = "SynthV Toolbox";
 const FFMPEG_ARTIFACT_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 const MAX_FFMPEG_ARTIFACTS_TO_SCAN: usize = 64;
+const MAX_FFMPEG_DOWNLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_COMPONENT_DOWNLOAD_BYTES: u64 = 256 * 1024 * 1024;
 const MEDIA_FETCHER_VERSION: &str = "2026.08.19";
 const MEDIA_FETCHER_MACOS_SHA256: &str =
     "0f192b7ec147ab6288885d6351d9ab67367640029b4377576ef46dd79cf7b202";
@@ -171,7 +173,7 @@ fn component_info_at(
                 "已就绪".to_string()
             }
         } else if installable {
-            "可通过 aria2 下载".to_string()
+            "可由 Toolbox 内置下载器下载".to_string()
         } else {
             "需要系统安装".to_string()
         },
@@ -651,7 +653,7 @@ fn sandboxie_component_info() -> ComponentInfo {
         } else if downloaded {
             "官方安装包已下载；等待用户安装".to_string()
         } else if installable {
-            "可通过 aria2 下载官方 x64 安装包".to_string()
+            "可由 Toolbox 内置下载器下载官方 x64 安装包".to_string()
         } else {
             "仅适用于 Windows x64".to_string()
         },
@@ -813,7 +815,7 @@ fn read_ffmpeg_manifest(root: &Path) -> Option<FfmpegInstallManifest> {
         .then_some(manifest)
 }
 
-fn install_managed_ffmpeg<F>(resource_root: &Path, progress: &mut F) -> OperationResult
+fn install_managed_ffmpeg<F>(_resource_root: &Path, progress: &mut F) -> OperationResult
 where
     F: FnMut(&str, u8, &str),
 {
@@ -838,12 +840,6 @@ where
             format!("Toolbox 私有安装位置：{}。", managed_root.display()),
         );
     }
-    let Some(aria2) = find_aria2(resource_root) else {
-        return failed(
-            "未找到 aria2c。",
-            "请安装 aria2，或设置 SYNTHV_TOOLBOX_ARIA2 指向 aria2c。",
-        );
-    };
     let cache = managed_data_root
         .join("downloads")
         .join("ffmpeg")
@@ -880,34 +876,33 @@ where
     };
     let archive = cache.join(FFMPEG_ARCHIVE_NAME);
     if !ffmpeg_archive_cached(&managed_data_root) {
-        progress(
-            "downloading",
-            12,
-            "aria2 正在下载固定版本的 FFmpeg LGPL 包。",
-        );
+        progress("downloading", 12, "正在下载固定版本的 FFmpeg LGPL 包。");
         let download_stage = cache.join(format!(".download-{}", Uuid::new_v4()));
         if let Err(error) = fs::create_dir(&download_stage) {
             return failed("无法创建 FFmpeg 下载暂存目录。", error.to_string());
         }
         let staged_archive = download_stage.join(FFMPEG_ARCHIVE_NAME);
-        let download_result =
-            download_with_aria2(&aria2, FFMPEG_ARCHIVE_URL, &download_stage, &payload).and_then(
-                |()| {
-                    if !regular_file_without_links(&staged_archive) {
-                        return Err("FFmpeg 下载结果不是安全的普通文件。".to_string());
-                    }
-                    verify_sha256(&staged_archive, FFMPEG_ARCHIVE_SHA256)?;
-                    if archive.exists() {
-                        if !regular_file_without_links(&archive) {
-                            return Err("FFmpeg 最终缓存路径是链接或非普通文件。".to_string());
-                        }
-                        fs::remove_file(&archive)
-                            .map_err(|error| format!("无法替换旧 FFmpeg 缓存：{error}"))?;
-                    }
-                    fs::rename(&staged_archive, &archive)
-                        .map_err(|error| format!("无法提交 FFmpeg 下载缓存：{error}"))
-                },
-            );
+        let download_result = download_verified_file(
+            FFMPEG_ARCHIVE_URL,
+            &staged_archive,
+            payload.sha256,
+            MAX_FFMPEG_DOWNLOAD_BYTES,
+        )
+        .and_then(|()| {
+            if !regular_file_without_links(&staged_archive) {
+                return Err("FFmpeg 下载结果不是安全的普通文件。".to_string());
+            }
+            verify_sha256(&staged_archive, FFMPEG_ARCHIVE_SHA256)?;
+            if archive.exists() {
+                if !regular_file_without_links(&archive) {
+                    return Err("FFmpeg 最终缓存路径是链接或非普通文件。".to_string());
+                }
+                fs::remove_file(&archive)
+                    .map_err(|error| format!("无法替换旧 FFmpeg 缓存：{error}"))?;
+            }
+            fs::rename(&staged_archive, &archive)
+                .map_err(|error| format!("无法提交 FFmpeg 下载缓存：{error}"))
+        });
         let _ = fs::remove_dir_all(&download_stage);
         if let Err(error) = download_result {
             return failed("FFmpeg 下载失败。", error);
@@ -1285,7 +1280,7 @@ fn atomic_replace_managed_directory(
     Ok(())
 }
 
-fn download_sandboxie_installer<F>(resource_root: &Path, progress: &mut F) -> OperationResult
+fn download_sandboxie_installer<F>(_resource_root: &Path, progress: &mut F) -> OperationResult
 where
     F: FnMut(&str, u8, &str),
 {
@@ -1306,23 +1301,22 @@ where
             format!("安装包：{}；工具箱不会静默安装驱动。", installer.display()),
         );
     }
-    let Some(aria2) = find_aria2(resource_root) else {
-        return failed(
-            "未找到 aria2c。",
-            "请安装 aria2，或设置 SYNTHV_TOOLBOX_ARIA2 指向 aria2c。",
-        );
-    };
     progress(
         "downloading",
         12,
-        &format!("aria2 正在下载 Sandboxie Plus {SANDBOXIE_VERSION} 官方安装包。"),
+        &format!("正在下载 Sandboxie Plus {SANDBOXIE_VERSION} 官方安装包。"),
     );
     let payload = ComponentPayload {
         name: SANDBOXIE_INSTALLER_NAME,
         relative_url: "",
         sha256: SANDBOXIE_INSTALLER_SHA256,
     };
-    if let Err(error) = download_with_aria2(&aria2, SANDBOXIE_INSTALLER_URL, &directory, &payload) {
+    if let Err(error) = download_verified_file(
+        SANDBOXIE_INSTALLER_URL,
+        &installer,
+        payload.sha256,
+        MAX_COMPONENT_DOWNLOAD_BYTES,
+    ) {
         return failed("Sandboxie 安装包下载失败。", error);
     }
     progress(
@@ -1543,7 +1537,7 @@ pub(crate) fn managed_media_fetcher_binary(managed_data_root: &Path) -> Option<P
     .then_some(binary)
 }
 
-fn install_media_fetcher<F>(resource_root: &Path, progress: &mut F) -> OperationResult
+fn install_media_fetcher<F>(_resource_root: &Path, progress: &mut F) -> OperationResult
 where
     F: FnMut(&str, u8, &str),
 {
@@ -1560,12 +1554,6 @@ where
             "当前固定版本和安装清单均有效。",
         );
     }
-    let Some(aria2) = find_aria2(resource_root) else {
-        return failed(
-            "未找到 aria2c。",
-            "请安装 aria2，或配置 SYNTHV_TOOLBOX_ARIA2。",
-        );
-    };
     let cache = managed_data_root
         .join("downloads/media-fetcher")
         .join(MEDIA_FETCHER_VERSION);
@@ -1577,8 +1565,13 @@ where
         relative_url: "",
         sha256,
     };
-    progress("downloading", 12, "aria2 正在下载固定版本的 yt-dlp。");
-    if let Err(error) = download_with_aria2(&aria2, source, &cache, &payload) {
+    progress("downloading", 12, "正在下载固定版本的 yt-dlp。");
+    if let Err(error) = download_verified_file(
+        source,
+        &cache.join(asset_name),
+        payload.sha256,
+        MAX_COMPONENT_DOWNLOAD_BYTES,
+    ) {
         return failed("媒体导入器下载失败。", error);
     }
     progress("installing", 72, "校验完成，正在安装媒体导入器。");
@@ -1658,7 +1651,7 @@ where
 
 fn download_component_source<F>(
     id: &str,
-    resource_root: &Path,
+    _resource_root: &Path,
     progress: &mut F,
 ) -> Result<PathBuf, String>
 where
@@ -1667,11 +1660,8 @@ where
     let payloads = match id {
         "pi-audio" => PI_AUDIO_PAYLOADS,
         "cvrs" => CVRS_PAYLOADS,
-        _ => return Err("该组件没有受信任的 aria2 下载清单。".to_string()),
+        _ => return Err("该组件没有受信任的固定下载清单。".to_string()),
     };
-    let aria2 = find_aria2(resource_root).ok_or_else(|| {
-        "未找到 aria2c。请安装 aria2（Windows 可使用 winget/choco，macOS 可使用 Homebrew），或设置 SYNTHV_TOOLBOX_ARIA2 指向 aria2c。".to_string()
-    })?;
     let cache = data_root()
         .join("downloads")
         .join(id)
@@ -1682,13 +1672,18 @@ where
         progress(
             "downloading",
             start,
-            &format!("aria2 正在下载 {}。", payload.name),
+            &format!("正在下载 {}。", payload.name),
         );
         let url = format!(
             "https://raw.githubusercontent.com/SynthVCopilot/pi-agent/{PI_AGENT_COMPONENT_REVISION}/{}",
             payload.relative_url
         );
-        download_with_aria2(&aria2, &url, &cache, payload)?;
+        download_verified_file(
+            &url,
+            &cache.join(payload.name),
+            payload.sha256,
+            MAX_COMPONENT_DOWNLOAD_BYTES,
+        )?;
         let complete = 8 + (((index + 1) * 48) / payloads.len()) as u8;
         progress(
             "downloading",
@@ -1699,70 +1694,86 @@ where
     Ok(cache)
 }
 
-fn find_aria2(resource_root: &Path) -> Option<PathBuf> {
-    if let Some(configured) = std::env::var_os("SYNTHV_TOOLBOX_ARIA2").map(PathBuf::from) {
-        if configured.is_file() {
-            return Some(configured);
-        }
-    }
-    let bundled = if cfg!(windows) {
-        resource_root.join("download-tools/windows/aria2c.exe")
-    } else {
-        resource_root.join("download-tools/macos/aria2c")
-    };
-    if bundled.is_file() {
-        return Some(bundled);
-    }
-    quiet_command("aria2c")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
-        .then(|| PathBuf::from("aria2c"))
-}
-
-fn download_with_aria2(
-    aria2: &Path,
+fn download_verified_file(
     url: &str,
-    directory: &Path,
-    payload: &ComponentPayload,
+    target: &Path,
+    expected_sha256: &str,
+    max_bytes: u64,
 ) -> Result<(), String> {
-    let output = quiet_command(aria2)
-        .args([
-            "--allow-overwrite=true",
-            "--auto-file-renaming=false",
-            "--check-certificate=true",
-            "--console-log-level=warn",
-            "--continue=true",
-            "--download-result=hide",
-            "--file-allocation=none",
-            "--max-connection-per-server=8",
-            "--min-split-size=1M",
-        ])
-        .arg(format!("--checksum=sha-256={}", payload.sha256))
-        .arg("--dir")
-        .arg(directory)
-        .arg("--out")
-        .arg(payload.name)
-        .arg(url)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|error| format!("无法启动 aria2c：{error}"))?;
-    if !output.status.success() {
-        let detail = String::from_utf8_lossy(&output.stderr)
-            .chars()
-            .take(1600)
-            .collect::<String>();
-        return Err(format!(
-            "aria2c 下载 {} 失败（退出码 {:?}）：{}",
-            payload.name,
-            output.status.code(),
-            detail.trim()
-        ));
+    let parent = target
+        .parent()
+        .ok_or_else(|| "下载目标没有父目录。".to_string())?;
+    fs::create_dir_all(parent).map_err(|error| format!("无法创建下载目录：{error}"))?;
+    if target.exists() {
+        if regular_file_without_links(target) && verify_sha256(target, expected_sha256).is_ok() {
+            return Ok(());
+        }
+        fs::remove_file(target).map_err(|error| format!("无法移除无效下载文件：{error}"))?;
     }
-    verify_sha256(&directory.join(payload.name), payload.sha256)
+    let name = target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("download");
+    let temporary = parent.join(format!(".{name}.{}.part", Uuid::new_v4()));
+    let result = (|| -> Result<(), String> {
+        let agent = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(60))
+            .timeout_connect(Duration::from_secs(10))
+            .timeout_read(Duration::from_secs(30))
+            .timeout_write(Duration::from_secs(30))
+            .build();
+        let response = agent
+            .get(url)
+            .set("Accept", "application/octet-stream")
+            .call()
+            .map_err(|_| "下载请求失败。".to_string())?;
+        if let Some(length) = response
+            .header("Content-Length")
+            .and_then(|value| value.parse::<u64>().ok())
+        {
+            if length > max_bytes {
+                return Err(format!("下载响应超过大小上限（{} bytes）。", max_bytes));
+            }
+        }
+        let mut reader = response.into_reader();
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| format!("无法创建下载暂存文件：{error}"))?;
+        let mut hasher = Sha256::new();
+        let mut total = 0_u64;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read = reader
+                .read(&mut buffer)
+                .map_err(|error| format!("读取下载响应失败：{error}"))?;
+            if read == 0 {
+                break;
+            }
+            total = total
+                .checked_add(read as u64)
+                .ok_or_else(|| "下载文件大小溢出。".to_string())?;
+            if total > max_bytes {
+                return Err(format!("下载响应超过大小上限（{} bytes）。", max_bytes));
+            }
+            file.write_all(&buffer[..read])
+                .map_err(|error| format!("写入下载暂存文件失败：{error}"))?;
+            hasher.update(&buffer[..read]);
+        }
+        file.sync_all()
+            .map_err(|error| format!("同步下载暂存文件失败：{error}"))?;
+        let actual = format!("{:x}", hasher.finalize());
+        if !actual.eq_ignore_ascii_case(expected_sha256) {
+            return Err("下载文件的 SHA-256 不匹配；已拒绝安装。".to_string());
+        }
+        fs::rename(&temporary, target).map_err(|error| format!("无法原子提交下载文件：{error}"))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }
 
 fn verify_sha256(path: &Path, expected: &str) -> Result<(), String> {
@@ -1920,6 +1931,8 @@ fn display_name(id: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
+    use std::thread;
 
     fn temporary_test_root(label: &str) -> PathBuf {
         let root = std::env::temp_dir();
@@ -1934,6 +1947,93 @@ mod tests {
     fn write_json(path: &Path, value: &Value) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, serde_json::to_vec_pretty(value).unwrap()).unwrap();
+    }
+
+    fn local_response(
+        body: Vec<u8>,
+        content_length: Option<usize>,
+    ) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request);
+            let length_header = content_length
+                .map(|length| format!("Content-Length: {length}\r\n"))
+                .unwrap_or_default();
+            let header = format!(
+                "HTTP/1.1 200 OK\r\n{length_header}Content-Type: application/octet-stream\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(header.as_bytes()).unwrap();
+            stream.write_all(&body).unwrap();
+        });
+        (format!("http://{address}/component"), handle)
+    }
+
+    #[test]
+    fn native_download_atomically_commits_verified_file() {
+        let root = temporary_test_root("native-download-success");
+        let target = root.join("payload.bin");
+        let body = b"trusted component".to_vec();
+        let expected = format!("{:x}", Sha256::digest(&body));
+        let (url, server) = local_response(body, None);
+        assert!(download_verified_file(&url, &target, &expected, 1024).is_ok());
+        server.join().unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"trusted component");
+        assert!(!fs::read_dir(&root).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".part")
+        }));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_download_removes_partial_file_on_hash_error() {
+        let root = temporary_test_root("native-download-hash");
+        let target = root.join("payload.bin");
+        let (url, server) = local_response(b"tampered".to_vec(), None);
+        let error = download_verified_file(&url, &target, &"0".repeat(64), 1024).unwrap_err();
+        server.join().unwrap();
+        assert!(error.contains("SHA-256"));
+        assert!(!target.exists());
+        assert!(!fs::read_dir(&root).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".part")
+        }));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_download_rejects_declared_oversize_before_writing() {
+        let root = temporary_test_root("native-download-limit");
+        let target = root.join("payload.bin");
+        let (url, server) = local_response(b"small".to_vec(), Some(2048));
+        let error = download_verified_file(&url, &target, &"0".repeat(64), 1024).unwrap_err();
+        server.join().unwrap();
+        assert!(error.contains("大小上限"));
+        assert!(!target.exists());
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_download_caps_stream_without_content_length_and_cleans_partial() {
+        let root = temporary_test_root("native-download-stream-limit");
+        let target = root.join("payload.bin");
+        let (url, server) = local_response(vec![b'x'; 2048], None);
+        let error = download_verified_file(&url, &target, &"0".repeat(64), 1024).unwrap_err();
+        server.join().unwrap();
+        assert!(error.contains("大小上限"));
+        assert!(!target.exists());
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
