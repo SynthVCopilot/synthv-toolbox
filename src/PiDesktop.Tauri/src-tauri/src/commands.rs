@@ -16,7 +16,7 @@ use crate::agent::{
 };
 use crate::audio_capture::{
     self, AudioCaptureCapability, AudioCaptureTarget, CaptureClipRequest, CompareClipsRequest,
-    ToolboxAudioToolExecutor,
+    ToolboxAudioToolContext, ToolboxAudioToolExecutor,
 };
 use crate::audio_prep::{
     AudioJobSnapshot, AudioPrepareRequest, AudioWritePlan, FfmpegRuntimeStatus,
@@ -2330,16 +2330,18 @@ pub async fn send_message(
         let mcp_executor = McpToolExecutor::new(bindings, runtime.clone());
         let executor = ToolboxAudioToolExecutor::new(
             mcp_executor,
-            state_mcp,
-            runtime,
-            bridge_dir,
-            resource_dir,
-            components_dir,
-            downloads,
-            media_tasks,
-            agent_work_mode,
-            file_approvals,
-            conversation_id,
+            ToolboxAudioToolContext {
+                manager: state_mcp,
+                runtime,
+                bridge_dir,
+                resource_dir,
+                components_dir,
+                downloads,
+                media_tasks,
+                file_approvals,
+                conversation_id,
+                work_mode: agent_work_mode,
+            },
         );
         let added = AgentLoop::new(&provider, &executor)
             .run_turn(&mut session.messages, &input)

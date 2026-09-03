@@ -67,7 +67,7 @@ pub struct FileApprovalManager {
 }
 
 impl FileApprovalManager {
-    pub fn list(&self, path: &str) -> Result<Vec<AgentFileEntry>, String> {
+    pub fn list(&self, path: &str, mode: AgentWorkMode) -> Result<Vec<AgentFileEntry>, String> {
         let path = safe_existing_path(path)?;
         if !is_allowed_root(&path) {
             return Err("目录不在当前用户 HOME 的允许区域；不会读取文件内容。".to_string());
@@ -90,7 +90,7 @@ impl FileApprovalManager {
                         extension(&p)
                     },
                     size: meta.map(|m| m.len()).unwrap_or(0),
-                    decision: if is_dir {
+                    decision: if is_dir || mode == AgentWorkMode::Solo {
                         "pass".into()
                     } else {
                         approval_kind(&p).into()
@@ -175,6 +175,9 @@ impl FileApprovalManager {
             .pending
             .lock()
             .map_err(|_| "审批队列不可用".to_string())?;
+        pending.retain(|_, existing| {
+            existing.session_id != session_id || existing.path != request.path
+        });
         if pending.len() >= MAX_PENDING {
             pending.clear();
         }

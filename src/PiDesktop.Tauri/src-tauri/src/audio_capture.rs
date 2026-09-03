@@ -519,6 +519,19 @@ pub struct ToolboxAudioToolExecutor {
     mode_state: std::sync::Mutex<ModeExecutionState>,
 }
 
+pub struct ToolboxAudioToolContext {
+    pub(crate) manager: Arc<McpManager>,
+    pub(crate) runtime: Handle,
+    pub(crate) bridge_dir: PathBuf,
+    pub(crate) resource_dir: PathBuf,
+    pub(crate) components_dir: PathBuf,
+    pub(crate) downloads: Arc<ComponentDownloadManager>,
+    pub(crate) media_tasks: Arc<MediaTaskManager>,
+    pub(crate) file_approvals: Arc<FileApprovalManager>,
+    pub(crate) conversation_id: String,
+    pub(crate) work_mode: AgentWorkMode,
+}
+
 #[derive(Default)]
 struct ModeExecutionState {
     checkpoint_created: bool,
@@ -526,31 +539,19 @@ struct ModeExecutionState {
 }
 
 impl ToolboxAudioToolExecutor {
-    pub fn new(
-        mcp: McpToolExecutor,
-        manager: Arc<McpManager>,
-        runtime: Handle,
-        bridge_dir: PathBuf,
-        resource_dir: PathBuf,
-        components_dir: PathBuf,
-        downloads: Arc<ComponentDownloadManager>,
-        media_tasks: Arc<MediaTaskManager>,
-        work_mode: AgentWorkMode,
-        file_approvals: Arc<FileApprovalManager>,
-        conversation_id: String,
-    ) -> Self {
+    pub fn new(mcp: McpToolExecutor, context: ToolboxAudioToolContext) -> Self {
         Self {
             mcp,
-            manager,
-            runtime,
-            bridge_dir,
-            resource_dir,
-            components_dir,
-            downloads,
-            media_tasks,
-            file_approvals,
-            conversation_id,
-            work_mode,
+            manager: context.manager,
+            runtime: context.runtime,
+            bridge_dir: context.bridge_dir,
+            resource_dir: context.resource_dir,
+            components_dir: context.components_dir,
+            downloads: context.downloads,
+            media_tasks: context.media_tasks,
+            file_approvals: context.file_approvals,
+            conversation_id: context.conversation_id,
+            work_mode: context.work_mode,
             mode_state: std::sync::Mutex::new(ModeExecutionState::default()),
         }
     }
@@ -803,7 +804,7 @@ impl ToolboxAudioToolExecutor {
             "agent_file_list" => Some(
                 serde_json::from_str::<AgentFileListRequest>(&call.arguments_json)
                     .map_err(|e| e.to_string())
-                    .and_then(|r| self.file_approvals.list(&r.path))
+                    .and_then(|r| self.file_approvals.list(&r.path, self.work_mode))
                     .and_then(|v| serde_json::to_string(&v).map_err(|e| e.to_string())),
             ),
             "agent_file_access" => Some(
