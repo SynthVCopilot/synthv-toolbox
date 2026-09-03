@@ -16,13 +16,12 @@ use crate::components::component_list;
 use crate::config::AgentWorkMode;
 use crate::creative_history;
 use crate::downloads::ComponentDownloadManager;
+use crate::mcp::McpManager;
 use crate::mcp::McpToolExecutor;
-use crate::mcp::{extract_mcp_json, McpManager};
 use crate::media_import;
 use crate::media_tasks::{CoverTaskRequest, MediaTaskManager};
 use crate::solo_tuning::{self, SoloTuningRequest};
-use crate::synthv::{bridge_is_bundled, find_node};
-use crate::synthv_control::{self, BridgeShortcutAction};
+use crate::synthv_unified;
 use crate::tuning_profiles::{self, TuningParameters};
 use crate::workflows;
 use tokio::runtime::Handle;
@@ -31,7 +30,6 @@ const MAX_CLIP_SECONDS: f64 = 30.0;
 const MAX_GUARD_SECONDS: f64 = 2.0;
 const MAX_WAV_BYTES: u64 = 128 * 1024 * 1024;
 const PLAYBACK_POLL_INTERVAL: Duration = Duration::from_millis(45);
-const PLAYBACK_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -243,9 +241,9 @@ pub async fn capture_clip(
         return Err(capability().detail);
     }
     let target = resolve_target(request.process_id)?;
-    let session_before = bridge_status(manager).await?;
+    let session_before = synthv_unified::capture_status(manager, target.process_id).await?;
     let session_token = recursive_string(&session_before, "sessionToken").map(str::to_string);
-    let playback_before = playback(manager, "status", None).await?;
+    let playback_before = playback(manager, target.process_id, "status", None).await?;
     let status = recursive_string(&playback_before, "status").unwrap_or("unknown");
     if status != "stopped" {
         return Err(
@@ -265,7 +263,7 @@ pub async fn capture_clip(
     let output_path = output_dir.join(format!("{file_stem}.wav"));
     let metadata_path = output_dir.join(format!("{file_stem}.json"));
 
-    playback(manager, "seek", Some(play_from)).await?;
+    playback(manager, target.process_id, "seek", Some(play_from)).await?;
     let raw_for_start = raw_path.clone();
     let process_id = target.process_id;
     let capture_start = tauri::async_runtime::spawn_blocking(move || {
@@ -277,7 +275,7 @@ pub async fn capture_clip(
     let mut capture = match capture_start {
         Ok(capture) => capture,
         Err(error) => {
-            let _ = playback(manager, "seek", Some(original_playhead)).await;
+            let _ = playback(manager, target.process_id, "seek", Some(original_playhead)).await;
             cleanup_capture_files(&[&raw_path]);
             return Err(error);
         }
@@ -285,13 +283,13 @@ pub async fn capture_clip(
     let capture_armed_at = Instant::now();
 
     let play_call_started = Instant::now();
-    let play_result = playback(manager, "play", None).await;
+    let play_result = playback(manager, target.process_id, "play", None).await;
     let play_call_finished = Instant::now();
     if let Err(error) = play_result {
         capture.stop();
         let _ = tauri::async_runtime::spawn_blocking(move || capture.finish()).await;
-        let _ = playback(manager, "stop", None).await;
-        let _ = playback(manager, "seek", Some(original_playhead)).await;
+        let _ = playback(manager, target.process_id, "stop", None).await;
+        let _ = playback(manager, target.process_id, "seek", Some(original_playhead)).await;
         cleanup_capture_files(&[&raw_path]);
         return Err(error);
     }
@@ -305,7 +303,7 @@ pub async fn capture_clip(
             break Err("等待 SynthV 播放到片段终点超时。".to_string());
         }
         tokio::time::sleep(PLAYBACK_POLL_INTERVAL).await;
-        match playback(manager, "status", None).await {
+        match playback(manager, target.process_id, "status", None).await {
             Ok(state) => {
                 let state_status = recursive_string(&state, "status").unwrap_or("unknown");
                 let playhead = recursive_f64(&state, "playheadSeconds").unwrap_or(play_from);
@@ -322,14 +320,15 @@ pub async fn capture_clip(
         }
     };
 
-    let stop_result = playback(manager, "stop", None).await;
+    let stop_result = playback(manager, target.process_id, "stop", None).await;
     tokio::time::sleep(Duration::from_millis(80)).await;
     capture.stop();
     let native_result = tauri::async_runtime::spawn_blocking(move || capture.finish())
         .await
         .map_err(|error| format!("等待音频捕获完成失败：{error}"))
         .and_then(|result| result);
-    let restore_result = playback(manager, "seek", Some(original_playhead)).await;
+    let restore_result =
+        playback(manager, target.process_id, "seek", Some(original_playhead)).await;
 
     if let Err(error) = playback_result {
         cleanup_capture_files(&[&raw_path]);
@@ -358,7 +357,7 @@ pub async fn capture_clip(
         ));
     }
 
-    let session_after = match bridge_status(manager).await {
+    let session_after = match synthv_unified::capture_status(manager, target.process_id).await {
         Ok(status) => status,
         Err(error) => {
             cleanup_capture_files(&[&raw_path]);
@@ -768,40 +767,8 @@ impl ToolboxAudioToolExecutor {
                     "additionalProperties": false
                 }).to_string(),
             },
-            ToolDefinition {
-                name: "list_synthv_processes".to_string(),
-                description: "List every running local SynthV process. This is read-only and returns PID, executable name, and command line.".to_string(),
-                input_schema_json: json!({ "type": "object", "additionalProperties": false }).to_string(),
-            },
-            ToolDefinition {
-                name: "read_synthv_bridge_shortcuts".to_string(),
-                description: "Read the Toolbox Bridge shortcut profile. The defaults are F13 for start/reconnect and F14 for stop.".to_string(),
-                input_schema_json: json!({ "type": "object", "additionalProperties": false }).to_string(),
-            },
-            ToolDefinition {
-                name: "send_synthv_bridge_shortcut".to_string(),
-                description: "Focus one listed SynthV PID and send its configured Bridge shortcut. Use start to send F13 or stop to send F14.".to_string(),
-                input_schema_json: json!({
-                    "type": "object",
-                    "properties": {
-                        "processId": { "type": "integer", "minimum": 1 },
-                        "action": { "type": "string", "enum": ["start", "stop"] }
-                    },
-                    "required": ["processId", "action"],
-                    "additionalProperties": false
-                }).to_string(),
-            },
-            ToolDefinition {
-                name: "auto_connect_synthv_bridge".to_string(),
-                description: "Focus one listed SynthV PID, send F13 to start or reconnect its Bridge, then retry the local MCP connection for up to four seconds. Only one SynthV Bridge session can be connected at a time.".to_string(),
-                input_schema_json: json!({
-                    "type": "object",
-                    "properties": { "processId": { "type": "integer", "minimum": 1 } },
-                    "required": ["processId"],
-                    "additionalProperties": false
-                }).to_string(),
-            },
         ]);
+        tools.extend(synthv_unified::definitions());
         if capability().supported {
             tools.push(ToolDefinition {
                 name: "capture_synthv_clip".to_string(),
@@ -826,6 +793,18 @@ impl ToolboxAudioToolExecutor {
 
     fn execute_local(&self, call: &ToolCall) -> Option<ToolResult> {
         let result = match call.tool_name.as_str() {
+            name if synthv_unified::is_tool(name) => Some((|| {
+                if synthv_unified::is_mutation(name) {
+                    self.admit_project_mutation()?;
+                }
+                let value = self.runtime.block_on(synthv_unified::execute(
+                    name,
+                    &call.arguments_json,
+                    &self.manager,
+                    &self.bridge_dir,
+                ))?;
+                serde_json::to_string(&value).map_err(|error| error.to_string())
+            })()),
             "preview_media_source" => Some(
                 serde_json::from_str::<MediaSourceToolRequest>(&call.arguments_json)
                     .map_err(|error| format!("媒体来源参数无效：{error}"))
@@ -1012,45 +991,6 @@ impl ToolboxAudioToolExecutor {
                         serde_json::to_string(&value).map_err(|error| error.to_string())
                     }),
             ),
-            "list_synthv_processes" => Some(synthv_control::list_processes().and_then(|value| {
-                serde_json::to_string(&value).map_err(|error| error.to_string())
-            })),
-            "read_synthv_bridge_shortcuts" => Some(
-                serde_json::to_string(&synthv_control::shortcut_profile())
-                    .map_err(|error| error.to_string()),
-            ),
-            "send_synthv_bridge_shortcut" => Some(
-                serde_json::from_str::<SynthVShortcutRequest>(&call.arguments_json)
-                    .map_err(|error| format!("快捷键参数无效：{error}"))
-                    .and_then(|request| {
-                        synthv_control::send_shortcut(request.process_id, request.action)
-                    })
-                    .and_then(|value| {
-                        serde_json::to_string(&value).map_err(|error| error.to_string())
-                    }),
-            ),
-            "auto_connect_synthv_bridge" => Some(
-                serde_json::from_str::<SynthVProcessRequest>(&call.arguments_json)
-                    .map_err(|error| format!("自动连接参数无效：{error}"))
-                    .and_then(|request| {
-                        if !bridge_is_bundled(&self.bridge_dir) {
-                            return Err("当前构建未包含完整的 SynthV Bridge。".to_string());
-                        }
-                        let node =
-                            find_node().ok_or_else(|| "未找到 Node.js 22.19+。".to_string())?;
-                        self.runtime
-                            .block_on(synthv_control::start_bridge_and_connect(
-                                request.process_id,
-                                &self.manager,
-                                node,
-                                self.bridge_dir.clone(),
-                            ))
-                    })
-                    .and_then(|(process, tools)| {
-                        serde_json::to_string(&json!({ "process": process, "tools": tools }))
-                            .map_err(|error| error.to_string())
-                    }),
-            ),
             _ => None,
         }?;
         Some(match result {
@@ -1088,12 +1028,6 @@ impl ToolboxAudioToolExecutor {
             manager.run_worker().await;
         });
     }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SynthVProcessRequest {
-    process_id: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1150,13 +1084,6 @@ struct ApplyTuningToolRequest {
     voice_name: String,
     track_index: u32,
     group_index: u32,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SynthVShortcutRequest {
-    process_id: u32,
-    action: BridgeShortcutAction,
 }
 
 impl ToolExecutor for ToolboxAudioToolExecutor {
@@ -1261,35 +1188,13 @@ fn resolve_target(process_id: Option<u32>) -> Result<AudioCaptureTarget, String>
     }
 }
 
-async fn bridge_status(manager: &McpManager) -> Result<Value, String> {
-    call_bridge(manager, "sv_status", json!({})).await
-}
-
 async fn playback(
     manager: &McpManager,
+    process_id: u32,
     operation: &str,
     time_seconds: Option<f64>,
 ) -> Result<Value, String> {
-    let mut args = json!({ "operation": operation });
-    if let Some(value) = time_seconds {
-        args["timeSeconds"] = json!(value);
-    }
-    call_bridge(
-        manager,
-        "sv_ui",
-        json!({ "action": "playback", "args": args }),
-    )
-    .await
-}
-
-async fn call_bridge(manager: &McpManager, tool: &str, args: Value) -> Result<Value, String> {
-    let response = tokio::time::timeout(
-        PLAYBACK_COMMAND_TIMEOUT,
-        manager.call_bridge_tool(tool, args),
-    )
-    .await
-    .map_err(|_| format!("{tool} 调用超时。"))??;
-    extract_mcp_json(&response)
+    synthv_unified::capture_playback(manager, process_id, operation, time_seconds).await
 }
 
 fn recursive_string<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
@@ -2108,6 +2013,7 @@ mod platform {
     fn is_synthv_standalone(name: &str) -> bool {
         [
             "synthv-studio",
+            "synthesizer v flat",
             "synthesizer v studio 2 pro",
             "synthesizer v studio pro",
             "synthesizer v studio",

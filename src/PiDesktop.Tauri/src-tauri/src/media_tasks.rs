@@ -15,8 +15,8 @@ use crate::bridge_workflows;
 use crate::creative_history;
 use crate::mcp::McpManager;
 use crate::media_import;
-use crate::synthv::{bridge_is_bundled, find_node};
 use crate::synthv_control;
+use crate::synthv_unified;
 use crate::workflows;
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
@@ -81,6 +81,14 @@ struct TaskRecord {
     snapshot: MediaTaskSnapshot,
     request: MediaTaskRequest,
     cancelled: Arc<AtomicBool>,
+}
+
+struct CoverHost {
+    id: String,
+    process_id: u32,
+    bulk_score_import: bool,
+    singer_list: bool,
+    singer_assignment: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -550,9 +558,12 @@ impl MediaTaskManager {
             .ok_or_else(|| "旋律提取没有返回 MIDI 路径。".to_string())?;
         self.ensure_not_cancelled(&cancelled)?;
 
-        self.update(id, 82, "正在检查并连接 SynthV Bridge。", None);
-        let process_id = self.ensure_bridge(request.process_id).await?;
-        let project_file = bridge_workflows::current_project_file(&self.mcp).await?;
+        self.update(id, 82, "正在检查并连接 SynthV 宿主。", None);
+        let host = self.resolve_cover_host(request.process_id).await?;
+        let project = self.standard_read(&host.id, "project", json!({})).await?;
+        let status = self.standard_read(&host.id, "status", json!({})).await?;
+        let project_file =
+            bridge_workflows::current_project_file_from_standard_reads(&project, &status)?;
         let project_path = PathBuf::from(&project_file);
         if !project_path.is_file()
             || !project_path
@@ -570,16 +581,35 @@ impl MediaTaskManager {
         self.ensure_not_cancelled(&cancelled)?;
 
         self.update(id, 90, "正在把 Cover 音符和歌词导入 SynthV。", None);
-        let imported_score = bridge_workflows::import_monophonic_midi(
-            &self.mcp,
-            &midi_path,
-            request.track_index,
-            &request.group_name,
-        )
-        .await?;
+        let (imported_score, voice_assignment) = if host.bulk_score_import {
+            (
+                bridge_workflows::import_monophonic_midi(
+                    &self.mcp,
+                    &midi_path,
+                    request.track_index,
+                    &request.group_name,
+                )
+                .await?,
+                unsupported_voice_assignment(),
+            )
+        } else {
+            let parsed = self.parse_cover_notes(&midi_path).await?;
+            let notes = validate_cover_notes(&parsed)?;
+            self.import_cover_notes(&host, parsed, notes, &request)
+                .await
+                .map_err(|error| {
+                    format!(
+                        "Cover 标准多音符写入未完成。已创建检查点：{}；新建 Part 或部分音符可能已经写入，请先恢复该检查点再重试。原因：{error}",
+                        checkpoint.snapshot_path
+                    )
+                })?
+        };
         self.update(id, 97, "正在保存并验证 .svp 工程。", None);
         tauri::async_runtime::spawn_blocking(move || {
-            synthv_control::send_shortcut(process_id, synthv_control::BridgeShortcutAction::Save)
+            synthv_control::send_shortcut(
+                host.process_id,
+                synthv_control::BridgeShortcutAction::Save,
+            )
         })
         .await
         .map_err(|error| error.to_string())??;
@@ -594,11 +624,7 @@ impl MediaTaskManager {
             "svpPath": project_file,
             "saveVerified": save_verified,
             "requestedVoice": request.voice_name,
-            "voiceAssignment": {
-                "assigned": false,
-                "requiresHostSelection": true,
-                "reason": "SynthV 官方脚本 API 不提供 singer/voicebank 身份 setter；已完成账号外的所有可验证 Cover 步骤。"
-            }
+            "voiceAssignment": voice_assignment
         }))
     }
 
@@ -610,48 +636,286 @@ impl MediaTaskManager {
         }
     }
 
-    async fn ensure_bridge(&self, requested_process_id: Option<u32>) -> Result<u32, String> {
-        let processes = tauri::async_runtime::spawn_blocking(synthv_control::list_processes)
-            .await
-            .map_err(|error| error.to_string())??;
-        let process_id = match requested_process_id {
-            Some(process_id) if processes.iter().any(|item| item.process_id == process_id) => {
-                process_id
-            }
-            Some(process_id) => {
-                return Err(format!("没有找到 PID {process_id} 对应的 SynthV 进程。"))
-            }
-            None if processes.len() == 1 => processes[0].process_id,
-            None if processes.is_empty() => {
-                return Err("没有发现正在运行的 SynthV 进程。".to_string())
-            }
-            None => {
-                return Err(format!(
-                    "发现多个 SynthV 进程，请由 Agent 从列表中选择 processId：{}",
-                    processes
+    async fn resolve_cover_host(
+        &self,
+        requested_process_id: Option<u32>,
+    ) -> Result<CoverHost, String> {
+        let hosts = self.standard_call("synthv_hosts", json!({})).await?;
+        let hosts = hosts
+            .as_array()
+            .ok_or_else(|| "标准 SynthV 宿主列表无效。".to_string())?;
+        let running = hosts
+            .iter()
+            .filter(|host| host.get("running").and_then(Value::as_bool) == Some(true))
+            .collect::<Vec<_>>();
+        let selected = match requested_process_id {
+            Some(process_id) => running
+                .iter()
+                .find(|host| {
+                    host.get("processId").and_then(Value::as_u64) == Some(process_id as u64)
+                })
+                .copied()
+                .ok_or_else(|| format!("没有找到 PID {process_id} 对应的 SynthV 宿主。"))?,
+            None => match running.as_slice() {
+                [host] => *host,
+                [] => return Err("没有发现正在运行的 SynthV 宿主。".to_string()),
+                _ => {
+                    let process_ids = running
                         .iter()
-                        .map(|item| item.process_id.to_string())
-                        .collect::<Vec<_>>()
-                        .join("、")
-                ))
-            }
+                        .filter_map(|host| host.get("processId").and_then(Value::as_u64))
+                        .map(|process_id| process_id.to_string())
+                        .collect::<Vec<_>>();
+                    return Err(format!(
+                        "发现多个 SynthV 宿主，请由 Agent 从列表中选择 processId：{}",
+                        process_ids.join("、")
+                    ));
+                }
+            },
         };
-        if self.mcp.is_connected("synthv").await {
-            return Ok(process_id);
-        }
-        if !bridge_is_bundled(&self.bridge_dir) {
-            return Err("当前构建未包含完整的 SynthV Bridge。".to_string());
-        }
-        let node = find_node().ok_or_else(|| "未找到 Node.js 22.19+。".to_string())?;
-        synthv_control::start_bridge_and_connect(
+        let id = selected
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| "所选 SynthV 宿主缺少标准标识。".to_string())?
+            .to_string();
+        let process_id = selected
+            .get("processId")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| "所选 SynthV 宿主缺少可保存的进程 PID。".to_string())?;
+        let capabilities = selected.get("capabilities").unwrap_or(&Value::Null);
+        let write_operations = capabilities
+            .get("writeOperations")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "所选 SynthV 宿主没有标准写入能力描述。".to_string())?;
+        self.standard_call("synthv_connect", json!({ "hostId": id }))
+            .await?;
+        Ok(CoverHost {
+            id,
             process_id,
-            &self.mcp,
-            node,
-            self.bridge_dir.clone(),
+            bulk_score_import: !write_operations
+                .iter()
+                .any(|operation| operation.as_str() == Some("part.create")),
+            singer_list: capabilities
+                .get("singerList")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            singer_assignment: capabilities
+                .get("singerAssignment")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        })
+    }
+
+    async fn import_cover_notes(
+        &self,
+        host: &CoverHost,
+        parsed: Value,
+        notes: Vec<Value>,
+        request: &CoverTaskRequest,
+    ) -> Result<(Value, Value), String> {
+        let track_index = request
+            .track_index
+            .checked_sub(1)
+            .ok_or_else(|| "Cover 目标轨道编号必须从 1 开始。".to_string())?;
+        let created_part = self
+            .standard_write(
+                &host.id,
+                "part.create",
+                json!({
+                    "trackIndex": track_index,
+                    "name": request.group_name,
+                    "timeOffset": 0,
+                    "pitchOffset": 0,
+                }),
+            )
+            .await?;
+        let part_index = find_index(&created_part, "partIndex")
+            .ok_or_else(|| "标准 SynthV 宿主没有返回新建 Cover Part 的索引。".to_string())?;
+        let voice_assignment = self
+            .assign_flat_voice_if_available(host, request, track_index, part_index)
+            .await?;
+        for note in &notes {
+            let mut arguments = note
+                .as_object()
+                .cloned()
+                .ok_or_else(|| "Cover 曲谱包含无效音符。".to_string())?;
+            arguments.insert("trackIndex".to_string(), json!(track_index));
+            arguments.insert("partIndex".to_string(), json!(part_index));
+            self.standard_write(&host.id, "note.create", Value::Object(arguments))
+                .await?;
+        }
+        Ok((
+            json!({
+                "mode": "standard-notes",
+                "part": created_part,
+                "noteCount": notes.len(),
+                "score": parsed,
+            }),
+            voice_assignment,
+        ))
+    }
+
+    async fn parse_cover_notes(&self, midi_path: &str) -> Result<Value, String> {
+        let parsed = {
+            let bridge_dir = self.bridge_dir.clone();
+            let midi_path = midi_path.to_string();
+            tauri::async_runtime::spawn_blocking(move || {
+                bridge_workflows::parse_cover_midi(&bridge_dir, &midi_path)
+            })
+            .await
+            .map_err(|error| error.to_string())??
+        };
+        Ok(parsed)
+    }
+
+    async fn assign_flat_voice_if_available(
+        &self,
+        host: &CoverHost,
+        request: &CoverTaskRequest,
+        track_index: u32,
+        part_index: u64,
+    ) -> Result<Value, String> {
+        if !(host.singer_list && host.singer_assignment) {
+            return Ok(unsupported_voice_assignment());
+        }
+        let singers = self.standard_read(&host.id, "singers", json!({})).await?;
+        let singer = singers.as_array().and_then(|items| {
+            items.iter().find(|singer| {
+                singer.get("databaseName").and_then(Value::as_str)
+                    == Some(request.voice_name.as_str())
+            })
+        });
+        let Some(singer) = singer else {
+            return Ok(json!({
+                "assigned": false,
+                "requiresHostSelection": true,
+                "reason": "Flat 未找到与 voiceName 精确匹配的已安装 singer。"
+            }));
+        };
+        let database_name = singer
+            .get("databaseName")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "Flat singer.list 返回的 singer 缺少 databaseName。".to_string())?;
+        let mut arguments = json!({
+            "trackIndex": track_index,
+            "partIndex": part_index,
+            "databaseName": database_name,
+        });
+        if let Some(version) = singer
+            .get("version")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        {
+            arguments["version"] = Value::String(version.to_string());
+        }
+        self.standard_write(&host.id, "voice.assign", arguments)
+            .await?;
+        Ok(json!({
+            "assigned": true,
+            "singer": {
+                "databaseName": database_name,
+                "version": singer.get("version").cloned(),
+            }
+        }))
+    }
+
+    async fn standard_read(
+        &self,
+        host_id: &str,
+        operation: &str,
+        arguments: Value,
+    ) -> Result<Value, String> {
+        let result = self
+            .standard_call(
+                "synthv_read",
+                json!({ "hostId": host_id, "operation": operation, "arguments": arguments }),
+            )
+            .await?;
+        result
+            .get("data")
+            .cloned()
+            .ok_or_else(|| "标准 SynthV 读取缺少 data。".to_string())
+    }
+
+    async fn standard_write(
+        &self,
+        host_id: &str,
+        operation: &str,
+        arguments: Value,
+    ) -> Result<Value, String> {
+        self.standard_call(
+            "synthv_write",
+            json!({ "hostId": host_id, "operation": operation, "arguments": arguments }),
         )
         .await
-        .map(|_| process_id)
     }
+
+    async fn standard_call(&self, tool: &str, arguments: Value) -> Result<Value, String> {
+        let arguments = serde_json::to_string(&arguments).map_err(|error| error.to_string())?;
+        synthv_unified::execute(tool, &arguments, &self.mcp, &self.bridge_dir).await
+    }
+}
+
+fn unsupported_voice_assignment() -> Value {
+    json!({
+        "assigned": false,
+        "requiresHostSelection": true,
+        "reason": "所选官方 SynthV 宿主不提供 singer identity 写入；已完成可验证的 Cover 导入。"
+    })
+}
+
+fn find_index(value: &Value, key: &str) -> Option<u64> {
+    match value {
+        Value::Object(object) => object
+            .get(key)
+            .and_then(Value::as_u64)
+            .or_else(|| object.values().find_map(|value| find_index(value, key))),
+        Value::Array(items) => items.iter().find_map(|value| find_index(value, key)),
+        _ => None,
+    }
+}
+
+fn validate_cover_notes(parsed: &Value) -> Result<Vec<Value>, String> {
+    let notes = parsed
+        .get("notes")
+        .and_then(Value::as_array)
+        .filter(|notes| (1..=512).contains(&notes.len()))
+        .ok_or_else(|| "Cover 曲谱转换器没有返回 1–512 个音符。".to_string())?;
+    let mut validated = Vec::with_capacity(notes.len());
+    for (index, note) in notes.iter().enumerate() {
+        let object = note
+            .as_object()
+            .ok_or_else(|| format!("Cover 曲谱第 {} 个音符不是对象。", index + 1))?;
+        for (field, minimum, maximum) in [
+            ("onset", 0_u64, 9_007_199_254_740_991_u64),
+            ("duration", 1, 9_007_199_254_740_991_u64),
+            ("pitch", 0, 127),
+        ] {
+            let value = object.get(field).and_then(Value::as_u64);
+            if !value.is_some_and(|value| value >= minimum && value <= maximum) {
+                return Err(format!(
+                    "Cover 曲谱第 {} 个音符的 {field} 无效。",
+                    index + 1
+                ));
+            }
+        }
+        for field in ["lyrics", "phonemes"] {
+            if object.get(field).is_some_and(|value| {
+                !value.is_string()
+                    || value
+                        .as_str()
+                        .is_some_and(|value| value.chars().count() > 4096)
+            }) {
+                return Err(format!(
+                    "Cover 曲谱第 {} 个音符的 {field} 无效。",
+                    index + 1
+                ));
+            }
+        }
+        validated.push(note.clone());
+    }
+    Ok(validated)
 }
 
 fn request_kind(request: &MediaTaskRequest) -> &'static str {
@@ -773,4 +1037,30 @@ fn replace_file(source: &Path, target: &Path) -> std::io::Result<()> {
 #[cfg(not(windows))]
 fn replace_file(source: &Path, target: &Path) -> std::io::Result<()> {
     fs::rename(source, target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_cover_notes_accepts_complete_standard_notes() {
+        let notes = validate_cover_notes(&json!({
+            "notes": [{ "onset": 0, "duration": 120, "pitch": 60, "lyrics": "la" }]
+        }))
+        .expect("valid standard note");
+        assert_eq!(notes.len(), 1);
+    }
+
+    #[test]
+    fn validate_cover_notes_rejects_every_note_before_part_creation() {
+        let error = validate_cover_notes(&json!({
+            "notes": [
+                { "onset": 0, "duration": 120, "pitch": 60 },
+                { "onset": 120, "duration": 0, "pitch": 61 }
+            ]
+        }))
+        .expect_err("invalid duration must fail the full preflight");
+        assert!(error.contains("第 2 个音符"));
+    }
 }
