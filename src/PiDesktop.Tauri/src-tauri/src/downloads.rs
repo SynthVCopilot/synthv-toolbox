@@ -1,14 +1,17 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::agent::data_root;
 use crate::components::install_component;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ComponentDownloadStatus {
     Queued,
@@ -16,6 +19,7 @@ pub enum ComponentDownloadStatus {
     Installing,
     Completed,
     Failed,
+    Cancelled,
 }
 
 impl ComponentDownloadStatus {
@@ -24,7 +28,7 @@ impl ComponentDownloadStatus {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentDownload {
     pub id: String,
@@ -43,9 +47,25 @@ struct QueueState {
     removal_reservations: HashSet<String>,
 }
 
-#[derive(Default)]
 pub struct ComponentDownloadManager {
     inner: Mutex<QueueState>,
+    store_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistedQueue {
+    schema_version: u32,
+    items: Vec<ComponentDownload>,
+}
+
+impl Default for ComponentDownloadManager {
+    fn default() -> Self {
+        Self {
+            inner: Mutex::new(QueueState::default()),
+            store_path: None,
+        }
+    }
 }
 
 pub struct ComponentRemovalReservation {
@@ -62,6 +82,44 @@ impl Drop for ComponentRemovalReservation {
 }
 
 impl ComponentDownloadManager {
+    pub fn persistent() -> Self {
+        Self::from_store_path(data_root().join("tasks/component-downloads.json"))
+    }
+
+    fn from_store_path(store_path: PathBuf) -> Self {
+        let mut items = match load_queue(&store_path) {
+            Ok(items) => items,
+            Err(error) => {
+                eprintln!("无法恢复组件任务：{error}");
+                Vec::new()
+            }
+        };
+        let mut changed = false;
+        for item in &mut items {
+            if item.status.active() {
+                item.status = ComponentDownloadStatus::Failed;
+                item.detail = "应用在任务完成前退出；可安全重试此组件。".to_string();
+                item.updated_at = Utc::now().to_rfc3339();
+                changed = true;
+            }
+        }
+        let manager = Self {
+            inner: Mutex::new(QueueState {
+                items,
+                ..QueueState::default()
+            }),
+            store_path: Some(store_path),
+        };
+        if changed {
+            if let Ok(queue) = manager.inner.lock() {
+                if let Err(error) = manager.persist(&queue) {
+                    eprintln!("无法保存恢复后的组件任务：{error}");
+                }
+            }
+        }
+        manager
+    }
+
     pub fn snapshot(&self) -> Vec<ComponentDownload> {
         self.inner
             .lock()
@@ -145,6 +203,87 @@ impl ComponentDownloadManager {
         if start_worker {
             queue.worker_running = true;
         }
+        if let Err(error) = self.persist(&queue) {
+            queue.items.pop();
+            if start_worker {
+                queue.worker_running = false;
+            }
+            return Err(error);
+        }
+        Ok((queue.items.clone(), start_worker))
+    }
+
+    pub fn cancel_queued(&self, task_id: &str) -> Result<Vec<ComponentDownload>, String> {
+        let mut queue = self
+            .inner
+            .lock()
+            .map_err(|_| "组件下载队列锁已损坏。".to_string())?;
+        let item = queue
+            .items
+            .iter_mut()
+            .find(|item| item.id == task_id)
+            .ok_or_else(|| "没有找到该组件任务。".to_string())?;
+        if item.status != ComponentDownloadStatus::Queued {
+            return Err("只有尚未开始的排队任务可以在此取消。".to_string());
+        }
+        let previous = item.clone();
+        item.status = ComponentDownloadStatus::Cancelled;
+        item.progress = 0;
+        item.detail = "已在开始下载前取消。".to_string();
+        item.updated_at = Utc::now().to_rfc3339();
+        if let Err(error) = self.persist(&queue) {
+            queue
+                .items
+                .iter_mut()
+                .find(|item| item.id == task_id)
+                .map(|item| *item = previous);
+            return Err(error);
+        }
+        Ok(queue.items.clone())
+    }
+
+    pub fn retry(&self, task_id: &str) -> Result<(Vec<ComponentDownload>, bool), String> {
+        let mut queue = self
+            .inner
+            .lock()
+            .map_err(|_| "组件下载队列锁已损坏。".to_string())?;
+        let index = queue
+            .items
+            .iter()
+            .position(|item| item.id == task_id)
+            .ok_or_else(|| "没有找到该组件任务。".to_string())?;
+        if !matches!(
+            queue.items[index].status,
+            ComponentDownloadStatus::Failed | ComponentDownloadStatus::Cancelled
+        ) {
+            return Err("只有失败或已取消的组件任务可以重试。".to_string());
+        }
+        let component_id = queue.items[index].component_id.clone();
+        let previous = queue.items[index].clone();
+        if queue.removal_reservations.contains(&component_id) {
+            return Err("组件正在删除，暂时不能重试。".to_string());
+        }
+        if queue.items.iter().enumerate().any(|(other_index, item)| {
+            other_index != index && item.component_id == component_id && item.status.active()
+        }) {
+            return Err("该组件已有活动任务。".to_string());
+        }
+        let item = &mut queue.items[index];
+        item.status = ComponentDownloadStatus::Queued;
+        item.progress = 0;
+        item.detail = "等待前面的下载任务完成。".to_string();
+        item.updated_at = Utc::now().to_rfc3339();
+        let start_worker = !queue.worker_running;
+        if start_worker {
+            queue.worker_running = true;
+        }
+        if let Err(error) = self.persist(&queue) {
+            queue.items[index] = previous;
+            if start_worker {
+                queue.worker_running = false;
+            }
+            return Err(error);
+        }
         Ok((queue.items.clone(), start_worker))
     }
 
@@ -213,7 +352,11 @@ impl ComponentDownloadManager {
         item.progress = 2;
         item.detail = "正在准备 aria2 下载。".to_string();
         item.updated_at = Utc::now().to_rfc3339();
-        Some((item.id.clone(), item.component_id.clone()))
+        let next = (item.id.clone(), item.component_id.clone());
+        if let Err(error) = self.persist(&queue) {
+            eprintln!("无法持久化组件任务状态：{error}");
+        }
+        Some(next)
     }
 
     fn update(&self, task_id: &str, status: &str, progress: u8, detail: &str) {
@@ -228,6 +371,9 @@ impl ComponentDownloadManager {
                 item.detail = detail.to_string();
                 item.updated_at = Utc::now().to_rfc3339();
             }
+            if let Err(error) = self.persist(&queue) {
+                eprintln!("无法持久化组件任务进度：{error}");
+            }
         }
     }
 
@@ -239,8 +385,107 @@ impl ComponentDownloadManager {
                 item.detail = detail;
                 item.updated_at = Utc::now().to_rfc3339();
             }
+            if let Err(error) = self.persist(&queue) {
+                eprintln!("无法持久化组件任务结果：{error}");
+            }
         }
     }
+
+    fn persist(&self, queue: &QueueState) -> Result<(), String> {
+        let Some(path) = &self.store_path else {
+            return Ok(());
+        };
+        write_queue(path, &queue.items)
+    }
+}
+
+fn load_queue(path: &Path) -> Result<Vec<ComponentDownload>, String> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("无法读取 {}：{error}", path.display())),
+    };
+    let mut stored: PersistedQueue =
+        serde_json::from_slice(&bytes).map_err(|error| format!("组件任务文件无法解析：{error}"))?;
+    if stored.schema_version != 1 {
+        return Err("组件任务文件版本不受支持。".to_string());
+    }
+    stored
+        .items
+        .retain(|item| component_display_name(&item.component_id).is_some());
+    if stored.items.len() > 24 {
+        stored.items.drain(..stored.items.len() - 24);
+    }
+    Ok(stored.items)
+}
+
+fn write_queue(path: &Path, items: &[ComponentDownload]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "组件任务文件缺少父目录。".to_string())?;
+    fs::create_dir_all(parent).map_err(|error| format!("无法创建组件任务目录：{error}"))?;
+    let metadata = fs::symlink_metadata(parent).map_err(|error| error.to_string())?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("组件任务目录不是安全的普通目录。".to_string());
+    }
+    if fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err("组件任务文件不能是符号链接。".to_string());
+    }
+    let temporary = path.with_extension(format!("json.{}.tmp", Uuid::new_v4()));
+    let payload = PersistedQueue {
+        schema_version: 1,
+        items: items.to_vec(),
+    };
+    let bytes = serde_json::to_vec_pretty(&payload).map_err(|error| error.to_string())?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|error| error.to_string())?;
+    if let Err(error) = file.write_all(&bytes).and_then(|_| file.sync_all()) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.to_string());
+    }
+    if let Err(error) = replace_queue_file(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.to_string());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn replace_queue_file(source: &Path, target: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+    let source = source
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let target = target
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let result = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            target.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn replace_queue_file(source: &Path, target: &Path) -> std::io::Result<()> {
+    fs::rename(source, target)
 }
 
 fn component_display_name(id: &str) -> Option<&'static str> {

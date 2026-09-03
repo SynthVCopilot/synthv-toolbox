@@ -680,15 +680,34 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
         id: crypto.randomUUID(),
         componentId,
         displayName: componentName,
-        status: "downloading",
-        progress: 38,
-        detail: "aria2 正在下载固定版本组件。",
+        status: "queued",
+        progress: 0,
+        detail: "等待前面的下载任务完成。",
         updatedAt: new Date().toISOString(),
       });
     }
     return previewDownloads as T;
   }
   if (command === "component_downloads") return previewDownloads as T;
+  if (command === "cancel_component_install") {
+    const task = previewDownloads.find((item) => item.id === String(args?.taskId ?? ""));
+    if (task?.status === "queued") {
+      task.status = "cancelled";
+      task.detail = "已在开始下载前取消。";
+      task.updatedAt = new Date().toISOString();
+    }
+    return previewDownloads as T;
+  }
+  if (command === "retry_component_install") {
+    const task = previewDownloads.find((item) => item.id === String(args?.taskId ?? ""));
+    if (task && ["failed", "cancelled"].includes(task.status)) {
+      task.status = "queued";
+      task.progress = 0;
+      task.detail = "等待前面的下载任务完成。";
+      task.updatedAt = new Date().toISOString();
+    }
+    return previewDownloads as T;
+  }
   if (command === "open_downloaded_component") return { succeeded: true, summary: "已打开 Sandboxie 安装包位置。", detail: "预览模式" } as T;
   if (command === "remove_local_component") {
     const componentId = String(args?.id ?? "");
@@ -961,6 +980,8 @@ export const api = {
     call<WorkflowResult>("compare_synthv_clips", { baselinePath, candidatePath, maxLagMs }),
   componentDownloads: () => call<ComponentDownload[]>("component_downloads"),
   queueComponentInstall: (id: string) => call<ComponentDownload[]>("queue_component_install", { id }),
+  cancelComponentInstall: (taskId: string) => call<ComponentDownload[]>("cancel_component_install", { taskId }),
+  retryComponentInstall: (taskId: string) => call<ComponentDownload[]>("retry_component_install", { taskId }),
   openDownloadedComponent: (id: string) => call<OperationResult>("open_downloaded_component", { id }),
   removeLocalComponent: (id: string) => call<OperationResult>("remove_local_component", { id }),
   listWorkflowRecipes: () => call<WorkflowRecipe[]>("list_workflow_recipes"),

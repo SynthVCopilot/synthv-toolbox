@@ -1154,6 +1154,31 @@ pub fn queue_component_install(
 }
 
 #[tauri::command]
+pub fn cancel_component_install(
+    task_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<ComponentDownload>, String> {
+    state.downloads.cancel_queued(&task_id)
+}
+
+#[tauri::command]
+pub fn retry_component_install(
+    task_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<ComponentDownload>, String> {
+    let (snapshot, start_worker) = state.downloads.retry(&task_id)?;
+    if start_worker {
+        let manager = state.downloads.clone();
+        let components_dir = state.components_dir.clone();
+        let resource_dir = state.resource_dir.clone();
+        tauri::async_runtime::spawn(async move {
+            manager.run_worker(components_dir, resource_dir).await;
+        });
+    }
+    Ok(snapshot)
+}
+
+#[tauri::command]
 pub async fn open_downloaded_component(id: String) -> Result<OperationResult, String> {
     tauri::async_runtime::spawn_blocking(move || open_component_download(&id))
         .await
@@ -2147,6 +2172,8 @@ pub async fn send_message(
     let state_mcp = state.mcp.clone();
     let bridge_dir = state.bridge_dir.clone();
     let resource_dir = state.resource_dir.clone();
+    let components_dir = state.components_dir.clone();
+    let downloads = state.downloads.clone();
     let session = state.agent.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let provider = build_ai_provider(&ai_settings)?;
@@ -2159,6 +2186,8 @@ pub async fn send_message(
             runtime,
             bridge_dir,
             resource_dir,
+            components_dir,
+            downloads,
         );
         let added = AgentLoop::new(&provider, &executor)
             .run_turn(&mut session.messages, &input)
