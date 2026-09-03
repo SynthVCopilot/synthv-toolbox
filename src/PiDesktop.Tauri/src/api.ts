@@ -1,6 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type {
   AiProviderId,
+  AgentWorkMode,
   AiProviderSummary,
   AppMode,
   AudioCaptureCapability,
@@ -48,6 +49,7 @@ import type {
 
 const preview = import.meta.env.DEV && !isTauri();
 let previewMode: AppMode = "toolbox";
+let previewAgentWorkMode: AgentWorkMode = "edit";
 let previewOnboarding = false;
 let previewConcurrentDisclaimerAccepted = false;
 let previewSv2ConcurrentEnabled = true;
@@ -275,6 +277,7 @@ let previewProfiles: Sv2ProfilesState = {
 const previewState = (): BootstrapState => ({
   onboardingCompleted: previewOnboarding,
   mode: previewMode,
+  agentWorkMode: previewAgentWorkMode,
   platform: "preview",
   appVersion: "0.1.1",
   configPath: "~/.SynthVcopilot/config.json",
@@ -419,6 +422,10 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     ],
   } as T;
   if (command === "bootstrap" || command === "complete_onboarding" || command === "set_mode" || command.endsWith("settings") || command.endsWith("server") || command === "save_scripts_path" || command === "delete_mcp_server") {
+    return previewState() as T;
+  }
+  if (command === "set_agent_work_mode") {
+    previewAgentWorkMode = args?.mode === "solo" ? "solo" : "edit";
     return previewState() as T;
   }
   if (command === "scan_synthv") return previewState().installations as T;
@@ -954,6 +961,7 @@ export const api = {
   bootstrap: () => call<BootstrapState>("bootstrap"),
   completeOnboarding: (mode: AppMode) => call<BootstrapState>("complete_onboarding", { mode }),
   setMode: (mode: AppMode) => call<BootstrapState>("set_mode", { mode }),
+  setAgentWorkMode: (mode: AgentWorkMode) => call<BootstrapState>("set_agent_work_mode", { mode }),
   authorizeAiProvider: (provider: AiProviderId) =>
     call<BootstrapState>("authorize_ai_provider", { provider }),
   selectAiProvider: (provider: AiProviderId, model: string) =>

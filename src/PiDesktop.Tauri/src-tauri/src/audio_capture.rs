@@ -12,6 +12,8 @@ use uuid::Uuid;
 
 use crate::agent::{AgentError, ToolCall, ToolDefinition, ToolExecutor, ToolResult};
 use crate::components::component_list;
+use crate::config::AgentWorkMode;
+use crate::creative_history;
 use crate::downloads::ComponentDownloadManager;
 use crate::mcp::McpToolExecutor;
 use crate::mcp::{extract_mcp_json, McpManager};
@@ -466,6 +468,14 @@ pub struct ToolboxAudioToolExecutor {
     components_dir: PathBuf,
     downloads: Arc<ComponentDownloadManager>,
     media_tasks: Arc<MediaTaskManager>,
+    work_mode: AgentWorkMode,
+    mode_state: std::sync::Mutex<ModeExecutionState>,
+}
+
+#[derive(Default)]
+struct ModeExecutionState {
+    checkpoint_created: bool,
+    project_mutations: u8,
 }
 
 impl ToolboxAudioToolExecutor {
@@ -478,6 +488,7 @@ impl ToolboxAudioToolExecutor {
         components_dir: PathBuf,
         downloads: Arc<ComponentDownloadManager>,
         media_tasks: Arc<MediaTaskManager>,
+        work_mode: AgentWorkMode,
     ) -> Self {
         Self {
             mcp,
@@ -488,6 +499,8 @@ impl ToolboxAudioToolExecutor {
             components_dir,
             downloads,
             media_tasks,
+            work_mode,
+            mode_state: std::sync::Mutex::new(ModeExecutionState::default()),
         }
     }
 
@@ -572,6 +585,19 @@ impl ToolboxAudioToolExecutor {
                         "advanced": { "type": "boolean", "default": true }
                     },
                     "required": ["source", "voiceName", "trackIndex", "groupName", "rightsConfirmed", "tolerance", "advanced"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
+                name: "create_project_checkpoint".to_string(),
+                description: "Create a recoverable managed copy of one saved .svp project before autonomous mutations.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": {
+                        "projectPath": { "type": "string" },
+                        "label": { "type": "string", "maxLength": 100 }
+                    },
+                    "required": ["projectPath", "label"],
                     "additionalProperties": false
                 }).to_string(),
             },
@@ -730,6 +756,20 @@ impl ToolboxAudioToolExecutor {
                     .and_then(|(snapshot, start_worker)| {
                         self.start_media_worker(start_worker);
                         serde_json::to_string(&snapshot).map_err(|error| error.to_string())
+                    }),
+            ),
+            "create_project_checkpoint" => Some(
+                serde_json::from_str::<CheckpointToolRequest>(&call.arguments_json)
+                    .map_err(|error| format!("检查点参数无效：{error}"))
+                    .and_then(|request| {
+                        let checkpoint = creative_history::create_checkpoint(
+                            &request.project_path,
+                            &request.label,
+                        )?;
+                        if let Ok(mut state) = self.mode_state.lock() {
+                            state.checkpoint_created = true;
+                        }
+                        serde_json::to_string(&checkpoint).map_err(|error| error.to_string())
                     }),
             ),
             "separate_vocals_and_instrumental" => Some(
@@ -905,6 +945,13 @@ struct TaskIdRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct CheckpointToolRequest {
+    project_path: String,
+    label: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SynthVShortcutRequest {
     process_id: u32,
     action: BridgeShortcutAction,
@@ -921,8 +968,42 @@ impl ToolExecutor for ToolboxAudioToolExecutor {
         if let Some(result) = self.execute_local(call) {
             Ok(result)
         } else {
+            if call.tool_name == "sv_command" {
+                if let Err(error) = self.admit_project_mutation() {
+                    return Ok(ToolResult {
+                        tool_call_id: call.id.clone(),
+                        result_json: json!({ "error": error }).to_string(),
+                        is_error: true,
+                    });
+                }
+            }
             self.mcp.execute(call)
         }
+    }
+}
+
+impl ToolboxAudioToolExecutor {
+    fn admit_project_mutation(&self) -> Result<(), String> {
+        let mut state = self
+            .mode_state
+            .lock()
+            .map_err(|_| "Agent 工作模式状态锁已损坏。".to_string())?;
+        match self.work_mode {
+            AgentWorkMode::Edit if state.project_mutations >= 1 => {
+                return Err("Edit 模式每轮只允许一次 SynthV 项目修改。".to_string())
+            }
+            AgentWorkMode::Solo if !state.checkpoint_created => {
+                return Err(
+                    "Solo 模式修改 SynthV 前必须先调用 create_project_checkpoint。".to_string(),
+                )
+            }
+            AgentWorkMode::Solo if state.project_mutations >= 8 => {
+                return Err("Solo 模式每轮最多执行八次 SynthV 项目修改。".to_string())
+            }
+            _ => {}
+        }
+        state.project_mutations += 1;
+        Ok(())
     }
 }
 

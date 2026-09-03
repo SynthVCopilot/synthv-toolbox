@@ -139,6 +139,7 @@ pub fn run() {
             commands::bootstrap,
             commands::complete_onboarding,
             commands::set_mode,
+            commands::set_agent_work_mode,
             commands::authorize_ai_provider,
             commands::select_ai_provider,
             commands::ai_provider_state,

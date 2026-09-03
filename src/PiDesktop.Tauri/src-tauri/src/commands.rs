@@ -27,8 +27,8 @@ use crate::components::{
     ComponentInfo,
 };
 use crate::config::{
-    model_summary, save_settings, settings_path, validate_ai_model, validate_mcp_server, AppMode,
-    McpServerConfig, ModelSummary, ToolboxSettings,
+    model_summary, save_settings, settings_path, validate_ai_model, validate_mcp_server,
+    AgentWorkMode, AppMode, McpServerConfig, ModelSummary, ToolboxSettings,
 };
 use crate::creative_history::{
     self, CreativeHistoryEntry, ProjectCheckpoint, WorkflowRecipe, WorkflowReportFormat,
@@ -87,6 +87,7 @@ pub struct BatchWorkflowResult {
 pub struct BootstrapState {
     onboarding_completed: bool,
     mode: AppMode,
+    agent_work_mode: AgentWorkMode,
     platform: String,
     app_version: String,
     config_path: String,
@@ -391,6 +392,19 @@ pub async fn set_mode(mode: AppMode, state: State<'_, AppState>) -> Result<Boots
         for id in external_ids {
             state.mcp.disconnect(&id).await;
         }
+    }
+    build_bootstrap(&state).await
+}
+
+#[tauri::command]
+pub async fn set_agent_work_mode(
+    mode: AgentWorkMode,
+    state: State<'_, AppState>,
+) -> Result<BootstrapState, String> {
+    {
+        let mut settings = state.settings.write().await;
+        settings.agent_work_mode = mode;
+        save_settings(&settings)?;
     }
     build_bootstrap(&state).await
 }
@@ -2207,6 +2221,7 @@ pub async fn send_message(
         return Err("消息超过 32,000 字符限制。".to_string());
     }
     let ai_settings = state.settings.read().await.clone();
+    let agent_work_mode = ai_settings.agent_work_mode;
     let mcp_configs = ai_settings.mcp_servers.clone();
     state.mcp.ensure_configured(&mcp_configs).await?;
     let bindings = state.mcp.bindings().await;
@@ -2222,6 +2237,7 @@ pub async fn send_message(
         let provider = build_ai_provider(&ai_settings)?;
         let mut session = session.lock().map_err(|_| "会话状态锁已损坏".to_string())?;
         ensure_session(&mut session);
+        apply_agent_work_mode(&mut session.messages, agent_work_mode);
         let mcp_executor = McpToolExecutor::new(bindings, runtime.clone());
         let executor = ToolboxAudioToolExecutor::new(
             mcp_executor,
@@ -2232,6 +2248,7 @@ pub async fn send_message(
             components_dir,
             downloads,
             media_tasks,
+            agent_work_mode,
         );
         let added = AgentLoop::new(&provider, &executor)
             .run_turn(&mut session.messages, &input)
@@ -2395,6 +2412,7 @@ async fn build_bootstrap(state: &State<'_, AppState>) -> Result<BootstrapState, 
     Ok(BootstrapState {
         onboarding_completed: settings.onboarding_completed,
         mode: settings.mode,
+        agent_work_mode: settings.agent_work_mode,
         platform: std::env::consts::OS.to_string(),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         config_path: settings_path().to_string_lossy().into_owned(),
@@ -2426,6 +2444,26 @@ fn ensure_session(session: &mut AgentSession) {
     session.id = Some(Uuid::new_v4().to_string());
     session.title = "新对话".to_string();
     session.created_at = now;
+}
+
+fn apply_agent_work_mode(messages: &mut Vec<ChatMessage>, mode: AgentWorkMode) {
+    const PREFIX: &str = "[SynthV Toolbox work mode]";
+    messages.retain(|message| {
+        !(matches!(message.role, Role::System) && message.content.starts_with(PREFIX))
+    });
+    let policy = match mode {
+        AgentWorkMode::Edit => "edit: execute one bounded, explicitly targeted edit sequence, verify its result, then report. Do not start an autonomous tuning loop.",
+        AgentWorkMode::Solo => "solo: autonomously continue safe in-scope steps toward the requested result. Before project mutations establish a recoverable checkpoint when a saved project is available; use bounded A/B evaluation, stop on failed verification, and never invent singer assignment or successful saves.",
+    };
+    messages.insert(
+        0,
+        ChatMessage {
+            role: Role::System,
+            content: format!("{PREFIX} {policy}"),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        },
+    );
 }
 
 fn session_to_conversation(
