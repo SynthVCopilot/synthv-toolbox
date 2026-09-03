@@ -22,6 +22,7 @@ use crate::audio_prep::{
     AudioJobSnapshot, AudioPrepareRequest, AudioWritePlan, FfmpegRuntimeStatus,
     LoudnessNormalizeRequest, LoudnessReport, MediaProbe,
 };
+use crate::bridge_workflows;
 use crate::components::{
     component_list, open_component_download, remove_local_component as remove_local_component_impl,
     ComponentInfo,
@@ -62,6 +63,7 @@ use crate::synthv::{
     OperationResult, SynthVInstallation,
 };
 use crate::synthv_control::{self, BridgeShortcutAction, SynthVProcess, SynthVShortcutProfile};
+use crate::tuning_profiles::{self, TuningParameters, TuningProfile};
 use crate::workflows::{self, WorkflowResult};
 
 #[derive(Debug, Clone, Serialize)]
@@ -1760,6 +1762,72 @@ pub async fn run_audio_probe(
         "音频结构分析",
         json!({ "audioPath": audio_path, "advanced": advanced }),
         result,
+    ))
+}
+
+#[tauri::command]
+pub async fn learn_tuning_profile(
+    audio_path: String,
+    voice_name: String,
+    state: State<'_, AppState>,
+) -> Result<TuningProfile, String> {
+    let resource_dir = state.resource_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let features = workflows::source_style(audio_path, &resource_dir)?;
+        tuning_profiles::learn(&voice_name, features)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn list_tuning_profiles() -> Result<Vec<TuningProfile>, String> {
+    tauri::async_runtime::spawn_blocking(tuning_profiles::list)
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_tuning_profile(voice_name: String) -> Result<TuningProfile, String> {
+    tauri::async_runtime::spawn_blocking(move || tuning_profiles::get(&voice_name))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn record_tuning_outcome(
+    voice_name: String,
+    candidate: TuningParameters,
+    improvement: f64,
+) -> Result<TuningProfile, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        tuning_profiles::record_outcome(&voice_name, candidate, improvement)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn apply_tuning_profile(
+    voice_name: String,
+    track_index: u32,
+    group_index: u32,
+    state: State<'_, AppState>,
+) -> Result<WorkflowResult, String> {
+    require_ai(&state).await?;
+    let profile = tuning_profiles::get(&voice_name)?;
+    let result =
+        bridge_workflows::apply_tuning_profile(&state.mcp, &profile, track_index, group_index)
+            .await?;
+    Ok(record_workflow_result(
+        "应用分声库调声档案",
+        json!({ "voiceName": voice_name, "trackIndex": track_index, "groupIndex": group_index }),
+        WorkflowResult {
+            kind: "learned-tuning-apply".to_string(),
+            summary: format!("已应用声库 {} 的本地学习调声参数。", profile.voice_name),
+            output_path: None,
+            data: result,
+        },
     ))
 }
 

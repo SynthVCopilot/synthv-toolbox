@@ -28,6 +28,7 @@
 - `src/PiDesktop.Tauri/src-tauri/src/media_tasks.rs`：平台导入、分离与一键 Cover 的持久化串行任务；支持取消、重试、歌词 MIDI、Bridge 导入和 `.svp` 保存验证。
 - `src/PiDesktop.Tauri/src-tauri/src/managed_process.rs`：受限 stdout/stderr 的跨平台可终止进程树执行器。
 - `src/PiDesktop.Tauri/src-tauri/src/config.rs`：应用模式、Edit/Solo Agent 工作模式、AI 提供商与持久化设置。
+- `src/PiDesktop.Tauri/src-tauri/src/tuning_profiles.rs`：参考演唱特征映射、按声库隔离档案与 A/B 反馈学习。
 - `external/synthv-agent-bridge`：SynthV 内部查询、编辑与能力边界；明确报告歌手身份不可由官方脚本 API 读取或分配。
 - `src/PiDesktop.Tauri/src-tauri/components/vocal-separation`：固定依赖的 Demucs 双轨分离运行时入口。
 - `src/PiDesktop.Tauri/src-tauri/src/workflows.rs`：音频分析、分离、MIDI 与工程处理工作流编排。
