@@ -39,50 +39,78 @@ const MEDIA_FETCHER_MACOS_SHA256: &str =
     "0f192b7ec147ab6288885d6351d9ab67367640029b4377576ef46dd79cf7b202";
 const MEDIA_FETCHER_WINDOWS_SHA256: &str =
     "66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a";
-static COMPONENT_MUTATING: AtomicBool = AtomicBool::new(false);
-static COMPONENT_USAGE_COUNT: AtomicUsize = AtomicUsize::new(0);
+struct ComponentActivity {
+    mutating: AtomicBool,
+    usage_count: AtomicUsize,
+}
 
-pub(crate) struct ComponentUsageGuard;
+impl ComponentActivity {
+    const fn new() -> Self {
+        Self {
+            mutating: AtomicBool::new(false),
+            usage_count: AtomicUsize::new(0),
+        }
+    }
+}
+
+static COMPONENT_ACTIVITY: ComponentActivity = ComponentActivity::new();
+
+pub(crate) struct ComponentUsageGuard {
+    activity: &'static ComponentActivity,
+}
 
 impl Drop for ComponentUsageGuard {
     fn drop(&mut self) {
-        let previous = COMPONENT_USAGE_COUNT.fetch_sub(1, Ordering::SeqCst);
+        let previous = self.activity.usage_count.fetch_sub(1, Ordering::SeqCst);
         debug_assert!(previous > 0, "component usage counter underflowed");
     }
 }
 
-struct ComponentMutationGuard;
+struct ComponentMutationGuard {
+    activity: &'static ComponentActivity,
+}
 
 impl Drop for ComponentMutationGuard {
     fn drop(&mut self) {
-        COMPONENT_MUTATING.store(false, Ordering::SeqCst);
+        self.activity.mutating.store(false, Ordering::SeqCst);
     }
 }
 
 pub(crate) fn component_usage_guard() -> Result<ComponentUsageGuard, String> {
-    if COMPONENT_MUTATING.load(Ordering::SeqCst) {
+    component_usage_guard_for(&COMPONENT_ACTIVITY)
+}
+
+fn component_usage_guard_for(
+    activity: &'static ComponentActivity,
+) -> Result<ComponentUsageGuard, String> {
+    if activity.mutating.load(Ordering::SeqCst) {
         return Err("组件正在安装或删除；请等待当前组件操作完成后重试。".to_string());
     }
-    COMPONENT_USAGE_COUNT.fetch_add(1, Ordering::SeqCst);
-    if COMPONENT_MUTATING.load(Ordering::SeqCst) {
-        COMPONENT_USAGE_COUNT.fetch_sub(1, Ordering::SeqCst);
+    activity.usage_count.fetch_add(1, Ordering::SeqCst);
+    if activity.mutating.load(Ordering::SeqCst) {
+        activity.usage_count.fetch_sub(1, Ordering::SeqCst);
         Err("组件正在安装或删除；请等待当前组件操作完成后重试。".to_string())
     } else {
-        Ok(ComponentUsageGuard)
+        Ok(ComponentUsageGuard { activity })
     }
 }
 
 fn component_mutation_guard() -> ComponentMutationGuard {
-    while COMPONENT_MUTATING
+    component_mutation_guard_for(&COMPONENT_ACTIVITY)
+}
+
+fn component_mutation_guard_for(activity: &'static ComponentActivity) -> ComponentMutationGuard {
+    while activity
+        .mutating
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
     {
         std::thread::yield_now();
     }
-    while COMPONENT_USAGE_COUNT.load(Ordering::SeqCst) != 0 {
+    while activity.usage_count.load(Ordering::SeqCst) != 0 {
         std::thread::sleep(Duration::from_millis(1));
     }
-    ComponentMutationGuard
+    ComponentMutationGuard { activity }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2229,24 +2257,25 @@ mod tests {
     fn component_usage_guard_excludes_install_or_remove_writer() {
         fn assert_send<T: Send>() {}
         assert_send::<ComponentUsageGuard>();
-        let usage_guard = component_usage_guard().unwrap();
+        let activity: &'static ComponentActivity = Box::leak(Box::new(ComponentActivity::new()));
+        let usage_guard = component_usage_guard_for(activity).unwrap();
         let started = std::sync::Arc::new(AtomicBool::new(false));
         let acquired = std::sync::Arc::new(AtomicBool::new(false));
         let thread_started = started.clone();
         let thread_acquired = acquired.clone();
         let writer = std::thread::spawn(move || {
             thread_started.store(true, Ordering::SeqCst);
-            let _guard = component_mutation_guard();
+            let _guard = component_mutation_guard_for(activity);
             thread_acquired.store(true, Ordering::SeqCst);
         });
         while !started.load(Ordering::SeqCst) {
             std::thread::yield_now();
         }
-        while !COMPONENT_MUTATING.load(Ordering::SeqCst) {
+        while !activity.mutating.load(Ordering::SeqCst) {
             std::thread::yield_now();
         }
         assert!(!acquired.load(Ordering::SeqCst));
-        assert!(component_usage_guard().is_err());
+        assert!(component_usage_guard_for(activity).is_err());
         drop(usage_guard);
         writer.join().unwrap();
         assert!(acquired.load(Ordering::SeqCst));
