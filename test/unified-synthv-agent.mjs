@@ -25,7 +25,7 @@ for (const tool of [
 
 assert.match(agent, /tools\.extend\(synthv_unified::definitions\(\)\)/);
 assert.match(agent, /synthv_unified::is_mutation/);
-assert.match(manager, /filter\(\|\(id, _\)\| !id\.starts_with\("synthv"\)\)/);
+assert.match(manager, /filter\(\|server\| server\.agent_visible\)/);
 assert.match(manager, /connect_http/);
 assert.match(unified, /HostKind::OfficialSv1/);
 assert.match(unified, /HostKind::Flat/);

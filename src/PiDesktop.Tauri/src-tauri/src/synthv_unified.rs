@@ -296,7 +296,7 @@ async fn connect(
     if manager.synthv_server_id(&host.id).await.is_some() {
         return Ok(json!({ "hostId": host.id, "connected": true, "alreadyConnected": true }));
     }
-    let tools = match host.kind {
+    let _tools = match host.kind {
         HostKind::Flat => {
             let endpoint = host
                 .endpoint
@@ -304,7 +304,8 @@ async fn connect(
                 .ok_or_else(|| "所选 SynthV 宿主的内置扩展尚未就绪。".to_string())?;
             manager
                 .connect_http(id.clone(), "SynthV Host".to_string(), endpoint)
-                .await?
+                .await
+                .map_err(standard_error)?
         }
         HostKind::OfficialSv2 => {
             if !bridge_is_bundled(bridge_dir) {
@@ -320,13 +321,14 @@ async fn connect(
                 node,
                 bridge_dir.to_path_buf(),
             )
-            .await?
+            .await
+            .map_err(standard_error)?
             .1
         }
         HostKind::OfficialSv1 => connect_sv1(manager, bridge_dir, &host, &id).await?,
     };
     manager.bind_synthv_host(host.id.clone(), id).await;
-    Ok(json!({ "hostId": host.id, "connected": true, "tools": tools.len() }))
+    Ok(json!({ "hostId": host.id, "connected": true }))
 }
 
 async fn connect_sv1(
@@ -344,7 +346,8 @@ async fn connect_sv1(
     let process_id = host
         .process_id
         .ok_or_else(|| "宿主进程不可用。".to_string())?;
-    synthv_control::send_shortcut(process_id, BridgeShortcutAction::Start)?;
+    synthv_control::send_shortcut(process_id, BridgeShortcutAction::Start)
+        .map_err(standard_error)?;
     let tools = manager
         .connect_stdio_host(
             id.to_string(),
@@ -353,7 +356,8 @@ async fn connect_sv1(
             vec!["dist/legacy-sv1/src/cli.js".to_string()],
             Some(bridge_dir.to_path_buf()),
         )
-        .await?;
+        .await
+        .map_err(standard_error)?;
     let mut last_error = "宿主扩展尚未就绪。".to_string();
     for _ in 0..CONNECT_RETRIES {
         match call_payload(manager, id, "studio.get_status", json!({})).await {
@@ -437,8 +441,7 @@ async fn disconnect(manager: &McpManager, host_id: &str) -> Result<Value, String
     Ok(json!({
         "hostId": host_id,
         "connected": false,
-        "hostExtensionStopped": stop_warning.is_none(),
-        "stopWarning": stop_warning,
+        "warning": stop_warning.map(standard_error)
     }))
 }
 
@@ -591,12 +594,16 @@ async fn write(manager: &McpManager, request: WriteRequest) -> Result<Value, Str
         .await
         .ok_or_else(|| "所选 SynthV 宿主尚未连接。".to_string())?;
     let data = match host.kind {
-        HostKind::Flat => {
-            write_direct(manager, &id, &request.operation, request.arguments, false).await?
-        }
-        HostKind::OfficialSv1 => {
-            write_direct(manager, &id, &request.operation, request.arguments, true).await?
-        }
+        HostKind::Flat => normalize_direct(
+            host.kind,
+            &request.operation,
+            write_direct(manager, &id, &request.operation, request.arguments, false).await?,
+        ),
+        HostKind::OfficialSv1 => normalize_direct(
+            host.kind,
+            &request.operation,
+            write_direct(manager, &id, &request.operation, request.arguments, true).await?,
+        ),
         HostKind::OfficialSv2 => {
             write_sv2(
                 manager,
@@ -804,14 +811,18 @@ fn normalize_direct(kind: HostKind, operation: &str, value: Value) -> Value {
         Value::Object(object) => {
             let mut normalized = Map::new();
             for (key, value) in object {
-                let canonical_key = match (kind, operation, key.as_str()) {
-                    (HostKind::Flat, "status" | "transport", "playhead") => {
-                        "playheadSeconds".to_string()
-                    }
-                    (HostKind::OfficialSv1, "sequence", "timeSignatures") => {
-                        "measureMarks".to_string()
-                    }
-                    _ => key,
+                let canonical_key = if kind == HostKind::Flat
+                    && (operation == "status" || operation.starts_with("transport"))
+                    && key == "playhead"
+                {
+                    "playheadSeconds".to_string()
+                } else if kind == HostKind::OfficialSv1
+                    && operation == "sequence"
+                    && key == "timeSignatures"
+                {
+                    "measureMarks".to_string()
+                } else {
+                    key
                 };
                 normalized.insert(canonical_key, normalize_direct(kind, operation, value));
             }
@@ -881,13 +892,16 @@ async fn call_payload(
         manager.call_server_tool(server_id, tool, arguments),
     )
     .await
-    .map_err(|_| "SynthV 宿主调用超时。".to_string())??;
+    .map_err(|_| "SynthV 宿主调用超时。".to_string())?
+    .map_err(standard_error)?;
     if response
         .get("isError")
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
-        return Err(tool_text(&response).unwrap_or_else(|| "SynthV 宿主拒绝了操作。".to_string()));
+        return Err(standard_error(
+            tool_text(&response).unwrap_or_else(|| "SynthV 宿主拒绝了操作。".to_string()),
+        ));
     }
     if let Some(text) = tool_text(&response) {
         return serde_json::from_str(&text)
@@ -897,6 +911,18 @@ async fn call_payload(
         .get("structuredContent")
         .cloned()
         .ok_or_else(|| "SynthV 宿主没有返回结果。".to_string())
+}
+
+fn standard_error(error: String) -> String {
+    error
+        .replace("Flat MCP", "SynthV 宿主")
+        .replace("SynthV Bridge", "SynthV 宿主")
+        .replace("HTTP MCP", "宿主连接")
+        .replace("stdio", "宿主连接")
+        .replace("MCP", "宿主连接")
+        .replace("Bridge", "宿主扩展")
+        .replace("F13", "启动快捷键")
+        .replace("F14", "停止快捷键")
 }
 
 fn tool_text(value: &Value) -> Option<String> {
@@ -1134,5 +1160,38 @@ mod tests {
     fn output_labels_cannot_escape_the_managed_directory() {
         assert_eq!(safe_label("../song name"), "___song_name");
         assert_eq!(safe_label(""), "project");
+    }
+
+    #[test]
+    fn transport_details_are_hidden_from_standard_errors() {
+        let error = standard_error("Flat MCP stdio Bridge failed after F13".to_string());
+        for private_term in ["Flat MCP", "stdio", "Bridge", "F13"] {
+            assert!(!error.contains(private_term));
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a running local Flat MCP host"]
+    async fn live_flat_uses_only_the_standard_surface() {
+        let host = synthv_hosts::discover()
+            .unwrap()
+            .into_iter()
+            .find(|host| host.kind == HostKind::Flat && host.running && host.endpoint.is_some())
+            .expect("running Flat MCP host");
+        let manager = Arc::new(McpManager::default());
+        connect(&manager, Path::new("."), &host.id).await.unwrap();
+        let status = read_value(&manager, &host.id, "status", json!({}))
+            .await
+            .unwrap();
+        assert!(status.pointer("/playback/playheadSeconds").is_some());
+        let tracks = read_value(&manager, &host.id, "tracks", json!({}))
+            .await
+            .unwrap();
+        assert!(tracks.is_array());
+        assert!(!host
+            .capabilities
+            .write_operations
+            .contains(&"transport.seek"));
+        disconnect(&manager, &host.id).await.unwrap();
     }
 }
