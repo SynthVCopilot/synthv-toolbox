@@ -398,6 +398,17 @@ export interface TuningProfile {
   updatedAtUtc: string;
 }
 
+export interface SoloTuningRequest {
+  referenceAudioPath: string;
+  voiceName: string;
+  projectPath: string;
+  processId: number;
+  trackIndex: number;
+  groupIndex: number;
+  startSeconds: number;
+  endSeconds: number;
+}
+
 export interface AudioCaptureCapability {
   supported: boolean;
   backend: string;

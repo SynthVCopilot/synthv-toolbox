@@ -17,6 +17,7 @@ mod media_tasks;
 mod oauth;
 mod opencode_catalog;
 mod process_tree;
+mod solo_tuning;
 mod state;
 mod sv2_account_probe;
 mod sv2_concurrent;
@@ -231,6 +232,7 @@ pub fn run() {
             commands::get_tuning_profile,
             commands::record_tuning_outcome,
             commands::apply_tuning_profile,
+            commands::run_solo_tuning,
             commands::preview_media_source,
             commands::media_tasks,
             commands::queue_media_import,
