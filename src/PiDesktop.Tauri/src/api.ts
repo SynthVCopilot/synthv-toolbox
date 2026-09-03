@@ -53,7 +53,7 @@ let previewSmartSvpLaunchEnabled = false;
 let previewBridgeConnected = true;
 let previewDownloads: ComponentDownload[] = [];
 let previewLyricProjects: LyricProject[] = [];
-const previewManagedComponentIds = new Set(["pi-audio", "cvrs"]);
+const previewManagedComponentIds = new Set(["pi-audio", "cvrs", "media-fetcher"]);
 const previewInstalledManagedComponentIds = new Set(["cvrs"]);
 let previewActiveAiProvider: AiProviderId = "anthropic";
 let previewAiAccountSequence = 2;
@@ -288,6 +288,7 @@ const previewState = (): BootstrapState => ({
     { id: "ffmpeg", displayName: "FFmpeg", description: "音视频转码与抽取；所有音频流程的基础。", audience: "AI 与人工", installed: true, downloaded: false, installable: true, removable: false, status: "已就绪" },
     { id: "pi-audio", displayName: "pi-audio 音频探针", description: "特征指纹、BPM、乐器与风格倾向。", audience: "AI 与人工", installed: previewInstalledManagedComponentIds.has("pi-audio"), downloaded: false, installable: true, removable: previewInstalledManagedComponentIds.has("pi-audio"), status: previewInstalledManagedComponentIds.has("pi-audio") ? "已就绪" : "可通过 aria2 下载" },
     { id: "cvrs", displayName: "CVRS 工程工具", description: "工程探测、安全副本、无参导出与 LRC。", audience: "AI 与人工", installed: previewInstalledManagedComponentIds.has("cvrs"), downloaded: false, installable: true, removable: previewInstalledManagedComponentIds.has("cvrs"), status: previewInstalledManagedComponentIds.has("cvrs") ? "已就绪" : "可通过 aria2 下载" },
+    { id: "media-fetcher", displayName: "媒体导入器", description: "固定版本 yt-dlp，用于显式 Bilibili/YouTube URL 导入。", audience: "AI 与人工", installed: previewInstalledManagedComponentIds.has("media-fetcher"), downloaded: false, installable: true, removable: previewInstalledManagedComponentIds.has("media-fetcher"), status: previewInstalledManagedComponentIds.has("media-fetcher") ? "已就绪" : "可通过 aria2 下载" },
     { id: "sandboxie", displayName: "Sandboxie Plus 1.18.2", description: "SynthV Toolbox 并发隔离提供方；下载官方安装包后由用户交互安装。", audience: "Windows 并发隔离", installed: false, downloaded: false, installable: true, removable: false, status: "可通过 aria2 下载官方 x64 安装包" },
   ],
   downloads: previewDownloads,

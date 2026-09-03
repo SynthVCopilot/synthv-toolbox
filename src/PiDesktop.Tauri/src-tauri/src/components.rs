@@ -32,6 +32,11 @@ const FFMPEG_MANIFEST_SCHEMA: u32 = 1;
 const FFMPEG_MANAGED_BY: &str = "SynthV Toolbox";
 const FFMPEG_ARTIFACT_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 const MAX_FFMPEG_ARTIFACTS_TO_SCAN: usize = 64;
+const MEDIA_FETCHER_VERSION: &str = "2026.08.19";
+const MEDIA_FETCHER_MACOS_SHA256: &str =
+    "0f192b7ec147ab6288885d6351d9ab67367640029b4377576ef46dd79cf7b202";
+const MEDIA_FETCHER_WINDOWS_SHA256: &str =
+    "66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a";
 static COMPONENT_MUTATING: AtomicBool = AtomicBool::new(false);
 static COMPONENT_USAGE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -97,7 +102,12 @@ pub fn component_list(resource_root: &Path) -> Vec<ComponentInfo> {
     let config_path = model_config_path();
     let mut components = default_catalog()
         .into_iter()
-        .filter(|component| matches!(component.id.as_str(), "ffmpeg" | "pi-audio" | "cvrs"))
+        .filter(|component| {
+            matches!(
+                component.id.as_str(),
+                "ffmpeg" | "pi-audio" | "cvrs" | "media-fetcher"
+            )
+        })
         .map(|component| {
             component_info_at(component, resource_root, &managed_data_root, &config_path)
         })
@@ -116,6 +126,7 @@ fn component_info_at(
         "ffmpeg" => resolve_ffmpeg_binary(resource_root, managed_data_root).is_some(),
         "pi-audio" => configured_component_at("audio", config_path),
         "cvrs" => configured_component_at("cvrs", config_path),
+        "media-fetcher" => managed_media_fetcher_binary(managed_data_root).is_some(),
         _ => false,
     };
     let id = component.id;
@@ -130,9 +141,10 @@ fn component_info_at(
             })
     };
     let installable = installed
-        || matches!(id.as_str(), "pi-audio" | "cvrs")
+        || matches!(id.as_str(), "pi-audio" | "cvrs" | "media-fetcher")
         || (id == "ffmpeg" && cfg!(all(windows, target_arch = "x86_64")));
     let is_ffmpeg = id == "ffmpeg";
+    let is_media_fetcher = id == "media-fetcher";
     ComponentInfo {
         id,
         display_name: component.display_name,
@@ -144,10 +156,13 @@ fn component_info_at(
         },
         installed,
         removable,
-        downloaded: is_ffmpeg && ffmpeg_archive_cached(managed_data_root),
+        downloaded: (is_ffmpeg && ffmpeg_archive_cached(managed_data_root))
+            || (is_media_fetcher && media_fetcher_cached(managed_data_root)),
         status: if installed {
             if is_ffmpeg {
                 ffmpeg_status_label(resource_root, managed_data_root, "已就绪")
+            } else if is_media_fetcher {
+                format!("yt-dlp {MEDIA_FETCHER_VERSION} 已就绪")
             } else {
                 "已就绪".to_string()
             }
@@ -172,6 +187,7 @@ where
     let _mutation_guard = component_mutation_guard();
     match id {
         "ffmpeg" => install_managed_ffmpeg(resource_root, &mut progress),
+        "media-fetcher" => install_media_fetcher(resource_root, &mut progress),
         "pi-audio" | "cvrs" => {
             let source = if std::env::var("SYNTHV_TOOLBOX_COMPONENT_SOURCE")
                 .is_ok_and(|value| value.eq_ignore_ascii_case("bundled"))
@@ -312,6 +328,15 @@ fn managed_component_paths(
         "pi-audio" => ("pi-audio", "audio", "pi_audio.py"),
         "cvrs" => ("cvrs", "cvrs", "cvrs.py"),
         "ffmpeg" => ("ffmpeg", "", "bin/ffmpeg.exe"),
+        "media-fetcher" => (
+            "media-fetcher",
+            "",
+            if cfg!(windows) {
+                "yt-dlp.exe"
+            } else {
+                "yt-dlp"
+            },
+        ),
         "sandboxie" => {
             return Err(format!(
                 "{} 不是由 SynthV Toolbox 管理安装的组件，不能在这里删除。",
@@ -1447,6 +1472,172 @@ const CVRS_PAYLOADS: &[ComponentPayload] = &[ComponentPayload {
     relative_url: "components/cvrs/cvrs.py",
     sha256: "71383517bdfc4394315592cf97ab2243d6fff89f0caa24ceb2ca560671354f1e",
 }];
+
+fn media_fetcher_asset() -> Option<(&'static str, &'static str, &'static str)> {
+    if cfg!(target_os = "macos") {
+        Some((
+            "yt-dlp_macos",
+            "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_macos",
+            MEDIA_FETCHER_MACOS_SHA256,
+        ))
+    } else if cfg!(all(windows, target_arch = "x86_64")) {
+        Some((
+            "yt-dlp.exe",
+            "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp.exe",
+            MEDIA_FETCHER_WINDOWS_SHA256,
+        ))
+    } else {
+        None
+    }
+}
+
+fn media_fetcher_cached(managed_data_root: &Path) -> bool {
+    let Some((name, _, sha256)) = media_fetcher_asset() else {
+        return false;
+    };
+    verify_sha256(
+        &managed_data_root
+            .join("downloads/media-fetcher")
+            .join(MEDIA_FETCHER_VERSION)
+            .join(name),
+        sha256,
+    )
+    .is_ok()
+}
+
+pub(crate) fn managed_media_fetcher_binary(managed_data_root: &Path) -> Option<PathBuf> {
+    let (asset_name, source, sha256) = media_fetcher_asset()?;
+    let root = managed_data_root.join("components/media-fetcher");
+    let binary = root.join(if cfg!(windows) {
+        "yt-dlp.exe"
+    } else {
+        "yt-dlp"
+    });
+    let manifest: Value = fs::read(root.join("manifest.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())?;
+    (managed_component_directory_exists(&root)
+        && regular_file_without_links(&binary)
+        && manifest.get("managedBy").and_then(Value::as_str) == Some(FFMPEG_MANAGED_BY)
+        && manifest.get("version").and_then(Value::as_str) == Some(MEDIA_FETCHER_VERSION)
+        && manifest.get("asset").and_then(Value::as_str) == Some(asset_name)
+        && manifest.get("source").and_then(Value::as_str) == Some(source)
+        && manifest.get("sha256").and_then(Value::as_str) == Some(sha256))
+    .then_some(binary)
+}
+
+fn install_media_fetcher<F>(resource_root: &Path, progress: &mut F) -> OperationResult
+where
+    F: FnMut(&str, u8, &str),
+{
+    let Some((asset_name, source, sha256)) = media_fetcher_asset() else {
+        return failed(
+            "媒体导入器不支持当前平台。",
+            "当前支持 macOS 与 Windows x64。",
+        );
+    };
+    let managed_data_root = data_root();
+    if managed_media_fetcher_binary(&managed_data_root).is_some() {
+        return succeeded(
+            format!("媒体导入器 {MEDIA_FETCHER_VERSION} 已可用。"),
+            "当前固定版本和安装清单均有效。",
+        );
+    }
+    let Some(aria2) = find_aria2(resource_root) else {
+        return failed(
+            "未找到 aria2c。",
+            "请安装 aria2，或配置 SYNTHV_TOOLBOX_ARIA2。",
+        );
+    };
+    let cache = managed_data_root
+        .join("downloads/media-fetcher")
+        .join(MEDIA_FETCHER_VERSION);
+    if let Err(error) = fs::create_dir_all(&cache) {
+        return failed("无法创建媒体导入器缓存。", error.to_string());
+    }
+    let payload = ComponentPayload {
+        name: asset_name,
+        relative_url: "",
+        sha256,
+    };
+    progress("downloading", 12, "aria2 正在下载固定版本的 yt-dlp。");
+    if let Err(error) = download_with_aria2(&aria2, source, &cache, &payload) {
+        return failed("媒体导入器下载失败。", error);
+    }
+    progress("installing", 72, "校验完成，正在安装媒体导入器。");
+    let components_root = managed_data_root.join("components");
+    if let Err(error) = fs::create_dir_all(&components_root) {
+        return failed("无法创建组件目录。", error.to_string());
+    }
+    let target = components_root.join("media-fetcher");
+    if target.exists() && managed_media_fetcher_binary(&managed_data_root).is_none() {
+        return failed(
+            "现有媒体导入器目录不受 Toolbox 管理。",
+            "为避免覆盖未知文件，已保留原目录。",
+        );
+    }
+    let stage = components_root.join(format!(".media-fetcher.stage-{}", Uuid::new_v4()));
+    if let Err(error) = fs::create_dir(&stage) {
+        return failed("无法创建媒体导入器暂存目录。", error.to_string());
+    }
+    let binary = stage.join(if cfg!(windows) {
+        "yt-dlp.exe"
+    } else {
+        "yt-dlp"
+    });
+    let result = (|| -> Result<(), String> {
+        fs::copy(cache.join(asset_name), &binary)
+            .map_err(|error| format!("无法复制媒体导入器：{error}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))
+                .map_err(|error| format!("无法设置媒体导入器权限：{error}"))?;
+        }
+        fs::write(
+            stage.join("manifest.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schemaVersion": 1,
+                "managedBy": FFMPEG_MANAGED_BY,
+                "id": "media-fetcher",
+                "version": MEDIA_FETCHER_VERSION,
+                "asset": asset_name,
+                "source": source,
+                "sha256": sha256,
+                "license": "Unlicense",
+                "entrypoint": if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" }
+            }))
+            .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| format!("无法写入媒体导入器清单：{error}"))?;
+        let backup = components_root.join(format!(".media-fetcher.backup-{}", Uuid::new_v4()));
+        let had_target = target.exists();
+        if had_target {
+            fs::rename(&target, &backup)
+                .map_err(|error| format!("无法暂存旧媒体导入器：{error}"))?;
+        }
+        if let Err(error) = fs::rename(&stage, &target) {
+            if had_target {
+                let _ = fs::rename(&backup, &target);
+            }
+            return Err(format!("无法提交媒体导入器：{error}"));
+        }
+        if had_target {
+            fs::remove_dir_all(&backup)
+                .map_err(|error| format!("新版本已安装，但无法清理旧媒体导入器：{error}"))?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let _ = fs::remove_dir_all(&stage);
+        return failed("媒体导入器安装失败。", error);
+    }
+    progress("installing", 98, "媒体导入器安装完成。");
+    succeeded(
+        format!("媒体导入器 {MEDIA_FETCHER_VERSION} 已安装。"),
+        format!("安装位置：{}", target.display()),
+    )
+}
 
 fn download_component_source<F>(
     id: &str,
