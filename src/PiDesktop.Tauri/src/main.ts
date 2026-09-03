@@ -7,6 +7,7 @@ import { featureCatalog, toolGroups, type FeatureCatalogItem, type ToolGroup } f
 import { mountShell, type ShellController } from "./vue/shell";
 import type {
   AiProviderId,
+  AgentWorkMode,
   AiProviderSummary,
   AppMode,
   AudioCaptureCapability,
@@ -1844,6 +1845,7 @@ function renderSettings(): string {
         ? "已注册，等待设为默认应用"
         : "尚未注册为可选打开方式";
   return `<div class="settings-layout"><section class="panel"><div class="section-heading"><div><h2>运行模式</h2><p>切换后导航与 Rust 后端能力会同时更新。</p></div></div><div class="mode-setting"><button class="setting-choice ${app.mode === "toolbox" ? "active" : ""}" data-set-mode="toolbox"><span class="mode-icon slate">${icon("toolbox", 23)}</span><span><strong>纯工具箱</strong><small>确定性基础流程，不启动 AI</small></span>${app.mode === "toolbox" ? icon("check", 20) : ""}</button><button class="setting-choice ${app.mode === "ai" ? "active" : ""}" data-set-mode="ai"><span class="mode-icon purple">${icon("sparkles", 23)}</span><span><strong>AI 模式</strong><small>Copilot、智能增强与 MCP</small></span>${app.mode === "ai" ? icon("check", 20) : ""}</button></div></section>
+    ${app.mode === "ai" ? `<section class="panel"><div class="section-heading"><div><h2>Agent 工作模式</h2><p>Edit 执行一次有界修改；Solo 会自主推进检查点、修改与复检循环。</p></div></div><div class="mode-setting"><button class="setting-choice ${app.agentWorkMode === "edit" ? "active" : ""}" data-agent-work-mode="edit"><span class="mode-icon blue">${icon("file", 23)}</span><span><strong>Edit</strong><small>明确目标、单次修改、立即验证</small></span>${app.agentWorkMode === "edit" ? icon("check", 20) : ""}</button><button class="setting-choice ${app.agentWorkMode === "solo" ? "active" : ""}" data-agent-work-mode="solo"><span class="mode-icon purple">${icon("sparkles", 23)}</span><span><strong>Solo</strong><small>自动检查点、迭代优化、失败即停</small></span>${app.agentWorkMode === "solo" ? icon("check", 20) : ""}</button></div></section>` : ""}
     ${app.mode === "ai" ? renderAiProviderSettings() : `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("bot", 24)}</span><div><h2>AI 运行时已关闭</h2><p>当前不会显示 Copilot、模型或 MCP 设置，也不会向模型端点发送请求。</p></div></section>`}
     ${showSvpRouting ? `<section class="panel smart-route-settings"><div class="section-heading"><div><h2>智能 .svp 启动</h2><p>根据工程所需声库，从空闲账号中建议最合适的启动槽位。</p></div><label class="fluent-switch large"><input id="svp-routing-enabled" type="checkbox" ${app.smartSvpLaunchEnabled ? "checked" : ""} ${association.supported ? "" : "disabled"} aria-label="启用智能 .svp 启动" /><span></span>${app.smartSvpLaunchEnabled ? "已开启" : "已关闭"}</label></div><div class="smart-route-state ${association.isDefault ? "ready" : "pending"}"><span class="feature-icon ${association.isDefault ? "emerald" : "blue"}">${icon("file", 20)}</span><div><strong>${escapeHtml(associationLabel)}</strong><p>${escapeHtml(association.detail)}</p></div><button class="secondary compact" data-open-svp-default-apps ${association.supported ? "" : "disabled"}>打开默认应用设置</button></div><div class="smart-route-boundary">${icon("shield", 17)}<span><strong>智能路由只在工具箱已经运行时生效</strong><small>冷启动或关闭此功能时，工具箱会把工程透明转交给原始 .svp 处理程序；不会监控、终止或劫持已经启动的 SV2。路由优先采用账号服务返回的授权摘要，并以你的确认记录作为补充；任何未知结果都必须由你选择账号。</small></span></div></section>` : ""}
     <section class="panel app-update-settings"><div class="section-heading"><div><h2>应用更新</h2><p>按需检查官方 GitHub Releases；不会自动下载或安装。</p></div></div><div class="update-check-actions"><div><small>当前版本</small><strong>v${escapeHtml(app.appVersion)}</strong></div><button class="secondary" data-check-toolbox-update>${icon("sync", 16)} ${toolboxUpdate ? "重新检查" : "检查更新"}</button></div>${renderToolboxUpdateResult()}</section>
@@ -2635,6 +2637,8 @@ document.addEventListener("click", (event) => {
   if (onboarding) { void run(async () => { app = await api.completeOnboarding(onboarding); page = "home"; }); return; }
   const mode = target.dataset.setMode as AppMode | undefined;
   if (mode) { void run(async () => { app = await api.setMode(mode); notice = `已切换到${mode === "ai" ? " AI 模式" : "纯工具箱模式"}。`; }); return; }
+  const agentWorkMode = target.dataset.agentWorkMode as AgentWorkMode | undefined;
+  if (agentWorkMode) { void run(async () => { app = await api.setAgentWorkMode(agentWorkMode); notice = `Agent 已切换到 ${agentWorkMode === "solo" ? "Solo" : "Edit"} 模式。`; }); return; }
   if (target.hasAttribute("data-enable-ai")) { page = "settings"; render(); return; }
   const toggledProvider = parseAiProviderId(target.dataset.toggleAiProvider);
   if (target.dataset.toggleAiProvider !== undefined) {

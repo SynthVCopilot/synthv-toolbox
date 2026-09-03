@@ -1,4 +1,5 @@
 export type AppMode = "toolbox" | "ai";
+export type AgentWorkMode = "edit" | "solo";
 
 export type AiProviderId = "anthropic" | "openai-codex";
 
@@ -256,6 +257,7 @@ export interface ComponentDownload {
 export interface BootstrapState {
   onboardingCompleted: boolean;
   mode: AppMode;
+  agentWorkMode: AgentWorkMode;
   platform: string;
   appVersion: string;
   configPath: string;
