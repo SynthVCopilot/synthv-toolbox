@@ -43,7 +43,8 @@ use crate::lyric_tools::{
     RhymeMatchMode,
 };
 use crate::mcp::McpToolExecutor;
-use crate::media_import::{self, MediaImportResult, MediaSourcePreview};
+use crate::media_import::{self, MediaSourcePreview};
+use crate::media_tasks::MediaTaskSnapshot;
 use crate::oauth::{self, AiProviderId, OAuthAccountMetadata};
 use crate::opencode_catalog::{self, OpenCodeCatalog};
 use crate::state::{AgentSession, AppState};
@@ -1749,25 +1750,6 @@ pub async fn run_audio_probe(
 }
 
 #[tauri::command]
-pub async fn run_source_separation(
-    audio_path: String,
-    state: State<'_, AppState>,
-) -> Result<WorkflowResult, String> {
-    let resource_dir = state.resource_dir.clone();
-    let path_for_run = audio_path.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        workflows::separate_audio(path_for_run, &resource_dir)
-    })
-    .await
-    .map_err(|error| error.to_string())??;
-    Ok(record_workflow_result(
-        "人声伴奏分离",
-        json!({ "audioPath": audio_path }),
-        result,
-    ))
-}
-
-#[tauri::command]
 pub async fn preview_media_source(source: String) -> Result<MediaSourcePreview, String> {
     tauri::async_runtime::spawn_blocking(move || media_import::preview(&source))
         .await
@@ -1775,17 +1757,62 @@ pub async fn preview_media_source(source: String) -> Result<MediaSourcePreview, 
 }
 
 #[tauri::command]
-pub async fn import_media_audio(
+pub fn media_tasks(state: State<'_, AppState>) -> Vec<MediaTaskSnapshot> {
+    state.media_tasks.snapshot()
+}
+
+#[tauri::command]
+pub fn queue_media_import(
     source: String,
     rights_confirmed: bool,
     state: State<'_, AppState>,
-) -> Result<MediaImportResult, String> {
-    let resource_dir = state.resource_dir.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        media_import::import_audio(&source, rights_confirmed, &resource_dir)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+) -> Result<MediaTaskSnapshot, String> {
+    let (snapshot, start_worker) = state.media_tasks.enqueue_import(source, rights_confirmed)?;
+    if start_worker {
+        let manager = state.media_tasks.clone();
+        tauri::async_runtime::spawn(async move {
+            manager.run_worker().await;
+        });
+    }
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn queue_media_separation(
+    audio_path: String,
+    state: State<'_, AppState>,
+) -> Result<MediaTaskSnapshot, String> {
+    let (snapshot, start_worker) = state.media_tasks.enqueue_separation(audio_path)?;
+    if start_worker {
+        let manager = state.media_tasks.clone();
+        tauri::async_runtime::spawn(async move {
+            manager.run_worker().await;
+        });
+    }
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn cancel_media_task(
+    task_id: String,
+    state: State<'_, AppState>,
+) -> Result<MediaTaskSnapshot, String> {
+    state.media_tasks.cancel(&task_id)
+}
+
+#[tauri::command]
+pub fn retry_media_task(
+    task_id: String,
+    state: State<'_, AppState>,
+) -> Result<MediaTaskSnapshot, String> {
+    let (snapshot, start_worker) = state.media_tasks.retry(&task_id)?;
+    if start_worker {
+        let manager = state.media_tasks.clone();
+        tauri::async_runtime::spawn(async move {
+            manager.run_worker().await;
+        });
+    }
+    Ok(snapshot)
 }
 
 #[tauri::command]
@@ -2174,6 +2201,7 @@ pub async fn send_message(
     let resource_dir = state.resource_dir.clone();
     let components_dir = state.components_dir.clone();
     let downloads = state.downloads.clone();
+    let media_tasks = state.media_tasks.clone();
     let session = state.agent.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let provider = build_ai_provider(&ai_settings)?;
@@ -2188,6 +2216,7 @@ pub async fn send_message(
             resource_dir,
             components_dir,
             downloads,
+            media_tasks,
         );
         let added = AgentLoop::new(&provider, &executor)
             .run_turn(&mut session.messages, &input)

@@ -10,8 +10,10 @@ mod creative_tools;
 mod downloads;
 mod lyric_projects;
 mod lyric_tools;
+mod managed_process;
 mod mcp;
 mod media_import;
+mod media_tasks;
 mod oauth;
 mod opencode_catalog;
 mod process_tree;
@@ -222,9 +224,12 @@ pub fn run() {
             commands::run_retake_workbench,
             commands::run_batch_workflow,
             commands::run_audio_probe,
-            commands::run_source_separation,
             commands::preview_media_source,
-            commands::import_media_audio,
+            commands::media_tasks,
+            commands::queue_media_import,
+            commands::queue_media_separation,
+            commands::cancel_media_task,
+            commands::retry_media_task,
             commands::run_game_to_midi,
             commands::run_project_probe,
             commands::add_project_reference,
