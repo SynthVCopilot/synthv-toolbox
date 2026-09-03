@@ -164,7 +164,32 @@ pub fn capability() -> AudioCaptureCapability {
             },
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        match macos_version() {
+            Some((major, minor)) if major > 14 || (major == 14 && minor >= 2) => {
+                AudioCaptureCapability {
+                    supported: true,
+                    backend: "core-audio-process-tap".to_string(),
+                    detail: "使用 Core Audio Process Tap，只捕获所选 SynthV 进程的输出。首次开始录制时，macOS 会请求系统音频录制权限。".to_string(),
+                    max_clip_seconds: MAX_CLIP_SECONDS,
+                }
+            }
+            Some((major, minor)) => AudioCaptureCapability {
+                supported: false,
+                backend: "unavailable".to_string(),
+                detail: format!("当前 macOS {major}.{minor} 不支持 Core Audio Process Tap；需要 macOS 14.2 或更高版本。"),
+                max_clip_seconds: MAX_CLIP_SECONDS,
+            },
+            None => AudioCaptureCapability {
+                supported: false,
+                backend: "unavailable".to_string(),
+                detail: "无法确认 macOS 版本，已停用进程级音频捕获。".to_string(),
+                max_clip_seconds: MAX_CLIP_SECONDS,
+            },
+        }
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         AudioCaptureCapability {
             supported: false,
@@ -173,6 +198,22 @@ pub fn capability() -> AudioCaptureCapability {
             max_clip_seconds: MAX_CLIP_SECONDS,
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_version() -> Option<(u32, u32)> {
+    let output = std::process::Command::new("sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let mut parts = std::str::from_utf8(&output.stdout).ok()?.trim().split('.');
+    Some((
+        parts.next()?.parse().ok()?,
+        parts.next().unwrap_or("0").parse().ok()?,
+    ))
 }
 
 #[cfg(windows)]
@@ -1900,7 +1941,174 @@ mod platform {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+mod platform {
+    use std::ffi::{c_char, c_int, c_void, CString};
+    use std::path::PathBuf;
+
+    use super::AudioCaptureTarget;
+
+    #[repr(C)]
+    #[derive(Debug, Default)]
+    struct NativeCaptureStats {
+        hresult: i32,
+        sample_rate: u32,
+        channels: u32,
+        bits_per_sample: u32,
+        discontinuities: u32,
+        frames_written: u64,
+        first_qpc_100ns: u64,
+        last_qpc_100ns: u64,
+    }
+
+    #[link(name = "synthv_macos_process_tap", kind = "static")]
+    unsafe extern "C" {
+        fn synthv_macos_process_tap_start(
+            process_id: u32,
+            output_path: *const c_char,
+            stats: *mut NativeCaptureStats,
+            error: *mut c_char,
+            error_capacity: usize,
+        ) -> *mut c_void;
+        fn synthv_macos_process_tap_stop(capture: *mut c_void) -> c_int;
+        fn synthv_macos_process_tap_finish(capture: *mut c_void) -> c_int;
+    }
+
+    pub(super) struct NativeCaptureResult {
+        pub(super) discontinuities: u32,
+    }
+
+    pub(super) struct NativeCapture {
+        raw: *mut c_void,
+        stats: Box<NativeCaptureStats>,
+    }
+
+    struct StartedCapture {
+        raw: *mut c_void,
+        stats: Box<NativeCaptureStats>,
+        error: [i8; 512],
+    }
+
+    unsafe impl Send for StartedCapture {}
+
+    impl Drop for StartedCapture {
+        fn drop(&mut self) {
+            if !self.raw.is_null() {
+                unsafe { synthv_macos_process_tap_finish(self.raw) };
+                self.raw = std::ptr::null_mut();
+            }
+        }
+    }
+
+    unsafe impl Send for NativeCapture {}
+
+    impl NativeCapture {
+        pub(super) fn start(process_id: u32, output_path: PathBuf) -> Result<Self, String> {
+            let output_path = CString::new(output_path.as_os_str().as_encoded_bytes())
+                .map_err(|_| "音频输出路径包含不支持的 NUL 字符。".to_string())?;
+            let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let cancelled_for_start = cancelled.clone();
+            let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+            std::thread::spawn(move || {
+                let mut stats = Box::<NativeCaptureStats>::default();
+                let mut error = [0i8; 512];
+                let raw = unsafe {
+                    synthv_macos_process_tap_start(
+                        process_id,
+                        output_path.as_ptr(),
+                        &mut *stats,
+                        error.as_mut_ptr(),
+                        error.len(),
+                    )
+                };
+                let outcome = StartedCapture { raw, stats, error };
+                if cancelled_for_start.load(std::sync::atomic::Ordering::Acquire) {
+                    return;
+                }
+                let _ = sender.send(outcome);
+            });
+            let mut outcome = receiver
+                .recv_timeout(std::time::Duration::from_secs(12))
+                .map_err(|_| {
+                    cancelled.store(true, std::sync::atomic::Ordering::Release);
+                    "初始化 macOS Process Tap 超时；后台启动若随后完成会立即清理资源。".to_string()
+                })?;
+            if outcome.raw.is_null() {
+                let detail = unsafe { std::ffi::CStr::from_ptr(outcome.error.as_ptr()) }
+                    .to_string_lossy()
+                    .trim()
+                    .to_string();
+                return Err(if detail.is_empty() {
+                    "无法启动 macOS 指定进程音频捕获。请确认 macOS 14.2+、目标 PID 仍在运行，并在系统设置中允许此应用录制系统音频。".to_string()
+                } else {
+                    detail
+                });
+            }
+            Ok(Self {
+                raw: std::mem::replace(&mut outcome.raw, std::ptr::null_mut()),
+                stats: std::mem::take(&mut outcome.stats),
+            })
+        }
+
+        pub(super) fn stop(&mut self) {
+            if !self.raw.is_null() {
+                unsafe { synthv_macos_process_tap_stop(self.raw) };
+            }
+        }
+
+        pub(super) fn finish(mut self) -> Result<NativeCaptureResult, String> {
+            let status = unsafe { synthv_macos_process_tap_finish(self.raw) };
+            self.raw = std::ptr::null_mut();
+            if status != 0 || self.stats.hresult != 0 {
+                return Err(format!(
+                    "macOS Core Audio Process Tap 捕获失败（OSStatus {}）。请确认已允许系统音频录制且目标进程仍在输出音频。",
+                    if self.stats.hresult != 0 { self.stats.hresult } else { status }
+                ));
+            }
+            if self.stats.frames_written == 0 {
+                return Err("macOS Process Tap 没有返回任何音频帧。请确认所选 SynthV 进程在捕获区间内确实播放音频。".to_string());
+            }
+            Ok(NativeCaptureResult {
+                discontinuities: self.stats.discontinuities,
+            })
+        }
+    }
+
+    impl Drop for NativeCapture {
+        fn drop(&mut self) {
+            if !self.raw.is_null() {
+                unsafe { synthv_macos_process_tap_finish(self.raw) };
+                self.raw = std::ptr::null_mut();
+            }
+        }
+    }
+
+    pub(super) fn list_targets() -> Result<Vec<AudioCaptureTarget>, String> {
+        let output = std::process::Command::new("ps")
+            .args(["-axo", "pid=,comm="])
+            .output()
+            .map_err(|error| format!("无法枚举 macOS 进程：{error}"))?;
+        if !output.status.success() {
+            return Err("macOS 进程枚举失败。".to_string());
+        }
+        let mut targets = std::str::from_utf8(&output.stdout)
+            .map_err(|_| "macOS 进程列表不是 UTF-8。".to_string())?
+            .lines()
+            .filter_map(|line| {
+                let (pid, command) = line.trim().split_once(char::is_whitespace)?;
+                let process_id = pid.parse().ok()?;
+                let name = command.rsplit('/').next()?.to_string();
+                let lower = name.to_ascii_lowercase();
+                (lower.contains("synthv") || lower.contains("synthesizer v"))
+                    .then_some(AudioCaptureTarget { process_id, name })
+            })
+            .collect::<Vec<_>>();
+        targets.sort_by_key(|target| target.process_id);
+        Ok(targets)
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 mod platform {
     use std::path::PathBuf;
 
