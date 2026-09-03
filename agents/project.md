@@ -23,4 +23,5 @@
 - `src/PiDesktop.Tauri/src-tauri/src/lyric_projects.rs`：歌词项目的本地创建、保存、读取和列表，写入范围固定在 Toolbox 数据根。
 - `src/PiDesktop.Tauri/src-tauri/src/synthv_control.rs`：运行中 SynthV 进程发现、F13/F14 Bridge 快捷键注入与主动连接。
 - `src/PiDesktop.Tauri/src-tauri/src/components.rs`：包含固定版本 FFmpeg 与 media-fetcher 等组件的下载、校验、安装和删除边界。
+- `src/PiDesktop.Tauri/src-tauri/src/media_import.rs`：BV/YouTube 来源规范化、元数据预览、受管 WAV 下载与来源 manifest。
 - `docs/lyric-and-audio-workflow-guide.zh-CN.md`：作词、平台音频导入、下载组件和内部工具的评估与实施指导。

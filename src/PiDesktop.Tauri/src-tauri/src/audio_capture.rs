@@ -13,6 +13,7 @@ use uuid::Uuid;
 use crate::agent::{AgentError, ToolCall, ToolDefinition, ToolExecutor, ToolResult};
 use crate::mcp::McpToolExecutor;
 use crate::mcp::{extract_mcp_json, McpManager};
+use crate::media_import;
 use crate::synthv::{bridge_is_bundled, find_node};
 use crate::synthv_control::{self, BridgeShortcutAction};
 use tokio::runtime::Handle;
@@ -458,6 +459,7 @@ pub struct ToolboxAudioToolExecutor {
     manager: Arc<McpManager>,
     runtime: Handle,
     bridge_dir: PathBuf,
+    resource_dir: PathBuf,
 }
 
 impl ToolboxAudioToolExecutor {
@@ -466,12 +468,14 @@ impl ToolboxAudioToolExecutor {
         manager: Arc<McpManager>,
         runtime: Handle,
         bridge_dir: PathBuf,
+        resource_dir: PathBuf,
     ) -> Self {
         Self {
             mcp,
             manager,
             runtime,
             bridge_dir,
+            resource_dir,
         }
     }
 
@@ -491,6 +495,29 @@ impl ToolboxAudioToolExecutor {
             }).to_string(),
         }];
         tools.extend([
+            ToolDefinition {
+                name: "preview_media_source".to_string(),
+                description: "Preview one explicit Bilibili/YouTube URL or BV identifier using the managed media-fetcher. It is read-only and never uses browser cookies or playlists.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": { "source": { "type": "string" } },
+                    "required": ["source"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
+                name: "import_media_audio".to_string(),
+                description: "Download one explicitly supplied Bilibili/YouTube source into a managed local WAV with metadata, manifest, and SHA-256. rightsConfirmed must be true.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": {
+                        "source": { "type": "string" },
+                        "rightsConfirmed": { "type": "boolean" }
+                    },
+                    "required": ["source", "rightsConfirmed"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
             ToolDefinition {
                 name: "list_synthv_processes".to_string(),
                 description: "List every running local SynthV process. This is read-only and returns PID, executable name, and command line.".to_string(),
@@ -549,6 +576,28 @@ impl ToolboxAudioToolExecutor {
 
     fn execute_local(&self, call: &ToolCall) -> Option<ToolResult> {
         let result = match call.tool_name.as_str() {
+            "preview_media_source" => Some(
+                serde_json::from_str::<MediaSourceToolRequest>(&call.arguments_json)
+                    .map_err(|error| format!("媒体来源参数无效：{error}"))
+                    .and_then(|request| media_import::preview(&request.source))
+                    .and_then(|value| {
+                        serde_json::to_string(&value).map_err(|error| error.to_string())
+                    }),
+            ),
+            "import_media_audio" => Some(
+                serde_json::from_str::<MediaSourceToolRequest>(&call.arguments_json)
+                    .map_err(|error| format!("媒体导入参数无效：{error}"))
+                    .and_then(|request| {
+                        media_import::import_audio(
+                            &request.source,
+                            request.rights_confirmed,
+                            &self.resource_dir,
+                        )
+                    })
+                    .and_then(|value| {
+                        serde_json::to_string(&value).map_err(|error| error.to_string())
+                    }),
+            ),
             "capture_synthv_clip" => Some(
                 serde_json::from_str::<CaptureClipRequest>(&call.arguments_json)
                     .map_err(|error| format!("片段捕获参数无效：{error}"))
@@ -625,6 +674,14 @@ impl ToolboxAudioToolExecutor {
 #[serde(rename_all = "camelCase")]
 struct SynthVProcessRequest {
     process_id: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MediaSourceToolRequest {
+    source: String,
+    #[serde(default)]
+    rights_confirmed: bool,
 }
 
 #[derive(Debug, Deserialize)]
