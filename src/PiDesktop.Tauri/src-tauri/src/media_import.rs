@@ -2,11 +2,18 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::time::Duration;
 
 use chrono::Utc;
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use tokio::io::AsyncRead;
+use tokio::process::Command;
 use url::Url;
 use uuid::Uuid;
 
@@ -15,6 +22,8 @@ use crate::components::{managed_media_fetcher_binary, resolved_ffmpeg_directory}
 use crate::synthv::{find_node, quiet_command};
 
 const MAX_METADATA_BYTES: usize = 4 * 1024 * 1024;
+const MAX_PROCESS_STDOUT_BYTES: usize = 4 * 1024 * 1024;
+const MAX_PROCESS_STDERR_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -167,6 +176,145 @@ pub fn import_audio(
     })
 }
 
+/// Import audio without blocking the async runtime and allow a long-running
+/// task manager to stop both yt-dlp and any helper processes it starts.
+pub async fn import_audio_cancellable(
+    source: String,
+    rights_confirmed: bool,
+    resource_root: PathBuf,
+    cancelled: Arc<AtomicBool>,
+) -> Result<MediaImportResult, String> {
+    if !rights_confirmed {
+        return Err("下载前必须确认你拥有该内容或已取得足够授权。".to_string());
+    }
+    if cancelled.load(Ordering::Acquire) {
+        return Err("媒体导入已取消。".to_string());
+    }
+
+    let source_preview = preview_cancellable(&source, &cancelled).await?;
+    let runtime = media_fetcher()?;
+    let import_id = Uuid::new_v4().to_string();
+    let directory = imports_root()?.join(&import_id);
+    fs::create_dir(&directory).map_err(|error| format!("无法创建媒体导入目录：{error}"))?;
+
+    let result = async {
+        let mut args = safe_common_args()?;
+        args.extend([
+            "--extract-audio".to_string(),
+            "--audio-format".to_string(),
+            "wav".to_string(),
+            "--format".to_string(),
+            "bestaudio/best".to_string(),
+            "--max-filesize".to_string(),
+            "2G".to_string(),
+            "--output".to_string(),
+            directory
+                .join("source.%(ext)s")
+                .to_string_lossy()
+                .into_owned(),
+        ]);
+        if let Some(ffmpeg) = resolved_ffmpeg_directory(&resource_root) {
+            args.push("--ffmpeg-location".to_string());
+            args.push(ffmpeg.to_string_lossy().into_owned());
+        }
+        args.push(source_preview.source_url.clone());
+
+        run_fetcher_cancellable(&runtime, &args, "下载并抽取音频", &cancelled).await?;
+        if cancelled.load(Ordering::Acquire) {
+            return Err("媒体导入已取消。".to_string());
+        }
+        let audio_path = fs::read_dir(&directory)
+            .map_err(|error| error.to_string())?
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("wav"))
+            })
+            .ok_or_else(|| "媒体导入完成，但没有找到输出 WAV。".to_string())?;
+        let sha256 = sha256_file(&audio_path)?;
+        let imported_at_utc = Utc::now().to_rfc3339();
+        let metadata_path = directory.join("source.json");
+        let manifest_path = directory.join("manifest.json");
+        write_json(&metadata_path, &source_preview)?;
+        write_json(
+            &manifest_path,
+            &json!({
+                "schemaVersion": 1,
+                "importId": import_id,
+                "sourceUrl": source_preview.source_url,
+                "canonicalUrl": source_preview.canonical_url,
+                "rightsConfirmed": true,
+                "rightsConfirmedAtUtc": imported_at_utc,
+                "audio": audio_path.file_name().and_then(|name| name.to_str()).unwrap_or("source.wav"),
+                "sha256": sha256,
+            }),
+        )?;
+        Ok(MediaImportResult {
+            import_id,
+            source: source_preview,
+            audio_path: audio_path.to_string_lossy().into_owned(),
+            metadata_path: metadata_path.to_string_lossy().into_owned(),
+            manifest_path: manifest_path.to_string_lossy().into_owned(),
+            sha256,
+            imported_at_utc,
+        })
+    }
+    .await;
+
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&directory);
+    }
+    result
+}
+
+async fn preview_cancellable(
+    source: &str,
+    cancelled: &Arc<AtomicBool>,
+) -> Result<MediaSourcePreview, String> {
+    let source_url = normalize_source(source)?;
+    let runtime = media_fetcher()?;
+    let mut args = safe_common_args()?;
+    args.extend(["--dump-single-json".to_string(), source_url.clone()]);
+    let output = run_fetcher_cancellable(&runtime, &args, "读取媒体元数据", cancelled).await?;
+    if output.stdout.len() > MAX_METADATA_BYTES {
+        return Err("媒体元数据超过 4 MiB 限制。".to_string());
+    }
+    let value: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("无法解析媒体元数据：{error}"))?;
+    if value.get("is_live").and_then(Value::as_bool) == Some(true) {
+        return Err("当前不支持直播或进行中的媒体。".to_string());
+    }
+    Ok(MediaSourcePreview {
+        source_url: source_url.clone(),
+        canonical_url: value
+            .get("webpage_url")
+            .and_then(Value::as_str)
+            .unwrap_or(&source_url)
+            .to_string(),
+        platform: value
+            .get("extractor_key")
+            .or_else(|| value.get("extractor"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string(),
+        media_id: required_text(&value, "id", "媒体 ID")?,
+        title: required_text(&value, "title", "标题")?,
+        uploader: value
+            .get("uploader")
+            .or_else(|| value.get("channel"))
+            .and_then(Value::as_str)
+            .unwrap_or("未知作者")
+            .to_string(),
+        duration_seconds: value.get("duration").and_then(Value::as_f64),
+        thumbnail_url: value
+            .get("thumbnail")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    })
+}
+
 fn normalize_source(source: &str) -> Result<String, String> {
     let source = source.trim();
     if source.len() == 12
@@ -237,6 +385,161 @@ fn run_fetcher(
             output.status.code(),
             detail.trim()
         ))
+    }
+}
+
+async fn run_fetcher_cancellable(
+    runtime: &Path,
+    args: &[String],
+    operation: &str,
+    cancelled: &AtomicBool,
+) -> Result<std::process::Output, String> {
+    if cancelled.load(Ordering::Acquire) {
+        return Err("媒体导入已取消。".to_string());
+    }
+    let mut command = Command::new(runtime);
+    command
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    crate::process_tree::prepare_command(&mut command)?;
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("无法启动媒体导入器：{error}"))?;
+    let guard = match crate::process_tree::attach_child(&child) {
+        Ok(guard) => guard,
+        Err(error) => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return Err(error);
+        }
+    };
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "媒体导入器没有提供 stdout 管道。".to_string());
+    let stdout = match stdout {
+        Ok(stdout) => stdout,
+        Err(error) => {
+            guard.terminate(&mut child).await?;
+            return Err(error);
+        }
+    };
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "媒体导入器没有提供 stderr 管道。".to_string());
+    let stderr = match stderr {
+        Ok(stderr) => stderr,
+        Err(error) => {
+            guard.terminate(&mut child).await?;
+            return Err(error);
+        }
+    };
+    let (output_tx, mut output_rx) = tokio::sync::mpsc::channel(2);
+    let stdout_task = tokio::spawn(async move {
+        let result = read_bounded(stdout, MAX_PROCESS_STDOUT_BYTES).await;
+        let _ = output_tx.send((true, result)).await;
+    });
+    let (stderr_tx, mut stderr_rx) = tokio::sync::mpsc::channel(1);
+    let stderr_task = tokio::spawn(async move {
+        let result = read_bounded(stderr, MAX_PROCESS_STDERR_BYTES).await;
+        let _ = stderr_tx.send(result).await;
+    });
+    let mut stdout_result = None;
+    let mut stderr_result = None;
+
+    let status = loop {
+        if cancelled.load(Ordering::Acquire) {
+            guard.terminate(&mut child).await?;
+            let _ = stdout_task.await;
+            let _ = stderr_task.await;
+            return Err("媒体导入已取消。".to_string());
+        }
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            break status;
+        }
+        tokio::select! {
+            message = output_rx.recv(), if stdout_result.is_none() => {
+                let (_, result) = message.ok_or_else(|| "读取媒体导入器 stdout 失败。".to_string())?;
+                if result.is_err() {
+                    guard.terminate(&mut child).await?;
+                    let _ = stdout_task.await;
+                    let _ = stderr_task.await;
+                    return Err("媒体导入器 stdout 超过大小限制。".to_string());
+                }
+                stdout_result = Some(result);
+            }
+            result = stderr_rx.recv(), if stderr_result.is_none() => {
+                let result = result.ok_or_else(|| "读取媒体导入器 stderr 失败。".to_string())?;
+                if result.is_err() {
+                    guard.terminate(&mut child).await?;
+                    let _ = stdout_task.await;
+                    let _ = stderr_task.await;
+                    return Err("媒体导入器 stderr 超过大小限制。".to_string());
+                }
+                stderr_result = Some(result);
+            }
+            _ = tokio::time::sleep(Duration::from_millis(25)) => {}
+        }
+    };
+    guard.release();
+    let stdout = match stdout_result {
+        Some(result) => result?,
+        None => {
+            output_rx
+                .recv()
+                .await
+                .ok_or_else(|| "读取媒体导入器 stdout 失败。".to_string())?
+                .1?
+        }
+    };
+    let stderr = match stderr_result {
+        Some(result) => result?,
+        None => stderr_rx
+            .recv()
+            .await
+            .ok_or_else(|| "读取媒体导入器 stderr 失败。".to_string())??,
+    };
+    if status.success() {
+        Ok(std::process::Output {
+            status,
+            stdout,
+            stderr,
+        })
+    } else {
+        let detail = String::from_utf8_lossy(&stderr)
+            .chars()
+            .take(2_000)
+            .collect::<String>();
+        Err(format!(
+            "{operation}失败（退出码 {:?}）：{}",
+            status.code(),
+            detail.trim()
+        ))
+    }
+}
+
+async fn read_bounded<R: AsyncRead + Unpin>(
+    mut reader: R,
+    limit: usize,
+) -> Result<Vec<u8>, String> {
+    use tokio::io::AsyncReadExt;
+
+    let mut output = Vec::new();
+    let mut buffer = [0u8; 16 * 1024];
+    loop {
+        let count = reader
+            .read(&mut buffer)
+            .await
+            .map_err(|error| error.to_string())?;
+        if count == 0 {
+            return Ok(output);
+        }
+        if output.len().saturating_add(count) > limit {
+            return Err(format!("进程输出超过 {limit} 字节限制。"));
+        }
+        output.extend_from_slice(&buffer[..count]);
     }
 }
 
