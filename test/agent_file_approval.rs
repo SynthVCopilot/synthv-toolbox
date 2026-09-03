@@ -1,8 +1,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-use synthv_toolbox_lib::agent_files::FileApprovalManager;
-use synthv_toolbox_lib::config::AgentWorkMode;
+use synthv_toolbox_lib::agent_files::{
+    auto_allowed, is_path_key, AgentWorkMode, FileApprovalManager,
+};
 use uuid::Uuid;
 
 fn test_dir() -> PathBuf {
@@ -14,6 +15,9 @@ fn test_dir() -> PathBuf {
 
 #[test]
 fn approval_is_format_aware_session_bound_and_fingerprint_bound() {
+    assert!(auto_allowed(PathBuf::from("source.mp4").as_path()));
+    assert!(is_path_key("reference_audio_path"));
+    assert!(!is_path_key("profile"));
     let root = test_dir();
     fs::create_dir_all(&root).expect("create test directory");
     let wav = root.join("voice.wav");

@@ -1140,6 +1140,7 @@ impl ToolExecutor for ToolboxAudioToolExecutor {
                     &self.file_approvals,
                     self.work_mode,
                     &self.conversation_id,
+                    &call.tool_name,
                 ) {
                     return Ok(ToolResult {
                         tool_call_id: call.id.clone(),
@@ -1171,6 +1172,7 @@ fn admit_paths(
     approvals: &FileApprovalManager,
     mode: AgentWorkMode,
     conversation_id: &str,
+    tool_name: &str,
 ) -> Result<(), String> {
     match value {
         Value::Object(map) => {
@@ -1179,7 +1181,7 @@ fn admit_paths(
                     if let Some(path) = item.as_str() {
                         let decision = approvals.admit_or_request(
                             path,
-                            "Agent tool file access",
+                            &format!("{tool_name} 工具访问文件"),
                             mode,
                             conversation_id,
                         )?;
@@ -1191,12 +1193,12 @@ fn admit_paths(
                         }
                     }
                 }
-                admit_paths(item, approvals, mode, conversation_id)?;
+                admit_paths(item, approvals, mode, conversation_id, tool_name)?;
             }
         }
         Value::Array(items) => {
             for item in items {
-                admit_paths(item, approvals, mode, conversation_id)?;
+                admit_paths(item, approvals, mode, conversation_id, tool_name)?;
             }
         }
         _ => {}
