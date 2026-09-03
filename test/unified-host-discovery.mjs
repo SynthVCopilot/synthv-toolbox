@@ -14,6 +14,8 @@ assert.match(source, /pub id: String/);
 for (const field of ["project", "sequence", "transport", "tracks", "parts", "notes", "singer_list", "singer_assignment", "retakes", "computed_pitch", "export_snapshot", "audio_capture"]) {
   assert.match(source, new RegExp(`pub ${field}: bool`));
 }
+assert.match(source, /pub read_operations: Vec<&'static str>/);
+assert.match(source, /pub write_operations: Vec<&'static str>/);
 assert.match(source, /pub voice_parameters: CapabilityAccess/);
 assert.match(source, /Synthesizer V Studio Pro\.app/);
 assert.match(source, /synthv-studio/);
