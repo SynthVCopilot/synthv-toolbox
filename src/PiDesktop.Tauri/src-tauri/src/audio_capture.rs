@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::agent::{AgentError, ToolCall, ToolDefinition, ToolExecutor, ToolResult};
+use crate::agent_files::FileApprovalManager;
 use crate::bridge_workflows;
 use crate::components::component_list;
 use crate::config::AgentWorkMode;
@@ -512,6 +513,8 @@ pub struct ToolboxAudioToolExecutor {
     components_dir: PathBuf,
     downloads: Arc<ComponentDownloadManager>,
     media_tasks: Arc<MediaTaskManager>,
+    file_approvals: Arc<FileApprovalManager>,
+    conversation_id: String,
     work_mode: AgentWorkMode,
     mode_state: std::sync::Mutex<ModeExecutionState>,
 }
@@ -533,6 +536,8 @@ impl ToolboxAudioToolExecutor {
         downloads: Arc<ComponentDownloadManager>,
         media_tasks: Arc<MediaTaskManager>,
         work_mode: AgentWorkMode,
+        file_approvals: Arc<FileApprovalManager>,
+        conversation_id: String,
     ) -> Self {
         Self {
             mcp,
@@ -543,13 +548,15 @@ impl ToolboxAudioToolExecutor {
             components_dir,
             downloads,
             media_tasks,
+            file_approvals,
+            conversation_id,
             work_mode,
             mode_state: std::sync::Mutex::new(ModeExecutionState::default()),
         }
     }
 
     fn local_tools(&self) -> Vec<ToolDefinition> {
-        let mut tools = vec![ToolDefinition {
+        let mut tools = vec![ToolDefinition { name: "agent_file_list".to_string(), description: "List only path, type, size and decision for a directory. Never reads file content.".to_string(), input_schema_json: json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}).to_string() }, ToolDefinition { name: "agent_file_access".to_string(), description: "Request access to one file. pass is immediate; ordinary Edit files require UI approval and cannot be approved by model arguments.".to_string(), input_schema_json: json!({"type":"object","properties":{"path":{"type":"string"},"purpose":{"type":"string"}},"required":["path","purpose"],"additionalProperties":false}).to_string() }, ToolDefinition {
             name: "compare_audio_clips".to_string(),
             description: "Fast local A/B comparison for two WAV clips. Aligns capture latency and returns only structured difference metrics; it never uploads or embeds audio.".to_string(),
             input_schema_json: json!({
@@ -793,6 +800,25 @@ impl ToolboxAudioToolExecutor {
 
     fn execute_local(&self, call: &ToolCall) -> Option<ToolResult> {
         let result = match call.tool_name.as_str() {
+            "agent_file_list" => Some(
+                serde_json::from_str::<AgentFileListRequest>(&call.arguments_json)
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| self.file_approvals.list(&r.path))
+                    .and_then(|v| serde_json::to_string(&v).map_err(|e| e.to_string())),
+            ),
+            "agent_file_access" => Some(
+                serde_json::from_str::<AgentFileAccessRequest>(&call.arguments_json)
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| {
+                        self.file_approvals.admit_or_request(
+                            &r.path,
+                            &r.purpose,
+                            self.work_mode,
+                            &self.conversation_id,
+                        )
+                    })
+                    .and_then(|value| serde_json::to_string(&value).map_err(|e| e.to_string())),
+            ),
             name if synthv_unified::is_tool(name) => Some((|| {
                 if synthv_unified::is_mutation(name) {
                     self.admit_project_mutation()?;
@@ -1045,6 +1071,16 @@ struct AudioPathToolRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct AgentFileListRequest {
+    path: String,
+}
+#[derive(Debug, Deserialize)]
+struct AgentFileAccessRequest {
+    path: String,
+    purpose: String,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ComponentTaskRequest {
     component_id: String,
@@ -1094,6 +1130,25 @@ impl ToolExecutor for ToolboxAudioToolExecutor {
     }
 
     fn execute(&self, call: &ToolCall) -> Result<ToolResult, AgentError> {
+        if !matches!(
+            call.tool_name.as_str(),
+            "agent_file_list" | "agent_file_access"
+        ) {
+            if let Ok(value) = serde_json::from_str::<Value>(&call.arguments_json) {
+                if let Err(error) = admit_paths(
+                    &value,
+                    &self.file_approvals,
+                    self.work_mode,
+                    &self.conversation_id,
+                ) {
+                    return Ok(ToolResult {
+                        tool_call_id: call.id.clone(),
+                        result_json: json!({"error":error}).to_string(),
+                        is_error: true,
+                    });
+                }
+            }
+        }
         if let Some(result) = self.execute_local(call) {
             Ok(result)
         } else {
@@ -1109,6 +1164,44 @@ impl ToolExecutor for ToolboxAudioToolExecutor {
             self.mcp.execute(call)
         }
     }
+}
+
+fn admit_paths(
+    value: &Value,
+    approvals: &FileApprovalManager,
+    mode: AgentWorkMode,
+    conversation_id: &str,
+) -> Result<(), String> {
+    match value {
+        Value::Object(map) => {
+            for (key, item) in map {
+                if crate::agent_files::is_path_key(key) {
+                    if let Some(path) = item.as_str() {
+                        let decision = approvals.admit_or_request(
+                            path,
+                            "Agent tool file access",
+                            mode,
+                            conversation_id,
+                        )?;
+                        if decision.decision != "pass" {
+                            return Err(format!(
+                                "文件需要人工批准；requestId={}",
+                                decision.request_id.unwrap_or_default()
+                            ));
+                        }
+                    }
+                }
+                admit_paths(item, approvals, mode, conversation_id)?;
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                admit_paths(item, approvals, mode, conversation_id)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 impl ToolboxAudioToolExecutor {

@@ -10,6 +10,10 @@ license = "Apache-2.0"
 name = "synthv_toolbox_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[test]]
+name = "agent-file-approval"
+path = "../../../test/agent_file_approval.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 cc = "1"
