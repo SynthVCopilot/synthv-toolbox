@@ -11,6 +11,8 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::agent::{AgentError, ToolCall, ToolDefinition, ToolExecutor, ToolResult};
+use crate::components::component_list;
+use crate::downloads::ComponentDownloadManager;
 use crate::mcp::McpToolExecutor;
 use crate::mcp::{extract_mcp_json, McpManager};
 use crate::media_import;
@@ -461,6 +463,8 @@ pub struct ToolboxAudioToolExecutor {
     runtime: Handle,
     bridge_dir: PathBuf,
     resource_dir: PathBuf,
+    components_dir: PathBuf,
+    downloads: Arc<ComponentDownloadManager>,
 }
 
 impl ToolboxAudioToolExecutor {
@@ -470,6 +474,8 @@ impl ToolboxAudioToolExecutor {
         runtime: Handle,
         bridge_dir: PathBuf,
         resource_dir: PathBuf,
+        components_dir: PathBuf,
+        downloads: Arc<ComponentDownloadManager>,
     ) -> Self {
         Self {
             mcp,
@@ -477,6 +483,8 @@ impl ToolboxAudioToolExecutor {
             runtime,
             bridge_dir,
             resource_dir,
+            components_dir,
+            downloads,
         }
     }
 
@@ -526,6 +534,46 @@ impl ToolboxAudioToolExecutor {
                     "type": "object",
                     "properties": { "audioPath": { "type": "string" } },
                     "required": ["audioPath"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
+                name: "list_managed_components".to_string(),
+                description: "List managed local components and their installation status.".to_string(),
+                input_schema_json: json!({ "type": "object", "additionalProperties": false }).to_string(),
+            },
+            ToolDefinition {
+                name: "list_component_tasks".to_string(),
+                description: "List persisted component installation tasks and their current status.".to_string(),
+                input_schema_json: json!({ "type": "object", "additionalProperties": false }).to_string(),
+            },
+            ToolDefinition {
+                name: "queue_component_install".to_string(),
+                description: "Queue one allowlisted managed component for serial installation.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": { "componentId": { "type": "string", "enum": ["ffmpeg", "pi-audio", "cvrs", "media-fetcher", "vocal-separation", "sandboxie"] } },
+                    "required": ["componentId"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
+                name: "cancel_component_task".to_string(),
+                description: "Cancel a component task only while it is still queued and has not started changing files.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": { "taskId": { "type": "string", "format": "uuid" } },
+                    "required": ["taskId"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
+                name: "retry_component_task".to_string(),
+                description: "Retry one failed or cancelled persisted component task.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": { "taskId": { "type": "string", "format": "uuid" } },
+                    "required": ["taskId"],
                     "additionalProperties": false
                 }).to_string(),
             },
@@ -619,6 +667,41 @@ impl ToolboxAudioToolExecutor {
                         serde_json::to_string(&value).map_err(|error| error.to_string())
                     }),
             ),
+            "list_managed_components" => Some(
+                serde_json::to_string(&component_list(&self.resource_dir))
+                    .map_err(|error| error.to_string()),
+            ),
+            "list_component_tasks" => Some(
+                serde_json::to_string(&self.downloads.snapshot())
+                    .map_err(|error| error.to_string()),
+            ),
+            "queue_component_install" => Some(
+                serde_json::from_str::<ComponentTaskRequest>(&call.arguments_json)
+                    .map_err(|error| format!("组件任务参数无效：{error}"))
+                    .and_then(|request| {
+                        let (snapshot, start_worker) =
+                            self.downloads.enqueue(&request.component_id)?;
+                        self.start_component_worker(start_worker);
+                        serde_json::to_string(&snapshot).map_err(|error| error.to_string())
+                    }),
+            ),
+            "cancel_component_task" => Some(
+                serde_json::from_str::<TaskIdRequest>(&call.arguments_json)
+                    .map_err(|error| format!("组件任务参数无效：{error}"))
+                    .and_then(|request| self.downloads.cancel_queued(&request.task_id))
+                    .and_then(|snapshot| {
+                        serde_json::to_string(&snapshot).map_err(|error| error.to_string())
+                    }),
+            ),
+            "retry_component_task" => Some(
+                serde_json::from_str::<TaskIdRequest>(&call.arguments_json)
+                    .map_err(|error| format!("组件任务参数无效：{error}"))
+                    .and_then(|request| self.downloads.retry(&request.task_id))
+                    .and_then(|(snapshot, start_worker)| {
+                        self.start_component_worker(start_worker);
+                        serde_json::to_string(&snapshot).map_err(|error| error.to_string())
+                    }),
+            ),
             "capture_synthv_clip" => Some(
                 serde_json::from_str::<CaptureClipRequest>(&call.arguments_json)
                     .map_err(|error| format!("片段捕获参数无效：{error}"))
@@ -689,6 +772,18 @@ impl ToolboxAudioToolExecutor {
             },
         })
     }
+
+    fn start_component_worker(&self, start_worker: bool) {
+        if !start_worker {
+            return;
+        }
+        let manager = self.downloads.clone();
+        let components_dir = self.components_dir.clone();
+        let resource_dir = self.resource_dir.clone();
+        self.runtime.spawn(async move {
+            manager.run_worker(components_dir, resource_dir).await;
+        });
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -709,6 +804,18 @@ struct MediaSourceToolRequest {
 #[serde(rename_all = "camelCase")]
 struct AudioPathToolRequest {
     audio_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ComponentTaskRequest {
+    component_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskIdRequest {
+    task_id: String,
 }
 
 #[derive(Debug, Deserialize)]

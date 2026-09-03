@@ -48,7 +48,7 @@ impl AppState {
             resource_dir,
             bridge_dir,
             components_dir,
-            downloads: Arc::new(ComponentDownloadManager::default()),
+            downloads: Arc::new(ComponentDownloadManager::persistent()),
             audio_preparation,
             sv2_profiles: Arc::new(Sv2ProfileService::new()),
             svp_passthrough_only: AtomicBool::new(svp_passthrough_only),

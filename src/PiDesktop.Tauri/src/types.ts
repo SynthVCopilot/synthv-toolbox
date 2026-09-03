@@ -241,7 +241,7 @@ export interface ComponentInfo {
   status: string;
 }
 
-export type ComponentDownloadStatus = "queued" | "downloading" | "installing" | "completed" | "failed";
+export type ComponentDownloadStatus = "queued" | "downloading" | "installing" | "completed" | "failed" | "cancelled";
 
 export interface ComponentDownload {
   id: string;

@@ -197,6 +197,8 @@ pub fn run() {
             commands::cancel_audio_job,
             commands::component_downloads,
             commands::queue_component_install,
+            commands::cancel_component_install,
+            commands::retry_component_install,
             commands::open_downloaded_component,
             commands::remove_local_component,
             commands::list_workflow_recipes,
