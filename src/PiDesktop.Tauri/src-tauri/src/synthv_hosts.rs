@@ -182,11 +182,11 @@ pub fn discover() -> Result<Vec<StandardSynthVHost>, String> {
         let processes = read_processes()?;
         let applications = discover_applications(&processes);
         let flat_status = std::fs::read_to_string(flat_status_path()).ok();
-        return Ok(build_hosts(
+        Ok(build_hosts(
             &processes,
             &applications,
             flat_status.as_deref(),
-        ));
+        ))
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -400,7 +400,7 @@ fn valid_flat_status(status: &str, expected_pid: Option<u32>) -> Option<String> 
         return None;
     }
     for key in ["running", "nativeHostReady", "bridgeReady", "runtimeReady"] {
-        if value.get(key)?.as_bool()? != true {
+        if !value.get(key)?.as_bool()? {
             return None;
         }
     }
@@ -495,9 +495,7 @@ mod tests {
             "1.4.3",
         )];
         let processes = vec![process(20, FLAT_EXECUTABLE_PATH)];
-        let good = format!(
-            r#"{{"pid":20,"running":true,"nativeHostReady":true,"bridgeReady":true,"runtimeReady":true,"endpoint":"http://127.0.0.1:17580/mcp"}}"#
-        );
+        let good = r#"{"pid":20,"running":true,"nativeHostReady":true,"bridgeReady":true,"runtimeReady":true,"endpoint":"http://127.0.0.1:17580/mcp"}"#.to_string();
         let hosts = build_hosts(&processes, &apps, Some(&good));
         assert!(
             hosts[0].connected
@@ -529,9 +527,7 @@ mod tests {
             process(21, FLAT_EXECUTABLE_PATH),
             process(22, FLAT_EXECUTABLE_PATH),
         ];
-        let status = format!(
-            r#"{{"pid":22,"running":true,"nativeHostReady":true,"bridgeReady":true,"runtimeReady":true,"endpoint":"http://127.0.0.1:17580/mcp"}}"#
-        );
+        let status = r#"{"pid":22,"running":true,"nativeHostReady":true,"bridgeReady":true,"runtimeReady":true,"endpoint":"http://127.0.0.1:17580/mcp"}"#.to_string();
         let hosts = build_hosts(&processes, &apps, Some(&status));
         assert_eq!(hosts.len(), 2);
         assert_eq!(hosts[0].id, "flat:21");

@@ -9,6 +9,7 @@ SynthV Toolbox 是面向 Synthesizer V 创作流程的桌面工具箱，支持 W
 - 导入、检查和整理 MIDI、MusicXML 与 SynthV 工程文件
 - 导出歌词与工程副本，方便校对和备份
 - 连接 SynthV Bridge，在当前工程中继续处理结果
+- 通过统一 Agent 接口连接官方 SV1、Flat 或官方 SV2，隐藏底层 Bridge/MCP 差异
 - 通过 Copilot 与用户配置的工具协助完成创作流程
 
 ## 平台支持
@@ -29,6 +30,8 @@ Windows 和 macOS 都提供可选的 SV2 本地数据槽位，可在 SV2 完全�
 构建、测试和发布说明请参阅项目内的开发文档与工作流配置。发布版本请从项目的 GitHub Releases 页面获取。
 
 作词、平台音频导入、下载组件和内部工具的评估与操作指导请参阅 [作词与音频导入工作流指导](docs/lyric-and-audio-workflow-guide.zh-CN.md)。
+
+官方 SV1、Flat 与官方 SV2 的统一 Agent 连接、能力和导出流程请参阅 [统一 SynthV 宿主接口](docs/unified-synthv-hosts.zh-CN.md)。
 
 ## License
 

@@ -17,7 +17,7 @@ use client::{McpServerSpec, McpStdioClient};
 use http_client::McpHttpClient;
 
 enum ManagedClient {
-    Stdio(McpStdioClient),
+    Stdio(Box<McpStdioClient>),
     Http(McpHttpClient),
 }
 
@@ -55,6 +55,7 @@ type SharedClient = Arc<Mutex<ManagedClient>>;
 struct ConnectedServer {
     client: SharedClient,
     tools: Vec<McpTool>,
+    agent_visible: bool,
 }
 
 #[derive(Clone)]
@@ -101,7 +102,7 @@ impl McpManager {
         node: String,
         bridge_dir: PathBuf,
     ) -> Result<Vec<String>, String> {
-        self.connect(
+        self.connect_hidden(
             "synthv".to_string(),
             "SynthV Bridge".to_string(),
             McpServerSpec {
@@ -138,7 +139,7 @@ impl McpManager {
         let client = McpHttpClient::from_endpoint(endpoint)
             .map(ManagedClient::Http)
             .map_err(|error| format!("无法连接 {name}：{error}"))?;
-        self.register_client(id, name, client).await
+        self.register_client(id, name, client, false).await
     }
 
     pub async fn connect_stdio_host(
@@ -149,7 +150,7 @@ impl McpManager {
         args: Vec<String>,
         working_dir: Option<PathBuf>,
     ) -> Result<Vec<String>, String> {
-        self.connect(
+        self.connect_hidden(
             id,
             name,
             McpServerSpec {
@@ -168,10 +169,30 @@ impl McpManager {
         name: String,
         spec: McpServerSpec,
     ) -> Result<Vec<String>, String> {
+        self.connect_with_visibility(id, name, spec, true).await
+    }
+
+    async fn connect_hidden(
+        &self,
+        id: String,
+        name: String,
+        spec: McpServerSpec,
+    ) -> Result<Vec<String>, String> {
+        self.connect_with_visibility(id, name, spec, false).await
+    }
+
+    async fn connect_with_visibility(
+        &self,
+        id: String,
+        name: String,
+        spec: McpServerSpec,
+        agent_visible: bool,
+    ) -> Result<Vec<String>, String> {
         let client = McpStdioClient::start(&spec)
+            .map(Box::new)
             .map(ManagedClient::Stdio)
             .map_err(|error| format!("无法启动 {name}：{error}"))?;
-        self.register_client(id, name, client).await
+        self.register_client(id, name, client, agent_visible).await
     }
 
     async fn register_client(
@@ -179,6 +200,7 @@ impl McpManager {
         id: String,
         name: String,
         client: ManagedClient,
+        agent_visible: bool,
     ) -> Result<Vec<String>, String> {
         client
             .initialize("synthv-toolbox", env!("CARGO_PKG_VERSION"))
@@ -201,6 +223,7 @@ impl McpManager {
             ConnectedServer {
                 client: Arc::new(Mutex::new(client)),
                 tools,
+                agent_visible,
             },
         );
         Ok(tool_names)
@@ -254,9 +277,9 @@ impl McpManager {
     pub async fn bindings(&self) -> Vec<McpToolBinding> {
         let servers = self.servers.lock().await;
         servers
-            .iter()
-            .filter(|(id, _)| !id.starts_with("synthv"))
-            .flat_map(|(_, server)| {
+            .values()
+            .filter(|server| server.agent_visible)
+            .flat_map(|server| {
                 server.tools.iter().map(|tool| McpToolBinding {
                     definition: tool.definition.clone(),
                     remote_name: tool.remote_name.clone(),
