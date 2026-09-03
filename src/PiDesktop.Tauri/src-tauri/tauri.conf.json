@@ -47,7 +47,9 @@
       "../../../external/synthv-agent-bridge/LICENSE": "synthv-agent-bridge/LICENSE",
       "components/cvrs/cvrs.py": "components/cvrs/cvrs.py",
       "components/pi-audio/pi_audio.py": "components/pi-audio/pi_audio.py",
-      "components/pi-audio/requirements.txt": "components/pi-audio/requirements.txt"
+      "components/pi-audio/requirements.txt": "components/pi-audio/requirements.txt",
+      "components/vocal-separation/separate.py": "components/vocal-separation/separate.py",
+      "components/vocal-separation/requirements.txt": "components/vocal-separation/requirements.txt"
     },
     "category": "Music",
     "shortDescription": "Cross-platform Synthesizer V creative toolbox",

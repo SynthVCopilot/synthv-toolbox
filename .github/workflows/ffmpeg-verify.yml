@@ -68,7 +68,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Check Python component sources
-        run: python -m py_compile src/PiDesktop.Tauri/src-tauri/components/pi-audio/pi_audio.py src/PiDesktop.Tauri/src-tauri/components/cvrs/cvrs.py
+        run: python -m py_compile src/PiDesktop.Tauri/src-tauri/components/pi-audio/pi_audio.py src/PiDesktop.Tauri/src-tauri/components/cvrs/cvrs.py src/PiDesktop.Tauri/src-tauri/components/vocal-separation/separate.py
 
       - name: Build bundled SynthV Bridge
         working-directory: external/synthv-agent-bridge
