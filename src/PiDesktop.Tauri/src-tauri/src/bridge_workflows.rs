@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use crate::mcp::{extract_mcp_json, McpManager};
+use crate::tuning_profiles::TuningProfile;
 
 const LOCAL_SCORE_EXTENSIONS: &[&str] = &["xml", "musicxml", "mxl", "mid", "midi"];
 
@@ -89,6 +90,65 @@ pub async fn current_project_file(manager: &McpManager) -> Result<String, String
         .filter(|path| !path.trim().is_empty())
         .map(str::to_string)
         .ok_or_else(|| "当前 SynthV 工程尚未保存为 .svp；无法验证 Cover 工程输出。".to_string())
+}
+
+pub async fn apply_tuning_profile(
+    manager: &McpManager,
+    profile: &TuningProfile,
+    track_index: u32,
+    group_index: u32,
+) -> Result<Value, String> {
+    if track_index == 0 || group_index == 0 {
+        return Err("轨道和音符组编号必须从 1 开始。".to_string());
+    }
+    let context = call_json(
+        manager,
+        "sv_query",
+        json!({
+            "action": "get_group_voice",
+            "args": { "trackIndex": track_index, "groupIndex": group_index },
+            "contextMode": "writeIntent",
+            "dense": "never",
+            "debug": false
+        }),
+    )
+    .await?;
+    let context_id = find_string(&context, "contextId")
+        .ok_or_else(|| "Bridge 没有返回可安全写入的 Group Voice Context。".to_string())?;
+    let parameters = &profile.parameters;
+    let applied = call_json(
+        manager,
+        "sv_command",
+        json!({
+            "action": "apply_group_tuning",
+            "args": {
+                "trackIndex": track_index,
+                "groupIndex": group_index,
+                "summary": format!("应用 {} 的本地学习调声档案", profile.voice_name),
+                "requireCurrentEditorGroup": false,
+                "voice": {
+                    "parameters": {
+                        "loudness": parameters.loudness,
+                        "tension": parameters.tension,
+                        "breathiness": parameters.breathiness,
+                        "gender": parameters.gender,
+                        "toneShift": parameters.tone_shift
+                    }
+                }
+            },
+            "contextId": context_id,
+            "expectedEffect": "allowAlreadySatisfied"
+        }),
+    )
+    .await?;
+    Ok(json!({
+        "profile": profile,
+        "context": context,
+        "applied": applied,
+        "vibratoStrength": parameters.vibrato_strength,
+        "vibratoApplied": false,
+        "vibratoNote": "Vibrato requires fingerprinted note scope and is applied by the Solo note pass, not Group Voice."
+    }))
 }
 
 fn validate_score_import(request: ScoreImportRequest) -> Result<ValidatedScoreImport, String> {

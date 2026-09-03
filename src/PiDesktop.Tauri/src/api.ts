@@ -41,6 +41,8 @@ import type {
   SynthVInstallation,
   SynthVProcess,
   SynthVShortcutProfile,
+  TuningParameters,
+  TuningProfile,
   ToolboxUpdateCheck,
   WorkflowRecipe,
   WorkflowResult,
@@ -908,6 +910,17 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     previewMediaTasks.push(task);
     return task as T;
   }
+  if (command === "list_tuning_profiles") return [] as T;
+  if (command === "learn_tuning_profile" || command === "record_tuning_outcome") return {
+    voiceName: String(args?.voiceName ?? "Preview Voice"),
+    normalizedVoiceName: String(args?.voiceName ?? "preview voice").toLowerCase(),
+    sourceSamples: 1,
+    outcomeSamples: command === "record_tuning_outcome" ? 1 : 0,
+    averageFeatures: { durationSec: 20, medianPitchMidi: 64, pitchRangeSemitones: 14, vibratoRateHz: 5.2, vibratoDepthCents: 42, dynamicRangeDb: 18, breathinessProxy: 0.2, brightnessHz: 2200, voicedRatio: 0.8 },
+    parameters: { loudness: 0, tension: 0.1, breathiness: 0.04, gender: 0, toneShift: 0, vibratoStrength: 0.36 },
+    updatedAtUtc: new Date().toISOString(),
+  } as T;
+  if (command === "apply_tuning_profile") return { kind: "learned-tuning-apply", summary: "已应用本地学习调声参数。", data: {} } as T;
   if (command === "media_tasks") return previewMediaTasks as T;
   if (command === "cancel_media_task") {
     const task = previewMediaTasks.find((item) => item.id === String(args?.taskId ?? ""));
@@ -1096,6 +1109,10 @@ export const api = {
   queueCover: (request: CoverTaskRequest) => call<MediaTaskSnapshot>("queue_cover", { request }),
   cancelMediaTask: (taskId: string) => call<MediaTaskSnapshot>("cancel_media_task", { taskId }),
   retryMediaTask: (taskId: string) => call<MediaTaskSnapshot>("retry_media_task", { taskId }),
+  listTuningProfiles: () => call<TuningProfile[]>("list_tuning_profiles"),
+  learnTuningProfile: (audioPath: string, voiceName: string) => call<TuningProfile>("learn_tuning_profile", { audioPath, voiceName }),
+  recordTuningOutcome: (voiceName: string, candidate: TuningParameters, improvement: number) => call<TuningProfile>("record_tuning_outcome", { voiceName, candidate, improvement }),
+  applyTuningProfile: (voiceName: string, trackIndex: number, groupIndex: number) => call<WorkflowResult>("apply_tuning_profile", { voiceName, trackIndex, groupIndex }),
   runGameToMidi: (vocalPath: string, instrumentalPath: string, outputName: string, tolerance: number, advanced: boolean) =>
     call<WorkflowResult>("run_game_to_midi", { vocalPath, instrumentalPath, outputName, tolerance, advanced }),
   runProjectProbe: (projectPath: string) =>

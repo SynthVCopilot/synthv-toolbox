@@ -367,6 +367,37 @@ export interface CoverTaskRequest {
   advanced: boolean;
 }
 
+export interface SourceStyleFeatures {
+  durationSec: number;
+  medianPitchMidi: number;
+  pitchRangeSemitones: number;
+  vibratoRateHz: number;
+  vibratoDepthCents: number;
+  dynamicRangeDb: number;
+  breathinessProxy: number;
+  brightnessHz: number;
+  voicedRatio: number;
+}
+
+export interface TuningParameters {
+  loudness: number;
+  tension: number;
+  breathiness: number;
+  gender: number;
+  toneShift: number;
+  vibratoStrength: number;
+}
+
+export interface TuningProfile {
+  voiceName: string;
+  normalizedVoiceName: string;
+  sourceSamples: number;
+  outcomeSamples: number;
+  averageFeatures: SourceStyleFeatures;
+  parameters: TuningParameters;
+  updatedAtUtc: string;
+}
+
 export interface AudioCaptureCapability {
   supported: boolean;
   backend: string;

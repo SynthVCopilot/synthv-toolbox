@@ -13,6 +13,7 @@ use crate::agent::data_root;
 use crate::audio_prep::configure_ffmpeg_environment;
 use crate::components::{component_usage_guard, ComponentUsageGuard};
 use crate::config::model_config_path;
+use crate::tuning_profiles::SourceStyleFeatures;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +47,20 @@ pub fn audio_probe(
         output_path: None,
         data,
     })
+}
+
+pub fn source_style(
+    audio_path: String,
+    resource_dir: &Path,
+) -> Result<SourceStyleFeatures, String> {
+    let audio = validate_input(&audio_path, "参考人声", AUDIO_EXTENSIONS)?;
+    let runtime = python_component("audio", None)?;
+    let args = vec![
+        "source-style".to_string(),
+        audio.to_string_lossy().into_owned(),
+    ];
+    let data = run_python(&runtime, &args, "参考人声特征学习", resource_dir)?;
+    serde_json::from_value(data).map_err(|error| format!("参考人声特征格式无效：{error}"))
 }
 
 pub async fn separate_audio_cancellable(
