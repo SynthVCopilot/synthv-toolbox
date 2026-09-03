@@ -1465,7 +1465,26 @@ function renderWorkflowPanel(id: string): string {
   const feature = features.find((item) => item.id === id);
   const group = toolGroups.find((item) => item.featureIds.includes(id));
   let form = "";
-  if (id === "media-import") {
+  if (id === "cover") {
+    const processOptions = [`<option value="">自动选择${synthvProcesses.length > 1 ? "（多实例时由 Agent 指定）" : ""}</option>`, ...synthvProcesses.map((process) => `<option value="${process.processId}">PID ${process.processId} · ${escapeHtml(process.name)}</option>`)].join("");
+    const taskCards = mediaTasks.filter((item) => item.kind === "cover").slice(-5).reverse().map((task) => {
+      const result = asObject(task.result) ?? {};
+      const midi = asObject(result.midi) ?? {};
+      const assignment = asObject(result.voiceAssignment) ?? {};
+      const action = ["queued", "running", "cancelling"].includes(task.status)
+        ? `<button class="secondary compact" data-cancel-media-task="${escapeHtml(task.id)}" ${task.status === "cancelling" ? "disabled" : ""}>${task.status === "cancelling" ? "终止中…" : "取消"}</button>`
+        : ["failed", "cancelled"].includes(task.status)
+          ? `<button class="secondary compact" data-retry-media-task="${escapeHtml(task.id)}">重试</button>`
+          : "";
+      const outputPath = typeof midi.outputPath === "string" ? midi.outputPath : "";
+      const voiceBoundary = assignment.requiresHostSelection === true ? `<small>指定声库：${escapeHtml(String(result.requestedVoice ?? ""))} · 宿主 API 不可自动分配身份</small>` : "";
+      const svpPath = typeof result.svpPath === "string" ? result.svpPath : "";
+      const saveState = svpPath ? `<small>SVP：${escapeHtml(svpPath)} · ${result.saveVerified === true ? "已验证落盘" : "保存未验证"}</small>` : "";
+      return `<article class="download-item ${task.status}"><span class="component-status ${task.status === "completed" ? "ready" : ""}">${icon(task.status === "failed" ? "plug" : "sparkles", 17)}</span><div><div class="download-title"><strong>一键 Cover</strong><span>${escapeHtml(task.status)}</span></div><div class="progress-track"><span style="width:${Math.max(2, Math.min(100, task.progress))}%"></span></div><small>${escapeHtml(task.error || task.detail)}</small>${outputPath ? `<small>MIDI：${escapeHtml(outputPath)}</small>` : ""}${saveState}${voiceBoundary}</div>${action}</article>`;
+    }).join("");
+    const taskList = taskCards ? `<section class="download-queue"><div class="section-heading"><div><h3>Cover 任务</h3><p>下载、分离与旋律提取均可取消；Bridge 写入开始后以宿主实际结果为准。</p></div></div><div class="download-list">${taskCards}</div></section>` : "";
+    form = `<div class="mode-limit"><strong>声库边界：</strong>Toolbox 会记录指定声库并自动连接/导入，但 SynthV 官方脚本 API 当前不能分配 singer 身份；不会伪报已切换。</div><form id="cover-form" class="workflow-form workflow-wide"><label>BV 或 YouTube 来源<input id="cover-source" required placeholder="BV1... 或 https://www.youtube.com/watch?v=..." /></label><div class="workflow-pair"><label>目标声库<input id="cover-voice" required maxlength="200" placeholder="例如 Mai 2" /></label><label>SynthV 进程<select id="cover-process">${processOptions}</select></label></div><label>完整歌词（可选；CJK 按字、拉丁词按词映射）<textarea id="cover-lyrics" rows="7" placeholder="留空时使用 MIDI/SynthV 默认歌词；歌词 token 多于音符会明确失败"></textarea></label><div class="workflow-pair"><label>目标轨道编号<input id="cover-track" type="number" min="1" max="10000" value="1" required /></label><label>音符组名称<input id="cover-group" value="Toolbox Cover" maxlength="200" required /></label></div><label class="checkbox workflow-check"><input id="cover-rights" type="checkbox" /> 我拥有来源内容或已取得足够授权，并会遵守来源平台规则</label><button class="primary">${icon("sparkles", 16)} 开始完整 Cover</button></form>${taskList}`;
+  } else if (id === "media-import") {
     const sourcePreview = mediaSourcePreview
       ? `<section class="media-source-preview"><div><span class="availability ready">${escapeHtml(mediaSourcePreview.platform)}</span><h3>${escapeHtml(mediaSourcePreview.title)}</h3><p>${escapeHtml(mediaSourcePreview.uploader)} · ${mediaSourcePreview.durationSeconds ? `${Math.round(mediaSourcePreview.durationSeconds)} 秒` : "时长未知"}</p><code>${escapeHtml(mediaSourcePreview.canonicalUrl)}</code></div></section>`
       : `<div class="mode-limit">支持裸 BV 号、Bilibili URL、YouTube URL 与 youtu.be 短链接。不会读取浏览器 Cookie、播放列表或付费内容。</div>`;
@@ -1832,6 +1851,26 @@ function renderSettings(): string {
 }
 
 function wireForms(): void {
+  document.querySelector<HTMLFormElement>("#cover-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const processText = document.querySelector<HTMLSelectElement>("#cover-process")?.value ?? "";
+    const lyrics = document.querySelector<HTMLTextAreaElement>("#cover-lyrics")?.value ?? "";
+    void run(async () => {
+      const task = await api.queueCover({
+        source: document.querySelector<HTMLInputElement>("#cover-source")?.value.trim() ?? "",
+        lyrics: lyrics.trim() ? lyrics : null,
+        voiceName: document.querySelector<HTMLInputElement>("#cover-voice")?.value.trim() ?? "",
+        processId: processText ? Number(processText) : null,
+        trackIndex: Number(document.querySelector<HTMLInputElement>("#cover-track")?.value ?? 1),
+        groupName: document.querySelector<HTMLInputElement>("#cover-group")?.value.trim() ?? "Toolbox Cover",
+        rightsConfirmed: document.querySelector<HTMLInputElement>("#cover-rights")?.checked ?? false,
+        tolerance: 0.08,
+        advanced: true,
+      });
+      mediaTasks = [...mediaTasks.filter((item) => item.id !== task.id), task];
+      notice = "完整 Cover 已加入可取消任务队列。";
+    });
+  });
   document.querySelector<HTMLFormElement>("#media-import-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;

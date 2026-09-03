@@ -16,7 +16,7 @@ use crate::downloads::ComponentDownloadManager;
 use crate::mcp::McpToolExecutor;
 use crate::mcp::{extract_mcp_json, McpManager};
 use crate::media_import;
-use crate::media_tasks::MediaTaskManager;
+use crate::media_tasks::{CoverTaskRequest, MediaTaskManager};
 use crate::synthv::{bridge_is_bundled, find_node};
 use crate::synthv_control::{self, BridgeShortcutAction};
 use tokio::runtime::Handle;
@@ -556,6 +556,26 @@ impl ToolboxAudioToolExecutor {
                 }).to_string(),
             },
             ToolDefinition {
+                name: "create_cover_from_source".to_string(),
+                description: "Queue the full cancellable Cover pipeline for one Bilibili BV/URL or YouTube URL: managed audio import, vocal/instrumental separation, melody MIDI extraction, optional lyric mapping, automatic F13 Bridge connection, and import into the current SynthV project. The requested voice name is recorded and reported, but SynthV's official scripting API cannot assign singer identity.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": {
+                        "source": { "type": "string" },
+                        "lyrics": { "type": ["string", "null"] },
+                        "voiceName": { "type": "string" },
+                        "processId": { "type": ["integer", "null"], "minimum": 1 },
+                        "trackIndex": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 1 },
+                        "groupName": { "type": "string", "maxLength": 200, "default": "Toolbox Cover" },
+                        "rightsConfirmed": { "type": "boolean" },
+                        "tolerance": { "type": "number", "minimum": 0.02, "maximum": 0.25, "default": 0.08 },
+                        "advanced": { "type": "boolean", "default": true }
+                    },
+                    "required": ["source", "voiceName", "trackIndex", "groupName", "rightsConfirmed", "tolerance", "advanced"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
                 name: "separate_vocals_and_instrumental".to_string(),
                 description: "Queue a cancellable managed Demucs separation for one local audio file. Returns a persisted media task; use list_media_tasks to observe vocals.wav and instrumental.wav outputs.".to_string(),
                 input_schema_json: json!({
@@ -698,6 +718,15 @@ impl ToolboxAudioToolExecutor {
                 serde_json::from_str::<TaskIdRequest>(&call.arguments_json)
                     .map_err(|error| format!("媒体任务参数无效：{error}"))
                     .and_then(|request| self.media_tasks.retry(&request.task_id))
+                    .and_then(|(snapshot, start_worker)| {
+                        self.start_media_worker(start_worker);
+                        serde_json::to_string(&snapshot).map_err(|error| error.to_string())
+                    }),
+            ),
+            "create_cover_from_source" => Some(
+                serde_json::from_str::<CoverTaskRequest>(&call.arguments_json)
+                    .map_err(|error| format!("Cover 任务参数无效：{error}"))
+                    .and_then(|request| self.media_tasks.enqueue_cover(request))
                     .and_then(|(snapshot, start_worker)| {
                         self.start_media_worker(start_worker);
                         serde_json::to_string(&snapshot).map_err(|error| error.to_string())

@@ -23,6 +23,7 @@ pub struct SynthVProcess {
 pub struct SynthVShortcutProfile {
     pub bridge_start: String,
     pub bridge_stop: String,
+    pub project_save: String,
     pub detail: String,
 }
 
@@ -31,6 +32,7 @@ pub struct SynthVShortcutProfile {
 pub enum BridgeShortcutAction {
     Start,
     Stop,
+    Save,
 }
 
 impl BridgeShortcutAction {
@@ -38,6 +40,13 @@ impl BridgeShortcutAction {
         match self {
             Self::Start => BRIDGE_START_KEY,
             Self::Stop => BRIDGE_STOP_KEY,
+            Self::Save => {
+                if cfg!(target_os = "macos") {
+                    "⌘S"
+                } else {
+                    "Ctrl+S"
+                }
+            }
         }
     }
 }
@@ -46,7 +55,8 @@ pub fn shortcut_profile() -> SynthVShortcutProfile {
     SynthVShortcutProfile {
         bridge_start: BRIDGE_START_KEY.to_string(),
         bridge_stop: BRIDGE_STOP_KEY.to_string(),
-        detail: "F13 触发 Bridge 启动或重连，F14 触发停止。快捷键直接发送到被聚焦的 SynthV 进程。"
+        project_save: if cfg!(target_os = "macos") { "⌘S" } else { "Ctrl+S" }.to_string(),
+        detail: "F13 触发 Bridge 启动或重连，F14 触发停止；Cover 保存使用标准 Ctrl/⌘+S。快捷键直接发送到被聚焦的 SynthV 进程。"
             .to_string(),
     }
 }
@@ -138,14 +148,15 @@ mod platform {
         process_id: u32,
         action: BridgeShortcutAction,
     ) -> Result<(), String> {
-        let key_code = match action {
-            BridgeShortcutAction::Start => "105",
-            BridgeShortcutAction::Stop => "107",
+        let key = match action {
+            BridgeShortcutAction::Start => "key code 105".to_string(),
+            BridgeShortcutAction::Stop => "key code 107".to_string(),
+            BridgeShortcutAction::Save => "keystroke \"s\" using command down".to_string(),
         };
         let focus = format!(
             "tell application \"System Events\" to tell (first process whose unix id is {process_id}) to set frontmost to true"
         );
-        let key = format!("tell application \"System Events\" to key code {key_code}");
+        let key = format!("tell application \"System Events\" to {key}");
         let output = quiet_command("osascript")
             .args(["-e", &focus, "-e", "delay 0.12", "-e", &key])
             .stdout(Stdio::piped())
@@ -236,14 +247,22 @@ mod platform {
                 return Err("Windows 拒绝聚焦 SynthV 窗口。".to_string());
             }
         }
-        let virtual_key = match action {
-            BridgeShortcutAction::Start => 0x7Cu16,
-            BridgeShortcutAction::Stop => 0x7Du16,
+        let mut input = match action {
+            BridgeShortcutAction::Start => vec![
+                keyboard_input(0x7C, 0),
+                keyboard_input(0x7C, KEYEVENTF_KEYUP),
+            ],
+            BridgeShortcutAction::Stop => vec![
+                keyboard_input(0x7D, 0),
+                keyboard_input(0x7D, KEYEVENTF_KEYUP),
+            ],
+            BridgeShortcutAction::Save => vec![
+                keyboard_input(0x11, 0),
+                keyboard_input(0x53, 0),
+                keyboard_input(0x53, KEYEVENTF_KEYUP),
+                keyboard_input(0x11, KEYEVENTF_KEYUP),
+            ],
         };
-        let mut input = [
-            keyboard_input(virtual_key, 0),
-            keyboard_input(virtual_key, KEYEVENTF_KEYUP),
-        ];
         let sent = unsafe {
             SendInput(
                 input.len() as u32,

@@ -145,6 +145,98 @@ pub fn game_to_midi(
         args.push("--advanced".to_string());
     }
     let data = run_python(&runtime, &args, "Game → MIDI", resource_dir)?;
+    game_midi_result(data, advanced)
+}
+
+pub async fn game_to_midi_cancellable(
+    vocal_path: String,
+    instrumental_path: String,
+    lyrics: Option<String>,
+    tolerance: f64,
+    advanced: bool,
+    resource_dir: PathBuf,
+    cancelled: Arc<AtomicBool>,
+    task_id: String,
+) -> Result<WorkflowResult, String> {
+    Uuid::parse_str(&task_id).map_err(|_| "Cover 任务 ID 无效。".to_string())?;
+    let vocal = validate_input(&vocal_path, "人声轨", AUDIO_EXTENSIONS)?;
+    let instrumental = validate_input(&instrumental_path, "伴奏轨", AUDIO_EXTENSIONS)?;
+    if !(0.02..=0.25).contains(&tolerance) {
+        return Err("匹配容差必须在 0.02–0.25 秒之间。".to_string());
+    }
+    let output_directory = data_root().join("output").join("covers").join(&task_id);
+    if let Ok(metadata) = fs::symlink_metadata(&output_directory) {
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err("Cover 输出目录不是安全的普通目录。".to_string());
+        }
+        fs::remove_dir_all(&output_directory)
+            .map_err(|error| format!("无法清理上次 Cover 临时输出：{error}"))?;
+    }
+    fs::create_dir_all(&output_directory)
+        .map_err(|error| format!("无法创建 Cover 输出目录：{error}"))?;
+    let midi_path = output_directory.join("cover.mid");
+    let runtime = python_component("audio", None)?;
+    let mut args = vec![
+        runtime.script.to_string_lossy().into_owned(),
+        "pair-diff".to_string(),
+        vocal.to_string_lossy().into_owned(),
+        instrumental.to_string_lossy().into_owned(),
+        "--midi".to_string(),
+        midi_path.to_string_lossy().into_owned(),
+        "--tol".to_string(),
+        format!("{tolerance:.3}"),
+    ];
+    if advanced {
+        args.push("--advanced".to_string());
+    }
+    if let Some(lyrics) = lyrics.filter(|value| !value.trim().is_empty()) {
+        if lyrics.len() > 256 * 1024 {
+            let _ = fs::remove_dir_all(&output_directory);
+            return Err("Cover 歌词超过 256 KiB 限制。".to_string());
+        }
+        let lyrics_path = output_directory.join("lyrics.txt");
+        fs::write(&lyrics_path, lyrics.as_bytes())
+            .map_err(|error| format!("无法写入 Cover 歌词：{error}"))?;
+        args.push("--lyrics-file".to_string());
+        args.push(lyrics_path.to_string_lossy().into_owned());
+    }
+    let mut command = AsyncCommand::new(&runtime.python);
+    command
+        .args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_ffmpeg_environment(command.as_std_mut(), &resource_dir)?;
+    let output =
+        crate::managed_process::run_managed_command(command, &cancelled, "Cover 旋律提取").await;
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&output_directory);
+            return Err(error);
+        }
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let data: Value = serde_json::from_str(stdout.trim()).map_err(|error| {
+        let _ = fs::remove_dir_all(&output_directory);
+        format!(
+            "Cover 旋律提取未返回有效结果：{error}\n{}",
+            tail(&String::from_utf8_lossy(&output.stderr), 1200)
+        )
+    })?;
+    if !output.status.success() || data.get("error").is_some() {
+        let _ = fs::remove_dir_all(&output_directory);
+        let detail = data
+            .get("error")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| tail(&String::from_utf8_lossy(&output.stderr), 1600));
+        return Err(format!("Cover 旋律提取失败：{detail}"));
+    }
+    game_midi_result(data, advanced)
+}
+
+fn game_midi_result(data: Value, advanced: bool) -> Result<WorkflowResult, String> {
     let output_path = data
         .get("midi_out")
         .and_then(Value::as_str)

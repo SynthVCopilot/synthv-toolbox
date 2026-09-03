@@ -43,11 +43,13 @@ impl AppState {
         settings: ToolboxSettings,
     ) -> Self {
         let audio_preparation = AudioPreparationService::new(resource_dir.clone());
-        let media_tasks = MediaTaskManager::persistent(resource_dir.clone());
+        let mcp = Arc::new(McpManager::default());
+        let media_tasks =
+            MediaTaskManager::persistent(resource_dir.clone(), bridge_dir.clone(), mcp.clone());
         Self {
             settings: Arc::new(RwLock::new(settings)),
             agent: Arc::new(Mutex::new(AgentSession::default())),
-            mcp: Arc::new(McpManager::default()),
+            mcp,
             resource_dir,
             bridge_dir,
             components_dir,

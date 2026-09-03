@@ -303,6 +303,82 @@ def monophony_rate(ns):
     return ok / (len(ns) - 1)
 
 
+def _is_cjk(char: str) -> bool:
+    code = ord(char)
+    return (
+        0x3400 <= code <= 0x4DBF
+        or 0x4E00 <= code <= 0x9FFF
+        or 0xF900 <= code <= 0xFAFF
+        or 0x20000 <= code <= 0x2FA1F
+    )
+
+
+def tokenize_lyrics(text: str):
+    """确定性歌词 token 化：CJK 逐字，拉丁/数字连续词，其他字符分隔。"""
+    import unicodedata
+
+    tokens = []
+    word = []
+
+    def flush_word():
+        if word:
+            tokens.append("".join(word))
+            word.clear()
+
+    for char in text:
+        if _is_cjk(char):
+            flush_word()
+            tokens.append(char)
+            continue
+        category = unicodedata.category(char)
+        if category[0] in {"L", "N"} and (
+            category[0] == "N" or "LATIN" in unicodedata.name(char, "")
+        ):
+            word.append(char)
+            continue
+        # 空白、标点以及非拉丁/数字符号都不生成 token，并结束当前词。
+        flush_word()
+    flush_word()
+    return tokens
+
+
+def read_lyrics_file(path: str):
+    """读取受限的 UTF-8 普通文件，拒绝符号链接和过大输入。"""
+    import pathlib
+    import stat
+
+    file_path = pathlib.Path(path)
+    try:
+        info = file_path.lstat()
+    except FileNotFoundError as exc:
+        raise ValueError(f"歌词文件不存在: {path}") from exc
+    if stat.S_ISLNK(info.st_mode):
+        raise ValueError(f"歌词文件不得为符号链接: {path}")
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError(f"歌词路径必须是普通文件: {path}")
+    if info.st_size > 256 * 1024:
+        raise ValueError(f"歌词文件超过 256 KiB 上限: {path}")
+    try:
+        return file_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"歌词文件不是有效 UTF-8: {path}") from exc
+
+
+def map_lyrics_to_notes(lyrics_file: str, notes):
+    """按音符顺序映射歌词；未覆盖音符使用 Synthesizer V 的连字符占位。"""
+    tokens = tokenize_lyrics(read_lyrics_file(lyrics_file))
+    if len(tokens) > len(notes):
+        raise ValueError(
+            f"歌词 token 数量 ({len(tokens)}) 多于可用 mono notes ({len(notes)})"
+        )
+    mapped = tokens + ["-"] * (len(notes) - len(tokens))
+    return mapped, {
+        "lyric_tokens": len(tokens),
+        "lyric_notes": len(notes),
+        "lyric_fill_hyphens": len(notes) - len(tokens),
+    }
+
+
 def automatic_correct(notes):
     """Conservative melody cleanup used by the AI-mode advanced workflow.
 
@@ -427,6 +503,15 @@ def cmd_pair_diff(args) -> dict:
         mono = mono_collapse(in_range)
         selected_tolerance = args.tol
 
+    lyric_texts = None
+    lyric_result = {
+        "lyric_tokens": 0,
+        "lyric_notes": 0,
+        "lyric_fill_hyphens": 0,
+    }
+    if args.lyrics_file:
+        lyric_texts, lyric_result = map_lyrics_to_notes(args.lyrics_file, mono)
+
     result = {
         "tool": "pi-audio/pair-diff",
         "vocal": args.vocal,
@@ -443,6 +528,9 @@ def cmd_pair_diff(args) -> dict:
         "sv_importable_whole": len(mono) <= 512,  # import_monophonic_score 上限
         "note": "残差含和声/混音差异；单音化保留最高声部，低声部和声会被丢弃",
     }
+    result.update(lyric_result)
+    if args.lyrics_file:
+        result["lyrics_file"] = args.lyrics_file
     if advanced is not None:
         result["advanced"] = advanced
     if mono:
@@ -466,6 +554,11 @@ def cmd_pair_diff(args) -> dict:
                 )
             )
         pm.instruments.append(instr)
+        if lyric_texts is not None:
+            pm.lyrics.extend(
+                pretty_midi.Lyric(text, n["start"])
+                for text, n in zip(lyric_texts, mono)
+            )
         pm.write(str(out_path))
         result["midi_out"] = str(out_path)
 
@@ -488,6 +581,10 @@ def main():
     d.add_argument("--midi", help="导出单音化 MIDI 路径")
     d.add_argument("--tol", type=float, default=0.08, help="起始时间匹配容差秒 (默认 0.08)")
     d.add_argument("--advanced", action="store_true", help="多容差寻优、保守自动纠正与置信度检查")
+    d.add_argument(
+        "--lyrics-file",
+        help="UTF-8 歌词文本（普通文件、非符号链接，最大 256 KiB）",
+    )
     d.set_defaults(fn=cmd_pair_diff)
 
     args = ap.parse_args()
