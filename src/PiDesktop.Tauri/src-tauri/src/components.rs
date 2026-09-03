@@ -105,7 +105,7 @@ pub fn component_list(resource_root: &Path) -> Vec<ComponentInfo> {
         .filter(|component| {
             matches!(
                 component.id.as_str(),
-                "ffmpeg" | "pi-audio" | "cvrs" | "media-fetcher"
+                "ffmpeg" | "pi-audio" | "cvrs" | "media-fetcher" | "vocal-separation"
             )
         })
         .map(|component| {
@@ -127,6 +127,7 @@ fn component_info_at(
         "pi-audio" => configured_component_at("audio", config_path),
         "cvrs" => configured_component_at("cvrs", config_path),
         "media-fetcher" => managed_media_fetcher_binary(managed_data_root).is_some(),
+        "vocal-separation" => configured_component_at("separation", config_path),
         _ => false,
     };
     let id = component.id;
@@ -141,7 +142,10 @@ fn component_info_at(
             })
     };
     let installable = installed
-        || matches!(id.as_str(), "pi-audio" | "cvrs" | "media-fetcher")
+        || matches!(
+            id.as_str(),
+            "pi-audio" | "cvrs" | "media-fetcher" | "vocal-separation"
+        )
         || (id == "ffmpeg" && cfg!(all(windows, target_arch = "x86_64")));
     let is_ffmpeg = id == "ffmpeg";
     let is_media_fetcher = id == "media-fetcher";
@@ -188,6 +192,13 @@ where
     match id {
         "ffmpeg" => install_managed_ffmpeg(resource_root, &mut progress),
         "media-fetcher" => install_media_fetcher(resource_root, &mut progress),
+        "vocal-separation" => install_python_component(
+            id,
+            "separate.py",
+            "separation",
+            true,
+            &components_dir.join(id),
+        ),
         "pi-audio" | "cvrs" => {
             let source = if std::env::var("SYNTHV_TOOLBOX_COMPONENT_SOURCE")
                 .is_ok_and(|value| value.eq_ignore_ascii_case("bundled"))
@@ -337,6 +348,7 @@ fn managed_component_paths(
                 "yt-dlp"
             },
         ),
+        "vocal-separation" => ("vocal-separation", "separation", "separate.py"),
         "sandboxie" => {
             return Err(format!(
                 "{} 不是由 SynthV Toolbox 管理安装的组件，不能在这里删除。",

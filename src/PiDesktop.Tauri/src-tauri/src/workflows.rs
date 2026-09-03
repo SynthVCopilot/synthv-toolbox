@@ -43,6 +43,24 @@ pub fn audio_probe(
     })
 }
 
+pub fn separate_audio(audio_path: String, resource_dir: &Path) -> Result<WorkflowResult, String> {
+    let audio = validate_input(&audio_path, "待分离音频", AUDIO_EXTENSIONS)?;
+    let runtime = python_component("separation", None)?;
+    let args = vec![audio.to_string_lossy().into_owned()];
+    let data = run_python(&runtime, &args, "人声伴奏分离", resource_dir)?;
+    let vocal_path = data.get("vocalPath").and_then(Value::as_str);
+    let instrumental_path = data.get("instrumentalPath").and_then(Value::as_str);
+    if vocal_path.is_none() || instrumental_path.is_none() {
+        return Err("分离组件没有返回 vocals/inst 输出路径。".to_string());
+    }
+    Ok(WorkflowResult {
+        kind: "source-separation".to_string(),
+        summary: "人声与伴奏分离完成，已生成受管 vocals/inst WAV。".to_string(),
+        output_path: vocal_path.map(str::to_string),
+        data,
+    })
+}
+
 pub fn game_to_midi(
     vocal_path: String,
     instrumental_path: String,
@@ -368,6 +386,7 @@ fn component_name(key: &str) -> &str {
     match key {
         "audio" => "pi-audio",
         "cvrs" => "CVRS",
+        "separation" => "人声伴奏分离",
         _ => key,
     }
 }

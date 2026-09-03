@@ -250,6 +250,7 @@ fn component_display_name(id: &str) -> Option<&'static str> {
         "cvrs" => Some("CVRS"),
         "sandboxie" => Some("Sandboxie Plus"),
         "media-fetcher" => Some("媒体导入器"),
+        "vocal-separation" => Some("人声伴奏分离"),
         _ => None,
     }
 }
