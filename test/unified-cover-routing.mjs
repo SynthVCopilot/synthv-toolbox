@@ -8,7 +8,7 @@ const rustRoot = join(repositoryRoot, "src", "PiDesktop.Tauri", "src-tauri");
 const read = (path) => readFileSync(path, "utf8");
 const tasks = read(join(rustRoot, "src", "media_tasks.rs"));
 const workflows = read(join(rustRoot, "src", "bridge_workflows.rs"));
-const parser = read(join(repositoryRoot, "external", "synthv-agent-bridge", "scripts", "cover-score-notes.mjs"));
+const parser = read(join(rustRoot, "components", "synthv-agent-bridge", "scripts", "cover-score-notes.mjs"));
 
 assert.match(tasks, /standard_call\("synthv_hosts"/);
 assert.match(tasks, /standard_call\("synthv_connect"/);

@@ -12,6 +12,10 @@ test("SV1 legacy Lua host executes standard operations with safe zero-based writ
     encoding: "utf8",
     env: { ...process.env, SYNTHV_AGENT_SV1_LEGACY_DIR: directory },
   });
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+    context.skip("Lua interpreter not found");
+    return;
+  }
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   assert.match(result.stdout, /SV1_LEGACY_MOCK_OK/u);
 });
