@@ -27,6 +27,14 @@ pub enum AppMode {
     Ai,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentWorkMode {
+    #[default]
+    Edit,
+    Solo,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerConfig {
@@ -48,6 +56,8 @@ pub struct ToolboxSettings {
     pub onboarding_completed: bool,
     #[serde(default)]
     pub mode: AppMode,
+    #[serde(default)]
+    pub agent_work_mode: AgentWorkMode,
     #[serde(default)]
     pub scripts_path: Option<String>,
     #[serde(default)]
@@ -111,6 +121,7 @@ impl Default for ToolboxSettings {
             schema_version: SETTINGS_SCHEMA_VERSION,
             onboarding_completed: false,
             mode: AppMode::Toolbox,
+            agent_work_mode: AgentWorkMode::Edit,
             scripts_path: None,
             mcp_servers: Vec::new(),
             concurrent_disclaimer_accepted: false,

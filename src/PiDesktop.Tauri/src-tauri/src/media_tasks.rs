@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::agent::data_root;
 use crate::bridge_workflows;
+use crate::creative_history;
 use crate::mcp::McpManager;
 use crate::media_import;
 use crate::synthv::{bridge_is_bundled, find_node};
@@ -562,6 +563,10 @@ impl MediaTaskManager {
             return Err("当前 SynthV 工程路径不是可验证的已保存 .svp 文件。".to_string());
         }
         let project_hash_before = sha256_file(&project_path)?;
+        let checkpoint = creative_history::create_checkpoint(
+            &project_file,
+            &format!("Cover 前检查点 {}", &id[..8]),
+        )?;
         self.ensure_not_cancelled(&cancelled)?;
 
         self.update(id, 90, "正在把 Cover 音符和歌词导入 SynthV。", None);
@@ -584,6 +589,7 @@ impl MediaTaskManager {
             "separation": separated,
             "midi": midi,
             "synthvImport": imported_score,
+            "checkpoint": checkpoint,
             "instrumentalPath": instrumental_path,
             "svpPath": project_file,
             "saveVerified": save_verified,
