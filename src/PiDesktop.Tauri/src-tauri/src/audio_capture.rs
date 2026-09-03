@@ -701,7 +701,7 @@ impl ToolboxAudioToolExecutor {
             },
             ToolDefinition {
                 name: "run_solo_tuning".to_string(),
-                description: "Run one bounded Solo tuning round: checkpoint, baseline capture, learned profile application, candidate capture, source-feature scoring, save on improvement or verified Undo on regression. Windows process-loopback capture is required.".to_string(),
+                description: "Run one bounded Solo tuning round: checkpoint, baseline capture, learned profile application, candidate capture, source-feature scoring, save on improvement or verified Undo on regression. Windows process loopback or macOS 14.2+ Process Tap capture is required.".to_string(),
                 input_schema_json: json!({
                     "type": "object",
                     "properties": {
