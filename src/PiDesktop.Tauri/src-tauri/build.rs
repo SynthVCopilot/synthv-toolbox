@@ -12,5 +12,19 @@ fn main() {
         println!("cargo:rustc-link-lib=ole32");
         println!("cargo:rerun-if-changed=native/windows_process_loopback.cpp");
     }
+    #[cfg(target_os = "macos")]
+    {
+        cc::Build::new()
+            .cpp(true)
+            .file("native/macos_process_tap.mm")
+            .flag_if_supported("-std=c++17")
+            .flag_if_supported("-fobjc-arc")
+            .warnings(true)
+            .compile("synthv_macos_process_tap");
+        println!("cargo:rustc-link-lib=framework=CoreAudio");
+        println!("cargo:rustc-link-lib=framework=AudioToolbox");
+        println!("cargo:rustc-link-lib=framework=Foundation");
+        println!("cargo:rerun-if-changed=native/macos_process_tap.mm");
+    }
     tauri_build::build()
 }
