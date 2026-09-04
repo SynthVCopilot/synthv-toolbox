@@ -12,7 +12,10 @@ const mediaTasks = read(join(root, "src", "PiDesktop.Tauri", "src-tauri", "src",
 
 assert.match(bridgeScript, /dist\/src\/cli\.js/);
 assert.match(bridgeScript, /dist\/legacy-sv1\/src\/cli\.js/);
-assert.match(bridgeScript, /bridgeEntries\.every\(\(entry\) => existsSync\(entry\)\)/);
+assert.match(bridgeScript, /process\.env\.CI === "true" && bridgeEntries\.every/);
+assert.match(bridgeScript, /node_modules\/typescript\/bin\/tsc/);
+assert.match(bridgeScript, /node_modules\/@types\/node\/package\.json/);
+assert.match(bridgeScript, /!buildDependencies\.every\(\(entry\) => existsSync\(entry\)\)/);
 assert.match(bridgeScript, /run\(\["ci", "--include=dev", "--no-audit", "--no-fund"\]\)/);
 assert.doesNotMatch(bridgeScript, /if \(!existsSync\(resolve\(componentDirectory, "node_modules"\)\)\)/);
 assert.match(downloads, /if let Some\(item\) = queue\.items\.iter_mut\(\)\.find/);
