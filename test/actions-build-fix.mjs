@@ -47,5 +47,10 @@ assert.doesNotMatch(
   synthvHosts,
   /#\[cfg\(target_os = "macos"\)\]\s+#\[test\]\s+fn same_executable_is_disambiguated_by_app_bundle_path\(/,
 );
+assert.match(synthvHosts, /#\[cfg\(any\(target_os = "macos", test\)\)\]\s+const SV1_APP/);
+assert.match(synthvHosts, /#\[cfg\(any\(target_os = "macos", test\)\)\]\s+const SV2_APP/);
+assert.match(synthvHosts, /#\[cfg\(target_os = "macos"\)\]\s+const FLAT_APP/);
+assert.match(synthvHosts, /#\[cfg\(any\(target_os = "macos", test\)\)\]\s+fn parse_processes/);
+assert.match(synthvHosts, /#\[cfg\(target_os = "macos"\)\]\s+fn app_from_args/);
 
 console.log("Actions build fix contracts passed.");

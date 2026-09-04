@@ -80,9 +80,13 @@ struct ApplicationRecord {
     version: Option<String>,
 }
 
+#[cfg(any(target_os = "macos", test))]
 const SV1_APP: &str = "/Applications/Synthesizer V Studio Pro.app";
+#[cfg(any(target_os = "macos", test))]
 const SV2_APP: &str = "/Applications/Synthesizer V Studio 2 Pro.app";
+#[cfg(target_os = "macos")]
 const FLAT_APP: &str = "/Applications/Synthesizer V Flat.app";
+#[cfg(any(target_os = "macos", test))]
 const SYNTHV_EXECUTABLE: &str = "synthv-studio";
 #[cfg(not(windows))]
 const FLAT_EXECUTABLE_PATH: &str = "/Applications/Synthesizer V Flat.app/Contents/Resources/Synthesizer V Studio Pro/Contents/MacOS/Synthesizer V Flat";
@@ -253,6 +257,7 @@ fn read_processes() -> Result<Vec<ProcessRecord>, String> {
     Ok(parse_processes(&String::from_utf8_lossy(&output.stdout)))
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn parse_processes(text: &str) -> Vec<ProcessRecord> {
     text.lines()
         .filter_map(|line| {
@@ -321,6 +326,7 @@ fn read_application(kind: HostKind, path: PathBuf) -> Option<ApplicationRecord> 
     })
 }
 
+#[cfg(target_os = "macos")]
 fn app_from_args(args: &str) -> Option<(HostKind, PathBuf)> {
     if args.contains(SV1_APP) {
         Some((HostKind::OfficialSv1, PathBuf::from(SV1_APP)))
