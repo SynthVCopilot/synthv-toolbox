@@ -641,6 +641,26 @@ impl ToolboxAudioToolExecutor {
                 }).to_string(),
             },
             ToolDefinition {
+                name: "create_cover_from_audio".to_string(),
+                description: "Queue the same cancellable Cover pipeline from an existing audio file inside the Toolbox managed data directory. Use this after an explicitly authorized platform download has already produced local audio.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": {
+                        "audioPath": { "type": "string" },
+                        "lyrics": { "type": ["string", "null"] },
+                        "voiceName": { "type": "string" },
+                        "processId": { "type": ["integer", "null"], "minimum": 1 },
+                        "trackIndex": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 1 },
+                        "groupName": { "type": "string", "maxLength": 200, "default": "Toolbox Cover" },
+                        "rightsConfirmed": { "type": "boolean" },
+                        "tolerance": { "type": "number", "minimum": 0.02, "maximum": 0.25, "default": 0.08 },
+                        "advanced": { "type": "boolean", "default": true }
+                    },
+                    "required": ["audioPath", "voiceName", "trackIndex", "groupName", "rightsConfirmed", "tolerance", "advanced"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
                 name: "create_project_checkpoint".to_string(),
                 description: "Create a recoverable managed copy of one saved .svp project before autonomous mutations.".to_string(),
                 input_schema_json: json!({
@@ -881,6 +901,15 @@ impl ToolboxAudioToolExecutor {
                         serde_json::to_string(&snapshot).map_err(|error| error.to_string())
                     }),
             ),
+            "create_cover_from_audio" => Some(
+                serde_json::from_str::<LocalCoverTaskRequest>(&call.arguments_json)
+                    .map_err(|error| format!("本地 Cover 任务参数无效：{error}"))
+                    .and_then(|request| self.media_tasks.enqueue_cover(request.into()))
+                    .and_then(|(snapshot, start_worker)| {
+                        self.start_media_worker(start_worker);
+                        serde_json::to_string(&snapshot).map_err(|error| error.to_string())
+                    }),
+            ),
             "create_project_checkpoint" => Some(
                 serde_json::from_str::<CheckpointToolRequest>(&call.arguments_json)
                     .map_err(|error| format!("检查点参数无效：{error}"))
@@ -1063,6 +1092,36 @@ struct MediaSourceToolRequest {
     source: String,
     #[serde(default)]
     rights_confirmed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalCoverTaskRequest {
+    audio_path: String,
+    lyrics: Option<String>,
+    voice_name: String,
+    process_id: Option<u32>,
+    track_index: u32,
+    group_name: String,
+    rights_confirmed: bool,
+    tolerance: f64,
+    advanced: bool,
+}
+
+impl From<LocalCoverTaskRequest> for CoverTaskRequest {
+    fn from(request: LocalCoverTaskRequest) -> Self {
+        Self {
+            source: request.audio_path,
+            lyrics: request.lyrics,
+            voice_name: request.voice_name,
+            process_id: request.process_id,
+            track_index: request.track_index,
+            group_name: request.group_name,
+            rights_confirmed: request.rights_confirmed,
+            tolerance: request.tolerance,
+            advanced: request.advanced,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

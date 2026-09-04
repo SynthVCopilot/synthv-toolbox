@@ -517,13 +517,17 @@ impl MediaTaskManager {
         cancelled: Arc<AtomicBool>,
     ) -> Result<Value, String> {
         self.update(id, 5, "正在导入 Cover 来源音频。", None);
-        let imported = media_import::import_audio_cancellable(
-            request.source.clone(),
-            request.rights_confirmed,
-            self.resource_dir.clone(),
-            cancelled.clone(),
-        )
-        .await?;
+        let imported = if Path::new(&request.source).is_absolute() {
+            media_import::adopt_managed_audio(request.source.clone(), request.rights_confirmed)?
+        } else {
+            media_import::import_audio_cancellable(
+                request.source.clone(),
+                request.rights_confirmed,
+                self.resource_dir.clone(),
+                cancelled.clone(),
+            )
+            .await?
+        };
         self.ensure_not_cancelled(&cancelled)?;
 
         self.update(id, 30, "正在分离人声与伴奏。", None);
@@ -809,8 +813,27 @@ impl MediaTaskManager {
         {
             arguments["version"] = Value::String(version.to_string());
         }
-        self.standard_write(&host.id, "voice.assign", arguments)
-            .await?;
+        if let Err(error) = self
+            .standard_write(&host.id, "voice.assign", arguments.clone())
+            .await
+        {
+            if !error.contains("did not register singer") {
+                return Err(error);
+            }
+            let process_id = host.process_id;
+            tauri::async_runtime::spawn_blocking(move || {
+                synthv_control::send_shortcut(
+                    process_id,
+                    synthv_control::BridgeShortcutAction::Refresh,
+                )
+            })
+            .await
+            .map_err(|join_error| join_error.to_string())?
+            .map_err(|refresh_error| format!("{error}；自动刷新 Flat 声库失败：{refresh_error}"))?;
+            tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+            self.standard_write(&host.id, "voice.assign", arguments)
+                .await?;
+        }
         Ok(json!({
             "assigned": true,
             "singer": {

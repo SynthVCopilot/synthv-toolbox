@@ -37,6 +37,7 @@ pub enum BridgeShortcutAction {
     Stop,
     Save,
     Undo,
+    Refresh,
 }
 
 impl BridgeShortcutAction {
@@ -58,6 +59,7 @@ impl BridgeShortcutAction {
                     "Ctrl+Z"
                 }
             }
+            Self::Refresh => "F5",
         }
     }
 }
@@ -183,6 +185,7 @@ mod platform {
             BridgeShortcutAction::Stop => "key code 107".to_string(),
             BridgeShortcutAction::Save => "keystroke \"s\" using command down".to_string(),
             BridgeShortcutAction::Undo => "keystroke \"z\" using command down".to_string(),
+            BridgeShortcutAction::Refresh => "key code 96".to_string(),
         };
         let focus = format!(
             "tell application \"System Events\" to tell (first process whose unix id is {process_id}) to set frontmost to true"
@@ -325,6 +328,10 @@ mod platform {
                 keyboard_input(0x5A, 0),
                 keyboard_input(0x5A, KEYEVENTF_KEYUP),
                 keyboard_input(0x11, KEYEVENTF_KEYUP),
+            ],
+            BridgeShortcutAction::Refresh => vec![
+                keyboard_input(0x74, 0),
+                keyboard_input(0x74, KEYEVENTF_KEYUP),
             ],
         };
         let sent = unsafe {

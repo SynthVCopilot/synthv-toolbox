@@ -230,19 +230,8 @@ where
             &components_dir.join(id),
         ),
         "pi-audio" | "cvrs" => {
-            let source = if std::env::var("SYNTHV_TOOLBOX_COMPONENT_SOURCE")
-                .is_ok_and(|value| value.eq_ignore_ascii_case("bundled"))
-            {
-                progress("downloading", 50, "开发模式：使用应用包内的组件源码。");
-                Ok(components_dir.join(id))
-            } else {
-                download_component_source(id, resource_root, &mut progress)
-            };
-            let source = match source {
-                Ok(source) => source,
-                Err(error) => return failed("组件下载失败。", error),
-            };
-            progress("installing", 68, "源码校验完成，正在创建本地运行环境。");
+            let source = components_dir.join(id);
+            progress("installing", 68, "正在从应用包准备组件运行环境。");
             match id {
                 "pi-audio" => install_python_component(id, "pi_audio.py", "audio", true, &source),
                 "cvrs" => install_python_component(id, "cvrs.py", "cvrs", false, &source),
@@ -898,8 +887,6 @@ where
         );
     }
     let payload = ComponentPayload {
-        name: FFMPEG_ARCHIVE_NAME,
-        relative_url: "",
         sha256: FFMPEG_ARCHIVE_SHA256,
     };
     let archive = cache.join(FFMPEG_ARCHIVE_NAME);
@@ -1335,8 +1322,6 @@ where
         &format!("正在下载 Sandboxie Plus {SANDBOXIE_VERSION} 官方安装包。"),
     );
     let payload = ComponentPayload {
-        name: SANDBOXIE_INSTALLER_NAME,
-        relative_url: "",
         sha256: SANDBOXIE_INSTALLER_SHA256,
     };
     if let Err(error) = download_verified_file(
@@ -1485,32 +1470,9 @@ fn install_python_component(
     )
 }
 
-const PI_AGENT_COMPONENT_REVISION: &str = "f4d56296d17c30077248fe9f73a13af47a329f62";
-
 struct ComponentPayload {
-    name: &'static str,
-    relative_url: &'static str,
     sha256: &'static str,
 }
-
-const PI_AUDIO_PAYLOADS: &[ComponentPayload] = &[
-    ComponentPayload {
-        name: "pi_audio.py",
-        relative_url: "components/pi-audio/pi_audio.py",
-        sha256: "0e00ccd56c928475a69f39981c1f66298fc15d5249e9e7b6efa673b4ca2a4097",
-    },
-    ComponentPayload {
-        name: "requirements.txt",
-        relative_url: "components/pi-audio/requirements.txt",
-        sha256: "4014ba330a2db128da28ec3782339c474df5fb1f4f0ab70842960cf5c650883e",
-    },
-];
-
-const CVRS_PAYLOADS: &[ComponentPayload] = &[ComponentPayload {
-    name: "cvrs.py",
-    relative_url: "components/cvrs/cvrs.py",
-    sha256: "71383517bdfc4394315592cf97ab2243d6fff89f0caa24ceb2ca560671354f1e",
-}];
 
 fn media_fetcher_asset() -> Option<(&'static str, &'static str, &'static str)> {
     if cfg!(target_os = "macos") {
@@ -1588,11 +1550,7 @@ where
     if let Err(error) = fs::create_dir_all(&cache) {
         return failed("无法创建媒体导入器缓存。", error.to_string());
     }
-    let payload = ComponentPayload {
-        name: asset_name,
-        relative_url: "",
-        sha256,
-    };
+    let payload = ComponentPayload { sha256 };
     progress("downloading", 12, "正在下载固定版本的 yt-dlp。");
     if let Err(error) = download_verified_file(
         source,
@@ -1675,51 +1633,6 @@ where
         format!("媒体导入器 {MEDIA_FETCHER_VERSION} 已安装。"),
         format!("安装位置：{}", target.display()),
     )
-}
-
-fn download_component_source<F>(
-    id: &str,
-    _resource_root: &Path,
-    progress: &mut F,
-) -> Result<PathBuf, String>
-where
-    F: FnMut(&str, u8, &str),
-{
-    let payloads = match id {
-        "pi-audio" => PI_AUDIO_PAYLOADS,
-        "cvrs" => CVRS_PAYLOADS,
-        _ => return Err("该组件没有受信任的固定下载清单。".to_string()),
-    };
-    let cache = data_root()
-        .join("downloads")
-        .join(id)
-        .join(PI_AGENT_COMPONENT_REVISION);
-    fs::create_dir_all(&cache).map_err(|error| format!("无法创建组件下载缓存：{error}"))?;
-    for (index, payload) in payloads.iter().enumerate() {
-        let start = 8 + ((index * 48) / payloads.len()) as u8;
-        progress(
-            "downloading",
-            start,
-            &format!("正在下载 {}。", payload.name),
-        );
-        let url = format!(
-            "https://raw.githubusercontent.com/SynthVCopilot/pi-agent/{PI_AGENT_COMPONENT_REVISION}/{}",
-            payload.relative_url
-        );
-        download_verified_file(
-            &url,
-            &cache.join(payload.name),
-            payload.sha256,
-            MAX_COMPONENT_DOWNLOAD_BYTES,
-        )?;
-        let complete = 8 + (((index + 1) * 48) / payloads.len()) as u8;
-        progress(
-            "downloading",
-            complete,
-            &format!("{} 已通过 SHA-256 校验。", payload.name),
-        );
-    }
-    Ok(cache)
 }
 
 fn download_verified_file(

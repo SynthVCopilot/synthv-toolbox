@@ -7,3 +7,7 @@
 - Flat 重启后原生 MCP 枚举到 91 个歌手，赤羽 Plus 的精确数据库名为 `MEDIUM5·Chiyu PLUS`、版本 100；目标工程已通过路径参数打开。
 - GLM 首次安装组件时发现 GUI 应用只能解析 `/usr/bin/python3` 3.9，虽然 Homebrew Python 3.11 已安装在 `/opt/homebrew/bin/python3.11`；组件发现器需要主动探测标准 Homebrew 路径。
 - 当前网络对无尾斜杠的 Bilibili `/video/BV…` 请求返回 412，但同一请求规范为 `/video/BV…/` 后，两个来源均由固定版本 media-fetcher 正常解析；无需读取浏览器 Cookie。
+- Demucs 首次完成推理后因 torchaudio 2.7 没有可用保存后端而失败；安装 `soundfile` 后后端恢复，因此它必须进入受管分离组件的锁定依赖，不能依赖 Agent 临时 pip 修改。
+- 已打包的 `pi-audio` 已包含 `source-style`，但默认安装仍从旧固定远程 revision 取源码，造成运行态命令缺失；改为从同版本应用包安装可消除双版本维护和源码漂移。
+- Cover 一体化流程只接受平台 URL，无法消费已由 Agent 成功下载的受管 WAV；增加仅允许 `~/.SynthVcopilot` 普通音频的本地 Cover 工具，作为平台限流后的安全续跑入口。
+- Flat 在声库文件安装后仍可能未把 singer 注册进当前运行时；Cover 的精确指派失败时应主动发送 F5 刷新并只重试一次，失败则保留检查点和真实错误。
