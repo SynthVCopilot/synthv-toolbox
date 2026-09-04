@@ -20,3 +20,4 @@
 - 2026-09-03：拉取 run 33826067978 / Windows job 100878878085 日志，确认编译成功、203 个测试通过，仅四个 macOS host fixture 失败；Windows 专用 host 测试均通过。
 - 2026-09-03：仅为四个指定测试添加 `cfg(target_os = "macos")`，并按平台收窄两个关联常量；根 `actions-build-fix.mjs` 契约同时保护 `same_executable_is_disambiguated_by_app_bundle_path` 继续跨平台运行。
 - 2026-09-03：`cargo fmt --check`、根契约与 `git diff --check` 通过；使用临时空资源占位完成 macOS `cargo test --all-targets`（202 passed、2 ignored、根集成测试 1 passed）及 `cargo clippy --all-targets -- -D warnings`，随后清理占位。
+- 2026-09-03：读取 run 33826755787 Windows Clippy 日志，确认平台编译与测试均通过；收窄 macOS 常量、`parse_processes` 与 `app_from_args` 的编译条件。
