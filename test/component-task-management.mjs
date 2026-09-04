@@ -11,6 +11,7 @@ const downloads = read(join(rustRoot, "downloads.rs"));
 const state = read(join(rustRoot, "state.rs"));
 const commands = read(join(rustRoot, "commands.rs"));
 const agent = read(join(rustRoot, "audio_capture.rs"));
+const components = read(join(rustRoot, "components.rs"));
 const api = read(join(webRoot, "api.ts"));
 const main = read(join(webRoot, "main.ts"));
 
@@ -32,5 +33,8 @@ assert.match(agent, /name: "list_component_tasks"/);
 assert.match(agent, /name: "queue_component_install"/);
 assert.match(agent, /name: "cancel_component_task"/);
 assert.match(agent, /name: "retry_component_task"/);
+assert.match(components, /PythonCommand::new\("\/opt\/homebrew\/bin\/python3\.11"\)/);
+assert.match(components, /PythonCommand::new\("\/usr\/local\/bin\/python3\.11"\)/);
+assert.match(components, /PythonCommand::new\("python3\.11"\)/);
 
 console.log("Component task management contracts passed.");

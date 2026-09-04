@@ -1924,6 +1924,12 @@ fn find_python() -> Option<PythonCommand> {
     }
     #[cfg(windows)]
     candidates.push(PythonCommand::with_args("py", ["-3.11"]));
+    #[cfg(not(windows))]
+    candidates.extend([
+        PythonCommand::new("/opt/homebrew/bin/python3.11"),
+        PythonCommand::new("/usr/local/bin/python3.11"),
+        PythonCommand::new("python3.11"),
+    ]);
     candidates.extend([PythonCommand::new("python"), PythonCommand::new("python3")]);
     candidates.into_iter().find(PythonCommand::is_python_311)
 }
