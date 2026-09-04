@@ -1,10 +1,13 @@
 use std::path::PathBuf;
-use std::process::Stdio;
 use std::time::Duration;
+
+#[cfg(target_os = "macos")]
+use std::process::Stdio;
 
 use serde::{Deserialize, Serialize};
 
 use crate::mcp::McpManager;
+#[cfg(target_os = "macos")]
 use crate::synthv::quiet_command;
 
 const BRIDGE_START_KEY: &str = "F13";
@@ -236,8 +239,10 @@ mod tests {
 #[cfg(windows)]
 mod platform {
     use std::mem::{size_of, zeroed};
+    use std::ptr::null_mut;
 
-    use windows_sys::Win32::Foundation::{BOOL, LPARAM};
+    use windows_sys::core::BOOL;
+    use windows_sys::Win32::Foundation::{HWND, LPARAM};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
         TH32CS_SNAPPROCESS,
@@ -281,7 +286,7 @@ mod platform {
         process_id: u32,
         action: BridgeShortcutAction,
     ) -> Result<(), String> {
-        let mut hwnd = 0isize;
+        let mut hwnd: HWND = null_mut();
         unsafe {
             EnumWindows(
                 Some(find_visible_window),
@@ -291,7 +296,7 @@ mod platform {
                 } as *mut _ as LPARAM,
             );
         }
-        if hwnd == 0 {
+        if hwnd.is_null() {
             return Err("未找到可聚焦的 SynthV 窗口。".to_string());
         }
         unsafe {
@@ -338,10 +343,10 @@ mod platform {
 
     struct WindowLookup {
         process_id: u32,
-        hwnd: *mut isize,
+        hwnd: *mut HWND,
     }
 
-    unsafe extern "system" fn find_visible_window(hwnd: isize, lparam: LPARAM) -> BOOL {
+    unsafe extern "system" fn find_visible_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
         if IsWindowVisible(hwnd) == 0 {
             return 1;
         }
