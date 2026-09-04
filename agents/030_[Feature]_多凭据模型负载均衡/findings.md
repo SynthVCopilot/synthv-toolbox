@@ -11,3 +11,4 @@
 - runtime 的 route cursor 只按 provider+model 建立，候选携带 auth method，因此同一模型的 OAuth 与 API Key 会进入同一轮转队列；永久失效只能通过 upsert/重启恢复。
 - `apiKeyModels` 为 provider 下全部 API Key 模型并集，`models` 为 OAuth/API Key 运行时并集；`apiKeys` 只输出非敏感摘要和 balancer 健康/冷却状态。
 - 首次 Rust check 因 worktree 缺少受管 Bridge `node_modules` 失败，执行既有 `npm run build:bridge` 后恢复；最终 check/test 通过。
+- 运行时 `models` 不能包含尚无 OAuth 账号时的静态潜在目录，否则可绕过 UI 选中没有任何凭据支持的模型；模型并集现只纳入已授权 OAuth 或已配置 Key 的目录。

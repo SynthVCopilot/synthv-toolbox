@@ -612,7 +612,11 @@ pub fn model_summary(settings: &ToolboxSettings, balancer: &CredentialBalancer) 
             let healthy_accounts = accounts.iter().filter(|account| account.healthy).count();
             let oauth_models = oauth_models_for(provider, discovered_codex_models.as_ref());
             let api_key_models = settings.api_key_models_for(provider);
-            let mut models = oauth_models.clone();
+            let mut models = if accounts.iter().any(|account| account.authorized) {
+                oauth_models.clone()
+            } else {
+                Vec::new()
+            };
             models.extend(api_key_models.iter().cloned());
             models.sort();
             models.dedup();
@@ -678,7 +682,11 @@ pub fn validate_ai_model(
     }) {
         return Err("模型 ID 包含不受支持的字符。".to_string());
     }
-    let oauth_available = provider.model_options().contains(&model);
+    let oauth_available = settings
+        .oauth_accounts
+        .iter()
+        .any(|account| account.provider == provider)
+        && provider.model_options().contains(&model);
     let api_key_available = settings
         .api_key_models_for(provider)
         .iter()
@@ -806,7 +814,14 @@ mod tests {
 
     #[test]
     fn codex_model_must_come_from_the_subscription_catalog() {
-        let settings = ToolboxSettings::default();
+        let mut settings = ToolboxSettings::default();
+        assert!(validate_ai_model(&settings, AiProviderId::OpenaiCodex, "gpt-5.6-terra").is_err());
+        settings.oauth_accounts.push(OAuthAccountMetadata {
+            id: "oauth:openai-codex:test".to_string(),
+            provider: AiProviderId::OpenaiCodex,
+            label: "Test account".to_string(),
+            expires_at: 0,
+        });
         assert!(validate_ai_model(&settings, AiProviderId::OpenaiCodex, "gpt-5.6-terra").is_ok());
         assert!(validate_ai_model(&settings, AiProviderId::OpenaiCodex, "invented-model").is_err());
     }
