@@ -17,6 +17,7 @@ use crate::synthv_hosts::{self, HostKind, StandardSynthVHost};
 const OFFICIAL_SV2_SERVER: &str = "synthv";
 const OFFICIAL_SV1_SERVER: &str = "synthv-sv1";
 const CONNECT_RETRIES: usize = 16;
+const FLAT_LAUNCH_RETRIES: usize = 32;
 const CONNECT_POLL: Duration = Duration::from_millis(250);
 const TOOL_TIMEOUT: Duration = Duration::from_secs(12);
 const LEGACY_STOP_FILE: &str = "synthv-agent-bridge-sv1-legacy.stop";
@@ -35,6 +36,7 @@ pub const TOOL_NAMES: &[&str] = &[
 #[serde(rename_all = "camelCase")]
 struct HostRequest {
     host_id: String,
+    project_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -78,7 +80,13 @@ pub fn definitions() -> Vec<ToolDefinition> {
             "Connect one standard SynthV host. The adapter hides Bridge, shortcut, and local HTTP details.",
             json!({
                 "type": "object",
-                "properties": { "hostId": { "type": "string" } },
+                "properties": {
+                    "hostId": { "type": "string" },
+                    "projectPath": {
+                        "type": "string",
+                        "description": "Only for hostId=flat. Must be an existing regular .svp file and is passed as the sole Flat launch argument."
+                    }
+                },
                 "required": ["hostId"],
                 "additionalProperties": false
             }),
@@ -173,7 +181,13 @@ pub async fn execute(
         "synthv_hosts" => list_public_hosts(manager).await,
         "synthv_connect" => {
             let request = parse::<HostRequest>(arguments)?;
-            connect(manager, bridge_dir, &request.host_id).await
+            connect(
+                manager,
+                bridge_dir,
+                &request.host_id,
+                request.project_path.as_deref(),
+            )
+            .await
         }
         "synthv_disconnect" => {
             let request = parse::<HostRequest>(arguments)?;
@@ -300,13 +314,25 @@ async fn connect(
     manager: &Arc<McpManager>,
     bridge_dir: &Path,
     host_id: &str,
+    project_path: Option<&str>,
 ) -> Result<Value, String> {
-    let host = synthv_hosts::discover()?
+    let mut host = synthv_hosts::discover()?
         .into_iter()
         .find(|host| host.id == host_id)
         .ok_or_else(|| format!("没有发现 SynthV 宿主 {host_id}。"))?;
+    let project_path = match (host.kind, project_path) {
+        (HostKind::Flat, Some(path)) => Some(validate_flat_project_path(path)?),
+        (HostKind::Flat, None) => None,
+        (_, Some(_)) => return Err("projectPath 仅支持 hostId=flat。".to_string()),
+        (_, None) => None,
+    };
     if !host.running {
-        return Err("所选 SynthV 宿主尚未运行。".to_string());
+        if host.kind != HostKind::Flat {
+            return Err("所选 SynthV 宿主尚未运行。".to_string());
+        }
+        let previous_process_ids = synthv_hosts::flat_process_ids()?;
+        synthv_hosts::launch_flat(&host, project_path.as_deref())?;
+        host = wait_for_flat_launch(&previous_process_ids).await?;
     }
     let id = server_id(&host);
     if manager.synthv_server_id(&host.id).await.is_some() {
@@ -350,6 +376,39 @@ async fn connect(
         manager.release_legacy_synthv_host(&host.id).await;
     }
     Ok(json!({ "hostId": host.id, "connected": true }))
+}
+
+fn validate_flat_project_path(value: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(value);
+    let is_svp = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("svp"));
+    if !is_svp {
+        return Err("Flat projectPath 必须是现有普通 .svp 文件。".to_string());
+    }
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|_| "Flat projectPath 必须是现有普通 .svp 文件。".to_string())?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err("Flat projectPath 必须是现有普通 .svp 文件。".to_string());
+    }
+    Ok(path)
+}
+
+async fn wait_for_flat_launch(previous_process_ids: &[u32]) -> Result<StandardSynthVHost, String> {
+    for _ in 0..FLAT_LAUNCH_RETRIES {
+        if let Some(host) = synthv_hosts::discover()?.into_iter().find(|host| {
+            host.kind == HostKind::Flat
+                && host.running
+                && host
+                    .process_id
+                    .is_some_and(|pid| !previous_process_ids.contains(&pid))
+        }) {
+            return Ok(host);
+        }
+        tokio::time::sleep(CONNECT_POLL).await;
+    }
+    Err("已启动 Synthesizer V Flat，但未在限定时间内发现新的宿主进程。请检查应用是否被系统阻止启动。".to_string())
 }
 
 async fn connect_flat(
@@ -406,7 +465,7 @@ where
     fallback()
         .await
         .map(|result| (result, SynthVConnectionProfile::LegacyBridge))
-        .map_err(|_| "无法连接所选 SynthV 宿主。".to_string())
+        .map_err(|error| standard_error(format!("无法连接所选 SynthV 宿主：{error}")))
 }
 
 async fn connect_sv1(
@@ -437,10 +496,15 @@ async fn connect_legacy_bridge(
         return Err("当前应用包不包含所需的兼容扩展。".to_string());
     }
     let node = find_node().ok_or_else(|| "未找到兼容的本地扩展运行时。".to_string())?;
-    install_legacy_bridge(bridge_dir, &scripts, &node)?;
+    let refreshed = install_legacy_bridge(bridge_dir, &scripts, &node)?;
     let process_id = host
         .process_id
         .ok_or_else(|| "宿主进程不可用。".to_string())?;
+    if refreshed {
+        synthv_control::send_shortcut(process_id, BridgeShortcutAction::Refresh)
+            .map_err(standard_error)?;
+        tokio::time::sleep(CONNECT_POLL).await;
+    }
     synthv_control::start_bridge(process_id)
         .await
         .map_err(standard_error)?;
@@ -466,7 +530,7 @@ async fn connect_legacy_bridge(
     Err(format!("宿主扩展未在限定时间内就绪：{last_error}"))
 }
 
-fn install_legacy_bridge(bridge_dir: &Path, scripts: &Path, node: &str) -> Result<(), String> {
+fn install_legacy_bridge(bridge_dir: &Path, scripts: &Path, node: &str) -> Result<bool, String> {
     if !scripts.is_dir() {
         return Err("所选宿主的扩展目录不存在。".to_string());
     }
@@ -478,7 +542,7 @@ fn install_legacy_bridge(bridge_dir: &Path, scripts: &Path, node: &str) -> Resul
         && installed.is_file()
         && fs::read(&source).ok() == fs::read(&installed).ok()
     {
-        return Ok(());
+        return Ok(false);
     }
     let output = std::process::Command::new(node)
         .arg(bridge_dir.join("scripts/install-sv1-legacy-bridge.mjs"))
@@ -488,9 +552,14 @@ fn install_legacy_bridge(bridge_dir: &Path, scripts: &Path, node: &str) -> Resul
         .output()
         .map_err(|error| format!("无法准备宿主扩展：{error}"))?;
     if output.status.success() {
-        Err("宿主扩展已安装或更新；请让宿主重新扫描扩展后再次连接。".to_string())
+        Ok(true)
     } else {
-        Err("无法准备宿主扩展。".to_string())
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if detail.is_empty() {
+            "无法准备所需的 SynthV Flat 兼容扩展。".to_string()
+        } else {
+            format!("无法准备所需的 SynthV Flat 兼容扩展：{detail}")
+        })
     }
 }
 
@@ -1275,6 +1344,21 @@ mod tests {
     }
 
     #[test]
+    fn flat_project_path_must_be_an_existing_regular_svp_file() {
+        let root = std::env::temp_dir().join(format!("flat-project-{}", Uuid::new_v4()));
+        fs::write(&root, b"svp").unwrap();
+        let svp = root.with_extension("svp");
+        fs::rename(&root, &svp).unwrap();
+        assert_eq!(
+            validate_flat_project_path(svp.to_str().unwrap()).unwrap(),
+            svp
+        );
+        assert!(validate_flat_project_path("missing.svp").is_err());
+        assert!(validate_flat_project_path("not-a-project.txt").is_err());
+        fs::remove_file(svp).unwrap();
+    }
+
+    #[test]
     fn transport_details_are_hidden_from_standard_errors() {
         let error = standard_error("Flat MCP stdio Bridge failed after F13".to_string());
         for private_term in ["Flat MCP", "stdio", "Bridge", "F13"] {
@@ -1387,7 +1471,9 @@ mod tests {
             .find(|host| host.kind == HostKind::Flat && host.running && host.endpoint.is_some())
             .expect("running Flat MCP host");
         let manager = Arc::new(McpManager::default());
-        connect(&manager, Path::new("."), &host.id).await.unwrap();
+        connect(&manager, Path::new("."), &host.id, None)
+            .await
+            .unwrap();
         let status = read_value(&manager, &host.id, "status", json!({}))
             .await
             .unwrap();
