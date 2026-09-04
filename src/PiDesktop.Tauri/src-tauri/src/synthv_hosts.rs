@@ -86,7 +86,6 @@ const SV1_APP: &str = "/Applications/Synthesizer V Studio Pro.app";
 const SV2_APP: &str = "/Applications/Synthesizer V Studio 2 Pro.app";
 #[cfg(target_os = "macos")]
 const FLAT_APP: &str = "/Applications/Synthesizer V Flat.app";
-#[cfg(any(target_os = "macos", test))]
 const SYNTHV_EXECUTABLE: &str = "synthv-studio";
 #[cfg(not(windows))]
 const FLAT_EXECUTABLE_PATH: &str = "/Applications/Synthesizer V Flat.app/Contents/Resources/Synthesizer V Studio Pro/Contents/MacOS/Synthesizer V Flat";
