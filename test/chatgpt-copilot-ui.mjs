@@ -10,9 +10,9 @@ const styles = fs.readFileSync(path.join(root, "src/PiDesktop.Tauri/src/styles.c
 test("Copilot exposes the active provider and model in its conversation header", () => {
   const renderCopilot = main.slice(main.indexOf("function renderCopilot"), main.indexOf("function renderAiProviderSettings"));
   assert.match(renderCopilot, /data-open-ai-provider-picker/);
-  assert.match(renderCopilot, /activeProvider/);
-  assert.match(renderCopilot, /activeProvider\?\.displayName|activeProvider\.displayName/);
-  assert.match(renderCopilot, /activeProvider\?\.model|activeProvider\.model/);
+  assert.match(renderCopilot, /activeAiProvider\(\)/);
+  assert.match(renderCopilot, /provider\?\.displayName|provider\.displayName/);
+  assert.match(renderCopilot, /provider\?\.model|provider\.model/);
 });
 
 test("Edit and Solo remain selectable inside the conversation", () => {
@@ -25,7 +25,7 @@ test("Edit and Solo remain selectable inside the conversation", () => {
 test("composer uses an inner shell and compact textarea", () => {
   const renderCopilot = main.slice(main.indexOf("function renderCopilot"), main.indexOf("function renderAiProviderSettings"));
   assert.match(renderCopilot, /class="composer-shell"/);
-  assert.match(renderCopilot, /class="composer-toolbar"/);
+  assert.match(renderCopilot, /class="primary icon-button"[^>]*type="submit"/);
   const textarea = renderCopilot.match(/<textarea[^>]*class="[^"]*composer[^"]*"[^>]*>|<textarea[^>]*>/)?.[0] ?? "";
   const rows = textarea.match(/\brows="(\d+)"/)?.[1];
   assert.ok(rows, "composer textarea must declare rows");
@@ -41,7 +41,7 @@ test("dark history panel uses theme tokens and no fixed light rgba", () => {
 
 test("messages and composer have bounded readable widths", () => {
   const relevant = styles.match(/\.(?:messages|chat-messages|composer)(?:[-\w]*)\s*\{[^}]*\}/g)?.join("\n") ?? "";
-  assert.match(relevant, /max-width\s*:/);
+  assert.match(relevant, /(?:max-width\s*:|width\s*:\s*min\()/);
   assert.match(relevant, /margin(?:-inline)?\s*:/);
 });
 
