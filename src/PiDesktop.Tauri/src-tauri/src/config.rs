@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::api_keys;
 use crate::oauth::{self, AiProviderId, OAuthAccountMetadata};
 
 const SETTINGS_SCHEMA_VERSION: u32 = 2;
@@ -34,6 +35,15 @@ pub enum AgentWorkMode {
     #[default]
     Edit,
     Solo,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AiAuthMethod {
+    #[default]
+    #[serde(rename = "oauth")]
+    OAuth,
+    ApiKey,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,10 +85,16 @@ pub struct ToolboxSettings {
     pub original_svp_prog_id: Option<String>,
     #[serde(default)]
     pub ai_provider: AiProviderId,
+    #[serde(default)]
+    pub ai_auth_method: AiAuthMethod,
     #[serde(default = "default_anthropic_model")]
     pub anthropic_model: String,
     #[serde(default = "default_codex_model")]
     pub codex_model: String,
+    #[serde(default)]
+    pub anthropic_api_key_models: Vec<String>,
+    #[serde(default)]
+    pub openai_api_key_models: Vec<String>,
     #[serde(default)]
     pub oauth_accounts: Vec<OAuthAccountMetadata>,
     #[serde(default)]
@@ -112,6 +128,8 @@ pub struct AiProviderSummary {
     pub model: String,
     pub models: Vec<String>,
     pub accounts: Vec<OAuthAccountSummary>,
+    pub auth_method: AiAuthMethod,
+    pub api_key_configured: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -137,8 +155,11 @@ impl Default for ToolboxSettings {
             smart_svp_launch_enabled: false,
             original_svp_prog_id: None,
             ai_provider: AiProviderId::Anthropic,
+            ai_auth_method: AiAuthMethod::OAuth,
             anthropic_model: default_anthropic_model(),
             codex_model: default_codex_model(),
+            anthropic_api_key_models: Vec::new(),
+            openai_api_key_models: Vec::new(),
             oauth_accounts: Vec::new(),
             http_api_enabled: false,
             http_agent_enabled: false,
@@ -184,6 +205,20 @@ impl ToolboxSettings {
         match provider {
             AiProviderId::Anthropic => self.anthropic_model = model,
             AiProviderId::OpenaiCodex => self.codex_model = model,
+        }
+    }
+
+    pub fn api_key_models_for(&self, provider: AiProviderId) -> &[String] {
+        match provider {
+            AiProviderId::Anthropic => &self.anthropic_api_key_models,
+            AiProviderId::OpenaiCodex => &self.openai_api_key_models,
+        }
+    }
+
+    pub fn set_api_key_models_for(&mut self, provider: AiProviderId, models: Vec<String>) {
+        match provider {
+            AiProviderId::Anthropic => self.anthropic_api_key_models = models,
+            AiProviderId::OpenaiCodex => self.openai_api_key_models = models,
         }
     }
 
@@ -476,6 +511,7 @@ pub fn model_summary(settings: &ToolboxSettings) -> ModelSummary {
     let providers = [AiProviderId::Anthropic, AiProviderId::OpenaiCodex]
         .into_iter()
         .map(|provider| {
+            let api_key_configured = api_keys::configured(provider);
             let account_metadata = settings
                 .oauth_accounts
                 .iter()
@@ -511,22 +547,35 @@ pub fn model_summary(settings: &ToolboxSettings) -> ModelSummary {
                     }
                 },
                 active: settings.ai_provider == provider,
-                connected: accounts.iter().any(|account| account.authorized),
+                connected: match settings.ai_auth_method {
+                    AiAuthMethod::OAuth => accounts.iter().any(|account| account.authorized),
+                    AiAuthMethod::ApiKey => api_key_configured,
+                },
                 healthy_accounts,
                 total_accounts: accounts.len(),
-                model: settings.model_for(provider).to_string(),
-                models: provider
-                    .model_options()
-                    .iter()
-                    .filter(|model| {
-                        **model != oauth::CODEX_SPARK_MODEL_ID
-                            || discovered_codex_models
-                                .as_ref()
-                                .is_some_and(|models| models.contains(**model))
-                    })
-                    .map(|model| (*model).to_string())
-                    .collect(),
+                model: (settings.ai_auth_method == AiAuthMethod::OAuth || api_key_configured)
+                    .then(|| settings.model_for(provider).to_string())
+                    .unwrap_or_default(),
+                models: match settings.ai_auth_method {
+                    AiAuthMethod::OAuth => provider
+                        .model_options()
+                        .iter()
+                        .filter(|model| {
+                            **model != oauth::CODEX_SPARK_MODEL_ID
+                                || discovered_codex_models
+                                    .as_ref()
+                                    .is_some_and(|models| models.contains(**model))
+                        })
+                        .map(|model| (*model).to_string())
+                        .collect(),
+                    AiAuthMethod::ApiKey if api_key_configured => {
+                        settings.api_key_models_for(provider).to_vec()
+                    }
+                    AiAuthMethod::ApiKey => Vec::new(),
+                },
                 accounts,
+                auth_method: settings.ai_auth_method,
+                api_key_configured,
             }
         })
         .collect();
@@ -537,7 +586,12 @@ pub fn model_summary(settings: &ToolboxSettings) -> ModelSummary {
     }
 }
 
-pub fn validate_ai_model(provider: AiProviderId, model: &str) -> Result<String, String> {
+pub fn validate_ai_model(
+    settings: &ToolboxSettings,
+    provider: AiProviderId,
+    auth_method: AiAuthMethod,
+    model: &str,
+) -> Result<String, String> {
     let model = model.trim();
     if model.is_empty() || model.len() > 120 {
         return Err("模型 ID 不能为空且不能超过 120 个字符。".to_string());
@@ -547,8 +601,23 @@ pub fn validate_ai_model(provider: AiProviderId, model: &str) -> Result<String, 
     }) {
         return Err("模型 ID 包含不受支持的字符。".to_string());
     }
-    if provider == AiProviderId::OpenaiCodex && !provider.model_options().contains(&model) {
+    if auth_method == AiAuthMethod::OAuth
+        && provider == AiProviderId::OpenaiCodex
+        && !provider.model_options().contains(&model)
+    {
         return Err("该模型不在当前 Codex 官方订阅目录中。".to_string());
+    }
+    if auth_method == AiAuthMethod::ApiKey {
+        if !api_keys::configured(provider) {
+            return Err("该提供商尚未配置 API Key。".to_string());
+        }
+        if !settings
+            .api_key_models_for(provider)
+            .iter()
+            .any(|available| available == model)
+        {
+            return Err("该模型不在当前 API Key 可用目录中。请重新验证 API Key。".to_string());
+        }
     }
     Ok(model.to_string())
 }
@@ -670,8 +739,56 @@ mod tests {
 
     #[test]
     fn codex_model_must_come_from_the_subscription_catalog() {
-        assert!(validate_ai_model(AiProviderId::OpenaiCodex, "gpt-5.6-terra").is_ok());
-        assert!(validate_ai_model(AiProviderId::OpenaiCodex, "invented-model").is_err());
+        let settings = ToolboxSettings::default();
+        assert!(validate_ai_model(
+            &settings,
+            AiProviderId::OpenaiCodex,
+            AiAuthMethod::OAuth,
+            "gpt-5.6-terra"
+        )
+        .is_ok());
+        assert!(validate_ai_model(
+            &settings,
+            AiProviderId::OpenaiCodex,
+            AiAuthMethod::OAuth,
+            "invented-model"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn auth_method_serializes_as_the_stable_frontend_contract() {
+        assert_eq!(
+            serde_json::to_string(&AiAuthMethod::OAuth).unwrap(),
+            "\"oauth\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AiAuthMethod::ApiKey).unwrap(),
+            "\"api-key\""
+        );
+    }
+
+    #[test]
+    fn provider_summary_exposes_configuration_state_not_secret_material() {
+        let summary = AiProviderSummary {
+            id: AiProviderId::Anthropic,
+            display_name: "Claude API".to_string(),
+            description: "Platform API".to_string(),
+            active: true,
+            connected: true,
+            healthy_accounts: 0,
+            total_accounts: 0,
+            model: "claude-sonnet-4-6".to_string(),
+            models: vec!["claude-sonnet-4-6".to_string()],
+            accounts: Vec::new(),
+            auth_method: AiAuthMethod::ApiKey,
+            api_key_configured: true,
+        };
+        let value = serde_json::to_value(summary).unwrap();
+        assert_eq!(value["authMethod"], "api-key");
+        assert_eq!(value["apiKeyConfigured"], true);
+        assert!(value.get("apiKey").is_none());
+        assert!(!value.to_string().contains("sk-ant-"));
     }
 
     #[test]
