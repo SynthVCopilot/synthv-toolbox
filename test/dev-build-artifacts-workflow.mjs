@@ -4,7 +4,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const workflow = readFileSync(join(root, ".github", "workflows", "ffmpeg-verify.yml"), "utf8");
+const workflow = readFileSync(join(root, ".github", "workflows", "ffmpeg-verify.yml"), "utf8").replace(
+  /\r\n/g,
+  "\n",
+);
 
 assert.match(workflow, /^name: Toolbox Dev Build\n/);
 assert.match(workflow, /^on:\n  pull_request:\n  push:\n    branches: \[main\]\n  workflow_dispatch:\n/m);
