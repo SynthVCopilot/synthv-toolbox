@@ -1046,7 +1046,7 @@ pub async fn ai_provider_state(
     require_ai(&state).await?;
     let settings = state.settings.read().await.clone();
     let balancer = state.credential_balancer.clone();
-    Ok(tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let catalog = if force_catalog {
             opencode_catalog::runtime_catalog(true)
         } else {
@@ -1055,7 +1055,7 @@ pub async fn ai_provider_state(
         model_summary_from_catalog(&settings, &balancer, &catalog)
     })
     .await
-    .map_err(|error| error.to_string())??)
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]

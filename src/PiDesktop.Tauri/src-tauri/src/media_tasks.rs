@@ -829,7 +829,7 @@ impl MediaTaskManager {
             })
             .await
             .map_err(|join_error| join_error.to_string())
-            .and_then(|result| result.map(|_| ()).map_err(|refresh_error| refresh_error));
+            .and_then(|result| result.map(|_| ()));
             if let Err(refresh_error) = refreshed {
                 return Ok(json!({
                     "assigned": false,

@@ -345,13 +345,20 @@ fn read_bounded<R: Read>(reader: R) -> Result<Vec<u8>> {
 }
 
 fn is_executable(path: &Path) -> bool {
-    path.is_file()
-        && (cfg!(windows) || {
-            use std::os::unix::fs::PermissionsExt;
-            path.metadata()
-                .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
-                .unwrap_or(false)
-        })
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        path.metadata()
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 fn trae_message(message: &ChatMessage) -> Result<Value> {
