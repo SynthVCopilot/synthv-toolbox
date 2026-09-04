@@ -11,6 +11,8 @@ const hosts = readFileSync(join(rust, "synthv_hosts.rs"), "utf8");
 assert.match(unified, /project_path: Option<String>/);
 assert.match(unified, /"projectPath"/);
 assert.match(unified, /validate_flat_project_path/);
+assert.match(unified, /path\.is_absolute\(\)/);
+assert.match(unified, /fs::canonicalize/);
 assert.match(unified, /metadata\.file_type\(\)\.is_file\(\)/);
 assert.match(unified, /metadata\.file_type\(\)\.is_symlink\(\)/);
 assert.match(unified, /projectPath 仅支持 hostId=flat/);
@@ -26,6 +28,7 @@ assert.doesNotMatch(unified, /已安装或更新；请让宿主重新扫描扩�
 assert.match(hosts, /pub fn launch_flat/);
 assert.match(hosts, /std::process::Command::new\(executable\)/);
 assert.match(hosts, /command\.arg\(project_path\)/);
+assert.match(hosts, /stdin\(Stdio::null\(\)\)/);
 assert.match(hosts, /\["Synthesizer V Flat\.exe", "synthesizer-v-flat\.exe"\]/);
 assert.match(hosts, /Documents\/Anthronics\/Synthesizer V Studio\/scripts/);
 assert.doesNotMatch(hosts, /Command::new\("(?:sh|cmd|powershell)"\)/);

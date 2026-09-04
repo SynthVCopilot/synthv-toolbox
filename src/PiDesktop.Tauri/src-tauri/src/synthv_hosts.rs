@@ -1,5 +1,6 @@
 use serde::Serialize;
 use std::path::PathBuf;
+use std::process::Stdio;
 
 #[cfg(windows)]
 use std::os::windows::fs::MetadataExt;
@@ -224,6 +225,10 @@ pub fn launch_flat(
     if let Some(project_path) = project_path {
         command.arg(project_path);
     }
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     command
         .spawn()
         .map(|_| ())
