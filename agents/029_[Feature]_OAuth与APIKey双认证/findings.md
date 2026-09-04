@@ -10,3 +10,5 @@
 - OpenAI Platform API Key 的运行时使用 `https://api.openai.com/v1/responses`、Bearer header 且不发送 ChatGPT account id；OAuth 仍维持既有 Codex subscription endpoint 与 header。
 - 三段式认证 UI 需要同时读取 OAuth 与 API Key 两套目录；单一 `models` 字段会随全局认证状态切换而丢失另一条目录，因此摘要改为 `oauthModels` 与 `apiKeyModels`。
 - 安装态供应商标签不能写死为官方订阅，否则 API Key 页面会产生错误暗示；统一为 `Claude / Anthropic` 与 `OpenAI / Codex`，描述同时列出 OAuth 和 API Key。
+- 三段式状态机将认证方式、提供商列表和详情分离，避免用户在未选择认证方式时看到不匹配的模型或配置。
+- 后端契约已稳定为 `oauthModels` 与 `apiKeyModels`；详情页只读取当前认证方式的目录，并在该方式未就绪时隐藏模型列表。

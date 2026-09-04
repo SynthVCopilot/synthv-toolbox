@@ -80,20 +80,21 @@ let previewActiveAiProvider: AiProviderId = "anthropic";
 let previewAiAccountSequence = 2;
 let previewAiProviders: AiProviderSummary[] = [{
   id: "anthropic",
-  displayName: "Claude 官方订阅",
-  description: "通过浏览器授权 Claude 账号，并使用官方订阅提供的模型。",
+  displayName: "Claude / Anthropic",
+  description: "可通过 Claude 账号 OAuth 或 Anthropic API Key 连接。",
   active: true,
   connected: true,
   healthyAccounts: 1,
   totalAccounts: 1,
   model: "claude-sonnet-4-6",
-  models: [
+  oauthModels: [
     "claude-sonnet-4-6",
     "claude-sonnet-5",
     "claude-haiku-4-5",
     "claude-opus-4-8",
     "claude-opus-5",
   ],
+  apiKeyModels: ["claude-sonnet-4-6", "claude-haiku-4-5", "claude-opus-4-8"],
   accounts: [{
     id: "preview-anthropic-1",
     label: "Claude official account",
@@ -105,14 +106,14 @@ let previewAiProviders: AiProviderSummary[] = [{
   apiKeyConfigured: false,
 }, {
   id: "openai-codex",
-  displayName: "Codex 官方订阅",
-  description: "通过浏览器授权 ChatGPT 账号，并使用账号可用的 Codex 模型。",
+  displayName: "OpenAI / Codex",
+  description: "可通过 ChatGPT OAuth 或 OpenAI API Key 连接。",
   active: false,
   connected: false,
   healthyAccounts: 0,
   totalAccounts: 0,
   model: "gpt-5.6-terra",
-  models: [
+  oauthModels: [
     "gpt-5.6-luna",
     "gpt-5.6-terra",
     "gpt-5.6-sol",
@@ -120,6 +121,7 @@ let previewAiProviders: AiProviderSummary[] = [{
     "gpt-5.4",
     "gpt-5.4-mini",
   ],
+  apiKeyModels: ["gpt-5.4", "gpt-5.4-mini"],
   accounts: [],
   authMethod: "oauth",
   apiKeyConfigured: false,
@@ -132,7 +134,8 @@ function previewAiModel() {
     providers: previewAiProviders.map((provider) => ({
       ...provider,
       accounts: provider.accounts.map((account) => ({ ...account })),
-      models: [...provider.models],
+      oauthModels: [...provider.oauthModels],
+      apiKeyModels: [...provider.apiKeyModels],
     })),
   };
 }
@@ -415,8 +418,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       authorized: true,
       healthy: true,
     });
-    if (provider.id === "openai-codex" && !provider.models.includes("gpt-5.3-codex-spark")) {
-      provider.models.push("gpt-5.3-codex-spark");
+    if (provider.id === "openai-codex" && !provider.oauthModels.includes("gpt-5.3-codex-spark")) {
+      provider.oauthModels.push("gpt-5.3-codex-spark");
     }
     refreshPreviewAiProvider(provider);
     previewActiveAiProvider = provider.id;
@@ -434,7 +437,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     if (authMethod !== "oauth" && authMethod !== "api-key") throw new Error("请选择认证方式。");
     if (authMethod === "oauth" && !provider.connected) throw new Error("请先通过浏览器授权此提供商。");
     if (authMethod === "api-key" && !provider.apiKeyConfigured) throw new Error("请先保存并验证 API Key。");
-    if (!model || !provider.models.includes(model)) throw new Error("请选择此账号可用的模型。");
+    const models = authMethod === "oauth" ? provider.oauthModels : provider.apiKeyModels;
+    if (!model || !models.includes(model)) throw new Error("请选择当前认证方式可用的模型。");
     previewActiveAiProvider = provider.id;
     previewAiProviders = previewAiProviders.map((item) => ({
       ...item,
