@@ -14,4 +14,9 @@
 - [x] 增加必要的根 `/test` 静态契约，且不触碰 workflows、`package.json`、artifact 测试
 - [x] 执行 Windows target cargo check 或官方 API 源检查
 - [x] 重新执行 macOS cargo fmt/test/clippy，检查 diff 后提交到 `codex/windows-build-fix`
+- [x] 拉取 run 33826067978 Windows job 日志并确认仅四个 macOS fixture 失败
+- [x] 仅为四个 macOS 专用 `synthv_hosts` 测试添加精确平台条件
+- [x] 更新根契约，约束四个 macOS fixture 且保留其他跨平台测试
+- [x] 运行 fmt、契约、macOS cargo test/clippy 并检查禁止变更范围
+- [x] 在 `codex/windows-build-fix` 新增独立提交并记录哈希
 - [ ] 在 GitHub hosted Windows runner 完成 Rust、Clippy、FFmpeg、NSIS 和 artifact 验证

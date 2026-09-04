@@ -84,7 +84,9 @@ const SV1_APP: &str = "/Applications/Synthesizer V Studio Pro.app";
 const SV2_APP: &str = "/Applications/Synthesizer V Studio 2 Pro.app";
 const FLAT_APP: &str = "/Applications/Synthesizer V Flat.app";
 const SYNTHV_EXECUTABLE: &str = "synthv-studio";
+#[cfg(not(windows))]
 const FLAT_EXECUTABLE_PATH: &str = "/Applications/Synthesizer V Flat.app/Contents/Resources/Synthesizer V Studio Pro/Contents/MacOS/Synthesizer V Flat";
+#[cfg(target_os = "macos")]
 const FLAT_MAC_SCRIPTS: &str =
     "/Library/Application Support/Anthronics/Synthesizer V Studio/scripts";
 
@@ -719,6 +721,7 @@ mod tests {
         assert_eq!(processes[0].pid, 12);
         assert!(processes[0].args.contains("Synthesizer V Studio Pro.app"));
     }
+    #[cfg(target_os = "macos")]
     #[test]
     fn sv1_uses_plist_identity_and_exact_app_path() {
         let apps = vec![app(HostKind::OfficialSv1, SV1_APP, None, "1.11.2")];
@@ -758,6 +761,7 @@ mod tests {
         assert_eq!(hosts[0].process_id, Some(12));
         assert_eq!(hosts[1].process_id, Some(13));
     }
+    #[cfg(target_os = "macos")]
     #[test]
     fn flat_uses_anthronics_scripts_and_requires_complete_ready_status() {
         let apps = vec![app(
@@ -782,6 +786,7 @@ mod tests {
         assert!(!build_hosts(&processes, &apps, Some(&bad))[0].connected);
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn flat_process_path_with_spaces_is_detected() {
         let apps = vec![app(HostKind::Flat, FLAT_APP, None, "1.4.3")];
@@ -792,6 +797,7 @@ mod tests {
         assert!(hosts[0].running && !hosts[0].connected);
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn emits_every_matching_process_and_connects_only_status_pid() {
         let apps = vec![app(HostKind::Flat, FLAT_APP, None, "1.4.3")];
