@@ -10,3 +10,5 @@
 - WorkBuddy 运行时采用产品已验证的 `apiBase`/`chatBase` 协议：`POST /auth/state?platform=workbuddy`、`GET /auth/token?state=`、业务码 `11217` 有界等待、`GET /login/account?state=` 与 `POST /auth/token/refresh`；没有引入 client secret 配置。
 - `OpenAiChatConfig` 支持完整 Chat Completions URL 和额外静态 headers；所有解析均受响应/事件大小上限保护。
 - TraeCode 只解析 `traecli login`、`login status`、`exec --json --output-schema --ephemeral --sandbox read-only`；未找到 CLI 时报告不可用，不读取 token。
+- 前端稳定契约将提供商认证能力显式建模为 `authMethods`，并以 `available/unavailableReason` 表达 TraeCode 的本机 CLI 状态；WorkBuddy 使用静态 `glm-5.2` 潜在模型目录，但未登录时运行时模型并集为空。
+- Provider 列表按所选认证方式过滤：OAuth 展示四家，API Key 仅展示 Anthropic/OpenAI；不可用 OAuth 项仍可进入详情查看状态，但不会显示可选模型。

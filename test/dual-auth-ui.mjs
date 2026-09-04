@@ -10,6 +10,8 @@ const [types, api, main, styles] = await Promise.all([
 ]);
 
 assert.match(types, /AiAuthMethod\s*=\s*"oauth"\s*\|\s*"api-key"/);
+assert.match(types, /"workbuddy"/);
+assert.match(types, /"traecode"/);
 assert.match(types, /models:\s*string\[\]/);
 assert.match(types, /interface AiApiKeySummary/);
 assert.match(types, /apiKeys:\s*AiApiKeySummary\[\]/);
@@ -21,6 +23,16 @@ assert.match(main, /data-choose-ai-auth-method="api-key"/);
 assert.match(main, /aiProviderPickerStep:|aiProviderPickerStep/);
 assert.match(main, /oauthModels/);
 assert.match(main, /apiKeyModels/);
+assert.match(main, /authMethods\.includes\(authMethod\)/);
+assert.match(main, /aiProviderMark\(/);
+assert.match(main, /traecode/);
+assert.match(main, /data-authorize-ai-provider="traecode"/);
+assert.match(main, /labelInput\.value = ""/);
+assert.match(api, /id: "workbuddy"/);
+assert.match(api, /"glm-5\.2"/);
+assert.match(api, /trae-account-default/);
+assert.match(main, /unavailableReason/);
+assert.match(main, /data-ai-credential-id/);
 assert.match(main, /data-ai-api-key-form/);
 assert.match(main, /data-ai-credential-id/);
 assert.match(main, /个 API Key/);
