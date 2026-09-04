@@ -9,6 +9,7 @@ use crate::agent_files::FileApprovalManager;
 use crate::audio_prep::AudioPreparationService;
 use crate::config::ToolboxSettings;
 use crate::downloads::ComponentDownloadManager;
+use crate::http_api::HttpApiManager;
 use crate::mcp::McpManager;
 use crate::media_tasks::MediaTaskManager;
 use crate::sv2_profiles::Sv2ProfileService;
@@ -34,6 +35,7 @@ pub struct AppState {
     pub audio_preparation: Arc<AudioPreparationService>,
     pub sv2_profiles: Arc<Sv2ProfileService>,
     pub svp_passthrough_only: AtomicBool,
+    pub http_api: Arc<HttpApiManager>,
 }
 
 impl AppState {
@@ -61,6 +63,7 @@ impl AppState {
             audio_preparation,
             sv2_profiles: Arc::new(Sv2ProfileService::new()),
             svp_passthrough_only: AtomicBool::new(svp_passthrough_only),
+            http_api: Arc::new(HttpApiManager::default()),
         }
     }
 }

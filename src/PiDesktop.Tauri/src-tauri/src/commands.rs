@@ -38,6 +38,7 @@ use crate::creative_tools::{
     self, ProjectDoctorRequest, PronunciationRequest, RenderReviewExpectations, RenderReviewRequest,
 };
 use crate::downloads::ComponentDownload;
+use crate::http_api::{validate_port, ConfigureHttpApiRequest, HttpApiStatus};
 use crate::lyric_projects::{self, LyricProject, LyricProjectSummary};
 use crate::lyric_tools::{
     self, ChineseRhymeLookup, LyricCandidateRequest, LyricCandidateSet, LyricSectionRequest,
@@ -108,6 +109,7 @@ pub struct BootstrapState {
     sv2_account_indicator_enabled: bool,
     smart_svp_launch_enabled: bool,
     svp_association: SvpAssociationView,
+    http_api: HttpApiStatus,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -361,6 +363,44 @@ pub async fn compare_synthv_clips(
 #[tauri::command]
 pub async fn bootstrap(state: State<'_, AppState>) -> Result<BootstrapState, String> {
     build_bootstrap(&state).await
+}
+
+#[tauri::command]
+pub async fn get_http_api_status(state: State<'_, AppState>) -> Result<HttpApiStatus, String> {
+    let settings = state.settings.read().await;
+    Ok(state
+        .http_api
+        .status_async(settings.http_api_enabled, settings.http_api_port)
+        .await)
+}
+
+#[tauri::command]
+pub async fn configure_http_api(
+    config: ConfigureHttpApiRequest,
+    state: State<'_, AppState>,
+) -> Result<HttpApiStatus, String> {
+    validate_port(config.port)?;
+    {
+        let mut settings = state.settings.write().await;
+        settings.http_api_enabled = config.enabled;
+        settings.http_api_port = config.port;
+        save_settings(&settings)?;
+    }
+    let context = {
+        let mut context = crate::http_api::HttpApiContext::from_state(&state);
+        context.enabled = config.enabled;
+        context.port = config.port;
+        context
+    };
+    if config.enabled {
+        let _ = state.http_api.start(context).await;
+    } else {
+        state.http_api.stop().await;
+    }
+    Ok(state
+        .http_api
+        .status_async(config.enabled, config.port)
+        .await)
 }
 
 #[tauri::command]
@@ -2554,6 +2594,10 @@ async fn build_bootstrap(state: &State<'_, AppState>) -> Result<BootstrapState, 
         sv2_account_indicator_enabled: settings.sv2_account_indicator_enabled,
         smart_svp_launch_enabled: settings.smart_svp_launch_enabled,
         svp_association,
+        http_api: state
+            .http_api
+            .status_async(settings.http_api_enabled, settings.http_api_port)
+            .await,
     })
 }
 
