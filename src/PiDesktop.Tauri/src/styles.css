@@ -941,6 +941,9 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .ai-provider-mark { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 7px; font-size: 14px; font-weight: 700; }
 .ai-provider-mark.claude { color: #a34f2c; background: color-mix(in srgb,#d97745 11%,var(--surface-solid)); }
 .ai-provider-mark.codex { color: var(--primary); background: var(--primary-soft); }
+.ai-provider-mark.workbuddy { color: #bb6b00; background: color-mix(in srgb,#f59e0b 13%,var(--surface-solid)); }
+.ai-provider-mark.traecode { color: #9b4de0; background: color-mix(in srgb,#a855f7 13%,var(--surface-solid)); }
+.ai-provider-picker-option.unavailable { opacity: .78; }
 .ai-provider-badge { padding: 3px 7px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--surface-solid); font-size: 9px; font-weight: 600; white-space: nowrap; }
 .ai-provider-badge.active { border-color: color-mix(in srgb,var(--primary) 25%,var(--line)); color: var(--primary); background: var(--primary-soft); }
 .ai-provider-badge.ready { color: var(--success); }

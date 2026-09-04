@@ -2,7 +2,7 @@ export type AppMode = "toolbox" | "ai";
 export type AgentWorkMode = "edit" | "solo";
 export interface AgentFileApproval { id: string; path: string; purpose: string; createdAtUtc: string; }
 
-export type AiProviderId = "anthropic" | "openai-codex";
+export type AiProviderId = "anthropic" | "openai-codex" | "workbuddy" | "traecode";
 export type AiAuthMethod = "oauth" | "api-key";
 
 export interface AiApiKeySummary {
@@ -36,6 +36,9 @@ export interface AiProviderSummary {
   apiKeyModels: string[];
   accounts: AiProviderAccountSummary[];
   apiKeys: AiApiKeySummary[];
+  authMethods: AiAuthMethod[];
+  available: boolean;
+  unavailableReason: string | null;
 }
 
 export interface ModelSummary {
