@@ -9,3 +9,9 @@
 - 2026-09-03：合并后将预构建跳过收紧为 `CI=true` 专用，并增加 TypeScript/节点类型构建依赖完整性检查。
 - 2026-09-03：执行全量 `actionlint` 并修复既有发布 workflow 的 SC2016 格式串问题。
 - 2026-09-03：将 `actions-build-fix.mjs` 接入桌面全量契约脚本，并同步 Bridge package-lock 中的 SV1 legacy CLI bin 入口。
+- 2026-09-03：拉取真实 run 33824920882 / job 100875483752 日志，确认 Windows x64 的 `windows-sys` 0.61 类型/API错误与平台未使用 import；更新任务审计计划。
+- 2026-09-03：修复 `synthv_control.rs` 的官方 `windows_sys::core::BOOL`、`Foundation::HWND` 与窗口回调类型；修复 `synthv_hosts.rs` 的 `MetadataExt::file_attributes` reparse 检查，并将 macOS-only imports 条件化。
+- 2026-09-03：更新根 `/test/actions-build-fix.mjs` 的 Windows API 静态契约；`cargo fmt`、契约测试和 `git diff --check` 通过。
+- 2026-09-03：Windows MSVC target cargo check 因本机无 MSVC C 工具链在 `ring` 的 `assert.h` 处停止；`windows-sys v0.61.2` 已先完成检查。
+- 2026-09-03：使用临时空资源占位完成 macOS `cargo test --all-targets`（202 passed、2 ignored、根集成测试 1 passed）与 `cargo clippy --all-targets -- -D warnings`；占位文件已清理。
+- 2026-09-03：依据 `windows-sys v0.61.2` 本地官方源核对 BOOL/HWND/WNDENUMPROC 与窗口函数签名；最终变更范围未包含 workflows、`package.json` 或 artifact 测试。

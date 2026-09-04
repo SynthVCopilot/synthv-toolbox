@@ -27,5 +27,5 @@
 | 019 | [Refactor] bridge-formal-component | 将 SynthV Agent Bridge 从 Git 子模块迁入应用组件目录，并保持开发、构建与打包可用。 | 让该运行时随主仓库统一版本管理与发布。 | ✅ 已完成 |
 | 020 | [Feature] Agent文件访问审批 | 为内置 Agent 提供标准文件枚举与两级审批策略。 | 音频/SynthV 工作文件应直接通过，其他文件在非 Solo 模式必须由人工批准。 | ✅ 已完成 |
 | 021 | [BugFix] Flat连接回退 | 在 Flat 原生 MCP 缺失或不稳定时回退到兼容 Bridge。 | Windows Flat 可能不提供 MCP，连接不能依赖单一实验性后端。 | ✅ 已完成 |
-| 022 | [BugFix] actions-build-fix | 修复正式 Bridge 组件裁剪后重复构建失败及后续 Rust lint 阻断。 | 当前 main 的 Windows 与 macOS Actions 都无法进入桌面打包阶段。 | 🔄 进行中 |
+| 022 | [BugFix] actions-build-fix | 修复正式 Bridge 组件裁剪后重复构建失败及后续 Rust lint 阻断。 | 当前 main 的 Windows 与 macOS Actions 都无法进入桌面打包阶段。 | ✅ 已完成 |
 | 023 | [Feature] dev-build-artifacts | 将 main、PR 与手动验证的 Windows/macOS 开发安装包上传为 Actions artifact。 | 让未打 tag 的开发构建也可以直接下载和验收。 | 🔄 进行中 |

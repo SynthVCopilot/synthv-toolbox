@@ -17,3 +17,9 @@
 - `downloads.rs` 的回滚由显式 `if let Some` 完成，避免 `Option::map` 产生 unit closure lint。
 - [集成复核] -> 无条件依赖 `dist` 会使本地源码改动不再重建 -> 仅当 GitHub Actions 的 `CI=true` 且两个 CLI 入口完整时复用预构建；本地开发继续正常重建。
 - [`actionlint` 全量检查] -> 发布说明的 `git log` 格式串在单引号内使用 GitHub 表达式，触发 SC2016 -> 改用 Actions 默认的 `GITHUB_REPOSITORY` 环境变量和安全的双引号格式。
+
+## 真实 Windows Actions 复现
+
+- [run 33824920882 / job 100875483752] -> Windows x64 在 `Test Rust core and FFmpeg fixtures` 失败，后续 lint 与打包步骤被跳过 -> 日志确认 `windows-sys` 0.61.2 下 `Foundation::BOOL` 不存在、Win32 HWND 参数已改为官方 `HWND` 指针类型，且 `synthv_hosts.rs` 的 `FileTypeExt::is_reparse_point` 不存在。
+- [平台 import] -> `Stdio`、`quiet_command` 仅由 macOS 分支使用，`FileTypeExt` 不提供所需 API -> 将 import 限定到 macOS，并使用 Windows `MetadataExt::file_attributes` 与 `FILE_ATTRIBUTE_REPARSE_POINT`。
+- [Windows target cargo check] -> 已安装 `x86_64-pc-windows-msvc`，并成功检查 `windows-sys v0.61.2`；项目随后在 `ring` C 编译阶段失败 -> 当前 macOS 主机无 Windows MSVC C 工具链，缺少目标编译环境的 `assert.h`，不是 Rust 源码诊断。

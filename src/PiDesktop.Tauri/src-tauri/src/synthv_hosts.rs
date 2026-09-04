@@ -2,7 +2,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 
 #[cfg(windows)]
-use std::os::windows::fs::FileTypeExt;
+use std::os::windows::fs::MetadataExt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -438,9 +438,15 @@ fn is_windows_flat_process(command: &str) -> bool {
 
 #[cfg(windows)]
 fn safe_regular_file(path: &std::path::Path) -> bool {
-    std::fs::symlink_metadata(path).is_ok_and(|metadata| {
-        metadata.file_type().is_file() && !metadata.file_type().is_reparse_point()
-    })
+    std::fs::symlink_metadata(path)
+        .is_ok_and(|metadata| metadata.file_type().is_file() && !is_reparse_point(&metadata))
+}
+
+#[cfg(windows)]
+fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
 fn command_has_exact_executable(args: &str, full_path: &str) -> bool {
@@ -595,7 +601,7 @@ fn safe_directory(path: &std::path::Path) -> bool {
             return false;
         }
         #[cfg(windows)]
-        if metadata.file_type().is_reparse_point() {
+        if is_reparse_point(&metadata) {
             return false;
         }
         true
