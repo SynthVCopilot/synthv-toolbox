@@ -11,3 +11,7 @@
 - 已接入 C/O/W/T provider mark/display helper、OAuth/API Key 列表过滤、TraeCode CLI 状态详情和 WorkBuddy OAuth 入口。
 - 已保持 API Key 多凭据逐项二次确认，并确保标签与密钥提交后同时清空。
 - `npm run test:contracts`、`npm run build`、定向前端契约测试全部通过。
+- 新增 WorkBuddy/TraeCode provider 枚举与 summary `authMethods`/`available`/`unavailableReason`，并接入多凭据 ProviderPool。
+- WorkBuddy 完成浏览器授权、受限轮询、Bearer account_info、刷新和 keyring routing envelope；TraeCode 完成官方 CLI login/status、虚拟账号与安全 exec 文件协议。
+- 已运行 `cargo fmt --all`、`cargo check -q`、`cargo test -q`：219 passed / 2 ignored，provider-runtime-adapters 4 passed；Trae argv 逐项契约测试通过。
+- summary 已扩展 WorkBuddy/TraeCode 的认证方式、可用性和不可用原因，并将模型字段限制为已有凭据可用模型。

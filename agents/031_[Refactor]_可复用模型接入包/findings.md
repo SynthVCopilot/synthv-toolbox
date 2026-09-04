@@ -12,3 +12,7 @@
 - TraeCode 只解析 `traecli login`、`login status`、`exec --json --output-schema --ephemeral --sandbox read-only`；未找到 CLI 时报告不可用，不读取 token。
 - 前端稳定契约将提供商认证能力显式建模为 `authMethods`，并以 `available/unavailableReason` 表达 TraeCode 的本机 CLI 状态；WorkBuddy 使用静态 `glm-5.2` 潜在模型目录，但未登录时运行时模型并集为空。
 - Provider 列表按所选认证方式过滤：OAuth 展示四家，API Key 仅展示 Anthropic/OpenAI；不可用 OAuth 项仍可进入详情查看状态，但不会显示可选模型。
+- WorkBuddy 连接实际验证了 `auth/state` 可返回 state+authUrl，未登录时 `auth/token` 返回业务码 11217；默认轮询窗口扩至约 10 分钟。
+- WorkBuddy access 只在内存中使用；系统钥匙串仅保存 refresh 与 domain/user/enterprise routing envelope，序列化缓冲和凭据结构均归零。
+- TraeCode `login status` 使用短超时缓存；缺少 CLI 时 `available=false` 并提供具体 unavailableReason，不能伪造连接。
+- TraeCode `login` 使用独立 10 分钟超时；`login status` 使用短超时与短 TTL 缓存；exec 使用受管临时目录、文件 schema、`--output-last-message`、位置 prompt 和 `--skip-git-repo-check`。

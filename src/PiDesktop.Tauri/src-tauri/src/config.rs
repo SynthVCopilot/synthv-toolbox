@@ -8,8 +8,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::agent::{TraeCodeConfig, TraeCodeProvider};
 use crate::credential_balancer::{cooldown_until_utc, CredentialBalancer, CredentialRoute};
 use crate::oauth::{self, AiProviderId, OAuthAccountMetadata};
+use crate::workbuddy_store;
 
 const SETTINGS_SCHEMA_VERSION: u32 = 2;
 pub const DEFAULT_HTTP_API_PORT: u16 = 17_831;
@@ -90,6 +92,10 @@ pub struct ToolboxSettings {
     pub anthropic_model: String,
     #[serde(default = "default_codex_model")]
     pub codex_model: String,
+    #[serde(default = "default_workbuddy_model")]
+    pub workbuddy_model: String,
+    #[serde(default = "default_traecode_model")]
+    pub traecode_model: String,
     #[serde(default)]
     pub anthropic_api_keys: Vec<ApiKeyMetadata>,
     #[serde(default)]
@@ -140,6 +146,9 @@ pub struct AiProviderSummary {
     pub api_key_models: Vec<String>,
     pub accounts: Vec<OAuthAccountSummary>,
     pub api_keys: Vec<AiApiKeySummary>,
+    pub auth_methods: Vec<AiAuthMethod>,
+    pub available: bool,
+    pub unavailable_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -178,6 +187,8 @@ impl Default for ToolboxSettings {
             ai_provider: AiProviderId::Anthropic,
             anthropic_model: default_anthropic_model(),
             codex_model: default_codex_model(),
+            workbuddy_model: default_workbuddy_model(),
+            traecode_model: default_traecode_model(),
             anthropic_api_keys: Vec::new(),
             openai_api_keys: Vec::new(),
             oauth_accounts: Vec::new(),
@@ -204,6 +215,14 @@ fn default_codex_model() -> String {
     AiProviderId::OpenaiCodex.default_model().to_string()
 }
 
+fn default_workbuddy_model() -> String {
+    AiProviderId::Workbuddy.default_model().to_string()
+}
+
+fn default_traecode_model() -> String {
+    AiProviderId::Traecode.default_model().to_string()
+}
+
 fn default_http_api_port() -> u16 {
     DEFAULT_HTTP_API_PORT
 }
@@ -213,6 +232,8 @@ impl ToolboxSettings {
         let value = match provider {
             AiProviderId::Anthropic => &self.anthropic_model,
             AiProviderId::OpenaiCodex => &self.codex_model,
+            AiProviderId::Workbuddy => &self.workbuddy_model,
+            AiProviderId::Traecode => &self.traecode_model,
         };
         if value.trim().is_empty() {
             provider.default_model()
@@ -225,6 +246,8 @@ impl ToolboxSettings {
         match provider {
             AiProviderId::Anthropic => self.anthropic_model = model,
             AiProviderId::OpenaiCodex => self.codex_model = model,
+            AiProviderId::Workbuddy => self.workbuddy_model = model,
+            AiProviderId::Traecode => self.traecode_model = model,
         }
     }
 
@@ -232,6 +255,7 @@ impl ToolboxSettings {
         match provider {
             AiProviderId::Anthropic => &self.anthropic_api_keys,
             AiProviderId::OpenaiCodex => &self.openai_api_keys,
+            AiProviderId::Workbuddy | AiProviderId::Traecode => &[],
         }
     }
 
@@ -250,6 +274,7 @@ impl ToolboxSettings {
         match provider {
             AiProviderId::Anthropic => self.anthropic_api_keys = keys,
             AiProviderId::OpenaiCodex => self.openai_api_keys = keys,
+            AiProviderId::Workbuddy | AiProviderId::Traecode => {}
         }
     }
 
@@ -569,83 +594,141 @@ fn legacy_model_token_configured() -> bool {
 }
 
 pub fn model_summary(settings: &ToolboxSettings, balancer: &CredentialBalancer) -> ModelSummary {
-    let providers = [AiProviderId::Anthropic, AiProviderId::OpenaiCodex]
-        .into_iter()
-        .map(|provider| {
-            let api_keys = settings
-                .api_keys_for(provider)
+    let providers = [
+        AiProviderId::Anthropic,
+        AiProviderId::OpenaiCodex,
+        AiProviderId::Workbuddy,
+        AiProviderId::Traecode,
+    ]
+    .into_iter()
+    .map(|provider| {
+        let api_keys = settings
+            .api_keys_for(provider)
+            .iter()
+            .map(|key| {
+                let health = balancer.health(AiAuthMethod::ApiKey, &key.id);
+                AiApiKeySummary {
+                    id: key.id.clone(),
+                    label: key.label.clone(),
+                    models: key.models.clone(),
+                    healthy: health.healthy,
+                    cooldown_until_utc: cooldown_until_utc(health.cooldown_until_ms),
+                    created_at_utc: key.created_at_utc.clone(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut account_metadata = settings
+            .oauth_accounts
+            .iter()
+            .filter(|account| account.provider == provider)
+            .cloned()
+            .collect::<Vec<_>>();
+        let discovered_codex_models = (provider == AiProviderId::OpenaiCodex)
+            .then(|| oauth::discover_codex_models(&account_metadata).ok())
+            .flatten();
+        let trae_status = (provider == AiProviderId::Traecode).then(|| {
+            TraeCodeProvider::new(TraeCodeConfig::new(provider.default_model()))
+                .cached_login_status()
+        });
+        let trae_available = trae_status
+            .as_ref()
+            .and_then(|status| status.as_ref().ok())
+            .is_some_and(|status| status.available);
+        let trae_connected = trae_status
+            .as_ref()
+            .and_then(|status| status.as_ref().ok())
+            .is_some_and(|status| status.logged_in);
+        if provider == AiProviderId::Traecode
+            && trae_connected
+            && !account_metadata
                 .iter()
-                .map(|key| {
-                    let health = balancer.health(AiAuthMethod::ApiKey, &key.id);
-                    AiApiKeySummary {
-                        id: key.id.clone(),
-                        label: key.label.clone(),
-                        models: key.models.clone(),
-                        healthy: health.healthy,
-                        cooldown_until_utc: cooldown_until_utc(health.cooldown_until_ms),
-                        created_at_utc: key.created_at_utc.clone(),
-                    }
-                })
-                .collect::<Vec<_>>();
-            let account_metadata = settings
-                .oauth_accounts
-                .iter()
-                .filter(|account| account.provider == provider)
-                .cloned()
-                .collect::<Vec<_>>();
-            let discovered_codex_models = (provider == AiProviderId::OpenaiCodex)
-                .then(|| oauth::discover_codex_models(&account_metadata).ok())
-                .flatten();
-            let accounts = account_metadata
-                .iter()
-                .map(|account| {
-                    let authorized = oauth::credential_available(account);
-                    OAuthAccountSummary {
-                        id: account.id.clone(),
-                        label: account.label.clone(),
-                        expires_at: oauth::credential_expires_at(account).unwrap_or_default(),
-                        authorized,
-                        healthy: authorized && oauth::credential_healthy(account),
-                    }
-                })
-                .collect::<Vec<_>>();
-            let healthy_accounts = accounts.iter().filter(|account| account.healthy).count();
-            let oauth_models = oauth_models_for(provider, discovered_codex_models.as_ref());
-            let api_key_models = settings.api_key_models_for(provider);
-            let mut models = if accounts.iter().any(|account| account.authorized) {
-                oauth_models.clone()
-            } else {
-                Vec::new()
-            };
-            models.extend(api_key_models.iter().cloned());
-            models.sort();
-            models.dedup();
-            let active = settings.ai_provider == provider;
-            AiProviderSummary {
-                id: provider,
-                display_name: provider.display_name().to_string(),
-                description: match provider {
-                    AiProviderId::Anthropic => {
-                        "支持 OAuth（Claude Pro / Max）或 Anthropic API Key。".to_string()
-                    }
-                    AiProviderId::OpenaiCodex => {
-                        "支持 OAuth（ChatGPT Plus / Pro）或 OpenAI API Key。".to_string()
-                    }
-                },
-                active,
-                connected: accounts.iter().any(|account| account.authorized)
-                    || !api_keys.is_empty(),
-                healthy_accounts,
-                total_accounts: accounts.len(),
-                model: settings.model_for(provider).to_string(),
-                models,
-                oauth_models,
-                api_key_models,
-                accounts,
-                api_keys,
+                .any(|account| account.id == "oauth:traecode:local")
+        {
+            account_metadata.push(OAuthAccountMetadata {
+                id: "oauth:traecode:local".to_string(),
+                provider,
+                label: "TraeCode account".to_string(),
+                expires_at: 0,
+            });
+        }
+        let accounts = account_metadata
+            .iter()
+            .map(|account| {
+                let authorized = if provider == AiProviderId::Workbuddy {
+                    workbuddy_store::configured(&account.id)
+                } else if provider == AiProviderId::Traecode {
+                    trae_connected
+                } else {
+                    oauth::credential_available(account)
+                };
+                OAuthAccountSummary {
+                    id: account.id.clone(),
+                    label: account.label.clone(),
+                    expires_at: if provider == AiProviderId::Workbuddy {
+                        account.expires_at
+                    } else {
+                        oauth::credential_expires_at(account).unwrap_or_default()
+                    },
+                    authorized,
+                    healthy: authorized
+                        && (provider == AiProviderId::Workbuddy
+                            || oauth::credential_healthy(account)),
+                }
+            })
+            .collect::<Vec<_>>();
+        let healthy_accounts = accounts.iter().filter(|account| account.healthy).count();
+        let oauth_models = oauth_models_for(provider, discovered_codex_models.as_ref());
+        let api_key_models = settings.api_key_models_for(provider);
+        let mut models = if accounts.iter().any(|account| account.authorized) || trae_connected {
+            oauth_models.clone()
+        } else {
+            Vec::new()
+        };
+        models.extend(api_key_models.iter().cloned());
+        models.sort();
+        models.dedup();
+        let active = settings.ai_provider == provider;
+        let auth_methods = match provider {
+            AiProviderId::Anthropic | AiProviderId::OpenaiCodex => {
+                vec![AiAuthMethod::OAuth, AiAuthMethod::ApiKey]
             }
-        })
-        .collect();
+            AiProviderId::Workbuddy | AiProviderId::Traecode => vec![AiAuthMethod::OAuth],
+        };
+        let available = provider != AiProviderId::Traecode || trae_available;
+        let unavailable_reason = trae_status.and_then(|status| match status {
+            Ok(status) if status.available => None,
+            Ok(status) => Some(status.detail),
+            Err(error) => Some(error.to_string()),
+        });
+        AiProviderSummary {
+            id: provider,
+            display_name: provider.display_name().to_string(),
+            description: match provider {
+                AiProviderId::Anthropic => {
+                    "支持 OAuth（Claude Pro / Max）或 Anthropic API Key。".to_string()
+                }
+                AiProviderId::OpenaiCodex => {
+                    "支持 OAuth（ChatGPT Plus / Pro）或 OpenAI API Key。".to_string()
+                }
+                AiProviderId::Workbuddy => "支持 WorkBuddy OAuth。".to_string(),
+                AiProviderId::Traecode => "通过官方 TraeCode CLI 登录。".to_string(),
+            },
+            active,
+            connected: accounts.iter().any(|account| account.authorized) || !api_keys.is_empty(),
+            healthy_accounts,
+            total_accounts: accounts.len(),
+            model: settings.model_for(provider).to_string(),
+            models,
+            oauth_models,
+            api_key_models,
+            accounts,
+            api_keys,
+            auth_methods,
+            available,
+            unavailable_reason,
+        }
+    })
+    .collect();
     ModelSummary {
         active_provider: settings.ai_provider,
         providers,
@@ -857,6 +940,34 @@ mod tests {
     }
 
     #[test]
+    fn provider_auth_method_contract_is_explicit_and_restricted() {
+        let balancer = CredentialBalancer::new([]);
+        let value =
+            serde_json::to_value(model_summary(&ToolboxSettings::default(), &balancer)).unwrap();
+        let providers = value["providers"].as_array().unwrap();
+        let workbuddy = providers
+            .iter()
+            .find(|provider| provider["id"] == "workbuddy")
+            .unwrap();
+        let traecode = providers
+            .iter()
+            .find(|provider| provider["id"] == "traecode")
+            .unwrap();
+        assert_eq!(workbuddy["authMethods"], serde_json::json!(["oauth"]));
+        assert_eq!(traecode["authMethods"], serde_json::json!(["oauth"]));
+        assert_eq!(
+            providers
+                .iter()
+                .find(|provider| provider["id"] == "anthropic")
+                .unwrap()["authMethods"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
     fn provider_summary_exposes_configuration_state_not_secret_material() {
         let summary = AiProviderSummary {
             id: AiProviderId::Anthropic,
@@ -875,6 +986,9 @@ mod tests {
             api_key_models: vec!["claude-opus-4-8".to_string()],
             accounts: Vec::new(),
             api_keys: Vec::new(),
+            auth_methods: vec![AiAuthMethod::OAuth, AiAuthMethod::ApiKey],
+            available: true,
+            unavailable_reason: None,
         };
         let value = serde_json::to_value(summary).unwrap();
         assert_eq!(value["oauthModels"][0], "claude-sonnet-4-6");

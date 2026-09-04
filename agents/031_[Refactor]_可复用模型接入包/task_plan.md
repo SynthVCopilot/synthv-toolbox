@@ -11,4 +11,8 @@
 - [x] 接入 WorkBuddy / TraeCode OAuth 详情和 API Key 多凭据详情
 - [x] 统一 provider display/mark、Copilot/Settings 状态显示
 - [x] 完善多凭据二次确认、预览 API 与根契约测试
-- [x] 运行 contracts/build 并提交
+- [x] 将 WorkBuddy 与 TRAE 适配接入 Toolbox 配置、凭据池和 UI
+- [x] 对缺少公开协议或应用注册凭据的接入显示明确不可用原因，不伪造成功
+- [x] 完成 Platform Kit 迁移指导并同步其主分支
+- [ ] 运行完整 contracts、Rust、生产构建和安装态点击验证
+- [ ] 完成主分支交付
