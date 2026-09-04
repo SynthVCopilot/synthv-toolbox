@@ -18,6 +18,10 @@ path = "../../../test/agent_file_approval.rs"
 name = "credential-balancer"
 path = "../../../test/credential_balancer.rs"
 
+[[test]]
+name = "provider-runtime-adapters"
+path = "../../../test/provider_runtime_adapters.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 cc = "1"

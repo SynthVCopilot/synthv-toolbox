@@ -7,3 +7,6 @@
 - Epilogue 远端 `main` 已有 Provider Source 搜索列表、OAuth 多账号和 WorkBuddy 登录/刷新实现，可作为同一所有者下的行为证据；其产品代码不直接复制，避免语言、许可证和维护耦合。
 - TRAE 官方目前公开 CLI 浏览器登录、PAT 登录和企业管理 OpenAPI，但未公开把个人订阅作为第三方模型 API 的稳定接口；可优先集成官方 `traecli` 运行时，不宣称不存在的模型 OAuth API。
 - TRAE 官方 CLI 2.0 提供 `login`、`exec --json`、`--output-schema`、`--ephemeral` 与 ACP/MCP；产品可把 CLI 自有浏览器登录视为外部 OAuth 凭据边界，并以受限非交互执行适配 Copilot，而无需读取其 token。
+- WorkBuddy 运行时采用产品已验证的 `apiBase`/`chatBase` 协议：`POST /auth/state?platform=workbuddy`、`GET /auth/token?state=`、业务码 `11217` 有界等待、`GET /login/account?state=` 与 `POST /auth/token/refresh`；没有引入 client secret 配置。
+- `OpenAiChatConfig` 支持完整 Chat Completions URL 和额外静态 headers；所有解析均受响应/事件大小上限保护。
+- TraeCode 只解析 `traecli login`、`login status`、`exec --json --output-schema --ephemeral --sandbox read-only`；未找到 CLI 时报告不可用，不读取 token。
