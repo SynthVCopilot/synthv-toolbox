@@ -541,16 +541,16 @@ impl MediaTaskManager {
         self.ensure_not_cancelled(&cancelled)?;
 
         self.update(id, 60, "正在提取旋律并写入歌词 MIDI。", None);
-        let midi = workflows::game_to_midi_cancellable(
+        let midi = workflows::game_to_midi_cancellable(workflows::GameToMidiRequest {
             vocal_path,
-            instrumental_path.clone(),
-            request.lyrics.clone(),
-            request.tolerance,
-            request.advanced,
-            self.resource_dir.clone(),
-            cancelled.clone(),
-            id.to_string(),
-        )
+            instrumental_path: instrumental_path.clone(),
+            lyrics: request.lyrics.clone(),
+            tolerance: request.tolerance,
+            advanced: request.advanced,
+            resource_dir: self.resource_dir.clone(),
+            cancelled: cancelled.clone(),
+            task_id: id.to_string(),
+        })
         .await?;
         let midi_path = midi
             .output_path
