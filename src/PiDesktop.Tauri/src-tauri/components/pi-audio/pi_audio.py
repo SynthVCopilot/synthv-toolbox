@@ -319,16 +319,16 @@ def cmd_source_style(args) -> dict:
         return {
             "tool": "pi-audio/source-style",
             "audio": args.audio,
-            "duration_sec": duration,
-            "median_pitch_midi": 0.0,
-            "pitch_range_semitones": 0.0,
-            "vibrato_rate_hz": 0.0,
-            "vibrato_depth_cents": 0.0,
-            "dynamic_range_db": 0.0,
-            "breathiness_proxy": 0.0,
-            "breathiness_proxy_note": "有声区谱平坦度代理；不是直接的气声测量",
-            "brightness_hz": 0.0,
-            "voiced_ratio": 0.0,
+            "durationSec": duration,
+            "medianPitchMidi": 0.0,
+            "pitchRangeSemitones": 0.0,
+            "vibratoRateHz": 0.0,
+            "vibratoDepthCents": 0.0,
+            "dynamicRangeDb": 0.0,
+            "breathinessProxy": 0.0,
+            "breathinessProxyNote": "有声区谱平坦度代理；不是直接的气声测量",
+            "brightnessHz": 0.0,
+            "voicedRatio": 0.0,
         }
 
     # Bound synchronous analysis so MCP clients do not time out on full songs.
@@ -396,16 +396,16 @@ def cmd_source_style(args) -> dict:
     return {
         "tool": "pi-audio/source-style",
         "audio": args.audio,
-        "duration_sec": round(duration, 6),
-        "median_pitch_midi": round(median_pitch, 4),
-        "pitch_range_semitones": round(pitch_range, 4),
-        "vibrato_rate_hz": round(vibrato_rate, 4),
-        "vibrato_depth_cents": round(vibrato_depth, 4),
-        "dynamic_range_db": round(dynamic_range, 4),
-        "breathiness_proxy": round(breathiness, 6),
-        "breathiness_proxy_note": "有声区谱平坦度代理；不是直接的气声测量",
-        "brightness_hz": round(brightness, 4),
-        "voiced_ratio": round(voiced_ratio, 6),
+        "durationSec": round(duration, 6),
+        "medianPitchMidi": round(median_pitch, 4),
+        "pitchRangeSemitones": round(pitch_range, 4),
+        "vibratoRateHz": round(vibrato_rate, 4),
+        "vibratoDepthCents": round(vibrato_depth, 4),
+        "dynamicRangeDb": round(dynamic_range, 4),
+        "breathinessProxy": round(breathiness, 6),
+        "breathinessProxyNote": "有声区谱平坦度代理；不是直接的气声测量",
+        "brightnessHz": round(brightness, 4),
+        "voicedRatio": round(voiced_ratio, 6),
     }
 
 
