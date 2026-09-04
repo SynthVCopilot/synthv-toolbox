@@ -26,6 +26,7 @@ import type {
   LyricSectionRequest,
   MediaSourcePreview,
   MediaTaskSnapshot,
+  HttpApiStatus,
   OperationResult,
   ProjectCheckpoint,
   Sv2AccountProbe,
@@ -59,6 +60,13 @@ let previewConcurrentDisclaimerAccepted = false;
 let previewSv2ConcurrentEnabled = true;
 let previewSv2AccountIndicatorEnabled = false;
 let previewSmartSvpLaunchEnabled = false;
+let previewHttpApiStatus: HttpApiStatus = {
+  enabled: false,
+  running: false,
+  port: 17831,
+  endpoint: null,
+  lastError: null,
+};
 let previewBridgeConnected = true;
 let previewDownloads: ComponentDownload[] = [];
 let previewMediaTasks: MediaTaskSnapshot[] = [];
@@ -360,6 +368,20 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "set_svp_launch_routing") {
     previewSmartSvpLaunchEnabled = Boolean(args?.enabled);
     return previewState() as T;
+  }
+  if (command === "get_http_api_status") return { ...previewHttpApiStatus } as T;
+  if (command === "configure_http_api") {
+    const enabled = Boolean(args?.enabled);
+    const port = Number(args?.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("端口必须是 1 到 65535 之间的整数。");
+    previewHttpApiStatus = {
+      enabled,
+      running: enabled,
+      port,
+      endpoint: enabled ? `http://127.0.0.1:${port}/mcp` : null,
+      lastError: null,
+    };
+    return { ...previewHttpApiStatus } as T;
   }
   if (command === "set_sv2_account_indicator") {
     const enabled = Boolean(args?.enabled);
@@ -1138,4 +1160,7 @@ export const api = {
   saveMcpServer: (server: McpServerConfig) => call<BootstrapState>("save_mcp_server", { server }),
   deleteMcpServer: (id: string) => call<BootstrapState>("delete_mcp_server", { id }),
   testMcpServer: (id: string) => call<OperationResult>("test_mcp_server", { id }),
+  getHttpApiStatus: () => call<HttpApiStatus>("get_http_api_status"),
+  configureHttpApi: (enabled: boolean, port: number) =>
+    call<HttpApiStatus>("configure_http_api", { enabled, port }),
 };
