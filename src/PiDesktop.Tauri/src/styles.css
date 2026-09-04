@@ -967,7 +967,7 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .ai-provider-picker-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 20px 20px 0; }
 .ai-provider-picker-dialog h2 { margin: 3px 0 0; }
 .ai-provider-picker-dialog header p { margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
-.ai-provider-search { display: flex; align-items: center; gap: 9px; margin: 0 20px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 6px; color: var(--muted); background: var(--control); }
+.ai-provider-search { grid-column: 1 / -1; width: auto; min-width: 0; display: flex; align-items: center; gap: 9px; margin: 0 20px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 6px; color: var(--muted); background: var(--control); }
 .ai-provider-search:focus-within { border-color: var(--primary); box-shadow: 0 0 0 2px color-mix(in srgb,var(--primary) 15%,transparent); }
 .ai-provider-search input { width: 100%; min-width: 0; padding: 10px 0; border: 0; outline: 0; color: inherit; background: transparent; font: inherit; }
 .ai-provider-picker-list, .ai-provider-picker-detail { min-height: 0; overflow: auto; padding: 0 20px 20px; }
@@ -986,6 +986,19 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .ai-provider-picker-detail { display: grid; align-content: start; gap: 12px; }
 .back-link { justify-self: start; display: inline-flex; align-items: center; gap: 6px; padding: 4px 0; border: 0; color: var(--primary); background: transparent; cursor: pointer; font: inherit; font-size: 11px; }
 .back-link svg { transform: rotate(180deg); }
+.ai-auth-method-tabs { display: inline-flex; justify-self: start; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-subtle); }
+.ai-auth-method-tabs button { min-width: 86px; padding: 6px 10px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; font: inherit; font-size: 11px; font-weight: 600; }
+.ai-auth-method-tabs button:hover { color: inherit; background: var(--control-hover); }
+.ai-auth-method-tabs button.active { color: var(--primary); background: var(--primary-soft); }
+.ai-api-key-form { display: grid; gap: 9px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-subtle); }
+.ai-api-key-form strong, .ai-api-key-form small { display: block; }
+.ai-api-key-form strong { font-size: 12px; font-weight: 600; }
+.ai-api-key-form small { margin-top: 4px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.ai-api-key-input { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 7px; padding: 0 6px 0 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--control); }
+.ai-api-key-input:focus-within { border-color: var(--primary); box-shadow: 0 0 0 2px color-mix(in srgb,var(--primary) 15%,transparent); }
+.ai-api-key-input input { min-width: 0; padding: 9px 0; border: 0; outline: 0; color: inherit; background: transparent; font: inherit; }
+.ai-api-key-input .icon-plain { width: auto; min-width: 42px; height: 30px; font-size: 10px; }
+.ai-api-key-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .ai-provider-picker-current { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 10px; padding: 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-subtle); }
 .ai-provider-picker-current > div { min-width: 0; }
 .ai-provider-picker-current strong, .ai-provider-picker-current small { display: block; }
@@ -1293,6 +1306,8 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
   .ai-provider-picker-option > svg { grid-column: 3; grid-row: 1 / span 2; }
   .ai-provider-picker-current { grid-template-columns: auto minmax(0,1fr); }
   .ai-provider-picker-current > .ai-provider-badge { grid-column: 2; justify-self: start; }
+  .ai-auth-method-tabs { width: 100%; }
+  .ai-auth-method-tabs button { flex: 1; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }

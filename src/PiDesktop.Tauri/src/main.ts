@@ -7,6 +7,7 @@ import { featureCatalog, toolGroups, type FeatureCatalogItem, type ToolGroup } f
 import { mountShell, type ShellController } from "./vue/shell";
 import type {
   AiProviderId,
+  AiAuthMethod,
   AgentWorkMode,
   AgentFileApproval,
   AiProviderSummary,
@@ -141,6 +142,7 @@ let pendingAiAccountRemovalTimer: number | undefined;
 let aiProviderPickerOpen = false;
 let aiProviderPickerQuery = "";
 let aiProviderPickerSelection: AiProviderId | undefined;
+let aiProviderPickerAuthMethod: AiAuthMethod = "oauth";
 let downloadPollTimer: number | undefined;
 let mediaTaskPollTimer: number | undefined;
 let toastDismissTimer: number | undefined;
@@ -1634,9 +1636,9 @@ function renderCopilot(): string {
   const provider = activeAiProvider();
   const providerName = provider?.displayName ?? "尚未选择提供商";
   const providerModel = provider?.model || "选择模型";
-  const providerStatus = provider?.connected
-    ? provider.healthyAccounts > 0 ? "已就绪" : "待验证"
-    : "未授权";
+  const providerStatus = provider?.authMethod === "api-key"
+    ? provider.apiKeyConfigured ? "API Key 已配置" : "API Key 未配置"
+    : provider?.connected ? provider.healthyAccounts > 0 ? "OAuth 已就绪" : "待验证" : "未授权";
   return `<div class="copilot-layout">
     <aside class="sessions-panel"><div class="sessions-panel-head"><button class="primary full" data-new-conversation>${icon("plus", 17)} 新建对话</button><span class="nav-label">历史对话</span></div><div class="session-list">${conversations.length ? conversations.map((item) => `<button class="session-item ${conversation?.id === item.id ? "active" : ""}" data-conversation="${escapeHtml(item.id)}"><strong>${escapeHtml(item.title)}</strong><small>${item.messageCount} 条消息 · ${escapeHtml(item.updatedAt.slice(0, 10))}</small></button>`).join("") : '<p class="empty-small">还没有历史对话</p>'}</div></aside>
     <section class="chat-panel">
@@ -1734,6 +1736,8 @@ function fallbackAiProviders(): AiProviderSummary[] {
     model: "",
     models: [],
     accounts: [],
+    authMethod: "oauth",
+    apiKeyConfigured: false,
   }, {
     id: "openai-codex",
     displayName: "Codex 官方订阅",
@@ -1745,6 +1749,8 @@ function fallbackAiProviders(): AiProviderSummary[] {
     model: "",
     models: [],
     accounts: [],
+    authMethod: "oauth",
+    apiKeyConfigured: false,
   }];
 }
 
@@ -1766,7 +1772,9 @@ function activeAiProvider(): AiProviderSummary | undefined {
 
 function aiConnectionSummary(): string {
   const provider = activeAiProvider();
-  if (!provider?.connected) return "等待浏览器授权模型提供商";
+  if (!provider) return "请选择模型提供商";
+  if (provider.authMethod === "api-key") return provider.apiKeyConfigured ? `${provider.displayName} · API Key 已配置` : "等待 API Key 配置";
+  if (!provider.connected) return "等待浏览器授权模型提供商";
   if (provider.healthyAccounts === 0) return `${provider.displayName} · 已授权，首次使用时验证`;
   return `${provider.displayName}${provider.model ? ` · ${provider.model}` : ""}`;
 }
@@ -1799,7 +1807,7 @@ function renderAiProviderPicker(): string {
   const pickerBody = selected ? renderAiProviderPickerDetail(selected) : matchingProviders.length
     ? `<div class="ai-provider-picker-list" role="listbox" aria-label="可用模型提供商">${matchingProviders.map((provider) => {
       const active = isActiveAiProvider(provider);
-      const state = provider.connected ? provider.healthyAccounts > 0 ? "已授权" : "待验证" : "未授权";
+      const state = provider.authMethod === "api-key" ? provider.apiKeyConfigured ? "API Key 已配置" : "等待 API Key" : provider.connected ? provider.healthyAccounts > 0 ? "已授权" : "待验证" : "未授权";
       return `<button type="button" class="ai-provider-picker-option ${active ? "active" : ""}" role="option" aria-selected="${active}" data-choose-ai-provider="${provider.id}"><span class="ai-provider-mark ${provider.id === "anthropic" ? "claude" : "codex"}">${provider.id === "anthropic" ? "C" : "O"}</span><span><strong>${escapeHtml(provider.displayName)}</strong><small>${escapeHtml(provider.description)}</small></span><span class="ai-provider-badge ${provider.connected ? "ready" : "off"}">${state}</span>${icon("arrow", 16)}</button>`;
     }).join("")}</div>`
     : `<div class="ai-provider-picker-empty" role="status"><span class="mode-icon slate">${icon("bot", 24)}</span><strong>没有匹配的可执行提供商</strong><p>请更换搜索词。这里只显示当前后端实际支持的提供商。</p></div>`;
@@ -1808,9 +1816,16 @@ function renderAiProviderPicker(): string {
 
 function renderAiProviderPickerDetail(provider: AiProviderSummary): string {
   const models = [...new Set([...provider.models.filter(Boolean), ...(provider.model ? [provider.model] : [])])];
-  const state = provider.connected ? provider.healthyAccounts > 0 ? "OAuth 已就绪" : "已授权，待验证" : "等待浏览器授权";
+  const authMethod = aiProviderPickerAuthMethod;
+  const oauthReady = provider.connected;
+  const apiKeyReady = provider.apiKeyConfigured;
+  const authReady = authMethod === "oauth" ? oauthReady : apiKeyReady;
+  const state = authMethod === "oauth" ? oauthReady ? provider.healthyAccounts > 0 ? "OAuth 已就绪" : "已授权，待验证" : "等待浏览器授权" : apiKeyReady ? "API Key 已配置" : "等待 API Key";
   const isAuthorizing = authorizingAiProvider === provider.id;
-  return `<div class="ai-provider-picker-detail"><button type="button" class="back-link" data-back-ai-provider-picker>${icon("arrow", 15)} 返回提供商列表</button><section class="ai-provider-picker-current"><span class="ai-provider-mark ${provider.id === "anthropic" ? "claude" : "codex"}">${provider.id === "anthropic" ? "C" : "O"}</span><div><strong>${escapeHtml(provider.displayName)}</strong><small>${escapeHtml(provider.description)}</small></div><span class="ai-provider-badge ${provider.connected ? "ready" : "warning"}">${state}</span></section><div class="ai-provider-auth-row"><div><strong>官方浏览器 OAuth</strong><small>在官方页面完成授权后，可回到此处选择模型。</small></div><button type="button" class="primary" data-authorize-ai-provider="${provider.id}" ${busy ? "disabled" : ""}>${isAuthorizing ? "等待授权…" : "浏览器授权"}</button></div><div class="ai-provider-account-list">${renderAiProviderAccounts(provider)}</div><section class="ai-provider-model-list" aria-labelledby="ai-provider-model-title"><div><strong id="ai-provider-model-title">选择模型</strong><small>${provider.connected ? "点击后立即保存为当前对话模型。" : "完成授权后会显示该提供商可用的模型。"}</small></div>${models.length ? `<div role="listbox" aria-label="${escapeHtml(provider.displayName)} 模型列表">${models.map((model) => `<button type="button" class="ai-provider-model-option ${model === provider.model && isActiveAiProvider(provider) ? "active" : ""}" role="option" aria-selected="${model === provider.model && isActiveAiProvider(provider)}" data-select-ai-provider-model="${escapeHtml(model)}" data-ai-provider="${provider.id}" ${!provider.connected || busy ? "disabled" : ""}><span><strong>${escapeHtml(model)}</strong><small>${model === provider.model && isActiveAiProvider(provider) ? "当前使用" : "点击使用此模型"}</small></span>${model === provider.model && isActiveAiProvider(provider) ? icon("check", 18) : ""}</button>`).join("")}</div>` : '<div class="ai-provider-empty">授权完成后，后端会在这里返回可用模型。</div>'}</section></div>`;
+  const authContent = authMethod === "oauth"
+    ? `<div class="ai-provider-auth-row"><div><strong>官方浏览器 OAuth</strong><small>在官方页面完成授权后，可回到此处选择模型。</small></div><button type="button" class="primary" data-authorize-ai-provider="${provider.id}" ${busy ? "disabled" : ""}>${isAuthorizing ? "等待授权…" : "浏览器授权"}</button></div><div class="ai-provider-account-list">${renderAiProviderAccounts(provider)}</div>`
+    : `<form class="ai-api-key-form" data-ai-api-key-form data-ai-provider="${provider.id}"><div><strong>API Key</strong><small>密钥只发送给本机后端验证与保存，不会显示、记录或返回给界面。</small></div><label class="ai-api-key-input"><span class="visually-hidden">${escapeHtml(provider.displayName)} API Key</span><input id="ai-api-key-input" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 API Key" ${busy ? "disabled" : ""}/><button type="button" class="icon-plain" data-toggle-ai-api-key aria-label="显示 API Key">显示</button></label><div class="ai-api-key-actions"><span class="ai-provider-badge ${apiKeyReady ? "ready" : "warning"}">${apiKeyReady ? "已配置" : "尚未配置"}</span><button type="submit" class="primary" ${busy ? "disabled" : ""}>${apiKeyReady ? "替换并验证" : "保存并验证"}</button>${apiKeyReady ? `<button type="button" class="secondary compact" data-remove-ai-api-key="${provider.id}" ${busy ? "disabled" : ""}>删除 API Key</button>` : ""}</div></form>`;
+  return `<div class="ai-provider-picker-detail"><button type="button" class="back-link" data-back-ai-provider-picker>${icon("arrow", 15)} 返回提供商列表</button><section class="ai-provider-picker-current"><span class="ai-provider-mark ${provider.id === "anthropic" ? "claude" : "codex"}">${provider.id === "anthropic" ? "C" : "O"}</span><div><strong>${escapeHtml(provider.displayName)}</strong><small>${escapeHtml(provider.description)}</small></div><span class="ai-provider-badge ${authReady ? "ready" : "warning"}">${state}</span></section><div class="ai-auth-method-tabs" role="tablist" aria-label="${escapeHtml(provider.displayName)} 认证方式"><button type="button" role="tab" aria-selected="${authMethod === "oauth"}" class="${authMethod === "oauth" ? "active" : ""}" data-select-ai-auth-method="oauth">OAuth</button><button type="button" role="tab" aria-selected="${authMethod === "api-key"}" class="${authMethod === "api-key" ? "active" : ""}" data-select-ai-auth-method="api-key">API Key</button></div>${authContent}<section class="ai-provider-model-list" aria-labelledby="ai-provider-model-title"><div><strong id="ai-provider-model-title">选择模型</strong><small>${authReady ? "点击后立即保存为当前对话模型。" : authMethod === "oauth" ? "完成浏览器授权后即可选择模型。" : "保存并验证 API Key 后即可选择模型。"}</small></div>${models.length ? `<div role="listbox" aria-label="${escapeHtml(provider.displayName)} 模型列表">${models.map((model) => `<button type="button" class="ai-provider-model-option ${model === provider.model && isActiveAiProvider(provider) ? "active" : ""}" role="option" aria-selected="${model === provider.model && isActiveAiProvider(provider)}" data-select-ai-provider-model="${escapeHtml(model)}" data-ai-provider="${provider.id}" ${!authReady || busy ? "disabled" : ""}><span><strong>${escapeHtml(model)}</strong><small>${model === provider.model && isActiveAiProvider(provider) ? "当前使用" : "点击使用此模型"}</small></span>${model === provider.model && isActiveAiProvider(provider) ? icon("check", 18) : ""}</button>`).join("")}</div>` : '<div class="ai-provider-empty">认证完成后，后端会在这里返回可用模型。</div>'}</section></div>`;
 }
 
 function renderAiProviderSettings(): string {
@@ -1845,6 +1860,26 @@ function renderSettings(): string {
 }
 
 function wireForms(): void {
+  document.querySelector<HTMLFormElement>("[data-ai-api-key-form]")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    const provider = parseAiProviderId(form.dataset.aiProvider);
+    const input = form.querySelector<HTMLInputElement>("#ai-api-key-input");
+    const apiKey = input?.value ?? "";
+    if (!provider || !input || !apiKey.trim()) {
+      error = "请输入 API Key。";
+      notice = "";
+      render();
+      return;
+    }
+    input.value = "";
+    void run(async () => {
+      app = await api.configureAiApiKey(provider, apiKey);
+      aiProviderPickerSelection = provider;
+      aiProviderPickerAuthMethod = "api-key";
+      notice = "API Key 已保存并验证。";
+    });
+  });
   document.querySelector<HTMLFormElement>("#tuning-learn-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     void run(async () => {
@@ -2659,6 +2694,7 @@ document.addEventListener("click", (event) => {
     aiProviderPickerOpen = true;
     aiProviderPickerQuery = "";
     aiProviderPickerSelection = undefined;
+    aiProviderPickerAuthMethod = activeAiProvider()?.authMethod ?? "oauth";
     render();
     requestAnimationFrame(() => document.querySelector<HTMLInputElement>("#ai-provider-search")?.focus());
     return;
@@ -2666,6 +2702,13 @@ document.addEventListener("click", (event) => {
   if (target.hasAttribute("data-close-ai-provider-picker")) {
     aiProviderPickerOpen = false;
     aiProviderPickerSelection = undefined;
+    clearPendingAiAccountRemoval();
+    render();
+    return;
+  }
+  const selectedAuthMethod = target.dataset.selectAiAuthMethod as AiAuthMethod | undefined;
+  if (selectedAuthMethod === "oauth" || selectedAuthMethod === "api-key") {
+    aiProviderPickerAuthMethod = selectedAuthMethod;
     clearPendingAiAccountRemoval();
     render();
     return;
@@ -2679,6 +2722,7 @@ document.addEventListener("click", (event) => {
   const chosenProvider = parseAiProviderId(target.dataset.chooseAiProvider);
   if (chosenProvider) {
     aiProviderPickerSelection = chosenProvider;
+    aiProviderPickerAuthMethod = aiProviders().find((provider) => provider.id === chosenProvider)?.authMethod ?? "oauth";
     clearPendingAiAccountRemoval();
     render();
     return;
@@ -2689,10 +2733,30 @@ document.addEventListener("click", (event) => {
     if (!selectedProvider || !model || busy) return;
     clearPendingAiAccountRemoval();
     void run(async () => {
-      app = await api.selectAiProvider(selectedProvider, model);
+      app = await api.selectAiProvider(selectedProvider, model, aiProviderPickerAuthMethod);
       aiProviderPickerOpen = false;
       aiProviderPickerSelection = undefined;
       notice = "当前 AI 提供商与模型已更新。";
+    });
+    return;
+  }
+  if (target.hasAttribute("data-toggle-ai-api-key")) {
+    const input = document.querySelector<HTMLInputElement>("#ai-api-key-input");
+    if (!input) return;
+    const visible = input.type === "text";
+    input.type = visible ? "password" : "text";
+    target.textContent = visible ? "显示" : "隐藏";
+    target.setAttribute("aria-label", visible ? "显示 API Key" : "隐藏 API Key");
+    return;
+  }
+  const apiKeyProvider = parseAiProviderId(target.dataset.removeAiApiKey);
+  if (apiKeyProvider) {
+    if (busy) return;
+    void run(async () => {
+      app = await api.removeAiApiKey(apiKeyProvider);
+      aiProviderPickerSelection = apiKeyProvider;
+      aiProviderPickerAuthMethod = "api-key";
+      notice = "API Key 已从本机移除。";
     });
     return;
   }

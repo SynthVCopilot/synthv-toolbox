@@ -3,6 +3,7 @@ export type AgentWorkMode = "edit" | "solo";
 export interface AgentFileApproval { id: string; path: string; purpose: string; createdAtUtc: string; }
 
 export type AiProviderId = "anthropic" | "openai-codex";
+export type AiAuthMethod = "oauth" | "api-key";
 
 export interface AiProviderAccountSummary {
   id: string;
@@ -23,6 +24,8 @@ export interface AiProviderSummary {
   model: string;
   models: string[];
   accounts: AiProviderAccountSummary[];
+  authMethod: AiAuthMethod;
+  apiKeyConfigured: boolean;
 }
 
 export interface ModelSummary {
