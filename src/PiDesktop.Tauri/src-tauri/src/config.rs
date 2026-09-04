@@ -664,14 +664,16 @@ pub fn model_summary(settings: &ToolboxSettings, balancer: &CredentialBalancer) 
                 OAuthAccountSummary {
                     id: account.id.clone(),
                     label: account.label.clone(),
-                    expires_at: if provider == AiProviderId::Workbuddy {
-                        account.expires_at
-                    } else {
-                        oauth::credential_expires_at(account).unwrap_or_default()
+                    expires_at: match provider {
+                        AiProviderId::Workbuddy => account.expires_at,
+                        AiProviderId::Traecode => 0,
+                        AiProviderId::Anthropic | AiProviderId::OpenaiCodex => {
+                            oauth::credential_expires_at(account).unwrap_or_default()
+                        }
                     },
                     authorized,
                     healthy: authorized
-                        && (provider == AiProviderId::Workbuddy
+                        && (matches!(provider, AiProviderId::Workbuddy | AiProviderId::Traecode)
                             || oauth::credential_healthy(account)),
                 }
             })
@@ -765,11 +767,23 @@ pub fn validate_ai_model(
     }) {
         return Err("模型 ID 包含不受支持的字符。".to_string());
     }
-    let oauth_available = settings
-        .oauth_accounts
-        .iter()
-        .any(|account| account.provider == provider)
-        && provider.model_options().contains(&model);
+    let oauth_connected = match provider {
+        AiProviderId::Workbuddy => settings
+            .oauth_accounts
+            .iter()
+            .filter(|account| account.provider == provider)
+            .any(|account| workbuddy_store::configured(&account.id)),
+        AiProviderId::Traecode => {
+            TraeCodeProvider::new(TraeCodeConfig::new(provider.default_model()))
+                .cached_login_status()
+                .is_ok_and(|status| status.logged_in)
+        }
+        AiProviderId::Anthropic | AiProviderId::OpenaiCodex => settings
+            .oauth_accounts
+            .iter()
+            .any(|account| account.provider == provider),
+    };
+    let oauth_available = oauth_connected && provider.model_options().contains(&model);
     let api_key_available = settings
         .api_key_models_for(provider)
         .iter()

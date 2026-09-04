@@ -407,20 +407,24 @@ fn build_ai_provider(
         .filter(|account| account.provider == provider_id)
         .cloned()
         .collect::<Vec<_>>();
-    if provider_id == AiProviderId::Traecode
+    let trae_connected = provider_id == AiProviderId::Traecode
         && TraeCodeProvider::new(TraeCodeConfig::new(provider_id.default_model()))
             .cached_login_status()
-            .is_ok_and(|status| status.logged_in)
-        && !accounts
+            .is_ok_and(|status| status.logged_in);
+    if provider_id == AiProviderId::Traecode {
+        if !trae_connected {
+            accounts.clear();
+        } else if !accounts
             .iter()
             .any(|account| account.id == "oauth:traecode:local")
-    {
-        accounts.push(OAuthAccountMetadata {
-            id: "oauth:traecode:local".to_string(),
-            provider: provider_id,
-            label: "TraeCode account".to_string(),
-            expires_at: 0,
-        });
+        {
+            accounts.push(OAuthAccountMetadata {
+                id: "oauth:traecode:local".to_string(),
+                provider: provider_id,
+                label: "TraeCode account".to_string(),
+                expires_at: 0,
+            });
+        }
     }
     let api_keys = settings
         .api_keys_for(provider_id)
@@ -686,22 +690,35 @@ fn authorize_workbuddy() -> Result<(OAuthAccountMetadata, crate::agent::WorkBudd
     let mut credential = oauth
         .poll_credential(&auth.state)
         .map_err(|error| error.to_string())?;
-    let account = oauth
-        .account_info(&auth.state, &credential)
-        .map_err(|error| error.to_string())?;
-    credential.user_id = Some(account.user_id.clone());
-    credential.enterprise_id = account.enterprise_id.clone();
-    let label = if account.display_name.trim().is_empty() {
-        account
-            .email
-            .clone()
-            .unwrap_or_else(|| account.user_id.clone())
-    } else {
-        account.display_name.clone()
-    };
+    let account = oauth.account_info(&auth.state, &credential).ok();
+    if let Some(account) = &account {
+        credential.user_id = Some(account.user_id.clone());
+        credential.enterprise_id = account.enterprise_id.clone();
+    }
+    let account_id = account
+        .as_ref()
+        .map(|account| account.user_id.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| credential.user_id.clone())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let label = account
+        .as_ref()
+        .and_then(|account| {
+            let display_name = account.display_name.trim();
+            if !display_name.is_empty() {
+                Some(display_name.to_string())
+            } else {
+                account
+                    .email
+                    .clone()
+                    .filter(|email| !email.trim().is_empty())
+            }
+        })
+        .unwrap_or_else(|| "WorkBuddy account".to_string());
     Ok((
         OAuthAccountMetadata {
-            id: format!("oauth:workbuddy:{}", account.user_id),
+            id: format!("oauth:workbuddy:{account_id}"),
             provider: AiProviderId::Workbuddy,
             label,
             expires_at: credential.expires_at,

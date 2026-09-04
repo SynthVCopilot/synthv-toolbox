@@ -363,6 +363,7 @@ impl WorkBuddyOAuth {
             .set("user-agent", "CLI/2.63.2 CodeBuddy/2.63.2")
             .set("x-product", "SaaS")
             .set("x-refresh-token", &credential.refresh)
+            .set("x-auth-refresh-source", "workbuddy")
             .set("content-type", "application/json");
         if !credential.access.trim().is_empty() {
             request = request.set("authorization", &format!("Bearer {}", credential.access));
@@ -389,11 +390,22 @@ impl WorkBuddyOAuth {
             request = request.set("x-user-id", user_id);
         }
         match request.send_string("{}") {
-            Ok(response) => parse_credential_response(
-                &response
-                    .into_string()
-                    .map_err(|e| AgentError::new(format!("read WorkBuddy refresh failed: {e}")))?,
-            ),
+            Ok(response) => {
+                let mut refreshed =
+                    parse_credential_response(&response.into_string().map_err(|e| {
+                        AgentError::new(format!("read WorkBuddy refresh failed: {e}"))
+                    })?)?;
+                if refreshed.domain.is_none() {
+                    refreshed.domain = credential.domain.clone();
+                }
+                if refreshed.user_id.is_none() {
+                    refreshed.user_id = credential.user_id.clone();
+                }
+                if refreshed.enterprise_id.is_none() {
+                    refreshed.enterprise_id = credential.enterprise_id.clone();
+                }
+                Ok(refreshed)
+            }
             Err(ureq::Error::Status(code, response)) => {
                 Err(http_error(code, response.into_string().unwrap_or_default()))
             }

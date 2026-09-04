@@ -19,7 +19,7 @@ fn server(
             let request = read_request(&mut stream);
             captured.lock().unwrap().push(request);
             let reason = if status == 200 { "OK" } else { "Error" };
-            let response = format!("HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            let response = format!("HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nSet-Cookie: session=test; Path=/; HttpOnly\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
             stream.write_all(response.as_bytes()).unwrap();
         }
     });
@@ -158,7 +158,7 @@ fn workbuddy_oauth_builds_state_url_polls_refreshes_and_reads_account() {
         ),
         (
             200,
-            r#"{"code":0,"data":{"access":"new-access","refresh":"new-refresh","expiresIn":"7200","domain":"tenant.example","userId":"user-1","enterpriseId":"ent-1"}}"#,
+            r#"{"code":0,"data":{"access":"new-access","refresh":"new-refresh","expiresIn":"7200"}}"#,
         ),
         (
             200,
@@ -179,6 +179,12 @@ fn workbuddy_oauth_builds_state_url_polls_refreshes_and_reads_account() {
     assert!(chat_headers
         .iter()
         .any(|(name, value)| name == "authorization" && value == "Bearer new-access"));
+    assert!(chat_headers
+        .iter()
+        .any(|(name, value)| name == "x-domain" && value == "tenant.example"));
+    assert!(chat_headers
+        .iter()
+        .any(|(name, value)| name == "x-enterprise-id" && value == "ent-1"));
     assert_eq!(
         oauth.chat_endpoint().unwrap().path(),
         "/chat/chat/completions"
@@ -196,6 +202,10 @@ fn workbuddy_oauth_builds_state_url_polls_refreshes_and_reads_account() {
     assert!(captured.contains("x-product: SaaS"));
     assert!(captured.contains("refresh-secret"));
     assert!(captured.contains("x-refresh-token: refresh-secret"));
+    assert!(captured.contains("x-auth-refresh-source: workbuddy"));
+    assert!(captured
+        .to_ascii_lowercase()
+        .contains("cookie: session=test"));
     handle.join().unwrap();
 }
 
