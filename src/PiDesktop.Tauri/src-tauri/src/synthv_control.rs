@@ -34,6 +34,7 @@ pub struct SynthVShortcutProfile {
 #[serde(rename_all = "camelCase")]
 pub enum BridgeShortcutAction {
     Start,
+    StartLegacy,
     Stop,
     Save,
     Undo,
@@ -43,7 +44,7 @@ pub enum BridgeShortcutAction {
 impl BridgeShortcutAction {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Start => BRIDGE_START_KEY,
+            Self::Start | Self::StartLegacy => BRIDGE_START_KEY,
             Self::Stop => BRIDGE_STOP_KEY,
             Self::Save => {
                 if cfg!(target_os = "macos") {
@@ -180,19 +181,31 @@ mod platform {
         process_id: u32,
         action: BridgeShortcutAction,
     ) -> Result<(), String> {
-        let key = match action {
+        let command = match action {
             BridgeShortcutAction::Start => "key code 105".to_string(),
+            BridgeShortcutAction::StartLegacy => format!(
+                "tell application \"System Events\" to tell (first process whose unix id is {process_id}) to click menu item \"SynthV Agent Bridge SV1 Legacy\" of menu 1 of menu item \"SynthV Agent Bridge\" of menu \"Scripts\" of menu bar 1"
+            ),
             BridgeShortcutAction::Stop => "key code 107".to_string(),
             BridgeShortcutAction::Save => "keystroke \"s\" using command down".to_string(),
             BridgeShortcutAction::Undo => "keystroke \"z\" using command down".to_string(),
-            BridgeShortcutAction::Refresh => "key code 96".to_string(),
+            BridgeShortcutAction::Refresh => format!(
+                "tell application \"System Events\" to tell (first process whose unix id is {process_id}) to click menu item \"Rescan\" of menu \"Scripts\" of menu bar 1"
+            ),
         };
         let focus = format!(
             "tell application \"System Events\" to tell (first process whose unix id is {process_id}) to set frontmost to true"
         );
-        let key = format!("tell application \"System Events\" to {key}");
+        let command = if matches!(
+            action,
+            BridgeShortcutAction::StartLegacy | BridgeShortcutAction::Refresh
+        ) {
+            command
+        } else {
+            format!("tell application \"System Events\" to {command}")
+        };
         let output = quiet_command("osascript")
-            .args(["-e", &focus, "-e", "delay 0.12", "-e", &key])
+            .args(["-e", &focus, "-e", "delay 0.12", "-e", &command])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output()
@@ -309,7 +322,7 @@ mod platform {
             }
         }
         let mut input = match action {
-            BridgeShortcutAction::Start => vec![
+            BridgeShortcutAction::Start | BridgeShortcutAction::StartLegacy => vec![
                 keyboard_input(0x7C, 0),
                 keyboard_input(0x7C, KEYEVENTF_KEYUP),
             ],

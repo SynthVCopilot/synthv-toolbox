@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use tokio::runtime::Handle;
@@ -20,6 +21,8 @@ enum ManagedClient {
     Stdio(Box<McpStdioClient>),
     Http(McpHttpClient),
 }
+
+const MCP_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(8);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SynthVConnectionProfile {
@@ -216,13 +219,16 @@ impl McpManager {
         client: ManagedClient,
         agent_visible: bool,
     ) -> Result<Vec<String>, String> {
-        client
-            .initialize("synthv-toolbox", env!("CARGO_PKG_VERSION"))
+        tokio::time::timeout(
+            MCP_HANDSHAKE_TIMEOUT,
+            client.initialize("synthv-toolbox", env!("CARGO_PKG_VERSION")),
+        )
+        .await
+        .map_err(|_| format!("{name} MCP 握手超时。"))?
+        .map_err(|error| format!("{name} MCP 握手失败：{error}"))?;
+        let listed = tokio::time::timeout(MCP_HANDSHAKE_TIMEOUT, client.list_tools())
             .await
-            .map_err(|error| format!("{name} MCP 握手失败：{error}"))?;
-        let listed = client
-            .list_tools()
-            .await
+            .map_err(|_| format!("{name} MCP 工具枚举超时。"))?
             .map_err(|error| format!("{name} 无法列出工具：{error}"))?;
         let tools = parse_tools(&id, &name, &listed);
         if tools.is_empty() {

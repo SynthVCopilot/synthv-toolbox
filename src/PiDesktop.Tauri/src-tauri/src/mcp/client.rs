@@ -109,6 +109,9 @@ impl McpStdioClient {
                     }
                 }
             }
+            for (_, pending) in read_pending.lock().await.drain() {
+                let _ = pending.send(Err(McpError("响应流已关闭（子进程可能已退出）".into())));
+            }
         });
 
         Ok(Self {

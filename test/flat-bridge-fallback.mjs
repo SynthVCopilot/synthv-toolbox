@@ -23,6 +23,7 @@ assert.match(manager, /synthv_connection_profile/);
 assert.match(control, /is_flat_executable_name/);
 assert.match(control, /"synthesizer v flat\.exe"/);
 assert.match(control, /"synthesizer-v-flat\.exe"/);
+assert.match(control, /BridgeShortcutAction::StartLegacy/);
 assert.doesNotMatch(control, /contains\("flat"\)/);
 
 console.log("Flat Bridge fallback contracts passed.");
