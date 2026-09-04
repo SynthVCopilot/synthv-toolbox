@@ -10,3 +10,4 @@
 - 参考分离已完成；运行态旧 pi-audio 缺失 `source-style`，且目标平台一体化 Cover 受 412 影响，正在以同版本包内组件源码和受管本地音频 Cover 入口完成修复。
 - 完整参考 vocals 已用包内 `source-style` 实测输出九项特征；目标 Cover 到 90% 后因 Flat singer 未注册失败，已加入 F5 自动刷新与一次重试，并保留两个原始检查点。
 - 已用全新 Flat 进程和 F5 复核：Mai 可指派、赤羽 Plus 仍未注册；调整 Cover 在该边界下继续写谱并返回 `requiresHostRegistration`，不再丢失整条任务。
+- `learn_tuning_from_source` 两次被 OpenCode 的单次 MCP 超时取消；已将长音频风格分析限制为中段 45 秒窗口，真实参考 vocals 从约 3 分钟降至 14 秒。
