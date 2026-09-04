@@ -9,6 +9,7 @@ mod components;
 mod config;
 mod creative_history;
 mod creative_tools;
+pub mod credential_balancer;
 mod downloads;
 mod http_api;
 mod lyric_projects;
@@ -155,7 +156,7 @@ pub fn run() {
             commands::set_agent_work_mode,
             commands::authorize_ai_provider,
             commands::select_ai_provider,
-            commands::configure_ai_api_key,
+            commands::add_ai_api_key,
             commands::remove_ai_api_key,
             commands::ai_provider_state,
             commands::opencode_provider_catalog,

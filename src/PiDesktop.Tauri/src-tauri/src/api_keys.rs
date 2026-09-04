@@ -24,25 +24,25 @@ const OPENAI_AUTHORIZATION_HEADER: &str = "authorization";
 /// A restorable keyring snapshot used to keep delete/configure transactions honest.
 pub struct ApiKeyBackup(Option<Zeroizing<Vec<u8>>>);
 
-fn entry(provider: AiProviderId) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(API_KEY_SERVICE, provider.as_str())
+fn entry(credential_id: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(API_KEY_SERVICE, credential_id)
         .map_err(|error| format!("系统凭据库不可用：{error}"))
 }
 
-fn read_raw(provider: AiProviderId) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
-    match entry(provider)?.get_secret() {
+fn read_raw(
+    _provider: AiProviderId,
+    credential_id: &str,
+) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
+    match entry(credential_id)?.get_secret() {
         Ok(value) => Ok(Some(Zeroizing::new(value))),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(error) => Err(format!("无法读取系统 API Key：{error}")),
     }
 }
 
-pub fn configured(provider: AiProviderId) -> bool {
-    read_raw(provider).is_ok_and(|value| value.is_some_and(|value| !value.is_empty()))
-}
-
-pub fn load(provider: AiProviderId) -> Result<Zeroizing<String>, String> {
-    let bytes = read_raw(provider)?.ok_or_else(|| "尚未配置 API Key。".to_string())?;
+pub fn load(_provider: AiProviderId, credential_id: &str) -> Result<Zeroizing<String>, String> {
+    let bytes =
+        read_raw(_provider, credential_id)?.ok_or_else(|| "尚未配置 API Key。".to_string())?;
     if bytes.is_empty() {
         return Err("系统凭据库中的 API Key 为空。请重新配置。".to_string());
     }
@@ -58,33 +58,38 @@ pub fn load(provider: AiProviderId) -> Result<Zeroizing<String>, String> {
 }
 
 pub fn replace(
-    provider: AiProviderId,
+    _provider: AiProviderId,
+    credential_id: &str,
     api_key: &Zeroizing<String>,
 ) -> Result<ApiKeyBackup, String> {
     if api_key.trim().is_empty() {
         return Err("API Key 不能为空。".to_string());
     }
-    let backup = ApiKeyBackup(read_raw(provider)?);
-    entry(provider)?
+    let backup = ApiKeyBackup(read_raw(_provider, credential_id)?);
+    entry(credential_id)?
         .set_secret(api_key.as_bytes())
         .map_err(|error| format!("无法写入系统 API Key：{error}"))?;
     Ok(backup)
 }
 
-pub fn take(provider: AiProviderId) -> Result<ApiKeyBackup, String> {
-    let backup = ApiKeyBackup(read_raw(provider)?);
-    match entry(provider)?.delete_credential() {
+pub fn take(_provider: AiProviderId, credential_id: &str) -> Result<ApiKeyBackup, String> {
+    let backup = ApiKeyBackup(read_raw(_provider, credential_id)?);
+    match entry(credential_id)?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(backup),
         Err(error) => Err(format!("无法从系统凭据库删除 API Key：{error}")),
     }
 }
 
-pub fn restore(provider: AiProviderId, backup: ApiKeyBackup) -> Result<(), String> {
+pub fn restore(
+    _provider: AiProviderId,
+    credential_id: &str,
+    backup: ApiKeyBackup,
+) -> Result<(), String> {
     match backup.0 {
-        Some(secret) => entry(provider)?
+        Some(secret) => entry(credential_id)?
             .set_secret(&secret)
             .map_err(|error| format!("无法恢复系统 API Key：{error}")),
-        None => match entry(provider)?.delete_credential() {
+        None => match entry(credential_id)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(error) => Err(format!("无法清理系统 API Key：{error}")),
         },

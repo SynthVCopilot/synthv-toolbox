@@ -8,6 +8,7 @@ use crate::agent::ChatMessage;
 use crate::agent_files::FileApprovalManager;
 use crate::audio_prep::AudioPreparationService;
 use crate::config::ToolboxSettings;
+use crate::credential_balancer::CredentialBalancer;
 use crate::downloads::ComponentDownloadManager;
 use crate::http_api::HttpApiManager;
 use crate::mcp::McpManager;
@@ -36,6 +37,7 @@ pub struct AppState {
     pub sv2_profiles: Arc<Sv2ProfileService>,
     pub svp_passthrough_only: AtomicBool,
     pub http_api: Arc<HttpApiManager>,
+    pub credential_balancer: Arc<Mutex<CredentialBalancer>>,
 }
 
 impl AppState {
@@ -50,6 +52,9 @@ impl AppState {
         let mcp = Arc::new(McpManager::default());
         let media_tasks =
             MediaTaskManager::persistent(resource_dir.clone(), bridge_dir.clone(), mcp.clone());
+        let credential_balancer = Arc::new(Mutex::new(CredentialBalancer::new(
+            settings.credential_routes(),
+        )));
         Self {
             settings: Arc::new(RwLock::new(settings)),
             agent: Arc::new(Mutex::new(AgentSession::default())),
@@ -64,6 +69,7 @@ impl AppState {
             sv2_profiles: Arc::new(Sv2ProfileService::new()),
             svp_passthrough_only: AtomicBool::new(svp_passthrough_only),
             http_api: Arc::new(HttpApiManager::default()),
+            credential_balancer,
         }
     }
 }
