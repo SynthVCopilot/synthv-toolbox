@@ -1,4 +1,5 @@
 fn main() {
+    let attributes = tauri_build::Attributes::new();
     #[cfg(windows)]
     {
         cc::Build::new()
@@ -26,5 +27,14 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=Foundation");
         println!("cargo:rerun-if-changed=native/macos_process_tap.mm");
     }
-    tauri_build::build()
+    #[cfg(windows)]
+    let attributes = {
+        let manifest = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+            .join("windows-app-manifest.xml");
+        println!("cargo:rerun-if-changed={}", manifest.display());
+        println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
+        attributes.windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest())
+    };
+    tauri_build::try_build(attributes).expect("failed to build desktop resources");
 }
