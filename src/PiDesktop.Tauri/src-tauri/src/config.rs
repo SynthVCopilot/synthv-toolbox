@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::oauth::{self, AiProviderId, OAuthAccountMetadata};
 
 const SETTINGS_SCHEMA_VERSION: u32 = 2;
+pub const DEFAULT_HTTP_API_PORT: u16 = 17_831;
 static MODEL_CONFIG_MUTATION_LOCK: Mutex<()> = Mutex::new(());
 static SETTINGS_LOAD_ERROR: OnceLock<String> = OnceLock::new();
 
@@ -80,6 +81,10 @@ pub struct ToolboxSettings {
     pub codex_model: String,
     #[serde(default)]
     pub oauth_accounts: Vec<OAuthAccountMetadata>,
+    #[serde(default)]
+    pub http_api_enabled: bool,
+    #[serde(default = "default_http_api_port")]
+    pub http_api_port: u16,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -133,6 +138,8 @@ impl Default for ToolboxSettings {
             anthropic_model: default_anthropic_model(),
             codex_model: default_codex_model(),
             oauth_accounts: Vec::new(),
+            http_api_enabled: false,
+            http_api_port: DEFAULT_HTTP_API_PORT,
         }
     }
 }
@@ -151,6 +158,10 @@ fn default_anthropic_model() -> String {
 
 fn default_codex_model() -> String {
     AiProviderId::OpenaiCodex.default_model().to_string()
+}
+
+fn default_http_api_port() -> u16 {
+    DEFAULT_HTTP_API_PORT
 }
 
 impl ToolboxSettings {

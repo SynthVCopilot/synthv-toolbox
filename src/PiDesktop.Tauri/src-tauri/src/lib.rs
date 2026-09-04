@@ -9,6 +9,7 @@ mod config;
 mod creative_history;
 mod creative_tools;
 mod downloads;
+mod http_api;
 mod lyric_projects;
 mod lyric_tools;
 mod managed_process;
@@ -97,6 +98,16 @@ pub fn run() {
                 passthrough_only,
                 settings,
             ));
+            let http_api = app.state::<AppState>().http_api.clone();
+            let mut http_context =
+                crate::http_api::HttpApiContext::from_state(&app.state::<AppState>());
+            let http_settings = app.state::<AppState>().settings.clone();
+            tauri::async_runtime::spawn(async move {
+                let settings = http_settings.read().await;
+                http_context.enabled = settings.http_api_enabled;
+                http_context.port = settings.http_api_port;
+                let _ = http_api.start_if_enabled(http_context).await;
+            });
             if let Some(activation) = initial_activation.clone() {
                 match open_original_svp_project(
                     &activation.project_path,
@@ -251,6 +262,8 @@ pub fn run() {
             commands::send_message,
             commands::agent_file_approvals,
             commands::decide_agent_file_approval,
+            commands::get_http_api_status,
+            commands::configure_http_api,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run SynthV Toolbox");
