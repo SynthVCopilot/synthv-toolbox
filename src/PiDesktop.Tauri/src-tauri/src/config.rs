@@ -1055,21 +1055,23 @@ mod tests {
 
     #[test]
     fn oauth_and_api_key_model_directories_never_mix() {
-        let mut settings = ToolboxSettings::default();
-        settings.anthropic_api_keys = vec![ApiKeyMetadata {
-            id: "key-1".to_string(),
-            provider: AiProviderId::Anthropic,
-            label: "A".to_string(),
-            models: vec!["claude-api-only".to_string()],
-            created_at_utc: "2026-01-01T00:00:00Z".to_string(),
-        }];
-        settings.openai_api_keys = vec![ApiKeyMetadata {
-            id: "key-2".to_string(),
-            provider: AiProviderId::OpenaiCodex,
-            label: "B".to_string(),
-            models: vec!["gpt-api-only".to_string()],
-            created_at_utc: "2026-01-01T00:00:00Z".to_string(),
-        }];
+        let settings = ToolboxSettings {
+            anthropic_api_keys: vec![ApiKeyMetadata {
+                id: "key-1".to_string(),
+                provider: AiProviderId::Anthropic,
+                label: "A".to_string(),
+                models: vec!["claude-api-only".to_string()],
+                created_at_utc: "2026-01-01T00:00:00Z".to_string(),
+            }],
+            openai_api_keys: vec![ApiKeyMetadata {
+                id: "key-2".to_string(),
+                provider: AiProviderId::OpenaiCodex,
+                label: "B".to_string(),
+                models: vec!["gpt-api-only".to_string()],
+                created_at_utc: "2026-01-01T00:00:00Z".to_string(),
+            }],
+            ..ToolboxSettings::default()
+        };
 
         let catalog = RuntimeModelCatalog::fallback(None);
         let oauth = oauth_models_for(AiProviderId::Anthropic, &catalog, None);
