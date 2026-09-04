@@ -204,6 +204,65 @@ pub fn discover() -> Result<Vec<StandardSynthVHost>, String> {
     }
 }
 
+pub fn flat_process_ids() -> Result<Vec<u32>, String> {
+    Ok(discover()?
+        .into_iter()
+        .filter(|host| host.kind == HostKind::Flat && host.running)
+        .filter_map(|host| host.process_id)
+        .collect())
+}
+
+pub fn launch_flat(
+    host: &StandardSynthVHost,
+    project_path: Option<&std::path::Path>,
+) -> Result<(), String> {
+    if host.kind != HostKind::Flat || !host.installed {
+        return Err("Synthesizer V Flat 未安装，无法启动。".to_string());
+    }
+    let executable = flat_launch_executable(host)?;
+    let mut command = std::process::Command::new(executable);
+    if let Some(project_path) = project_path {
+        command.arg(project_path);
+    }
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("无法启动 Synthesizer V Flat：{error}"))
+}
+
+#[cfg(target_os = "macos")]
+fn flat_launch_executable(host: &StandardSynthVHost) -> Result<PathBuf, String> {
+    let application = host
+        .application_path
+        .as_deref()
+        .map(PathBuf::from)
+        .ok_or_else(|| "Synthesizer V Flat 安装路径不可用。".to_string())?;
+    let executable = application
+        .join("Contents/Resources/Synthesizer V Studio Pro/Contents/MacOS/Synthesizer V Flat");
+    safe_regular_file(&executable)
+        .then_some(executable)
+        .ok_or_else(|| "Synthesizer V Flat 可执行文件不可用。".to_string())
+}
+
+#[cfg(windows)]
+fn flat_launch_executable(host: &StandardSynthVHost) -> Result<PathBuf, String> {
+    let directory = host
+        .application_path
+        .as_deref()
+        .map(PathBuf::from)
+        .ok_or_else(|| "Synthesizer V Flat 安装路径不可用。".to_string())?;
+    ["Synthesizer V Flat.exe", "synthesizer-v-flat.exe"]
+        .into_iter()
+        .map(|name| directory.join(name))
+        .find(|path| safe_regular_file(path))
+        .ok_or_else(|| "Synthesizer V Flat 可执行文件不可用。".to_string())
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn flat_launch_executable(_host: &StandardSynthVHost) -> Result<PathBuf, String> {
+    Err("当前平台不支持启动 Synthesizer V Flat。".to_string())
+}
+
 #[cfg(windows)]
 fn discover_windows() -> Result<Vec<StandardSynthVHost>, String> {
     let processes = crate::synthv_control::list_processes()?
@@ -447,6 +506,12 @@ fn is_windows_flat_process(command: &str) -> bool {
 fn safe_regular_file(path: &std::path::Path) -> bool {
     std::fs::symlink_metadata(path)
         .is_ok_and(|metadata| metadata.file_type().is_file() && !is_reparse_point(&metadata))
+}
+
+#[cfg(not(windows))]
+fn safe_regular_file(path: &std::path::Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .is_ok_and(|metadata| metadata.file_type().is_file() && !metadata.file_type().is_symlink())
 }
 
 #[cfg(windows)]
