@@ -35,6 +35,7 @@ mod synthv_hosts;
 mod synthv_unified;
 mod tuning_profiles;
 mod update_checker;
+mod workbuddy_store;
 mod workflows;
 
 use std::path::PathBuf;

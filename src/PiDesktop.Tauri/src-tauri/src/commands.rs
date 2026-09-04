@@ -12,7 +12,8 @@ use uuid::Uuid;
 use crate::agent::{
     AgentError, AgentErrorKind, AgentLoop, AgentProvider, AgentStep, AnthropicConfig,
     AnthropicProvider, ChatMessage, Conversation, ConversationStore, JsonConversationStore,
-    NoTools, OpenAiCodexConfig, OpenAiCodexProvider, Role, ToolDefinition,
+    NoTools, OpenAiChatConfig, OpenAiChatProvider, OpenAiCodexConfig, OpenAiCodexProvider, Role,
+    ToolDefinition, TraeCodeConfig, TraeCodeProvider, WorkBuddyOAuth, WorkBuddyOAuthConfig,
 };
 use crate::api_keys;
 use crate::audio_capture::{
@@ -69,6 +70,7 @@ use crate::synthv::{
 };
 use crate::synthv_control::{self, BridgeShortcutAction, SynthVProcess, SynthVShortcutProfile};
 use crate::tuning_profiles::{self, TuningParameters, TuningProfile};
+use crate::workbuddy_store;
 use crate::workflows::{self, WorkflowResult};
 
 #[derive(Debug, Clone, Serialize)]
@@ -146,26 +148,61 @@ impl ProviderPool {
         &self,
         account: &OAuthAccountMetadata,
     ) -> crate::agent::Result<Box<dyn AgentProvider>> {
-        let mut credential = oauth::load_ready_credential(account)
-            .map_err(|error| AgentError::transport(format!("{}：{error}", account.label)))?;
-        let access = std::mem::take(&mut credential.access);
         match self.provider_id {
-            AiProviderId::Anthropic => Ok(Box::new(AnthropicProvider::new(
-                AnthropicConfig::oauth(access, self.model.clone()),
-            ))),
-            AiProviderId::OpenaiCodex => {
-                let account_id = credential.account_id.take().ok_or_else(|| {
-                    AgentError::transport(format!(
-                        "{}：Codex OAuth 凭据缺少 ChatGPT account id。",
-                        account.label
-                    ))
+            AiProviderId::Anthropic | AiProviderId::OpenaiCodex => {
+                let mut credential = oauth::load_ready_credential(account).map_err(|error| {
+                    AgentError::transport(format!("{}：{error}", account.label))
                 })?;
-                Ok(Box::new(OpenAiCodexProvider::new(OpenAiCodexConfig::new(
-                    access,
-                    account_id,
-                    self.model.clone(),
-                ))))
+                let access = std::mem::take(&mut credential.access);
+                if self.provider_id == AiProviderId::Anthropic {
+                    Ok(Box::new(AnthropicProvider::new(AnthropicConfig::oauth(
+                        access,
+                        self.model.clone(),
+                    ))))
+                } else {
+                    let account_id = credential.account_id.take().ok_or_else(|| {
+                        AgentError::transport(format!(
+                            "{}：Codex OAuth 凭据缺少 ChatGPT account id。",
+                            account.label
+                        ))
+                    })?;
+                    Ok(Box::new(OpenAiCodexProvider::new(OpenAiCodexConfig::new(
+                        access,
+                        account_id,
+                        self.model.clone(),
+                    ))))
+                }
             }
+            AiProviderId::Workbuddy => {
+                let mut credential =
+                    workbuddy_store::load(&account.id).map_err(AgentError::transport)?;
+                let oauth = WorkBuddyOAuth::new(WorkBuddyOAuthConfig::builtin());
+                if credential.access.trim().is_empty()
+                    || credential.expires_at <= Utc::now().timestamp_millis()
+                {
+                    let refreshed = oauth
+                        .refresh_credential(&credential)
+                        .map_err(|error| AgentError::transport(error.to_string()))?;
+                    workbuddy_store::replace(&account.id, &refreshed)
+                        .map_err(AgentError::transport)?;
+                    credential = refreshed;
+                }
+                let mut config = OpenAiChatConfig::new(
+                    oauth
+                        .chat_endpoint()
+                        .map_err(|error| AgentError::transport(error.to_string()))?
+                        .to_string(),
+                    credential.access.clone(),
+                    self.model.clone(),
+                );
+                config.headers = oauth
+                    .chat_headers(&credential)
+                    .map_err(|error| AgentError::transport(error.to_string()))?;
+                Ok(Box::new(OpenAiChatProvider::new(config)))
+            }
+            AiProviderId::Traecode => Ok(Box::new(TraeCodeProvider::new(TraeCodeConfig::new(
+                self.model.clone(),
+            )))),
         }
     }
 
@@ -364,12 +401,27 @@ fn build_ai_provider(
 ) -> Result<ProviderPool, String> {
     let provider_id = settings.ai_provider;
     let model = settings.model_for(provider_id).to_string();
-    let accounts = settings
+    let mut accounts = settings
         .oauth_accounts
         .iter()
         .filter(|account| account.provider == provider_id)
         .cloned()
         .collect::<Vec<_>>();
+    if provider_id == AiProviderId::Traecode
+        && TraeCodeProvider::new(TraeCodeConfig::new(provider_id.default_model()))
+            .cached_login_status()
+            .is_ok_and(|status| status.logged_in)
+        && !accounts
+            .iter()
+            .any(|account| account.id == "oauth:traecode:local")
+    {
+        accounts.push(OAuthAccountMetadata {
+            id: "oauth:traecode:local".to_string(),
+            provider: provider_id,
+            label: "TraeCode account".to_string(),
+            expires_at: 0,
+        });
+    }
     let api_keys = settings
         .api_keys_for(provider_id)
         .iter()
@@ -391,6 +443,16 @@ fn build_ai_provider(
             Err(error) => return Err(error),
         }
     };
+    if provider_id == AiProviderId::Traecode && !accounts.is_empty() {
+        if let Ok(mut balancer) = balancer.lock() {
+            balancer.upsert(crate::credential_balancer::CredentialRoute {
+                id: "oauth:traecode:local".to_string(),
+                provider: provider_id,
+                auth_method: AiAuthMethod::OAuth,
+                models: vec![provider_id.default_model().to_string()],
+            });
+        }
+    }
     Ok(ProviderPool {
         id: provider_id.as_str().to_string(),
         provider_id,
@@ -614,12 +676,125 @@ pub async fn set_agent_work_mode(
     build_bootstrap(&state).await
 }
 
+fn authorize_workbuddy() -> Result<(OAuthAccountMetadata, crate::agent::WorkBuddyCredential), String>
+{
+    let oauth = WorkBuddyOAuth::new(WorkBuddyOAuthConfig::builtin());
+    let auth = oauth
+        .request_auth_state()
+        .map_err(|error| error.to_string())?;
+    oauth::open_external(&auth.auth_url)?;
+    let mut credential = oauth
+        .poll_credential(&auth.state)
+        .map_err(|error| error.to_string())?;
+    let account = oauth
+        .account_info(&auth.state, &credential)
+        .map_err(|error| error.to_string())?;
+    credential.user_id = Some(account.user_id.clone());
+    credential.enterprise_id = account.enterprise_id.clone();
+    let label = if account.display_name.trim().is_empty() {
+        account
+            .email
+            .clone()
+            .unwrap_or_else(|| account.user_id.clone())
+    } else {
+        account.display_name.clone()
+    };
+    Ok((
+        OAuthAccountMetadata {
+            id: format!("oauth:workbuddy:{}", account.user_id),
+            provider: AiProviderId::Workbuddy,
+            label,
+            expires_at: credential.expires_at,
+        },
+        credential,
+    ))
+}
+
 #[tauri::command]
 pub async fn authorize_ai_provider(
     provider: AiProviderId,
     state: State<'_, AppState>,
 ) -> Result<BootstrapState, String> {
     require_ai(&state).await?;
+    if provider == AiProviderId::Workbuddy {
+        let (metadata, credential) = tauri::async_runtime::spawn_blocking(authorize_workbuddy)
+            .await
+            .map_err(|error| error.to_string())??;
+        let id = metadata.id.clone();
+        {
+            let mut settings = state.settings.write().await;
+            let mut next = settings.clone();
+            next.ai_provider = provider;
+            next.upsert_oauth_account(metadata.clone());
+            let saved = next.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let backup = workbuddy_store::replace(&id, &credential)?;
+                if let Err(save_error) = save_settings(&saved) {
+                    return match workbuddy_store::restore(&id, backup) {
+                        Ok(()) => Err(save_error),
+                        Err(rollback) => Err(format!(
+                            "{save_error}；WorkBuddy 凭据回滚也失败：{rollback}"
+                        )),
+                    };
+                }
+                Ok::<_, String>(())
+            })
+            .await
+            .map_err(|error| error.to_string())??;
+            *settings = next;
+        }
+        state
+            .credential_balancer
+            .lock()
+            .map_err(|_| "凭据调度器不可用。".to_string())?
+            .upsert(crate::credential_balancer::CredentialRoute {
+                id: metadata.id,
+                provider,
+                auth_method: AiAuthMethod::OAuth,
+                models: WorkBuddyOAuthConfig::builtin().models,
+            });
+        return build_bootstrap(&state).await;
+    }
+    if provider == AiProviderId::Traecode {
+        let status = tauri::async_runtime::spawn_blocking(|| {
+            TraeCodeProvider::new(TraeCodeConfig::new(AiProviderId::Traecode.default_model()))
+                .login()
+        })
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+        if !status.available {
+            return Err(status.detail);
+        }
+        if !status.logged_in {
+            return Err(status.detail);
+        }
+        let metadata = OAuthAccountMetadata {
+            id: "oauth:traecode:local".to_string(),
+            provider,
+            label: "TraeCode account".to_string(),
+            expires_at: 0,
+        };
+        {
+            let mut settings = state.settings.write().await;
+            let mut next = settings.clone();
+            next.ai_provider = provider;
+            next.upsert_oauth_account(metadata.clone());
+            save_settings(&next)?;
+            *settings = next;
+        }
+        state
+            .credential_balancer
+            .lock()
+            .map_err(|_| "凭据调度器不可用。".to_string())?
+            .upsert(crate::credential_balancer::CredentialRoute {
+                id: metadata.id,
+                provider,
+                auth_method: AiAuthMethod::OAuth,
+                models: vec![provider.default_model().to_string()],
+            });
+        return build_bootstrap(&state).await;
+    }
     let authorized = tauri::async_runtime::spawn_blocking(move || oauth::authorize(provider))
         .await
         .map_err(|error| error.to_string())??;
@@ -857,6 +1032,73 @@ pub async fn remove_ai_provider_account(
     state: State<'_, AppState>,
 ) -> Result<BootstrapState, String> {
     require_ai(&state).await?;
+    if provider == AiProviderId::Traecode {
+        let status = tauri::async_runtime::spawn_blocking(|| {
+            TraeCodeProvider::new(TraeCodeConfig::new(AiProviderId::Traecode.default_model()))
+                .logout()
+        })
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+        if !status.available || status.logged_in {
+            return Err(status.detail);
+        }
+        let mut settings = state.settings.write().await;
+        if !settings
+            .oauth_accounts
+            .iter()
+            .any(|account| account.provider == provider && account.id == account_id)
+        {
+            return Err("没有找到要移除的 TraeCode 登录记录。".to_string());
+        }
+        let mut next = settings.clone();
+        next.oauth_accounts
+            .retain(|account| account.id != account_id);
+        save_settings(&next)?;
+        *settings = next;
+        state
+            .credential_balancer
+            .lock()
+            .map_err(|_| "凭据调度器不可用。".to_string())?
+            .remove(AiAuthMethod::OAuth, &account_id);
+        return build_bootstrap(&state).await;
+    }
+    if provider == AiProviderId::Workbuddy {
+        let mut settings = state.settings.write().await;
+        let mut next = settings.clone();
+        if !next
+            .oauth_accounts
+            .iter()
+            .any(|account| account.provider == provider && account.id == account_id)
+        {
+            return Err("没有找到要移除的 WorkBuddy 账号。".to_string());
+        }
+        next.oauth_accounts
+            .retain(|account| account.id != account_id);
+        let saved = next.clone();
+        let id = account_id.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let backup = workbuddy_store::take(&id)?;
+            if let Err(save_error) = save_settings(&saved) {
+                return match workbuddy_store::restore(&id, backup) {
+                    Ok(()) => Err(save_error),
+                    Err(rollback) => Err(format!(
+                        "{save_error}；WorkBuddy 凭据回滚也失败：{rollback}"
+                    )),
+                };
+            }
+            Ok::<_, String>(())
+        })
+        .await
+        .map_err(|error| error.to_string())??;
+        *settings = next;
+        state
+            .credential_balancer
+            .lock()
+            .map_err(|_| "凭据调度器不可用。".to_string())?
+            .remove(AiAuthMethod::OAuth, &account_id);
+        return build_bootstrap(&state).await;
+    }
     {
         let mut settings = state.settings.write().await;
         let metadata = settings

@@ -1,13 +1,16 @@
 //! TraeCode CLI provider with a deliberately narrow official CLI boundary.
 
+use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use uuid::Uuid;
 
 use super::{
     AgentError, AgentProvider, AgentStep, ChatMessage, Result, Role, ToolCall, ToolDefinition,
@@ -15,6 +18,8 @@ use super::{
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
+const STATUS_CACHE_TTL: Duration = Duration::from_secs(2);
+static STATUS_CACHE: OnceLock<Mutex<Option<(Instant, TraeLoginStatus)>>> = OnceLock::new();
 
 fn default_timeout_secs() -> u64 {
     DEFAULT_TIMEOUT_SECS
@@ -118,7 +123,12 @@ impl TraeCodeProvider {
             .as_ref()
             .and_then(|value| value.get("loggedIn").or_else(|| value.get("logged_in")))
             .and_then(Value::as_bool)
-            .unwrap_or_else(|| output.stdout.to_ascii_lowercase().contains("logged in"));
+            .unwrap_or_else(|| {
+                let text = output.stdout.to_ascii_lowercase();
+                !text.contains("not logged in")
+                    && !text.contains("logged out")
+                    && text.contains("logged in")
+            });
         Ok(TraeLoginStatus {
             available: true,
             logged_in,
@@ -130,9 +140,36 @@ impl TraeCodeProvider {
         })
     }
 
+    pub fn cached_login_status(&self) -> Result<TraeLoginStatus> {
+        let cache = STATUS_CACHE.get_or_init(|| Mutex::new(None));
+        if let Ok(guard) = cache.lock() {
+            if let Some((created, status)) = guard.as_ref() {
+                if created.elapsed() < STATUS_CACHE_TTL {
+                    return Ok(status.clone());
+                }
+            }
+        }
+        let mut status_config = self.config.clone();
+        status_config.timeout_secs = status_config.timeout_secs.min(5);
+        let status = Self::new(status_config).login_status()?;
+        if let Ok(mut guard) = cache.lock() {
+            *guard = Some((Instant::now(), status.clone()));
+        }
+        Ok(status)
+    }
+
     pub fn login(&self) -> Result<TraeLoginStatus> {
+        let mut login_config = self.config.clone();
+        login_config.timeout_secs = 10 * 60;
+        let login_provider = Self::new(login_config);
+        let executable = login_provider.resolve_executable()?;
+        login_provider.run(&executable, &["login"])?;
+        self.login_status()
+    }
+
+    pub fn logout(&self) -> Result<TraeLoginStatus> {
         let executable = self.resolve_executable()?;
-        self.run(&executable, &["login"])?;
+        self.run(&executable, &["logout"])?;
         self.login_status()
     }
 
@@ -140,21 +177,28 @@ impl TraeCodeProvider {
         &self,
         conversation: &[ChatMessage],
         tools: &[ToolDefinition],
+        schema_path: &Path,
+        output_path: &Path,
     ) -> Result<Vec<String>> {
         if self.config.model.trim().is_empty() {
             return Err(AgentError::new("TraeCode model id is empty"));
         }
-        let schema = json!({ "type": "object", "required": ["assistantText", "toolCalls"], "additionalProperties": false, "properties": { "assistantText": { "type": ["string", "null"] }, "toolCalls": { "type": "array", "items": { "type": "object", "required": ["id", "tool_name", "arguments_json"], "additionalProperties": false, "properties": { "id": { "type": "string" }, "tool_name": { "type": "string" }, "arguments_json": { "type": "string" } } } } } }).to_string();
+        let schema = json!({ "type": "object", "required": ["assistantText", "toolCalls"], "additionalProperties": false, "properties": { "assistantText": { "type": ["string", "null"] }, "toolCalls": { "type": "array", "items": { "type": "object", "required": ["id", "tool_name", "arguments_json"], "additionalProperties": false, "properties": { "id": { "type": "string" }, "tool_name": { "type": "string" }, "arguments_json": { "type": "string" } } } } } });
+        fs::write(schema_path, schema.to_string()).map_err(|error| {
+            AgentError::new(format!("write TraeCode output schema failed: {error}"))
+        })?;
         let input = json!({ "model": self.config.model, "messages": conversation.iter().map(trae_message).collect::<Result<Vec<_>>>()?, "tools": tools.iter().map(|tool| json!({ "name": tool.name, "description": tool.description, "inputSchema": serde_json::from_str::<Value>(&tool.input_schema_json).unwrap_or_else(|_| json!({ "type": "object" })) })).collect::<Vec<_>>() });
         Ok(vec![
             "exec".into(),
             "--json".into(),
             "--output-schema".into(),
-            schema,
+            schema_path.to_string_lossy().into_owned(),
+            "--output-last-message".into(),
+            output_path.to_string_lossy().into_owned(),
             "--ephemeral".into(),
             "--sandbox".into(),
             "read-only".into(),
-            "--prompt".into(),
+            "--skip-git-repo-check".into(),
             input.to_string(),
         ])
     }
@@ -181,12 +225,21 @@ impl TraeCodeProvider {
             .iter()
             .map(|value| (*value).to_string())
             .collect::<Vec<_>>();
-        self.run_owned(executable, &owned)
+        self.run_owned(executable, &owned, None)
     }
 
-    fn run_owned(&self, executable: &Path, args: &[String]) -> Result<BoundedOutput> {
-        let mut child = Command::new(executable)
-            .args(args)
+    fn run_owned(
+        &self,
+        executable: &Path,
+        args: &[String],
+        current_dir: Option<&Path>,
+    ) -> Result<BoundedOutput> {
+        let mut command = Command::new(executable);
+        command.args(args);
+        if let Some(directory) = current_dir {
+            command.current_dir(directory);
+        }
+        let mut child = command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -245,8 +298,25 @@ impl AgentProvider for TraeCodeProvider {
     }
     fn step(&self, conversation: &[ChatMessage], tools: &[ToolDefinition]) -> Result<AgentStep> {
         let executable = self.resolve_executable()?;
-        let args = self.build_exec_args(conversation, tools)?;
-        Self::parse_output(&self.run_owned(&executable, &args)?.stdout)
+        let temporary_directory =
+            std::env::temp_dir().join(format!("synthv-traecode-{}", Uuid::new_v4().simple()));
+        fs::create_dir(&temporary_directory).map_err(|error| {
+            AgentError::new(format!(
+                "create TraeCode temporary directory failed: {error}"
+            ))
+        })?;
+        let schema_path = temporary_directory.join("output-schema.json");
+        let output_path = temporary_directory.join("last-message.json");
+        let result = (|| {
+            let args = self.build_exec_args(conversation, tools, &schema_path, &output_path)?;
+            self.run_owned(&executable, &args, Some(&temporary_directory))?;
+            let message = fs::read_to_string(&output_path).map_err(|error| {
+                AgentError::new(format!("TraeCode final message file unavailable: {error}"))
+            })?;
+            Self::parse_output(&message)
+        })();
+        let _ = fs::remove_dir_all(temporary_directory);
+        result
     }
 }
 

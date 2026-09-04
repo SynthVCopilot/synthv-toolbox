@@ -57,6 +57,8 @@ pub enum AiProviderId {
     #[default]
     Anthropic,
     OpenaiCodex,
+    Workbuddy,
+    Traecode,
 }
 
 impl AiProviderId {
@@ -64,6 +66,8 @@ impl AiProviderId {
         match self {
             Self::Anthropic => "anthropic",
             Self::OpenaiCodex => "openai-codex",
+            Self::Workbuddy => "workbuddy",
+            Self::Traecode => "traecode",
         }
     }
 
@@ -71,6 +75,8 @@ impl AiProviderId {
         match self {
             Self::Anthropic => "Claude / Anthropic",
             Self::OpenaiCodex => "OpenAI / Codex",
+            Self::Workbuddy => "WorkBuddy",
+            Self::Traecode => "TraeCode",
         }
     }
 
@@ -78,6 +84,8 @@ impl AiProviderId {
         match self {
             Self::Anthropic => "claude-sonnet-4-6",
             Self::OpenaiCodex => "gpt-5.6-terra",
+            Self::Workbuddy => "glm-5.2",
+            Self::Traecode => "trae-account-default",
         }
     }
 
@@ -99,6 +107,17 @@ impl AiProviderId {
                 "gpt-5.4-mini",
                 "gpt-5.3-codex-spark",
             ],
+            Self::Workbuddy => &[
+                "glm-5.2",
+                "glm-5.1",
+                "glm-5v-turbo",
+                "kimi-k2.7",
+                "minimax-m3-pay",
+                "hy3",
+                "deepseek-v4-pro",
+                "deepseek-v4-flash",
+            ],
+            Self::Traecode => &["trae-account-default"],
         }
     }
 }
@@ -255,6 +274,9 @@ impl OAuthConfig {
                 callback_path: "/auth/callback",
                 scope: CODEX_SCOPE,
             },
+            AiProviderId::Workbuddy | AiProviderId::Traecode => {
+                unreachable!("non-OAuth provider passed to the official OAuth flow")
+            }
         }
     }
 
@@ -315,6 +337,9 @@ impl Drop for AuthorizationGuard {
 }
 
 pub fn authorize(provider: AiProviderId) -> Result<AuthorizedAccount, String> {
+    if matches!(provider, AiProviderId::Workbuddy | AiProviderId::Traecode) {
+        return Err(format!("{} 使用专用授权流程。", provider.display_name()));
+    }
     let _guard = AuthorizationGuard::acquire(provider)?;
     let config = OAuthConfig::for_provider(provider);
     let verifier = pkce_verifier();
@@ -345,6 +370,8 @@ pub fn authorize(provider: AiProviderId) -> Result<AuthorizedAccount, String> {
         label: match provider {
             AiProviderId::Anthropic => "Claude official account".to_string(),
             AiProviderId::OpenaiCodex => "ChatGPT official account".to_string(),
+            AiProviderId::Workbuddy => "WorkBuddy account".to_string(),
+            AiProviderId::Traecode => "TraeCode account".to_string(),
         },
         expires_at: credential.expires_at,
     };
@@ -1171,6 +1198,9 @@ fn refresh(provider: AiProviderId, current: &OAuthCredential) -> Result<OAuthCre
                 ("client_id", client_id.as_str()),
                 ("refresh_token", current.refresh.as_str()),
             ]),
+        AiProviderId::Workbuddy | AiProviderId::Traecode => {
+            unreachable!("non-OAuth provider passed to OAuth refresh")
+        }
     }
     .map_err(|error| describe_oauth_request("刷新", error))?;
     parse_token_response(provider, response, Some(current))
@@ -1207,6 +1237,9 @@ fn exchange_code(
                 ("code_verifier", verifier),
                 ("redirect_uri", config.redirect_uri),
             ]),
+        AiProviderId::Workbuddy | AiProviderId::Traecode => {
+            unreachable!("non-OAuth provider passed to OAuth exchange")
+        }
     }
     .map_err(|error| describe_oauth_request("交换", error))?;
     parse_token_response(provider, response, None)
@@ -1313,6 +1346,9 @@ fn build_authorize_url(
                     .append_pair("id_token_add_organizations", "true")
                     .append_pair("codex_cli_simplified_flow", "true")
                     .append_pair("originator", "pi");
+            }
+            AiProviderId::Workbuddy | AiProviderId::Traecode => {
+                unreachable!("non-OAuth provider passed to OAuth URL builder")
             }
         }
     }
@@ -1510,7 +1546,7 @@ fn describe_oauth_request(action: &str, error: ureq::Error) -> String {
     }
 }
 
-fn open_external(url: &str) -> Result<(), String> {
+pub fn open_external(url: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let mut command = Command::new("explorer.exe");
     #[cfg(target_os = "macos")]

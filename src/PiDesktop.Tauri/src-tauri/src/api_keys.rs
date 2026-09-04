@@ -116,6 +116,9 @@ pub fn discover_models(
                 .set(OPENAI_AUTHORIZATION_HEADER, authorization.as_str())
                 .call()
         }
+        AiProviderId::Workbuddy | AiProviderId::Traecode => {
+            return Err("该提供商不支持 API Key。".to_string());
+        }
     };
     let response = match response {
         Ok(response) => response,
