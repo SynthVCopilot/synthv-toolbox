@@ -511,6 +511,7 @@ pub async fn authorize_ai_provider(
         let mut settings = state.settings.write().await;
         let mut next = settings.clone();
         next.ai_provider = provider;
+        next.ai_auth_method = AiAuthMethod::OAuth;
         next.upsert_oauth_account(authorized.metadata.clone());
         let next = tauri::async_runtime::spawn_blocking(move || {
             let backup = oauth::install_authorized(&authorized)?;
