@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod agent_files;
+mod api_keys;
 mod audio_capture;
 mod audio_prep;
 mod bridge_workflows;
@@ -154,6 +155,8 @@ pub fn run() {
             commands::set_agent_work_mode,
             commands::authorize_ai_provider,
             commands::select_ai_provider,
+            commands::configure_ai_api_key,
+            commands::remove_ai_api_key,
             commands::ai_provider_state,
             commands::opencode_provider_catalog,
             commands::remove_ai_provider_account,

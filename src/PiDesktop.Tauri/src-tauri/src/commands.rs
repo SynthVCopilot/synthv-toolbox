@@ -14,6 +14,7 @@ use crate::agent::{
     AnthropicProvider, ChatMessage, Conversation, ConversationStore, JsonConversationStore,
     NoTools, OpenAiCodexConfig, OpenAiCodexProvider, Role, ToolDefinition,
 };
+use crate::api_keys;
 use crate::audio_capture::{
     self, AudioCaptureCapability, AudioCaptureTarget, CaptureClipRequest, CompareClipsRequest,
     ToolboxAudioToolContext, ToolboxAudioToolExecutor,
@@ -29,7 +30,7 @@ use crate::components::{
 };
 use crate::config::{
     model_summary, save_settings, settings_path, validate_ai_model, validate_mcp_server,
-    AgentWorkMode, AppMode, McpServerConfig, ModelSummary, ToolboxSettings,
+    AgentWorkMode, AiAuthMethod, AppMode, McpServerConfig, ModelSummary, ToolboxSettings,
 };
 use crate::creative_history::{
     self, CreativeHistoryEntry, ProjectCheckpoint, WorkflowRecipe, WorkflowReportFormat,
@@ -134,10 +135,11 @@ struct ProviderPool {
     provider_id: AiProviderId,
     model: String,
     accounts: Vec<OAuthAccountMetadata>,
+    api_key: Option<zeroize::Zeroizing<String>>,
 }
 
 impl ProviderPool {
-    fn provider_for(
+    fn oauth_provider_for(
         &self,
         account: &OAuthAccountMetadata,
     ) -> crate::agent::Result<Box<dyn AgentProvider>> {
@@ -164,13 +166,28 @@ impl ProviderPool {
         }
     }
 
+    fn api_key_provider(&self) -> crate::agent::Result<Box<dyn AgentProvider>> {
+        let api_key = self
+            .api_key
+            .as_ref()
+            .ok_or_else(|| AgentError::transport("尚未配置 API Key。"))?;
+        match self.provider_id {
+            AiProviderId::Anthropic => Ok(Box::new(AnthropicProvider::new(
+                AnthropicConfig::api_key(api_key.to_string(), self.model.clone()),
+            ))),
+            AiProviderId::OpenaiCodex => Ok(Box::new(OpenAiCodexProvider::new(
+                OpenAiCodexConfig::api_key(api_key.to_string(), self.model.clone()),
+            ))),
+        }
+    }
+
     fn step_with(
         &self,
         account: &OAuthAccountMetadata,
         conversation: &[ChatMessage],
         tools: &[ToolDefinition],
     ) -> crate::agent::Result<AgentStep> {
-        self.provider_for(account)?.step(conversation, tools)
+        self.oauth_provider_for(account)?.step(conversation, tools)
     }
 }
 
@@ -184,6 +201,9 @@ impl AgentProvider for ProviderPool {
         conversation: &[ChatMessage],
         tools: &[ToolDefinition],
     ) -> crate::agent::Result<AgentStep> {
+        if self.api_key.is_some() {
+            return self.api_key_provider()?.step(conversation, tools);
+        }
         let mut failures = Vec::new();
         for account in &self.accounts {
             match self.step_with(account, conversation, tools) {
@@ -227,6 +247,22 @@ fn is_account_failover_error(error: &AgentError) -> bool {
 fn build_ai_provider(settings: &ToolboxSettings) -> Result<ProviderPool, String> {
     let provider_id = settings.ai_provider;
     let model = settings.model_for(provider_id).to_string();
+    if settings.ai_auth_method == AiAuthMethod::ApiKey {
+        if !settings
+            .api_key_models_for(provider_id)
+            .iter()
+            .any(|available| available == &model)
+        {
+            return Err("当前 API Key 的模型目录不包含选中的模型。请重新选择模型。".to_string());
+        }
+        return Ok(ProviderPool {
+            id: provider_id.as_str().to_string(),
+            provider_id,
+            model,
+            accounts: Vec::new(),
+            api_key: Some(api_keys::load(provider_id)?),
+        });
+    }
     let accounts = settings
         .oauth_accounts
         .iter()
@@ -245,6 +281,7 @@ fn build_ai_provider(settings: &ToolboxSettings) -> Result<ProviderPool, String>
         provider_id,
         model,
         accounts,
+        api_key: None,
     })
 }
 
@@ -498,11 +535,13 @@ pub async fn authorize_ai_provider(
 #[tauri::command]
 pub async fn select_ai_provider(
     provider: AiProviderId,
+    auth_method: AiAuthMethod,
     model: String,
     state: State<'_, AppState>,
 ) -> Result<BootstrapState, String> {
     require_ai(&state).await?;
-    let model = validate_ai_model(provider, &model)?;
+    let settings_snapshot = state.settings.read().await.clone();
+    let model = validate_ai_model(&settings_snapshot, provider, auth_method, &model)?;
     {
         let mut settings = state.settings.write().await;
         let accounts = settings
@@ -511,16 +550,96 @@ pub async fn select_ai_provider(
             .filter(|account| account.provider == provider)
             .cloned()
             .collect::<Vec<_>>();
-        let validation_model = model.clone();
+        if auth_method == AiAuthMethod::OAuth {
+            let validation_model = model.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                eligible_accounts_for_model(provider, &validation_model, accounts).map(|_| ())
+            })
+            .await
+            .map_err(|error| error.to_string())??;
+        }
+        let mut next = settings.clone();
+        next.ai_provider = provider;
+        next.ai_auth_method = auth_method;
+        next.set_model_for(provider, model);
+        save_settings(&next)?;
+        *settings = next;
+    }
+    build_bootstrap(&state).await
+}
+
+#[tauri::command]
+pub async fn configure_ai_api_key(
+    provider: AiProviderId,
+    api_key: String,
+    state: State<'_, AppState>,
+) -> Result<BootstrapState, String> {
+    require_ai(&state).await?;
+    let api_key = zeroize::Zeroizing::new(api_key);
+    let verification_key = api_key.clone();
+    let models = tauri::async_runtime::spawn_blocking(move || {
+        api_keys::discover_models(provider, &verification_key)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    {
+        let mut settings = state.settings.write().await;
+        let mut next = settings.clone();
+        next.ai_provider = provider;
+        next.ai_auth_method = AiAuthMethod::ApiKey;
+        next.set_api_key_models_for(provider, models.clone());
+        if !models.iter().any(|model| model == next.model_for(provider)) {
+            next.set_model_for(provider, models[0].clone());
+        }
+        let saved = next.clone();
         tauri::async_runtime::spawn_blocking(move || {
-            eligible_accounts_for_model(provider, &validation_model, accounts).map(|_| ())
+            let backup = api_keys::replace(provider, &api_key)?;
+            if let Err(save_error) = save_settings(&saved) {
+                return match api_keys::restore(provider, backup) {
+                    Ok(()) => Err(save_error),
+                    Err(restore_error) => {
+                        Err(format!("{save_error}；API Key 回滚也失败：{restore_error}"))
+                    }
+                };
+            }
+            Ok::<_, String>(())
         })
         .await
         .map_err(|error| error.to_string())??;
+        *settings = next;
+    }
+    build_bootstrap(&state).await
+}
+
+#[tauri::command]
+pub async fn remove_ai_api_key(
+    provider: AiProviderId,
+    state: State<'_, AppState>,
+) -> Result<BootstrapState, String> {
+    require_ai(&state).await?;
+    {
+        let mut settings = state.settings.write().await;
         let mut next = settings.clone();
-        next.ai_provider = provider;
-        next.set_model_for(provider, model);
-        save_settings(&next)?;
+        next.set_api_key_models_for(provider, Vec::new());
+        if next.ai_provider == provider && next.ai_auth_method == AiAuthMethod::ApiKey {
+            next.ai_auth_method = AiAuthMethod::OAuth;
+            next.set_model_for(provider, provider.default_model().to_string());
+        }
+        let saved = next.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let backup = api_keys::take(provider)?;
+            if let Err(save_error) = save_settings(&saved) {
+                return match api_keys::restore(provider, backup) {
+                    Ok(()) => Err(save_error),
+                    Err(restore_error) => {
+                        Err(format!("{save_error}；API Key 回滚也失败：{restore_error}"))
+                    }
+                };
+            }
+            Ok::<_, String>(())
+        })
+        .await
+        .map_err(|error| error.to_string())??;
         *settings = next;
     }
     build_bootstrap(&state).await

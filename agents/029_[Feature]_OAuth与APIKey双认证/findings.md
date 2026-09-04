@@ -6,3 +6,5 @@
 - UI 搜索输入在 dialog 的父级网格中未占满整行，导致用户截图中的右侧窄竖条。
 - API Key 输入仅在提交事件内读取；提交前即清空 DOM 输入，再调用后端，因此不会因重渲染、预览状态或错误提示回显密钥。
 - 模型可选性以当前选中的认证方式决定：OAuth 需要已授权账号，API Key 需要后端返回 `apiKeyConfigured`。
+- API Key 不可复用 OAuth 凭据服务：使用独立 `com.synthvcopilot.toolbox.api-key` 服务，并在设置写入失败时恢复原钥匙串值，防止界面状态与真实凭据不一致。
+- OpenAI Platform API Key 的运行时使用 `https://api.openai.com/v1/responses`、Bearer header 且不发送 ChatGPT account id；OAuth 仍维持既有 Codex subscription endpoint 与 header。
