@@ -182,6 +182,9 @@ impl ProviderPool {
             AiProviderId::OpenaiCodex => Ok(Box::new(OpenAiCodexProvider::new(
                 OpenAiCodexConfig::api_key(api_key.to_string(), self.model.clone()),
             ))),
+            AiProviderId::Workbuddy | AiProviderId::Traecode => {
+                Err(AgentError::new("该提供商不支持 API Key。"))
+            }
         }
     }
 
