@@ -13,6 +13,7 @@ use crate::downloads::ComponentDownloadManager;
 use crate::http_api::HttpApiManager;
 use crate::mcp::McpManager;
 use crate::media_tasks::MediaTaskManager;
+use crate::opencode_catalog::RuntimeModelCatalog;
 use crate::sv2_profiles::Sv2ProfileService;
 
 #[derive(Default)]
@@ -52,8 +53,9 @@ impl AppState {
         let mcp = Arc::new(McpManager::default());
         let media_tasks =
             MediaTaskManager::persistent(resource_dir.clone(), bridge_dir.clone(), mcp.clone());
+        let startup_catalog = RuntimeModelCatalog::fallback(None);
         let credential_balancer = Arc::new(Mutex::new(CredentialBalancer::new(
-            settings.credential_routes(),
+            settings.credential_routes(&startup_catalog),
         )));
         Self {
             settings: Arc::new(RwLock::new(settings)),

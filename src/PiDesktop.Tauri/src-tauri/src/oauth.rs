@@ -49,7 +49,6 @@ const CODEX_MODELS_URL: &str = "https://chatgpt.com/backend-api/codex/models";
 const CODEX_CLIENT_ID_B64: &str = "YXBwX0VNb2FtRUVaNzNmMENrWGFYcDdocmFubg==";
 const CODEX_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
 const CODEX_SCOPE: &str = "openid profile email offline_access";
-pub const CODEX_SPARK_MODEL_ID: &str = "gpt-5.3-codex-spark";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -89,7 +88,7 @@ impl AiProviderId {
         }
     }
 
-    pub fn model_options(self) -> &'static [&'static str] {
+    pub fn fallback_model_options(self) -> &'static [&'static str] {
         match self {
             Self::Anthropic => &[
                 "claude-sonnet-4-6",

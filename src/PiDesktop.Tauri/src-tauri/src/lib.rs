@@ -19,7 +19,7 @@ mod mcp;
 mod media_import;
 mod media_tasks;
 mod oauth;
-mod opencode_catalog;
+pub mod opencode_catalog;
 mod process_tree;
 mod solo_tuning;
 mod state;

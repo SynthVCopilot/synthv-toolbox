@@ -52,7 +52,7 @@ use crate::mcp::McpToolExecutor;
 use crate::media_import::{self, MediaSourcePreview};
 use crate::media_tasks::{CoverTaskRequest, MediaTaskSnapshot};
 use crate::oauth::{self, AiProviderId, OAuthAccountMetadata};
-use crate::opencode_catalog::{self, OpenCodeCatalog};
+use crate::opencode_catalog::{self, OpenCodeCatalog, RuntimeModelCatalog};
 use crate::solo_tuning::{self, SoloTuningRequest, SoloTuningResult};
 use crate::state::{AgentSession, AppState};
 use crate::sv2_concurrent::Sv2IsolationPreference;
@@ -395,6 +395,20 @@ fn is_account_failover_error(error: &AgentError) -> bool {
     )
 }
 
+fn model_summary_from_catalog(
+    settings: &ToolboxSettings,
+    balancer: &std::sync::Arc<std::sync::Mutex<CredentialBalancer>>,
+    catalog: &RuntimeModelCatalog,
+) -> Result<ModelSummary, String> {
+    let mut balancer = balancer
+        .lock()
+        .map_err(|_| "凭据调度器不可用。".to_string())?;
+    for route in settings.credential_routes(catalog) {
+        balancer.sync_route(route);
+    }
+    Ok(model_summary(settings, &balancer, catalog))
+}
+
 fn build_ai_provider(
     settings: &ToolboxSettings,
     balancer: std::sync::Arc<std::sync::Mutex<CredentialBalancer>>,
@@ -472,22 +486,27 @@ fn eligible_accounts_for_model(
     model: &str,
     accounts: Vec<OAuthAccountMetadata>,
 ) -> Result<Vec<OAuthAccountMetadata>, String> {
-    if provider != AiProviderId::OpenaiCodex || model != oauth::CODEX_SPARK_MODEL_ID {
+    if provider != AiProviderId::OpenaiCodex {
         return Ok(accounts);
     }
-    let discovered = oauth::discover_codex_models(&accounts)
-        .map_err(|error| format!("无法验证 Codex Spark 账号权限：{error}"))?;
-    if !discovered.contains(model) {
-        return Err("当前授权账号未提供 gpt-5.3-codex-spark。请选择其他 Codex 模型。".to_string());
+    let mut eligible = Vec::new();
+    let mut failures = Vec::new();
+    for account in accounts {
+        match oauth::codex_account_models(&account) {
+            Ok(models) if models.contains(model) => eligible.push(account),
+            Ok(_) => {}
+            Err(error) => failures.push(format!("{}：{error}", account.label)),
+        }
     }
-    let eligible = accounts
-        .into_iter()
-        .filter(|account| {
-            oauth::codex_account_models(account).is_ok_and(|models| models.contains(model))
-        })
-        .collect::<Vec<_>>();
     if eligible.is_empty() {
-        Err("Codex Spark 账号目录在校验期间发生变化，请重试。".to_string())
+        if failures.is_empty() {
+            Err(format!("当前 Codex OAuth 账号未提供模型 {model}。"))
+        } else {
+            Err(format!(
+                "无法验证 Codex OAuth 模型资格：{}",
+                failures.join("；")
+            ))
+        }
     } else {
         Ok(eligible)
     }
@@ -847,7 +866,7 @@ pub async fn authorize_ai_provider(
             provider,
             auth_method: AiAuthMethod::OAuth,
             models: provider
-                .model_options()
+                .fallback_model_options()
                 .iter()
                 .map(|model| (*model).to_string())
                 .collect(),
@@ -863,7 +882,10 @@ pub async fn select_ai_provider(
 ) -> Result<BootstrapState, String> {
     require_ai(&state).await?;
     let settings_snapshot = state.settings.read().await.clone();
-    let model = validate_ai_model(&settings_snapshot, provider, &model)?;
+    let catalog = tauri::async_runtime::spawn_blocking(|| opencode_catalog::runtime_catalog(false))
+        .await
+        .map_err(|error| error.to_string())?;
+    let model = validate_ai_model(&settings_snapshot, provider, &model, &catalog)?;
     {
         let mut settings = state.settings.write().await;
         let accounts = settings
@@ -1017,15 +1039,20 @@ fn sanitize_api_key_label(input: &str, secret: &str) -> String {
 }
 
 #[tauri::command]
-pub async fn ai_provider_state(state: State<'_, AppState>) -> Result<ModelSummary, String> {
+pub async fn ai_provider_state(
+    force_catalog: bool,
+    state: State<'_, AppState>,
+) -> Result<ModelSummary, String> {
     require_ai(&state).await?;
     let settings = state.settings.read().await.clone();
     let balancer = state.credential_balancer.clone();
     Ok(tauri::async_runtime::spawn_blocking(move || {
-        let balancer = balancer
-            .lock()
-            .map_err(|_| "凭据调度器不可用。".to_string())?;
-        Ok::<ModelSummary, String>(model_summary(&settings, &balancer))
+        let catalog = if force_catalog {
+            opencode_catalog::runtime_catalog(true)
+        } else {
+            opencode_catalog::cached_runtime_catalog()
+        };
+        model_summary_from_catalog(&settings, &balancer, &catalog)
     })
     .await
     .map_err(|error| error.to_string())??)
@@ -3147,10 +3174,8 @@ async fn build_bootstrap(state: &State<'_, AppState>) -> Result<BootstrapState, 
             {
                 let balancer = state.credential_balancer.clone();
                 tauri::async_runtime::spawn_blocking(move || {
-                    let balancer = balancer
-                        .lock()
-                        .map_err(|_| "凭据调度器不可用。".to_string())?;
-                    Ok::<ModelSummary, String>(model_summary(&model_settings, &balancer))
+                    let catalog = opencode_catalog::cached_runtime_catalog();
+                    model_summary_from_catalog(&model_settings, &balancer, &catalog)
                 })
             }
             .await

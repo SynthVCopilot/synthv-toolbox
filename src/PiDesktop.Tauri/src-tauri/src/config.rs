@@ -11,6 +11,7 @@ use uuid::Uuid;
 use crate::agent::{TraeCodeConfig, TraeCodeProvider};
 use crate::credential_balancer::{cooldown_until_utc, CredentialBalancer, CredentialRoute};
 use crate::oauth::{self, AiProviderId, OAuthAccountMetadata};
+use crate::opencode_catalog::{RuntimeCatalogSource, RuntimeModelCatalog};
 use crate::workbuddy_store;
 
 const SETTINGS_SCHEMA_VERSION: u32 = 2;
@@ -168,6 +169,9 @@ pub struct ModelSummary {
     pub active_provider: AiProviderId,
     pub providers: Vec<AiProviderSummary>,
     pub legacy_configured: bool,
+    pub catalog_source: RuntimeCatalogSource,
+    pub catalog_generated_at: u64,
+    pub catalog_error: Option<String>,
 }
 
 impl Default for ToolboxSettings {
@@ -278,7 +282,7 @@ impl ToolboxSettings {
         }
     }
 
-    pub fn credential_routes(&self) -> Vec<CredentialRoute> {
+    pub fn credential_routes(&self, catalog: &RuntimeModelCatalog) -> Vec<CredentialRoute> {
         let mut routes = self
             .oauth_accounts
             .iter()
@@ -286,12 +290,7 @@ impl ToolboxSettings {
                 id: account.id.clone(),
                 provider: account.provider,
                 auth_method: AiAuthMethod::OAuth,
-                models: account
-                    .provider
-                    .model_options()
-                    .iter()
-                    .map(|model| (*model).to_string())
-                    .collect(),
+                models: catalog.models_for(account.provider).to_vec(),
             })
             .collect::<Vec<_>>();
         routes.extend(
@@ -593,7 +592,11 @@ fn legacy_model_token_configured() -> bool {
         .is_some_and(|token| !token.trim().is_empty())
 }
 
-pub fn model_summary(settings: &ToolboxSettings, balancer: &CredentialBalancer) -> ModelSummary {
+pub fn model_summary(
+    settings: &ToolboxSettings,
+    balancer: &CredentialBalancer,
+    catalog: &RuntimeModelCatalog,
+) -> ModelSummary {
     let providers = [
         AiProviderId::Anthropic,
         AiProviderId::OpenaiCodex,
@@ -623,9 +626,10 @@ pub fn model_summary(settings: &ToolboxSettings, balancer: &CredentialBalancer) 
             .filter(|account| account.provider == provider)
             .cloned()
             .collect::<Vec<_>>();
-        let discovered_codex_models = (provider == AiProviderId::OpenaiCodex)
-            .then(|| oauth::discover_codex_models(&account_metadata).ok())
-            .flatten();
+        let discovered_codex_models = (provider == AiProviderId::OpenaiCodex
+            && !account_metadata.is_empty())
+        .then(|| oauth::discover_codex_models(&account_metadata).ok())
+        .flatten();
         let trae_status = (provider == AiProviderId::Traecode).then(|| {
             TraeCodeProvider::new(TraeCodeConfig::new(provider.default_model()))
                 .cached_login_status()
@@ -679,7 +683,7 @@ pub fn model_summary(settings: &ToolboxSettings, balancer: &CredentialBalancer) 
             })
             .collect::<Vec<_>>();
         let healthy_accounts = accounts.iter().filter(|account| account.healthy).count();
-        let oauth_models = oauth_models_for(provider, discovered_codex_models.as_ref());
+        let oauth_models = oauth_models_for(provider, catalog, discovered_codex_models.as_ref());
         let api_key_models = settings.api_key_models_for(provider);
         let mut models = if accounts.iter().any(|account| account.authorized) || trae_connected {
             oauth_models.clone()
@@ -735,28 +739,31 @@ pub fn model_summary(settings: &ToolboxSettings, balancer: &CredentialBalancer) 
         active_provider: settings.ai_provider,
         providers,
         legacy_configured: legacy_model_token_configured(),
+        catalog_source: catalog.source,
+        catalog_generated_at: catalog.generated_at,
+        catalog_error: catalog.error.clone(),
     }
 }
 
 fn oauth_models_for(
     provider: AiProviderId,
+    catalog: &RuntimeModelCatalog,
     discovered_codex_models: Option<&HashSet<String>>,
 ) -> Vec<String> {
-    provider
-        .model_options()
-        .iter()
-        .filter(|model| {
-            **model != oauth::CODEX_SPARK_MODEL_ID
-                || discovered_codex_models.is_some_and(|models| models.contains(**model))
-        })
-        .map(|model| (*model).to_string())
-        .collect()
+    let mut models = catalog.models_for(provider).to_vec();
+    if provider == AiProviderId::OpenaiCodex {
+        if let Some(discovered) = discovered_codex_models {
+            models.retain(|model| discovered.contains(model));
+        }
+    }
+    models
 }
 
 pub fn validate_ai_model(
     settings: &ToolboxSettings,
     provider: AiProviderId,
     model: &str,
+    catalog: &RuntimeModelCatalog,
 ) -> Result<String, String> {
     let model = model.trim();
     if model.is_empty() || model.len() > 120 {
@@ -783,7 +790,11 @@ pub fn validate_ai_model(
             .iter()
             .any(|account| account.provider == provider),
     };
-    let oauth_available = oauth_connected && provider.model_options().contains(&model);
+    let oauth_available = oauth_connected
+        && catalog
+            .models_for(provider)
+            .iter()
+            .any(|available| available == model);
     let api_key_available = settings
         .api_key_models_for(provider)
         .iter()
@@ -912,15 +923,34 @@ mod tests {
     #[test]
     fn codex_model_must_come_from_the_subscription_catalog() {
         let mut settings = ToolboxSettings::default();
-        assert!(validate_ai_model(&settings, AiProviderId::OpenaiCodex, "gpt-5.6-terra").is_err());
+        let catalog = RuntimeModelCatalog::fallback(None);
+        assert!(validate_ai_model(
+            &settings,
+            AiProviderId::OpenaiCodex,
+            "gpt-5.6-terra",
+            &catalog
+        )
+        .is_err());
         settings.oauth_accounts.push(OAuthAccountMetadata {
             id: "oauth:openai-codex:test".to_string(),
             provider: AiProviderId::OpenaiCodex,
             label: "Test account".to_string(),
             expires_at: 0,
         });
-        assert!(validate_ai_model(&settings, AiProviderId::OpenaiCodex, "gpt-5.6-terra").is_ok());
-        assert!(validate_ai_model(&settings, AiProviderId::OpenaiCodex, "invented-model").is_err());
+        assert!(validate_ai_model(
+            &settings,
+            AiProviderId::OpenaiCodex,
+            "gpt-5.6-terra",
+            &catalog
+        )
+        .is_ok());
+        assert!(validate_ai_model(
+            &settings,
+            AiProviderId::OpenaiCodex,
+            "invented-model",
+            &catalog
+        )
+        .is_err());
     }
 
     #[test]
@@ -940,9 +970,15 @@ mod tests {
         assert_eq!(AiProviderId::Anthropic.display_name(), "Claude / Anthropic");
         assert_eq!(AiProviderId::OpenaiCodex.display_name(), "OpenAI / Codex");
         let balancer = CredentialBalancer::new([]);
-        let encoded =
-            serde_json::to_value(model_summary(&ToolboxSettings::default(), &balancer)).unwrap();
+        let catalog = RuntimeModelCatalog::fallback(None);
+        let encoded = serde_json::to_value(model_summary(
+            &ToolboxSettings::default(),
+            &balancer,
+            &catalog,
+        ))
+        .unwrap();
         let providers = encoded["providers"].as_array().unwrap();
+        assert_eq!(encoded["catalogSource"], "built-in-fallback");
         assert!(providers[0]["description"]
             .as_str()
             .unwrap()
@@ -956,8 +992,13 @@ mod tests {
     #[test]
     fn provider_auth_method_contract_is_explicit_and_restricted() {
         let balancer = CredentialBalancer::new([]);
-        let value =
-            serde_json::to_value(model_summary(&ToolboxSettings::default(), &balancer)).unwrap();
+        let catalog = RuntimeModelCatalog::fallback(None);
+        let value = serde_json::to_value(model_summary(
+            &ToolboxSettings::default(),
+            &balancer,
+            &catalog,
+        ))
+        .unwrap();
         let providers = value["providers"].as_array().unwrap();
         let workbuddy = providers
             .iter()
@@ -1030,7 +1071,8 @@ mod tests {
             created_at_utc: "2026-01-01T00:00:00Z".to_string(),
         }];
 
-        let oauth = oauth_models_for(AiProviderId::Anthropic, None);
+        let catalog = RuntimeModelCatalog::fallback(None);
+        let oauth = oauth_models_for(AiProviderId::Anthropic, &catalog, None);
         let api_key = settings.api_key_models_for(AiProviderId::Anthropic);
         assert!(oauth.contains(&"claude-sonnet-4-6".to_string()));
         assert!(!oauth.contains(&"claude-api-only".to_string()));
