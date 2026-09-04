@@ -18,6 +18,7 @@ const OFFICIAL_SV2_SERVER: &str = "synthv";
 const OFFICIAL_SV1_SERVER: &str = "synthv-sv1";
 const CONNECT_RETRIES: usize = 16;
 const FLAT_LAUNCH_RETRIES: usize = 80;
+const FLAT_NATIVE_GRACE_RETRIES: usize = 20;
 const CONNECT_POLL: Duration = Duration::from_millis(250);
 const TOOL_TIMEOUT: Duration = Duration::from_secs(12);
 const LEGACY_STOP_FILE: &str = "synthv-agent-bridge-sv1-legacy.stop";
@@ -333,6 +334,7 @@ async fn connect(
         let previous_process_ids = synthv_hosts::flat_process_ids()?;
         synthv_hosts::launch_flat(&host, project_path.as_deref())?;
         host = wait_for_flat_launch(&previous_process_ids).await?;
+        host = wait_for_flat_native_ready(host).await?;
     }
     let id = server_id(&host);
     if manager.synthv_server_id(&host.id).await.is_some() {
@@ -413,6 +415,24 @@ async fn wait_for_flat_launch(previous_process_ids: &[u32]) -> Result<StandardSy
         tokio::time::sleep(CONNECT_POLL).await;
     }
     Err("已启动 Synthesizer V Flat，但未在限定时间内发现新的宿主进程。请检查应用是否被系统阻止启动。".to_string())
+}
+
+async fn wait_for_flat_native_ready(
+    mut host: StandardSynthVHost,
+) -> Result<StandardSynthVHost, String> {
+    for _ in 0..FLAT_NATIVE_GRACE_RETRIES {
+        if host.endpoint.is_some() {
+            return Ok(host);
+        }
+        tokio::time::sleep(CONNECT_POLL).await;
+        if let Some(refreshed) = synthv_hosts::discover()?
+            .into_iter()
+            .find(|candidate| candidate.id == host.id)
+        {
+            host = refreshed;
+        }
+    }
+    Ok(host)
 }
 
 async fn connect_flat(

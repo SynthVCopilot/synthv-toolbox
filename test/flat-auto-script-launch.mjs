@@ -19,6 +19,8 @@ assert.match(unified, /projectPath 仅支持 hostId=flat/);
 assert.match(unified, /flat_process_ids/);
 assert.match(unified, /launch_flat\(&host, project_path\.as_deref\(\)\)/);
 assert.match(unified, /wait_for_flat_launch/);
+assert.match(unified, /wait_for_flat_native_ready/);
+assert.match(unified, /FLAT_NATIVE_GRACE_RETRIES/);
 assert.match(unified, /BridgeShortcutAction::Refresh/);
 assert.match(unified, /BridgeShortcutAction::StartLegacy/);
 assert.match(unified, /install_legacy_bridge[\s\S]*Result<bool, String>/);
