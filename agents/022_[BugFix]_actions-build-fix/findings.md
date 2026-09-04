@@ -24,6 +24,7 @@
 - [平台 import] -> `Stdio`、`quiet_command` 仅由 macOS 分支使用，`FileTypeExt` 不提供所需 API -> 将 import 限定到 macOS，并使用 Windows `MetadataExt::file_attributes` 与 `FILE_ATTRIBUTE_REPARSE_POINT`。
 - [Windows target cargo check] -> 已安装 `x86_64-pc-windows-msvc`，并成功检查 `windows-sys v0.61.2`；项目随后在 `ring` C 编译阶段失败 -> 当前 macOS 主机无 Windows MSVC C 工具链，缺少目标编译环境的 `assert.h`，不是 Rust 源码诊断。
 - [run 33826755787 Windows Clippy] -> Rust 编译与 204 项平台测试已通过，但 macOS 应用常量及辅助解析函数在 Windows 非测试 target 上成为 dead code -> 将生产仅 macOS 的符号收窄到 `target_os = "macos"`，仅为跨平台纯测试需要的符号保留 `test` 条件。
+- [run 33827377637 Windows 编译复验] -> `SYNTHV_EXECUTABLE` 不仅服务 macOS 发现，还用于 Windows 标准宿主实例匹配与显示 -> 保持该常量跨平台，只收窄确实为 macOS 路径的符号。
 - [run 33826067978 / Windows job 100878878085] -> Rust 已成功编译并运行测试，203 passed、4 failed、2 ignored -> 失败仅为四个显式依赖 `SV1_APP`、`FLAT_APP`、`Contents/MacOS` 或 `FLAT_MAC_SCRIPTS` 的 macOS fixture；三个 Windows 专用 host 测试均通过。
 - [测试边界] -> `same_executable_is_disambiguated_by_app_bundle_path` 同样使用 macOS 风格路径，但在 Windows job 通过 -> 该测试保留跨平台执行，只限定用户点名的四个 fixture。
 - [Windows lint 边界] -> 四个 fixture 限定到 macOS 后，`FLAT_EXECUTABLE_PATH` 与 `FLAT_MAC_SCRIPTS` 会在 Windows 失去测试侧引用 -> 分别按 `not(windows)` 与 `target_os = "macos"` 收窄常量，避免后续 Windows clippy 产生死代码告警。
