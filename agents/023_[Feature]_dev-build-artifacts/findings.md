@@ -7,4 +7,5 @@
 - 首次验证从 `src/PiDesktop.Tauri` 执行根测试路径，导致 Node 找不到 `src/PiDesktop.Tauri/test/...`；改为从 worktree 根目录执行后重试。
 - 最终静态契约、Ruby YAML 解析、`actionlint` 和完整 `npm run --prefix src/PiDesktop.Tauri test:contracts` 均通过。
 - [集成复核] -> 双平台分别维护 upload 步骤会重复 artifact 策略 -> 收敛为一个矩阵通用上传步骤，产物名统一为 `synthv-toolbox-dev-${{ matrix.target }}`。
+- [首次真实 Actions 复验] -> Windows 已通过原 TS2688 失败点，但 Git checkout 将 YAML 换行转为 CRLF，静态契约首行仅匹配 LF -> 读取 workflow 后先归一化 CRLF，保留所有结构断言。
 - 首次验证从 `src/PiDesktop.Tauri` 执行根测试路径，导致 Node 找不到 `src/PiDesktop.Tauri/test/...`；改为从 worktree 根目录执行后重试。
