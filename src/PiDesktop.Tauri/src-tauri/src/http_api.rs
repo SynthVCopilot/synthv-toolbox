@@ -7,12 +7,13 @@ use axum::{
     routing::get,
     Router,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::{
     net::TcpListener,
     runtime::Handle,
     sync::{oneshot, Mutex},
+    task::JoinHandle,
 };
 
 use crate::{
@@ -32,7 +33,7 @@ pub struct HttpApiStatus {
     pub enabled: bool,
     pub running: bool,
     pub port: u16,
-    pub endpoint: String,
+    pub endpoint: Option<String>,
     pub last_error: Option<String>,
 }
 
@@ -43,11 +44,11 @@ pub struct HttpApiManager {
 
 #[derive(Default)]
 struct ManagerState {
-    enabled: bool,
     port: u16,
     running: bool,
     last_error: Option<String>,
     shutdown: Option<oneshot::Sender<()>>,
+    task: Option<JoinHandle<()>>,
 }
 
 impl HttpApiManager {
@@ -57,7 +58,7 @@ impl HttpApiManager {
             enabled,
             running: state.running,
             port,
-            endpoint: endpoint(port),
+            endpoint: enabled.then(|| endpoint(port)),
             last_error: state.last_error.clone(),
         }
     }
@@ -74,11 +75,16 @@ impl HttpApiManager {
     pub async fn start(self: &Arc<Self>, context: HttpApiContext) -> Result<(), String> {
         if let Err(error) = validate_port(context.port) {
             let mut state = self.state.lock().await;
-            state.enabled = context.enabled;
             state.port = context.port;
             state.running = false;
             state.last_error = Some(error.clone());
             return Err(error);
+        }
+        {
+            let state = self.state.lock().await;
+            if state.running && state.port == context.port {
+                return Ok(());
+            }
         }
         self.stop().await;
         let listener = match TcpListener::bind(("127.0.0.1", context.port)).await {
@@ -86,7 +92,6 @@ impl HttpApiManager {
             Err(error) => {
                 let message = format!("无法启动本地 HTTP MCP（端口 {}）：{error}", context.port);
                 let mut state = self.state.lock().await;
-                state.enabled = true;
                 state.port = context.port;
                 state.running = false;
                 state.last_error = Some(message.clone());
@@ -96,14 +101,13 @@ impl HttpApiManager {
         let (sender, receiver) = oneshot::channel();
         {
             let mut state = self.state.lock().await;
-            state.enabled = true;
             state.port = context.port;
             state.running = true;
             state.last_error = None;
             state.shutdown = Some(sender);
         }
         let manager = Arc::clone(self);
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let router = Router::new()
                 .route("/health", get(health))
                 .route(ENDPOINT_PATH, get(get_mcp).post(post_mcp))
@@ -120,13 +124,20 @@ impl HttpApiManager {
                 state.last_error = Some(format!("HTTP MCP 服务已停止：{error}"));
             }
         });
+        self.state.lock().await.task = Some(task);
         Ok(())
     }
 
     pub async fn stop(&self) {
-        let sender = self.state.lock().await.shutdown.take();
+        let (sender, task) = {
+            let mut state = self.state.lock().await;
+            (state.shutdown.take(), state.task.take())
+        };
         if let Some(sender) = sender {
             let _ = sender.send(());
+        }
+        if let Some(task) = task {
+            let _ = task.await;
         }
         let mut state = self.state.lock().await;
         state.running = false;
@@ -316,13 +327,6 @@ async fn handle_rpc(
         _ => return Err((id, -32601, format!("不支持的方法：{method}"))),
     };
     Ok(Some(json!({"jsonrpc":"2.0", "id":id, "result":result})))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConfigureHttpApiRequest {
-    pub enabled: bool,
-    pub port: u16,
 }
 
 #[cfg(test)]

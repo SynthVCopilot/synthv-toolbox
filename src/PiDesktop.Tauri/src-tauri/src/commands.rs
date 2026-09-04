@@ -38,7 +38,7 @@ use crate::creative_tools::{
     self, ProjectDoctorRequest, PronunciationRequest, RenderReviewExpectations, RenderReviewRequest,
 };
 use crate::downloads::ComponentDownload;
-use crate::http_api::{validate_port, ConfigureHttpApiRequest, HttpApiStatus};
+use crate::http_api::{validate_port, HttpApiStatus};
 use crate::lyric_projects::{self, LyricProject, LyricProjectSummary};
 use crate::lyric_tools::{
     self, ChineseRhymeLookup, LyricCandidateRequest, LyricCandidateSet, LyricSectionRequest,
@@ -376,31 +376,29 @@ pub async fn get_http_api_status(state: State<'_, AppState>) -> Result<HttpApiSt
 
 #[tauri::command]
 pub async fn configure_http_api(
-    config: ConfigureHttpApiRequest,
+    enabled: bool,
+    port: u16,
     state: State<'_, AppState>,
 ) -> Result<HttpApiStatus, String> {
-    validate_port(config.port)?;
+    validate_port(port)?;
     {
         let mut settings = state.settings.write().await;
-        settings.http_api_enabled = config.enabled;
-        settings.http_api_port = config.port;
+        settings.http_api_enabled = enabled;
+        settings.http_api_port = port;
         save_settings(&settings)?;
     }
     let context = {
         let mut context = crate::http_api::HttpApiContext::from_state(&state);
-        context.enabled = config.enabled;
-        context.port = config.port;
+        context.enabled = enabled;
+        context.port = port;
         context
     };
-    if config.enabled {
+    if enabled {
         let _ = state.http_api.start(context).await;
     } else {
         state.http_api.stop().await;
     }
-    Ok(state
-        .http_api
-        .status_async(config.enabled, config.port)
-        .await)
+    Ok(state.http_api.status_async(enabled, port).await)
 }
 
 #[tauri::command]
