@@ -370,35 +370,46 @@ pub async fn get_http_api_status(state: State<'_, AppState>) -> Result<HttpApiSt
     let settings = state.settings.read().await;
     Ok(state
         .http_api
-        .status_async(settings.http_api_enabled, settings.http_api_port)
+        .status_async(
+            settings.http_api_enabled,
+            settings.http_agent_enabled,
+            settings.http_api_port,
+        )
         .await)
 }
 
 #[tauri::command]
 pub async fn configure_http_api(
     enabled: bool,
+    agent_enabled: bool,
     port: u16,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<HttpApiStatus, String> {
     validate_port(port)?;
     {
         let mut settings = state.settings.write().await;
         settings.http_api_enabled = enabled;
+        settings.http_agent_enabled = agent_enabled;
         settings.http_api_port = port;
         save_settings(&settings)?;
     }
     let context = {
-        let mut context = crate::http_api::HttpApiContext::from_state(&state);
-        context.enabled = enabled;
+        let mut context = crate::http_api::HttpApiContext::from_state(&state, app);
+        context.mcp_enabled = enabled;
+        context.agent_enabled = agent_enabled;
         context.port = port;
         context
     };
-    if enabled {
+    if enabled || agent_enabled {
         let _ = state.http_api.start(context).await;
     } else {
         state.http_api.stop().await;
     }
-    Ok(state.http_api.status_async(enabled, port).await)
+    Ok(state
+        .http_api
+        .status_async(enabled, agent_enabled, port)
+        .await)
 }
 
 #[tauri::command]
@@ -2334,7 +2345,16 @@ pub async fn send_message(
     input: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<ChatMessage>, String> {
-    require_ai(&state).await?;
+    run_agent_message(input, state.inner()).await
+}
+
+pub(crate) async fn run_agent_message(
+    input: String,
+    state: &AppState,
+) -> Result<Vec<ChatMessage>, String> {
+    if state.settings.read().await.mode != AppMode::Ai {
+        return Err("此能力只在 AI 模式下可用。请先在设置中切换模式。".to_string());
+    }
     let input = input.trim().to_string();
     if input.is_empty() {
         return Err("消息不能为空。".to_string());
@@ -2594,7 +2614,11 @@ async fn build_bootstrap(state: &State<'_, AppState>) -> Result<BootstrapState, 
         svp_association,
         http_api: state
             .http_api
-            .status_async(settings.http_api_enabled, settings.http_api_port)
+            .status_async(
+                settings.http_api_enabled,
+                settings.http_agent_enabled,
+                settings.http_api_port,
+            )
             .await,
     })
 }

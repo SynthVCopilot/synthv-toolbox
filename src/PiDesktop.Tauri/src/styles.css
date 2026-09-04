@@ -992,7 +992,7 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .fluent-switch.large span::after { width: 14px; height: 14px; }
 .fluent-switch.large input:checked + span::after { transform: translateX(18px); }
 .http-api-settings { max-width: 820px; }
-.http-api-form { display: grid; grid-template-columns: minmax(180px,1fr) minmax(130px,220px) auto; align-items: end; gap: 12px; margin-top: 14px; }
+.http-api-form { display: grid; grid-template-columns: minmax(170px,1fr) minmax(170px,1fr) minmax(130px,200px) auto; align-items: end; gap: 12px; margin-top: 14px; }
 .http-api-form .fluent-switch { min-height: 36px; }
 .http-api-port { display: grid; gap: 5px; color: var(--muted); font-size: 11px; font-weight: 600; }
 .http-api-port input { width: 100%; padding: 8px 9px; border: 1px solid var(--line-strong); border-radius: 5px; color: inherit; background: var(--control); font-variant-numeric: tabular-nums; }

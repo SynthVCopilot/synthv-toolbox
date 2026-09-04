@@ -83,6 +83,8 @@ pub struct ToolboxSettings {
     pub oauth_accounts: Vec<OAuthAccountMetadata>,
     #[serde(default)]
     pub http_api_enabled: bool,
+    #[serde(default)]
+    pub http_agent_enabled: bool,
     #[serde(default = "default_http_api_port")]
     pub http_api_port: u16,
 }
@@ -139,6 +141,7 @@ impl Default for ToolboxSettings {
             codex_model: default_codex_model(),
             oauth_accounts: Vec::new(),
             http_api_enabled: false,
+            http_agent_enabled: false,
             http_api_port: DEFAULT_HTTP_API_PORT,
         }
     }
