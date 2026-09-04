@@ -234,9 +234,9 @@ fn normalize_source(source: &str) -> Result<String, String> {
             .chars()
             .all(|character| character.is_ascii_alphanumeric())
     {
-        return Ok(format!("https://www.bilibili.com/video/{source}"));
+        return Ok(format!("https://www.bilibili.com/video/{source}/"));
     }
-    let parsed = Url::parse(source)
+    let mut parsed = Url::parse(source)
         .map_err(|_| "请输入完整的 Bilibili/YouTube URL 或 BV 号。".to_string())?;
     if parsed.scheme() != "https" {
         return Err("媒体来源必须使用 HTTPS。".to_string());
@@ -250,6 +250,13 @@ fn normalize_source(source: &str) -> Result<String, String> {
         || host == "b23.tv";
     if !allowed {
         return Err("当前只支持 Bilibili 与 YouTube 来源。".to_string());
+    }
+    if (host == "bilibili.com" || host.ends_with(".bilibili.com"))
+        && parsed.path().starts_with("/video/BV")
+        && !parsed.path().ends_with('/')
+    {
+        let normalized_path = format!("{}/", parsed.path());
+        parsed.set_path(&normalized_path);
     }
     Ok(parsed.to_string())
 }
@@ -371,4 +378,21 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     file.write_all(&bytes).map_err(|error| error.to_string())?;
     file.sync_all().map_err(|error| error.to_string())?;
     fs::rename(&temporary, path).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_source;
+
+    #[test]
+    fn bilibili_video_urls_have_a_stable_trailing_slash() {
+        assert_eq!(
+            normalize_source("BV1ba4y1x7pg").unwrap(),
+            "https://www.bilibili.com/video/BV1ba4y1x7pg/"
+        );
+        assert_eq!(
+            normalize_source("https://www.bilibili.com/video/BV1JTnTzWEPc").unwrap(),
+            "https://www.bilibili.com/video/BV1JTnTzWEPc/"
+        );
+    }
 }
