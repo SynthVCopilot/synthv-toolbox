@@ -34,7 +34,7 @@ assert.match(synthvHosts, /metadata\.file_attributes\(\) & FILE_ATTRIBUTE_REPARS
 assert.doesNotMatch(synthvHosts, /FileTypeExt|is_reparse_point\(\)/);
 for (const macosFixture of [
   "sv1_uses_plist_identity_and_exact_app_path",
-  "flat_uses_anthronics_scripts_and_requires_complete_ready_status",
+  "flat_prefers_live_script_directory_and_requires_complete_ready_status",
   "flat_process_path_with_spaces_is_detected",
   "emits_every_matching_process_and_connects_only_status_pid",
 ]) {
