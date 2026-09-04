@@ -19,4 +19,4 @@
 - [x] 更新根契约，约束四个 macOS fixture 且保留其他跨平台测试
 - [x] 运行 fmt、契约、macOS cargo test/clippy 并检查禁止变更范围
 - [x] 在 `codex/windows-build-fix` 新增独立提交并记录哈希
-- [ ] 在 GitHub hosted Windows runner 完成 Rust、Clippy、FFmpeg、NSIS 和 artifact 验证
+- [x] 在 GitHub hosted Windows runner 完成 Rust、Clippy、FFmpeg、NSIS 和 artifact 验证

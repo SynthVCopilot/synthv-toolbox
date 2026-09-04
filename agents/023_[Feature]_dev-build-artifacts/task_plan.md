@@ -5,4 +5,4 @@
 - [x] 新增根 `/test` 静态 workflow 契约并接入 `test:contracts`
 - [x] 运行 YAML/契约及相关验证，记录结果
 - [x] 检查 diff 与 Git 规则后提交到指定分支
-- [ ] 合并 main 并验证 Actions 中双平台 artifact 可下载
+- [x] 合并 main 并验证 Actions 中双平台 artifact 可下载

@@ -22,3 +22,4 @@
 - 2026-09-03：`cargo fmt --check`、根契约与 `git diff --check` 通过；使用临时空资源占位完成 macOS `cargo test --all-targets`（202 passed、2 ignored、根集成测试 1 passed）及 `cargo clippy --all-targets -- -D warnings`，随后清理占位。
 - 2026-09-03：读取 run 33826755787 Windows Clippy 日志，确认平台编译与测试均通过；收窄 macOS 常量、`parse_processes` 与 `app_from_args` 的编译条件。
 - 2026-09-03：根据 run 33827377637 恢复 `SYNTHV_EXECUTABLE` 跨平台定义，避免 Windows 宿主匹配与显示路径缺少该符号。
+- 2026-09-03：GitHub Actions run 33827781511 成功；Windows hosted runner 的 Bridge、前端、契约、Rust、Clippy、FFmpeg、NSIS 与 artifact 步骤全部通过。
