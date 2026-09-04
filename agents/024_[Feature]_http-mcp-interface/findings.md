@@ -7,3 +7,6 @@
 - `ToolboxAudioToolExecutor` 是同步 `ToolExecutor`，需要在 HTTP 请求线程中复用与 `send_message` 相同的 MCP bindings、文件审批、工作模式和会话 ID 上下文。
 - Tauri setup 是同步闭包；启用态 HTTP 服务应在 `app.manage(AppState)` 后通过 Tauri Tokio runtime 异步启动，并把 bind 错误写入状态而不是让应用启动失败。
 - OpenCode 1.18.19 当前对未运行的 `http://127.0.0.1:17831/mcp` 报告 `SSE error: Unable to connect`；这是服务未启用时的预期结果。实现兼容其 `Accept: application/json, text/event-stream` 探测，并用 GET 405/Allow: POST 表明会话入口只接受 POST。
+- 本次前端子任务只依赖固定 Tauri 命令：`get_http_api_status` 无参数读取状态，`configure_http_api` 接收 `{ enabled, port }` 并返回相同状态；不在前端复制 Rust 服务逻辑。
+- 首次 `npm run build` 因 worktree 没有前端依赖而报 `tsc: command not found`；离线安装现有锁定依赖后构建和全部契约测试通过。
+- 根目录全局 Git 忽略规则会忽略 `/test/`；契约测试需显式强制加入版本控制。

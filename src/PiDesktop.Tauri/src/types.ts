@@ -51,6 +51,14 @@ export interface McpServerConfig {
   enabled: boolean;
 }
 
+export interface HttpApiStatus {
+  enabled: boolean;
+  running: boolean;
+  port: number;
+  endpoint: string | null;
+  lastError: string | null;
+}
+
 export interface SynthVInstallation {
   displayName: string;
   installPath?: string;
