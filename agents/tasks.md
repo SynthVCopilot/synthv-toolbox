@@ -31,3 +31,4 @@
 | 023 | [Feature] dev-build-artifacts | 将 main、PR 与手动验证的 Windows/macOS 开发安装包上传为 Actions artifact。 | 让未打 tag 的开发构建也可以直接下载和验收。 | ✅ 已完成 |
 | 024 | [Feature] http-mcp-interface | 为 Toolbox 增加默认关闭、仅监听本机的 HTTP MCP 接口及设置入口。 | 让 OpenCode 等外部程序在不暴露网络服务的默认状态下复用标准 SynthV 工具。 | ✅ 已完成 |
 | 025 | [Integration] opencode-ollama-cover-test | 将 OpenCode 的 Ollama Cloud GLM 模型连接到 Toolbox，并执行指定 BV 来源与风格参考的 Cover 验证。 | 用真实外部 Agent、Flat 宿主和媒体链路验证端到端可用性与失败回退。 | ✅ 已完成 |
+| 026 | [Feature] 对话模型与模式选择 | 将模型提供商改为可搜索弹窗列表，并把 Edit/Solo 工作模式移入对话界面。 | 让模型和执行强度在开始对话时可见、可点击选择，减少设置页层级。 | 🔄 进行中 |
