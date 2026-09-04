@@ -13,3 +13,6 @@
 - `npm install --offline --ignore-scripts && npm run build && npm run test:contracts` 通过；构建输出为 Vite production bundle，全部现有及 HTTP MCP UI 契约通过。
 - 已提交前端子任务，提交信息为 `Add local HTTP MCP settings UI`。
 - 后端与前端子提交已进入主分支集成，正在修正跨边界命令参数、状态 DTO 和服务重启语义并进行真实 OpenCode 连接测试。
+- 已构建并首次安装应用，验证默认关闭；启用后 `/health` 与 OpenCode MCP 握手成功。
+- 安装态标准工具首次执行暴露 Tokio 嵌套运行时问题，已改为阻塞线程执行并新增回归单测。
+- 按追加需求实现独立 Agent HTTP 开关与 `/agent/chat`，MCP 与 Agent 权限分别生效；前端构建、全部契约、Rust check 和 3 个 HTTP 单测通过。

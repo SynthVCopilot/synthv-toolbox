@@ -84,9 +84,11 @@ let synthvProcesses: SynthVProcess[] = [];
 let synthvShortcutProfile: SynthVShortcutProfile | undefined;
 let httpApiStatus: HttpApiStatus = {
   enabled: false,
+  agentEnabled: false,
   running: false,
   port: 17831,
   endpoint: null,
+  agentEndpoint: null,
   lastError: null,
 };
 let abProcessId: number | undefined;
@@ -1867,7 +1869,7 @@ function renderSettings(): string {
     ${app.mode === "ai" ? `<section class="panel"><div class="section-heading"><div><h2>Agent 工作模式</h2><p>Edit 执行一次有界修改；Solo 会自主推进检查点、修改与复检循环。</p></div></div><div class="mode-setting"><button class="setting-choice ${app.agentWorkMode === "edit" ? "active" : ""}" data-agent-work-mode="edit"><span class="mode-icon blue">${icon("file", 23)}</span><span><strong>Edit</strong><small>明确目标、单次修改、立即验证</small></span>${app.agentWorkMode === "edit" ? icon("check", 20) : ""}</button><button class="setting-choice ${app.agentWorkMode === "solo" ? "active" : ""}" data-agent-work-mode="solo"><span class="mode-icon purple">${icon("sparkles", 23)}</span><span><strong>Solo</strong><small>自动检查点、迭代优化、失败即停</small></span>${app.agentWorkMode === "solo" ? icon("check", 20) : ""}</button></div></section>` : ""}
     ${app.mode === "ai" ? renderAiProviderSettings() : `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("bot", 24)}</span><div><h2>AI 运行时已关闭</h2><p>当前不会显示 Copilot、模型或 MCP 设置，也不会向模型端点发送请求。</p></div></section>`}
     ${showSvpRouting ? `<section class="panel smart-route-settings"><div class="section-heading"><div><h2>智能 .svp 启动</h2><p>根据工程所需声库，从空闲账号中建议最合适的启动槽位。</p></div><label class="fluent-switch large"><input id="svp-routing-enabled" type="checkbox" ${app.smartSvpLaunchEnabled ? "checked" : ""} ${association.supported ? "" : "disabled"} aria-label="启用智能 .svp 启动" /><span></span>${app.smartSvpLaunchEnabled ? "已开启" : "已关闭"}</label></div><div class="smart-route-state ${association.isDefault ? "ready" : "pending"}"><span class="feature-icon ${association.isDefault ? "emerald" : "blue"}">${icon("file", 20)}</span><div><strong>${escapeHtml(associationLabel)}</strong><p>${escapeHtml(association.detail)}</p></div><button class="secondary compact" data-open-svp-default-apps ${association.supported ? "" : "disabled"}>打开默认应用设置</button></div><div class="smart-route-boundary">${icon("shield", 17)}<span><strong>智能路由只在工具箱已经运行时生效</strong><small>冷启动或关闭此功能时，工具箱会把工程透明转交给原始 .svp 处理程序；不会监控、终止或劫持已经启动的 SV2。路由优先采用账号服务返回的授权摘要，并以你的确认记录作为补充；任何未知结果都必须由你选择账号。</small></span></div></section>` : ""}
-    <section class="panel http-api-settings"><div class="section-heading"><div><h2>本地 HTTP MCP API</h2><p>仅监听本机回环地址，供 OpenCode 等外部程序复用 Toolbox 工具；默认关闭。</p></div><span class="availability ${httpApiStatus.running ? "ready" : httpApiStatus.enabled ? "warning" : ""}">${httpApiStatus.running ? "运行中" : httpApiStatus.enabled ? "启动失败" : "已关闭"}</span></div><form id="http-api-form" class="http-api-form"><label class="fluent-switch large"><input id="http-api-enabled" name="enabled" type="checkbox" ${httpApiStatus.enabled ? "checked" : ""} aria-describedby="http-api-help" /><span></span>${httpApiStatus.enabled ? "已开启" : "已关闭"}</label><label class="http-api-port">监听端口<input id="http-api-port" name="port" type="number" min="1" max="65535" step="1" value="${httpApiStatus.port || 17831}" inputmode="numeric" required aria-describedby="http-api-help" /></label><button class="primary" type="submit" ${busy ? "disabled" : ""}>应用并保存</button></form><div id="http-api-help" class="http-api-status"><span><strong>状态</strong>${httpApiStatus.running ? "正在监听" : httpApiStatus.enabled ? "未运行" : "未启用"}</span>${httpApiStatus.endpoint ? `<span><strong>端点</strong><code>${escapeHtml(httpApiStatus.endpoint)}</code></span>` : ""}${httpApiStatus.lastError ? `<span class="error-text"><strong>错误</strong>${escapeHtml(httpApiStatus.lastError)}</span>` : ""}</div></section>
+    <section class="panel http-api-settings"><div class="section-heading"><div><h2>本地 HTTP 接口</h2><p>仅监听本机回环地址；MCP 工具与 Agent 对话分别授权，默认全部关闭。</p></div><span class="availability ${httpApiStatus.running ? "ready" : httpApiStatus.enabled || httpApiStatus.agentEnabled ? "warning" : ""}">${httpApiStatus.running ? "运行中" : httpApiStatus.enabled || httpApiStatus.agentEnabled ? "启动失败" : "已关闭"}</span></div><form id="http-api-form" class="http-api-form"><label class="fluent-switch large"><input id="http-api-enabled" name="enabled" type="checkbox" ${httpApiStatus.enabled ? "checked" : ""} aria-label="允许本地 HTTP 连接 MCP 工具" aria-describedby="http-api-help" /><span></span>MCP 工具接口</label><label class="fluent-switch large"><input id="http-agent-enabled" name="agentEnabled" type="checkbox" ${httpApiStatus.agentEnabled ? "checked" : ""} aria-label="允许本地 HTTP 连接 Agent" aria-describedby="http-api-help" /><span></span>Agent 对话接口</label><label class="http-api-port">监听端口<input id="http-api-port" name="port" type="number" min="1" max="65535" step="1" value="${httpApiStatus.port || 17831}" inputmode="numeric" required aria-describedby="http-api-help" /></label><button class="primary" type="submit" ${busy ? "disabled" : ""}>应用并保存</button></form><div id="http-api-help" class="http-api-status"><span><strong>监听</strong>${httpApiStatus.running ? "正在运行" : httpApiStatus.enabled || httpApiStatus.agentEnabled ? "未运行" : "未启用"}</span>${httpApiStatus.endpoint ? `<span><strong>MCP</strong><code>${escapeHtml(httpApiStatus.endpoint)}</code></span>` : ""}${httpApiStatus.agentEndpoint ? `<span><strong>Agent</strong><code>${escapeHtml(httpApiStatus.agentEndpoint)}</code></span>` : ""}${httpApiStatus.lastError ? `<span class="error-text"><strong>错误</strong>${escapeHtml(httpApiStatus.lastError)}</span>` : ""}</div></section>
     <section class="panel app-update-settings"><div class="section-heading"><div><h2>应用更新</h2><p>按需检查官方 GitHub Releases；不会自动下载或安装。</p></div></div><div class="update-check-actions"><div><small>当前版本</small><strong>v${escapeHtml(app.appVersion)}</strong></div><button class="secondary" data-check-toolbox-update>${icon("sync", 16)} ${toolboxUpdate ? "重新检查" : "检查更新"}</button></div>${renderToolboxUpdateResult()}</section>
     <section class="panel"><div class="section-heading"><div><h2>数据与平台</h2><p>配置和历史使用统一的跨平台用户目录。</p></div></div><dl class="detail-list"><div><dt>平台</dt><dd>${escapeHtml(app.platform)}</dd></div><div><dt>配置</dt><dd><code>${escapeHtml(app.configPath)}</code></dd></div><div><dt>应用版本</dt><dd>${escapeHtml(app.appVersion)}</dd></div></dl></section></div>`;
 }
@@ -2257,6 +2259,7 @@ function wireForms(): void {
     event.preventDefault();
     const form = event.currentTarget as HTMLFormElement;
     const enabled = form.querySelector<HTMLInputElement>('[name="enabled"]')?.checked ?? false;
+    const agentEnabled = form.querySelector<HTMLInputElement>('[name="agentEnabled"]')?.checked ?? false;
     const port = Number(form.querySelector<HTMLInputElement>('[name="port"]')?.value ?? 0);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       error = "端口必须是 1 到 65535 之间的整数。";
@@ -2265,8 +2268,8 @@ function wireForms(): void {
       return;
     }
     void run(async () => {
-      httpApiStatus = await api.configureHttpApi(enabled, port);
-      notice = enabled ? "本地 HTTP MCP API 设置已保存。" : "本地 HTTP MCP API 已关闭。";
+      httpApiStatus = await api.configureHttpApi(enabled, agentEnabled, port);
+      notice = enabled || agentEnabled ? "本地 HTTP 接口设置已保存。" : "本地 HTTP 接口已关闭。";
     });
   });
   document.querySelector<HTMLFormElement>("#mcp-form")?.addEventListener("submit", (event) => {

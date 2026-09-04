@@ -12,6 +12,7 @@ const packageJson = JSON.parse(readFileSync(join(root, "src/PiDesktop.Tauri/pack
 assert.match(rust, /TcpListener::bind\(\("127\.0\.0\.1", context\.port\)\)/);
 assert.match(rust, /route\("\/health", get\(health\)\)/);
 assert.match(rust, /route\(ENDPOINT_PATH, get\(get_mcp\)\.post\(post_mcp\)\)/);
+assert.match(rust, /route\(AGENT_ENDPOINT_PATH, post\(post_agent\)\)/);
 assert.match(rust, /PROTOCOL_VERSION: &str = "2025-06-18"/);
 assert.match(rust, /"initialize"/);
 assert.match(rust, /"tools\/list"/);
@@ -22,10 +23,12 @@ assert.match(rust, /ToolboxAudioToolExecutor::new/);
 assert.match(rust, /notifications\/initialized/);
 assert.match(config, /DEFAULT_HTTP_API_PORT: u16 = 17_831/);
 assert.match(config, /http_api_enabled/);
+assert.match(config, /http_agent_enabled/);
 assert.match(config, /http_api_port/);
 assert.match(commands, /pub async fn get_http_api_status/);
-assert.match(commands, /pub async fn configure_http_api\([\s\S]*enabled: bool,[\s\S]*port: u16/);
+assert.match(commands, /pub async fn configure_http_api\([\s\S]*enabled: bool,[\s\S]*agent_enabled: bool,[\s\S]*port: u16/);
 assert.match(commands, /validate_port\(port\)/);
+assert.match(commands, /pub\(crate\) async fn run_agent_message/);
 assert.match(packageJson.scripts["test:contracts"], /http-mcp-server\.mjs/);
 
 console.log("HTTP MCP server contract checks passed");

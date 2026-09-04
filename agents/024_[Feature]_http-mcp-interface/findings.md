@@ -10,3 +10,5 @@
 - 本次前端子任务只依赖固定 Tauri 命令：`get_http_api_status` 无参数读取状态，`configure_http_api` 接收 `{ enabled, port }` 并返回相同状态；不在前端复制 Rust 服务逻辑。
 - 首次 `npm run build` 因 worktree 没有前端依赖而报 `tsc: command not found`；离线安装现有锁定依赖后构建和全部契约测试通过。
 - 根目录全局 Git 忽略规则会忽略 `/test/`；契约测试需显式强制加入版本控制。
+- MCP 工具授权和 Agent 对话授权是两个不同权限面：同一回环监听器仅在任一开关开启时存在，`/mcp` 与 `/agent/chat` 分别在对应开关关闭时返回不可用。
+- 首次安装态调用 `synthv_hosts` 暴露了异步请求线程中嵌套 `Handle::block_on` 的 panic；工具调用必须通过 `spawn_blocking` 执行，不能直接在 axum handler 的 Tokio worker 上运行。

@@ -4,11 +4,12 @@ use axum::{
     extract::{Json, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Router,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tauri::Manager as _;
 use tokio::{
     net::TcpListener,
     runtime::Handle,
@@ -26,14 +27,17 @@ use crate::{
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
 const ENDPOINT_PATH: &str = "/mcp";
+const AGENT_ENDPOINT_PATH: &str = "/agent/chat";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpApiStatus {
     pub enabled: bool,
+    pub agent_enabled: bool,
     pub running: bool,
     pub port: u16,
     pub endpoint: Option<String>,
+    pub agent_endpoint: Option<String>,
     pub last_error: Option<String>,
 }
 
@@ -45,6 +49,8 @@ pub struct HttpApiManager {
 #[derive(Default)]
 struct ManagerState {
     port: u16,
+    mcp_enabled: bool,
+    agent_enabled: bool,
     running: bool,
     last_error: Option<String>,
     shutdown: Option<oneshot::Sender<()>>,
@@ -52,19 +58,26 @@ struct ManagerState {
 }
 
 impl HttpApiManager {
-    pub async fn status_async(&self, enabled: bool, port: u16) -> HttpApiStatus {
+    pub async fn status_async(
+        &self,
+        enabled: bool,
+        agent_enabled: bool,
+        port: u16,
+    ) -> HttpApiStatus {
         let state = self.state.lock().await;
         HttpApiStatus {
             enabled,
+            agent_enabled,
             running: state.running,
             port,
-            endpoint: enabled.then(|| endpoint(port)),
+            endpoint: enabled.then(|| mcp_endpoint(port)),
+            agent_endpoint: agent_enabled.then(|| agent_endpoint(port)),
             last_error: state.last_error.clone(),
         }
     }
 
     pub async fn start_if_enabled(self: Arc<Self>, context: HttpApiContext) -> Result<(), String> {
-        if context.enabled {
+        if context.mcp_enabled || context.agent_enabled {
             self.start(context).await
         } else {
             self.stop().await;
@@ -82,7 +95,11 @@ impl HttpApiManager {
         }
         {
             let state = self.state.lock().await;
-            if state.running && state.port == context.port {
+            if state.running
+                && state.port == context.port
+                && state.mcp_enabled == context.mcp_enabled
+                && state.agent_enabled == context.agent_enabled
+            {
                 return Ok(());
             }
         }
@@ -90,9 +107,11 @@ impl HttpApiManager {
         let listener = match TcpListener::bind(("127.0.0.1", context.port)).await {
             Ok(listener) => listener,
             Err(error) => {
-                let message = format!("无法启动本地 HTTP MCP（端口 {}）：{error}", context.port);
+                let message = format!("无法启动本地 HTTP 接口（端口 {}）：{error}", context.port);
                 let mut state = self.state.lock().await;
                 state.port = context.port;
+                state.mcp_enabled = context.mcp_enabled;
+                state.agent_enabled = context.agent_enabled;
                 state.running = false;
                 state.last_error = Some(message.clone());
                 return Err(message);
@@ -102,6 +121,8 @@ impl HttpApiManager {
         {
             let mut state = self.state.lock().await;
             state.port = context.port;
+            state.mcp_enabled = context.mcp_enabled;
+            state.agent_enabled = context.agent_enabled;
             state.running = true;
             state.last_error = None;
             state.shutdown = Some(sender);
@@ -111,6 +132,7 @@ impl HttpApiManager {
             let router = Router::new()
                 .route("/health", get(health))
                 .route(ENDPOINT_PATH, get(get_mcp).post(post_mcp))
+                .route(AGENT_ENDPOINT_PATH, post(post_agent))
                 .with_state(Arc::new(context));
             let result = axum::serve(listener, router)
                 .with_graceful_shutdown(async {
@@ -147,8 +169,10 @@ impl HttpApiManager {
 
 #[derive(Clone)]
 pub struct HttpApiContext {
-    pub enabled: bool,
+    pub mcp_enabled: bool,
+    pub agent_enabled: bool,
     pub port: u16,
+    pub app: Option<tauri::AppHandle>,
     pub mcp: Arc<crate::mcp::McpManager>,
     pub settings: Arc<tokio::sync::RwLock<crate::config::ToolboxSettings>>,
     pub bridge_dir: std::path::PathBuf,
@@ -160,10 +184,12 @@ pub struct HttpApiContext {
 }
 
 impl HttpApiContext {
-    pub fn from_state(state: &AppState) -> Self {
+    pub fn from_state(state: &AppState, app: tauri::AppHandle) -> Self {
         Self {
-            enabled: false,
+            mcp_enabled: false,
+            agent_enabled: false,
             port: DEFAULT_HTTP_API_PORT,
+            app: Some(app),
             mcp: state.mcp.clone(),
             settings: state.settings.clone(),
             bridge_dir: state.bridge_dir.clone(),
@@ -198,8 +224,12 @@ impl HttpApiContext {
     }
 }
 
-fn endpoint(port: u16) -> String {
+fn mcp_endpoint(port: u16) -> String {
     format!("http://127.0.0.1:{port}{ENDPOINT_PATH}")
+}
+
+fn agent_endpoint(port: u16) -> String {
+    format!("http://127.0.0.1:{port}{AGENT_ENDPOINT_PATH}")
 }
 
 pub fn validate_port(port: u16) -> Result<(), String> {
@@ -211,7 +241,12 @@ pub fn validate_port(port: u16) -> Result<(), String> {
 }
 
 async fn health(State(context): State<Arc<HttpApiContext>>) -> impl IntoResponse {
-    Json(json!({"status":"ok", "enabled": context.enabled, "port": context.port}))
+    Json(json!({
+        "status":"ok",
+        "mcpEnabled": context.mcp_enabled,
+        "agentEnabled": context.agent_enabled,
+        "port": context.port
+    }))
 }
 
 async fn get_mcp() -> Response {
@@ -223,6 +258,9 @@ async fn post_mcp(
     headers: HeaderMap,
     Json(request): Json<Value>,
 ) -> Response {
+    if !context.mcp_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let wants_sse = headers
         .get(header::ACCEPT)
         .and_then(|value| value.to_str().ok())
@@ -253,6 +291,32 @@ async fn post_mcp(
             Json(response),
         )
             .into_response()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentChatRequest {
+    input: String,
+}
+
+async fn post_agent(
+    State(context): State<Arc<HttpApiContext>>,
+    Json(request): Json<AgentChatRequest>,
+) -> Response {
+    if !context.agent_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(app) = context.app.as_ref() else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error":"Agent 运行时不可用。"})),
+        )
+            .into_response();
+    };
+    match crate::commands::run_agent_message(request.input, app.state::<AppState>().inner()).await {
+        Ok(messages) => (StatusCode::OK, Json(json!({"messages": messages}))).into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, Json(json!({"error": error}))).into_response(),
     }
 }
 
@@ -315,12 +379,14 @@ async fn handle_rpc(
                 .executor()
                 .await
                 .map_err(|error| (id.clone(), -32603, error))?;
-            let result = executor
-                .execute(&ToolCall {
-                    id: id.to_string(),
-                    tool_name: name.to_string(),
-                    arguments_json: arguments.to_string(),
-                })
+            let call = ToolCall {
+                id: id.to_string(),
+                tool_name: name.to_string(),
+                arguments_json: arguments.to_string(),
+            };
+            let result = tokio::task::spawn_blocking(move || executor.execute(&call))
+                .await
+                .map_err(|error| (id.clone(), -32603, format!("工具执行线程失败：{error}")))?
                 .map_err(|error| (id.clone(), -32603, error.to_string()))?;
             json!({"content":[{"type":"text","text":result.result_json}], "isError":result.is_error})
         }
@@ -343,8 +409,10 @@ mod tests {
     #[tokio::test]
     async fn initialize_and_ping_use_json_rpc_envelopes() {
         let context = HttpApiContext {
-            enabled: true,
+            mcp_enabled: true,
+            agent_enabled: false,
             port: 17_831,
+            app: None,
             mcp: Arc::new(crate::mcp::McpManager::default()),
             settings: Arc::new(tokio::sync::RwLock::new(
                 crate::config::ToolboxSettings::default(),
@@ -373,5 +441,42 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(response["result"], json!({}));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tool_calls_run_outside_the_async_request_thread() {
+        let context = HttpApiContext {
+            mcp_enabled: true,
+            agent_enabled: false,
+            port: 17_831,
+            app: None,
+            mcp: Arc::new(crate::mcp::McpManager::default()),
+            settings: Arc::new(tokio::sync::RwLock::new(
+                crate::config::ToolboxSettings::default(),
+            )),
+            bridge_dir: std::path::PathBuf::new(),
+            resource_dir: std::path::PathBuf::new(),
+            components_dir: std::path::PathBuf::new(),
+            downloads: Arc::new(crate::downloads::ComponentDownloadManager::persistent()),
+            media_tasks: crate::media_tasks::MediaTaskManager::persistent(
+                std::path::PathBuf::new(),
+                std::path::PathBuf::new(),
+                Arc::new(crate::mcp::McpManager::default()),
+            ),
+            file_approvals: Arc::new(crate::agent_files::FileApprovalManager::default()),
+        };
+        let response = handle_rpc(
+            &context,
+            json!({
+                "jsonrpc":"2.0",
+                "id":3,
+                "method":"tools/call",
+                "params":{"name":"synthv_hosts","arguments":{}}
+            }),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(response["result"]["isError"], false);
     }
 }
