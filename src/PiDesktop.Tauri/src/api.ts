@@ -176,6 +176,9 @@ function previewAiModel() {
   return {
     activeProvider: previewActiveAiProvider,
     legacyConfigured: false,
+    catalogSource: "models-dev" as const,
+    catalogGeneratedAt: Date.now(),
+    catalogError: null,
     providers: previewAiProviders.map((provider) => ({
       ...provider,
       accounts: provider.accounts.map((account) => ({ ...account })),
@@ -524,9 +527,9 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "opencode_provider_catalog") return {
     generatedAt: Date.now(),
     providers: [
-      { id: "anthropic", name: "Anthropic", modelCount: 12, package: "@ai-sdk/anthropic" },
-      { id: "openai", name: "OpenAI", modelCount: 18, package: "@ai-sdk/openai" },
-      { id: "google", name: "Google", modelCount: 15, package: "@ai-sdk/google" },
+      { id: "anthropic", name: "Anthropic", modelCount: 12, package: "@ai-sdk/anthropic", models: ["claude-sonnet-4-6"] },
+      { id: "openai", name: "OpenAI", modelCount: 18, package: "@ai-sdk/openai", models: ["gpt-5.6-terra"] },
+      { id: "google", name: "Google", modelCount: 15, package: "@ai-sdk/google", models: ["gemini-preview"] },
     ],
   } as T;
   if (command === "bootstrap" || command === "complete_onboarding" || command === "set_mode" || command.endsWith("settings") || command.endsWith("server") || command === "save_scripts_path" || command === "delete_mcp_server") {
@@ -1090,7 +1093,8 @@ export const api = {
     call<BootstrapState>("add_ai_api_key", { provider, label, apiKey }),
   removeAiApiKey: (provider: AiProviderId, credentialId: string) =>
     call<BootstrapState>("remove_ai_api_key", { provider, credentialId }),
-  aiProviderState: () => call<ModelSummary>("ai_provider_state"),
+  aiProviderState: (forceCatalog = false) =>
+    call<ModelSummary>("ai_provider_state", { forceCatalog }),
   opencodeProviderCatalog: (force = false) =>
     call<OpenCodeCatalog>("opencode_provider_catalog", { force }),
   removeAiProviderAccount: (provider: AiProviderId, accountId: string) =>

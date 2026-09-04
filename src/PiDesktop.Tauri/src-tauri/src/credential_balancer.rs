@@ -83,6 +83,16 @@ impl CredentialBalancer {
         );
     }
 
+    pub fn sync_route(&mut self, route: CredentialRoute) {
+        let key = route_key(route.auth_method, &route.id);
+        self.routes.insert(key.clone(), route);
+        self.states.entry(key).or_insert(CredentialState {
+            health: Health::Healthy,
+            failure_count: 0,
+        });
+        self.cursors.clear();
+    }
+
     pub fn remove(&mut self, auth_method: AiAuthMethod, id: &str) {
         let key = route_key(auth_method, id);
         self.routes.remove(&key);
@@ -137,6 +147,9 @@ impl CredentialBalancer {
         let Some(state) = self.states.get_mut(&route_key(auth_method, id)) else {
             return;
         };
+        if state.health == Health::PermanentlyFailed {
+            return;
+        }
         state.failure_count = state.failure_count.saturating_add(1);
         if matches!(kind, FailureKind::Unauthorized) {
             state.health = Health::PermanentlyFailed;
@@ -262,6 +275,18 @@ mod tests {
         balancer.record_failure(AiAuthMethod::ApiKey, "key", FailureKind::Unauthorized);
         assert!(balancer
             .candidates(AiProviderId::Anthropic, "model")
+            .is_empty());
+        balancer.record_failure(AiAuthMethod::ApiKey, "key", FailureKind::Server);
+        assert_eq!(
+            balancer.health(AiAuthMethod::ApiKey, "key"),
+            HealthSnapshot {
+                healthy: false,
+                cooldown_until_ms: None,
+            }
+        );
+        balancer.sync_route(route("key", AiAuthMethod::ApiKey, &["model", "model-2"]));
+        assert!(balancer
+            .candidates(AiProviderId::Anthropic, "model-2")
             .is_empty());
         balancer.upsert(route("key", AiAuthMethod::ApiKey, &["model"]));
         assert_eq!(
