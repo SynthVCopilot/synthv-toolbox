@@ -28,7 +28,6 @@ import type {
   McpServerConfig,
   HttpApiStatus,
   OperationResult,
-  OpenCodeCatalog,
   ProjectCheckpoint,
   RhymeMatchMode,
   Sv2AccountProbe,
@@ -136,13 +135,12 @@ let pendingComponentRemovalId: string | undefined;
 let pendingProfileDeletionId: string | undefined;
 let pendingAccountIndicatorConsent: PendingAccountIndicatorConsent | undefined;
 let removingComponentId: string | undefined;
-let expandedAiProvider: AiProviderId | undefined;
 let authorizingAiProvider: AiProviderId | undefined;
 let pendingAiAccountRemoval: { provider: AiProviderId; accountId: string } | undefined;
 let pendingAiAccountRemovalTimer: number | undefined;
-let openCodeCatalog: OpenCodeCatalog | undefined;
-let openCodeCatalogLoading = false;
-let openCodeCatalogError = "";
+let aiProviderPickerOpen = false;
+let aiProviderPickerQuery = "";
+let aiProviderPickerSelection: AiProviderId | undefined;
 let downloadPollTimer: number | undefined;
 let mediaTaskPollTimer: number | undefined;
 let toastDismissTimer: number | undefined;
@@ -523,7 +521,7 @@ function render(): void {
       }, 4200);
     }
   }
-  const overlayHtml = pendingComponentRemovalId ? renderComponentRemovalDialog() : pendingProfileDeletionId ? renderProfileDeletionDialog() : pendingBlockedSwitchSlot ? renderBlockedSwitchDialog() : pendingConcurrentLaunchSlot ? renderConcurrentDisclaimer() : pendingSvpRoute ? renderSvpRouteDialog() : pendingAccountIndicatorConsent ? renderAccountIndicatorConsent() : accountManagerOpen && page === "accounts" ? renderAccountManager() : "";
+  const overlayHtml = pendingComponentRemovalId ? renderComponentRemovalDialog() : pendingProfileDeletionId ? renderProfileDeletionDialog() : pendingBlockedSwitchSlot ? renderBlockedSwitchDialog() : pendingConcurrentLaunchSlot ? renderConcurrentDisclaimer() : pendingSvpRoute ? renderSvpRouteDialog() : pendingAccountIndicatorConsent ? renderAccountIndicatorConsent() : accountManagerOpen && page === "accounts" ? renderAccountManager() : aiProviderPickerOpen ? renderAiProviderPicker() : "";
   const nextShellState = {
     page,
     sidebarCollapsed,
@@ -1636,7 +1634,7 @@ function renderCopilot(): string {
   return `<div class="copilot-layout">
     <aside class="sessions-panel"><button class="primary full" data-new-conversation>${icon("plus", 17)} 新建对话</button><span class="nav-label">历史对话</span><div class="session-list">${conversations.length ? conversations.map((item) => `<button class="session-item ${conversation?.id === item.id ? "active" : ""}" data-conversation="${escapeHtml(item.id)}"><strong>${escapeHtml(item.title)}</strong><small>${item.messageCount} 条消息 · ${escapeHtml(item.updatedAt.slice(0, 10))}</small></button>`).join("") : '<p class="empty-small">还没有历史对话</p>'}</div></aside>
     <section class="chat-panel">
-      <div class="chat-header"><div><strong>${escapeHtml(conversation?.title ?? "新对话")}</strong><small>Copilot 只会调用已启用的能力</small></div><span class="mode-pill ai">${icon("sparkles", 14)} AI</span></div>
+      <div class="chat-header"><div><strong>${escapeHtml(conversation?.title ?? "新对话")}</strong><small>Copilot 只会调用已启用的能力</small></div><div class="chat-header-actions"><span class="mode-pill ai">${icon("sparkles", 14)} AI</span><div class="chat-work-mode" role="group" aria-label="Agent 工作模式"><button type="button" class="${app?.agentWorkMode === "edit" ? "active" : ""}" data-agent-work-mode="edit" aria-pressed="${app?.agentWorkMode === "edit"}">Edit</button><button type="button" class="${app?.agentWorkMode === "solo" ? "active" : ""}" data-agent-work-mode="solo" aria-pressed="${app?.agentWorkMode === "solo"}">Solo</button></div></div></div>
       ${approvals}
       <div class="messages">${messages.length ? messages.map(renderMessage).join("") : `<div class="empty-chat"><span class="mode-icon purple">${icon("bot", 30)}</span><h2>今天想完成什么？</h2><p>可以从分析音频、检查工程或连接 SynthV 开始。</p><div class="prompt-chips"><button data-prompt="分析这段音频的 BPM、调性和能量变化">分析音频特征</button><button data-prompt="检查当前 SynthV 工程并总结轨道结构">检查 SynthV 工程</button><button data-prompt="帮我规划从演唱音频到 MIDI 或 SynthV 工程的工作流">规划音频到 SynthV</button></div></div>`}</div>
       <form id="chat-form" class="composer"><textarea id="chat-input" rows="2" placeholder="向 Copilot 描述任务…（Ctrl/⌘ + Enter 发送）"></textarea><button class="primary icon-button" title="发送">${icon("send", 19)}</button><span>Copilot 可能出错，重要修改请在 SynthV 中复核。</span></form>
@@ -1773,22 +1771,8 @@ function aiAccountExpiry(expiresAt: number): string {
   return Number.isFinite(date.getTime()) ? date.toLocaleString("zh-CN") : "未知";
 }
 
-function renderAiProviderCard(provider: AiProviderSummary): string {
-  const expanded = expandedAiProvider === provider.id;
-  const active = isActiveAiProvider(provider);
-  const tone = provider.connected ? (provider.healthyAccounts > 0 ? "ready" : "warning") : "off";
-  const stateLabel = provider.connected
-    ? provider.healthyAccounts > 0 ? "已绑定" : "已授权，待验证"
-    : "未绑定";
-  const knownModels = [...new Set([
-    ...provider.models.filter(Boolean),
-    ...(provider.model ? [provider.model] : []),
-  ])];
-  const modelOptions = knownModels.length
-    ? knownModels.map((model) => `<option value="${escapeHtml(model)}" ${model === provider.model ? "selected" : ""}>${escapeHtml(model)}</option>`).join("")
-    : '<option value="">授权后加载可用模型</option>';
-  const isAuthorizing = authorizingAiProvider === provider.id;
-  const accounts = provider.accounts.length
+function renderAiProviderAccounts(provider: AiProviderSummary): string {
+  return provider.accounts.length
     ? provider.accounts.map((account) => {
       const awaitingConfirmation = pendingAiAccountRemoval?.provider === provider.id
         && pendingAiAccountRemoval.accountId === account.id;
@@ -1796,61 +1780,42 @@ function renderAiProviderCard(provider: AiProviderSummary): string {
       const accountLabel = account.healthy
         ? `授权可用${account.expiresAt > 0 ? ` · 会话到期：${escapeHtml(aiAccountExpiry(account.expiresAt))}` : ""}`
         : account.authorized ? "凭据已安全保存，首次使用时验证并续期" : "凭据缺失，需要重新授权";
-      const removalLabel = awaitingConfirmation
-        ? `确认移除 ${account.label}`
-        : `移除账号 ${account.label}`;
-      return `<article class="ai-provider-account ${accountState}">
-        <span class="ai-account-state" aria-label="${account.healthy ? "账号可用" : account.authorized ? "账号待验证" : "账号不可用"}"></span>
-        <div><strong>${escapeHtml(account.label)}</strong><small>${accountLabel}</small></div>
-        <button type="button" class="secondary compact ai-account-remove ${awaitingConfirmation ? "confirm" : ""}" data-remove-ai-account="${escapeHtml(account.id)}" data-ai-provider="${provider.id}" aria-label="${escapeHtml(removalLabel)}" ${busy ? "disabled" : ""}>${awaitingConfirmation ? "确认移除" : "移除账号"}</button>
-        ${awaitingConfirmation ? `<span class="visually-hidden" role="status" aria-live="assertive">再次点击以确认移除 ${escapeHtml(account.label)}；确认将在五秒后取消。</span>` : ""}
-      </article>`;
+      const removalLabel = awaitingConfirmation ? `确认移除 ${account.label}` : `移除账号 ${account.label}`;
+      return `<article class="ai-provider-account ${accountState}"><span class="ai-account-state" aria-label="${account.healthy ? "账号可用" : account.authorized ? "账号待验证" : "账号不可用"}"></span><div><strong>${escapeHtml(account.label)}</strong><small>${accountLabel}</small></div><button type="button" class="secondary compact ai-account-remove ${awaitingConfirmation ? "confirm" : ""}" data-remove-ai-account="${escapeHtml(account.id)}" data-ai-provider="${provider.id}" aria-label="${escapeHtml(removalLabel)}" ${busy ? "disabled" : ""}>${awaitingConfirmation ? "确认移除" : "移除账号"}</button>${awaitingConfirmation ? `<span class="visually-hidden" role="status" aria-live="assertive">再次点击以确认移除 ${escapeHtml(account.label)}；确认将在五秒后取消。</span>` : ""}</article>`;
     }).join("")
-    : '<div class="ai-provider-empty">尚未授权账号。点击“浏览器授权”，在官方页面完成登录。</div>';
+    : '<div class="ai-provider-empty">尚未授权账号。可在此处打开官方浏览器授权。</div>';
+}
 
-  return `<article class="ai-provider-card ${active ? "active" : ""} ${expanded ? "expanded" : ""}">
-    <div class="ai-provider-row">
-      <span class="ai-provider-state ${tone}" aria-label="${stateLabel}"></span>
-      <span class="ai-provider-mark ${provider.id === "anthropic" ? "claude" : "codex"}">${provider.id === "anthropic" ? "C" : "O"}</span>
-      <div class="ai-provider-copy"><strong>${escapeHtml(provider.displayName)}</strong><small>${escapeHtml(provider.description)}</small></div>
-      <div class="ai-provider-badges">
-        <span class="ai-provider-badge ${active ? "active" : ""}">${active ? "当前使用" : "可切换"}</span>
-        <span class="ai-provider-badge ${tone}">${escapeHtml(stateLabel)}</span>
-        <span class="ai-provider-badge">${provider.healthyAccounts}/${provider.totalAccounts} 个账号可用</span>
-        <span class="ai-provider-badge mono">${provider.models.length} 个模型</span>
-      </div>
-      <button type="button" class="secondary compact ai-provider-toggle" data-toggle-ai-provider="${provider.id}" aria-expanded="${expanded}">${expanded ? "完成" : "配置"}</button>
-    </div>
-    ${expanded ? `<div class="ai-provider-details">
-      <div class="ai-provider-auth-row"><div><strong>官方浏览器 OAuth</strong><small>将在系统浏览器中打开官方授权页，OAuth token 只由本机后端保管。</small></div><button type="button" class="primary" data-authorize-ai-provider="${provider.id}" ${busy ? "disabled" : ""}>${isAuthorizing ? "等待授权…" : `浏览器授权${provider.id === "anthropic" ? " Claude" : " ChatGPT"}`}</button></div>
-      <div class="ai-provider-account-list">${accounts}</div>
-      <form class="ai-provider-model-form" data-ai-provider-form="${provider.id}">
-        <label>模型<select name="model" ${!provider.connected || !knownModels.length ? "disabled" : ""}>${modelOptions}</select></label>
-        <button class="primary" ${!provider.connected || !knownModels.length || busy ? "disabled" : ""}>${active ? "保存模型" : "使用此提供商"}</button>
-      </form>
-    </div>` : ""}
-  </article>`;
+function renderAiProviderPicker(): string {
+  const query = aiProviderPickerQuery.trim().toLocaleLowerCase();
+  const selected = aiProviderPickerSelection ? aiProviders().find((provider) => provider.id === aiProviderPickerSelection) : undefined;
+  const matchingProviders = aiProviders().filter((provider) => [provider.displayName, provider.description, provider.id].some((value) => value.toLocaleLowerCase().includes(query)));
+  const pickerBody = selected ? renderAiProviderPickerDetail(selected) : matchingProviders.length
+    ? `<div class="ai-provider-picker-list" role="listbox" aria-label="可用模型提供商">${matchingProviders.map((provider) => {
+      const active = isActiveAiProvider(provider);
+      const state = provider.connected ? provider.healthyAccounts > 0 ? "已授权" : "待验证" : "未授权";
+      return `<button type="button" class="ai-provider-picker-option ${active ? "active" : ""}" role="option" aria-selected="${active}" data-choose-ai-provider="${provider.id}"><span class="ai-provider-mark ${provider.id === "anthropic" ? "claude" : "codex"}">${provider.id === "anthropic" ? "C" : "O"}</span><span><strong>${escapeHtml(provider.displayName)}</strong><small>${escapeHtml(provider.description)}</small></span><span class="ai-provider-badge ${provider.connected ? "ready" : "off"}">${state}</span>${icon("arrow", 16)}</button>`;
+    }).join("")}</div>`
+    : `<div class="ai-provider-picker-empty" role="status"><span class="mode-icon slate">${icon("bot", 24)}</span><strong>没有匹配的可执行提供商</strong><p>请更换搜索词。这里只显示当前后端实际支持的提供商。</p></div>`;
+  return `<div class="dialog-backdrop ai-provider-picker-backdrop" role="presentation"><section class="fluent-dialog ai-provider-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="ai-provider-picker-title" aria-describedby="ai-provider-picker-description"><header><div><span class="eyebrow">AI 运行时</span><h2 id="ai-provider-picker-title">选择提供商与模型</h2><p id="ai-provider-picker-description">仅展示当前后端可执行的提供商；账号凭据始终由本机后端保管。</p></div><button type="button" class="icon-plain" data-close-ai-provider-picker aria-label="关闭提供商与模型选择">×</button></header><label class="ai-provider-search"><span class="visually-hidden">搜索提供商</span><span aria-hidden="true">⌕</span><input id="ai-provider-search" type="search" value="${escapeHtml(aiProviderPickerQuery)}" placeholder="搜索提供商" autocomplete="off" /></label>${pickerBody}</section></div>`;
+}
+
+function renderAiProviderPickerDetail(provider: AiProviderSummary): string {
+  const models = [...new Set([...provider.models.filter(Boolean), ...(provider.model ? [provider.model] : [])])];
+  const state = provider.connected ? provider.healthyAccounts > 0 ? "OAuth 已就绪" : "已授权，待验证" : "等待浏览器授权";
+  const isAuthorizing = authorizingAiProvider === provider.id;
+  return `<div class="ai-provider-picker-detail"><button type="button" class="back-link" data-back-ai-provider-picker>${icon("arrow", 15)} 返回提供商列表</button><section class="ai-provider-picker-current"><span class="ai-provider-mark ${provider.id === "anthropic" ? "claude" : "codex"}">${provider.id === "anthropic" ? "C" : "O"}</span><div><strong>${escapeHtml(provider.displayName)}</strong><small>${escapeHtml(provider.description)}</small></div><span class="ai-provider-badge ${provider.connected ? "ready" : "warning"}">${state}</span></section><div class="ai-provider-auth-row"><div><strong>官方浏览器 OAuth</strong><small>在官方页面完成授权后，可回到此处选择模型。</small></div><button type="button" class="primary" data-authorize-ai-provider="${provider.id}" ${busy ? "disabled" : ""}>${isAuthorizing ? "等待授权…" : "浏览器授权"}</button></div><div class="ai-provider-account-list">${renderAiProviderAccounts(provider)}</div><section class="ai-provider-model-list" aria-labelledby="ai-provider-model-title"><div><strong id="ai-provider-model-title">选择模型</strong><small>${provider.connected ? "点击后立即保存为当前对话模型。" : "完成授权后会显示该提供商可用的模型。"}</small></div>${models.length ? `<div role="listbox" aria-label="${escapeHtml(provider.displayName)} 模型列表">${models.map((model) => `<button type="button" class="ai-provider-model-option ${model === provider.model && isActiveAiProvider(provider) ? "active" : ""}" role="option" aria-selected="${model === provider.model && isActiveAiProvider(provider)}" data-select-ai-provider-model="${escapeHtml(model)}" data-ai-provider="${provider.id}" ${!provider.connected || busy ? "disabled" : ""}><span><strong>${escapeHtml(model)}</strong><small>${model === provider.model && isActiveAiProvider(provider) ? "当前使用" : "点击使用此模型"}</small></span>${model === provider.model && isActiveAiProvider(provider) ? icon("check", 18) : ""}</button>`).join("")}</div>` : '<div class="ai-provider-empty">授权完成后，后端会在这里返回可用模型。</div>'}</section></div>`;
 }
 
 function renderAiProviderSettings(): string {
-  if (!openCodeCatalog && !openCodeCatalogLoading && !openCodeCatalogError) {
-    void loadOpenCodeCatalog(false);
-  }
   const legacyWarning = app?.model?.legacyConfigured
     ? `<div class="ai-legacy-warning">${icon("shield", 17)}<span><strong>检测到旧版 API token 配置</strong><small>旧配置不会作为 OAuth 账号展示。请完成浏览器授权；后端迁移完成前仍会保留旧配置。</small></span></div>`
     : "";
   const activeProvider = activeAiProvider();
   const activeVerified = Boolean(activeProvider?.connected && activeProvider.healthyAccounts > 0);
   const activeStatus = activeVerified ? "OAuth 已就绪" : activeProvider?.connected ? "已授权，待验证" : "等待授权";
-  const catalogStatus = openCodeCatalog
-    ? `${openCodeCatalog.providers.length} 个提供商`
-    : openCodeCatalogLoading ? "正在获取…" : "获取失败";
-  const catalogOptions = openCodeCatalog?.providers.map((provider) =>
-    `<option value="${escapeHtml(provider.id)}">${escapeHtml(provider.name)} · ${escapeHtml(provider.id)} · ${provider.modelCount} 个模型</option>`
-  ).join("") ?? "";
   return `<section class="panel ai-provider-panel"><div class="section-heading"><div><h2>模型提供商</h2><p>使用 IRIS 同款官方订阅接入；授权、续期与账号凭据均由 Rust 后端处理。</p></div><span class="availability ${activeVerified ? "ready" : "warning"}">${activeStatus}</span></div>
-    ${legacyWarning}<div class="ai-provider-list">${aiProviders().map(renderAiProviderCard).join("")}</div>
-    <div class="opencode-catalog-row"><div><strong>OpenCode 提供商目录</strong><small>${openCodeCatalogError ? escapeHtml(openCodeCatalogError) : openCodeCatalog ? `已自动获取 ${openCodeCatalog.providers.length} 个提供商。` : "正在从 models.dev 自动获取目录。"}</small></div>${catalogOptions ? `<label><span class="visually-hidden">OpenCode 提供商</span><select aria-label="OpenCode 提供商目录">${catalogOptions}</select></label>` : `<span class="availability ${openCodeCatalogError ? "warning" : ""}">${catalogStatus}</span>`}<button type="button" class="secondary compact" data-refresh-opencode-catalog ${openCodeCatalogLoading || busy ? "disabled" : ""}>${icon("sync", 15)} 刷新</button></div>
+    ${legacyWarning}<div class="ai-provider-summary"><div><strong>${escapeHtml(activeProvider?.displayName ?? "尚未选择提供商")}</strong><small>${escapeHtml(activeProvider?.model || "选择提供商并完成浏览器授权后即可开始对话。")}</small></div><button type="button" class="primary" data-open-ai-provider-picker ${busy ? "disabled" : ""}>选择提供商与模型</button></div>
   </section>`;
 }
 
@@ -1866,7 +1831,6 @@ function renderSettings(): string {
         ? "已注册，等待设为默认应用"
         : "尚未注册为可选打开方式";
   return `<div class="settings-layout"><section class="panel"><div class="section-heading"><div><h2>运行模式</h2><p>切换后导航与 Rust 后端能力会同时更新。</p></div></div><div class="mode-setting"><button class="setting-choice ${app.mode === "toolbox" ? "active" : ""}" data-set-mode="toolbox"><span class="mode-icon slate">${icon("toolbox", 23)}</span><span><strong>纯工具箱</strong><small>确定性基础流程，不启动 AI</small></span>${app.mode === "toolbox" ? icon("check", 20) : ""}</button><button class="setting-choice ${app.mode === "ai" ? "active" : ""}" data-set-mode="ai"><span class="mode-icon purple">${icon("sparkles", 23)}</span><span><strong>AI 模式</strong><small>Copilot、智能增强与 MCP</small></span>${app.mode === "ai" ? icon("check", 20) : ""}</button></div></section>
-    ${app.mode === "ai" ? `<section class="panel"><div class="section-heading"><div><h2>Agent 工作模式</h2><p>Edit 执行一次有界修改；Solo 会自主推进检查点、修改与复检循环。</p></div></div><div class="mode-setting"><button class="setting-choice ${app.agentWorkMode === "edit" ? "active" : ""}" data-agent-work-mode="edit"><span class="mode-icon blue">${icon("file", 23)}</span><span><strong>Edit</strong><small>明确目标、单次修改、立即验证</small></span>${app.agentWorkMode === "edit" ? icon("check", 20) : ""}</button><button class="setting-choice ${app.agentWorkMode === "solo" ? "active" : ""}" data-agent-work-mode="solo"><span class="mode-icon purple">${icon("sparkles", 23)}</span><span><strong>Solo</strong><small>自动检查点、迭代优化、失败即停</small></span>${app.agentWorkMode === "solo" ? icon("check", 20) : ""}</button></div></section>` : ""}
     ${app.mode === "ai" ? renderAiProviderSettings() : `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("bot", 24)}</span><div><h2>AI 运行时已关闭</h2><p>当前不会显示 Copilot、模型或 MCP 设置，也不会向模型端点发送请求。</p></div></section>`}
     ${showSvpRouting ? `<section class="panel smart-route-settings"><div class="section-heading"><div><h2>智能 .svp 启动</h2><p>根据工程所需声库，从空闲账号中建议最合适的启动槽位。</p></div><label class="fluent-switch large"><input id="svp-routing-enabled" type="checkbox" ${app.smartSvpLaunchEnabled ? "checked" : ""} ${association.supported ? "" : "disabled"} aria-label="启用智能 .svp 启动" /><span></span>${app.smartSvpLaunchEnabled ? "已开启" : "已关闭"}</label></div><div class="smart-route-state ${association.isDefault ? "ready" : "pending"}"><span class="feature-icon ${association.isDefault ? "emerald" : "blue"}">${icon("file", 20)}</span><div><strong>${escapeHtml(associationLabel)}</strong><p>${escapeHtml(association.detail)}</p></div><button class="secondary compact" data-open-svp-default-apps ${association.supported ? "" : "disabled"}>打开默认应用设置</button></div><div class="smart-route-boundary">${icon("shield", 17)}<span><strong>智能路由只在工具箱已经运行时生效</strong><small>冷启动或关闭此功能时，工具箱会把工程透明转交给原始 .svp 处理程序；不会监控、终止或劫持已经启动的 SV2。路由优先采用账号服务返回的授权摘要，并以你的确认记录作为补充；任何未知结果都必须由你选择账号。</small></span></div></section>` : ""}
     <section class="panel http-api-settings"><div class="section-heading"><div><h2>本地 HTTP 接口</h2><p>仅监听本机回环地址；MCP 工具与 Agent 对话分别授权，默认全部关闭。</p></div><span class="availability ${httpApiStatus.running ? "ready" : httpApiStatus.enabled || httpApiStatus.agentEnabled ? "warning" : ""}">${httpApiStatus.running ? "运行中" : httpApiStatus.enabled || httpApiStatus.agentEnabled ? "启动失败" : "已关闭"}</span></div><form id="http-api-form" class="http-api-form"><label class="fluent-switch large"><input id="http-api-enabled" name="enabled" type="checkbox" ${httpApiStatus.enabled ? "checked" : ""} aria-label="允许本地 HTTP 连接 MCP 工具" aria-describedby="http-api-help" /><span></span>MCP 工具接口</label><label class="fluent-switch large"><input id="http-agent-enabled" name="agentEnabled" type="checkbox" ${httpApiStatus.agentEnabled ? "checked" : ""} aria-label="允许本地 HTTP 连接 Agent" aria-describedby="http-api-help" /><span></span>Agent 对话接口</label><label class="http-api-port">监听端口<input id="http-api-port" name="port" type="number" min="1" max="65535" step="1" value="${httpApiStatus.port || 17831}" inputmode="numeric" required aria-describedby="http-api-help" /></label><button class="primary" type="submit" ${busy ? "disabled" : ""}>应用并保存</button></form><div id="http-api-help" class="http-api-status"><span><strong>监听</strong>${httpApiStatus.running ? "正在运行" : httpApiStatus.enabled || httpApiStatus.agentEnabled ? "未运行" : "未启用"}</span>${httpApiStatus.endpoint ? `<span><strong>MCP</strong><code>${escapeHtml(httpApiStatus.endpoint)}</code></span>` : ""}${httpApiStatus.agentEndpoint ? `<span><strong>Agent</strong><code>${escapeHtml(httpApiStatus.agentEndpoint)}</code></span>` : ""}${httpApiStatus.lastError ? `<span class="error-text"><strong>错误</strong>${escapeHtml(httpApiStatus.lastError)}</span>` : ""}</div></section>
@@ -2232,20 +2196,6 @@ function wireForms(): void {
       if (input) void sendPrompt(input);
     }
   });
-  document.querySelectorAll<HTMLFormElement>("[data-ai-provider-form]").forEach((form) => {
-    form.addEventListener("submit", (event) => {
-      event.preventDefault();
-      const provider = parseAiProviderId(form.dataset.aiProviderForm);
-      const model = form.querySelector<HTMLSelectElement>("select[name='model']")?.value.trim() ?? "";
-      if (!provider || !model || busy) return;
-      clearPendingAiAccountRemoval();
-      void run(async () => {
-        app = await api.selectAiProvider(provider, model);
-        expandedAiProvider = provider;
-        notice = "当前 AI 提供商与模型已更新。";
-      });
-    });
-  });
   document.querySelector<HTMLInputElement>("#svp-routing-enabled")?.addEventListener("change", (event) => {
     const enabled = (event.currentTarget as HTMLInputElement).checked;
     void run(async () => {
@@ -2315,20 +2265,6 @@ async function refreshAiProviderSummary(): Promise<void> {
   if (app?.mode === "ai") app.model = await api.aiProviderState();
 }
 
-async function loadOpenCodeCatalog(force: boolean): Promise<void> {
-  if (openCodeCatalogLoading || app?.mode !== "ai") return;
-  openCodeCatalogLoading = true;
-  openCodeCatalogError = "";
-  try {
-    openCodeCatalog = await api.opencodeProviderCatalog(force);
-  } catch (reason) {
-    openCodeCatalogError = reason instanceof Error ? reason.message : String(reason);
-  } finally {
-    openCodeCatalogLoading = false;
-    render();
-  }
-}
-
 async function withAiProviderStateRefresh<T>(action: () => Promise<T>): Promise<T> {
   try {
     return await action();
@@ -2344,12 +2280,32 @@ async function withAiProviderStateRefresh<T>(action: () => Promise<T>): Promise<
 
 document.addEventListener("input", (event) => {
   const target = event.target as HTMLElement;
+  if (target instanceof HTMLInputElement && target.id === "ai-provider-search") {
+    aiProviderPickerQuery = target.value;
+    aiProviderPickerSelection = undefined;
+    render();
+    requestAnimationFrame(() => {
+      const search = document.querySelector<HTMLInputElement>("#ai-provider-search");
+      search?.focus();
+      search?.setSelectionRange(aiProviderPickerQuery.length, aiProviderPickerQuery.length);
+    });
+    return;
+  }
   if (!target.closest(".lyric-workbench-grid")) return;
   if (lyricPersistTimer !== undefined) window.clearTimeout(lyricPersistTimer);
   lyricPersistTimer = window.setTimeout(() => {
     lyricPersistTimer = undefined;
     syncLyricDraftFromDom();
   }, 250);
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !aiProviderPickerOpen) return;
+  event.preventDefault();
+  aiProviderPickerOpen = false;
+  aiProviderPickerSelection = undefined;
+  clearPendingAiAccountRemoval();
+  render();
 });
 
 document.addEventListener("click", (event) => {
@@ -2429,10 +2385,6 @@ document.addEventListener("click", (event) => {
           ? `发现 ${audioCaptureTargets.length} 个 SynthV standalone 实例。`
           : "没有发现运行中的 SynthV standalone 实例。";
     });
-    return;
-  }
-  if (target.hasAttribute("data-refresh-opencode-catalog")) {
-    void loadOpenCodeCatalog(true);
     return;
   }
   const lyricPreset = target.dataset.lyricPreset as "compact" | "pop" | "rap" | "blank" | undefined;
@@ -2697,15 +2649,48 @@ document.addEventListener("click", (event) => {
   if (mode) { void run(async () => { app = await api.setMode(mode); notice = `已切换到${mode === "ai" ? " AI 模式" : "纯工具箱模式"}。`; }); return; }
   const agentWorkMode = target.dataset.agentWorkMode as AgentWorkMode | undefined;
   if (agentWorkMode) { void run(async () => { app = await api.setAgentWorkMode(agentWorkMode); notice = `Agent 已切换到 ${agentWorkMode === "solo" ? "Solo" : "Edit"} 模式。`; }); return; }
-  if (target.hasAttribute("data-enable-ai")) { page = "settings"; render(); return; }
-  const toggledProvider = parseAiProviderId(target.dataset.toggleAiProvider);
-  if (target.dataset.toggleAiProvider !== undefined) {
-    if (!toggledProvider) return;
-    expandedAiProvider = expandedAiProvider === toggledProvider ? undefined : toggledProvider;
+  if (target.hasAttribute("data-open-ai-provider-picker")) {
+    aiProviderPickerOpen = true;
+    aiProviderPickerQuery = "";
+    aiProviderPickerSelection = undefined;
+    render();
+    requestAnimationFrame(() => document.querySelector<HTMLInputElement>("#ai-provider-search")?.focus());
+    return;
+  }
+  if (target.hasAttribute("data-close-ai-provider-picker")) {
+    aiProviderPickerOpen = false;
+    aiProviderPickerSelection = undefined;
     clearPendingAiAccountRemoval();
     render();
     return;
   }
+  if (target.hasAttribute("data-back-ai-provider-picker")) {
+    aiProviderPickerSelection = undefined;
+    render();
+    requestAnimationFrame(() => document.querySelector<HTMLInputElement>("#ai-provider-search")?.focus());
+    return;
+  }
+  const chosenProvider = parseAiProviderId(target.dataset.chooseAiProvider);
+  if (chosenProvider) {
+    aiProviderPickerSelection = chosenProvider;
+    clearPendingAiAccountRemoval();
+    render();
+    return;
+  }
+  const selectedProvider = parseAiProviderId(target.dataset.aiProvider);
+  if (target.dataset.selectAiProviderModel !== undefined) {
+    const model = target.dataset.selectAiProviderModel?.trim() ?? "";
+    if (!selectedProvider || !model || busy) return;
+    clearPendingAiAccountRemoval();
+    void run(async () => {
+      app = await api.selectAiProvider(selectedProvider, model);
+      aiProviderPickerOpen = false;
+      aiProviderPickerSelection = undefined;
+      notice = "当前 AI 提供商与模型已更新。";
+    });
+    return;
+  }
+  if (target.hasAttribute("data-enable-ai")) { page = "settings"; render(); return; }
   const authorizedProvider = parseAiProviderId(target.dataset.authorizeAiProvider);
   if (target.dataset.authorizeAiProvider !== undefined) {
     if (!authorizedProvider || busy || authorizingAiProvider) return;
@@ -2713,7 +2698,7 @@ document.addEventListener("click", (event) => {
     void run(async () => {
       try {
         app = await api.authorizeAiProvider(authorizedProvider);
-        expandedAiProvider = authorizedProvider;
+        aiProviderPickerSelection = authorizedProvider;
         notice = "官方账号授权已更新。";
       } finally {
         authorizingAiProvider = undefined;
@@ -2736,7 +2721,7 @@ document.addEventListener("click", (event) => {
     clearPendingAiAccountRemoval();
     void run(async () => {
       app = await api.removeAiProviderAccount(provider, accountId);
-      expandedAiProvider = provider;
+      aiProviderPickerSelection = provider;
       notice = "账号授权已从本机移除。";
     });
     return;
