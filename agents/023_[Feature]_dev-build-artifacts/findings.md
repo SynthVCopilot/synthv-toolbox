@@ -6,4 +6,5 @@
 - 任务范围明确排除 Rust 和 `ensure-bridge`；本任务只涉及 workflow、根测试和 package script，以及 `/agents` 审计记录。
 - 首次验证从 `src/PiDesktop.Tauri` 执行根测试路径，导致 Node 找不到 `src/PiDesktop.Tauri/test/...`；改为从 worktree 根目录执行后重试。
 - 最终静态契约、Ruby YAML 解析、`actionlint` 和完整 `npm run --prefix src/PiDesktop.Tauri test:contracts` 均通过。
+- [集成复核] -> 双平台分别维护 upload 步骤会重复 artifact 策略 -> 收敛为一个矩阵通用上传步骤，产物名统一为 `synthv-toolbox-dev-${{ matrix.target }}`。
 - 首次验证从 `src/PiDesktop.Tauri` 执行根测试路径，导致 Node 找不到 `src/PiDesktop.Tauri/test/...`；改为从 worktree 根目录执行后重试。

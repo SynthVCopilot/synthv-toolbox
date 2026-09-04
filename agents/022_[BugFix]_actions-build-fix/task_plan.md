@@ -8,3 +8,4 @@
 - [x] 在根 `/test` 增加或更新 Node 契约测试
 - [x] 运行相关 Node 契约、cargo fmt、cargo test 与 cargo clippy
 - [x] 检查 diff 范围与提交内容，提交到 `codex/actions-build-fix`
+- [ ] 在 main 复现 CI 裁剪后构建并等待双平台 Actions 通过

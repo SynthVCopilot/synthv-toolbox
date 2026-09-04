@@ -15,3 +15,5 @@
 - `game_to_midi_cancellable` 的八个参数收敛到 `GameToMidiRequest`，调用方使用具名字段，保留所有取消、输出和资源路径语义。
 - `game_to_midi_cancellable` 使用 `request.resource_dir` 配置 FFmpeg 环境，避免请求结构重构后引用已删除的局部变量。
 - `downloads.rs` 的回滚由显式 `if let Some` 完成，避免 `Option::map` 产生 unit closure lint。
+- [集成复核] -> 无条件依赖 `dist` 会使本地源码改动不再重建 -> 仅当 GitHub Actions 的 `CI=true` 且两个 CLI 入口完整时复用预构建；本地开发继续正常重建。
+- [`actionlint` 全量检查] -> 发布说明的 `git log` 格式串在单引号内使用 GitHub 表达式，触发 SC2016 -> 改用 Actions 默认的 `GITHUB_REPOSITORY` 环境变量和安全的双引号格式。

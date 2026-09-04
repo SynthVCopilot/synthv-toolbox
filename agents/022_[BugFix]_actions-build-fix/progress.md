@@ -5,4 +5,7 @@
 - 2026-09-03：修改 `ensure-bridge.mjs`、`downloads.rs`、`workflows.rs`、`media_tasks.rs`，新增根 `/test/actions-build-fix.mjs`；Bridge 有效 dist 跳过构建，缺失时以 `--include=dev` 恢复依赖。
 - 2026-09-03：复核后补正 `request.resource_dir`，并将 Bridge 有效判定收紧为 native 与 SV1 legacy 两个 dist CLI 入口同时存在。
 - 2026-09-03：Node actions-build、formal Bridge、Cover 契约通过；`cargo fmt --check`、`cargo test --all-targets`（202 passed、1 integration passed、2 ignored）和 `cargo clippy --all-targets -- -D warnings` 通过。Rust 验证使用了临时空资源入口，随后已清理。
-- 2026-09-03：提交 `42345bf506fefed8c90e24e621b17f6928798796` 创建，提交前检查确认未修改 `.github/workflows` 或 `package.json`。
+- 2026-09-03：子分支提交 `b38ced3`，提交前检查确认未修改 `.github/workflows` 或 `package.json`。
+- 2026-09-03：合并后将预构建跳过收紧为 `CI=true` 专用，并增加 TypeScript/节点类型构建依赖完整性检查。
+- 2026-09-03：执行全量 `actionlint` 并修复既有发布 workflow 的 SC2016 格式串问题。
+- 2026-09-03：将 `actions-build-fix.mjs` 接入桌面全量契约脚本，并同步 Bridge package-lock 中的 SV1 legacy CLI bin 入口。
