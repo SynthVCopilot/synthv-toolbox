@@ -1006,11 +1006,14 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .ai-api-key-form strong, .ai-api-key-form small { display: block; }
 .ai-api-key-form strong { font-size: 12px; font-weight: 600; }
 .ai-api-key-form small { margin-top: 4px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.ai-api-key-fields { display: grid; gap: 8px; }
+.ai-api-key-fields > input { min-width: 0; padding: 9px 10px; border: 1px solid var(--line-strong); border-radius: 6px; color: inherit; background: var(--control); font: inherit; }
 .ai-api-key-input { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 7px; padding: 0 6px 0 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--control); }
 .ai-api-key-input:focus-within { border-color: var(--primary); box-shadow: 0 0 0 2px color-mix(in srgb,var(--primary) 15%,transparent); }
 .ai-api-key-input input { min-width: 0; padding: 9px 0; border: 0; outline: 0; color: inherit; background: transparent; font: inherit; }
 .ai-api-key-input .icon-plain { width: auto; min-width: 42px; height: 30px; font-size: 10px; }
 .ai-api-key-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.ai-api-key-list { display: grid; gap: 7px; }
 .ai-provider-picker-current { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 10px; padding: 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-subtle); }
 .ai-provider-picker-current > div { min-width: 0; }
 .ai-provider-picker-current strong, .ai-provider-picker-current small { display: block; }
