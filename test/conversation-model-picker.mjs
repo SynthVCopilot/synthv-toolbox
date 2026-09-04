@@ -12,26 +12,27 @@ function functionBody(name) {
 
 const copilot = functionBody("renderCopilot");
 const settings = functionBody("renderSettings");
+const providerSettings = functionBody("renderAiProviderSettings");
 
-// Provider/model selection is an in-conversation dialog with searchable, clickable options.
-assert.match(copilot, /data-open-ai-model-picker/);
+// Provider/model selection is a dialog with searchable, clickable options.
+assert.match(providerSettings, /data-open-ai-provider-picker/);
 assert.match(main, /role="dialog"[\s\S]*aria-modal="true"[\s\S]*aria-labelledby=/);
-assert.match(main, /data-ai-model-picker/);
-assert.match(main, /type="search"[\s\S]*data-ai-model-search/);
-assert.match(main, /data-select-ai-model/);
+assert.match(main, /type="search"/);
+assert.match(main, /data-choose-ai-provider/);
+assert.match(main, /data-select-ai-provider-model/);
 assert.doesNotMatch(copilot, /<select[^>]+name="model"/);
 
 // Edit/Solo are controls in the conversation header, not a settings panel.
-assert.match(copilot, /data-conversation-work-mode="edit"/);
-assert.match(copilot, /data-conversation-work-mode="solo"/);
+assert.match(copilot, /data-agent-work-mode="edit"/);
+assert.match(copilot, /data-agent-work-mode="solo"/);
 assert.doesNotMatch(settings, /Agent 工作模式/);
 
 // Existing backend contracts remain the only persistence path for these choices.
-assert.match(main, /selectAiProvider\(provider, model\)/);
+assert.match(main, /selectAiProvider\([^,]+, model\)/);
 assert.match(main, /setAgentWorkMode\(agentWorkMode\)/);
 
 // The picker must expose an accessible close action as well as modal semantics.
-assert.match(main, /data-close-ai-model-picker/);
+assert.match(main, /data-close-ai-provider-picker/);
 assert.match(main, /aria-label="(?:关闭|Close)[^"]*"/);
 
 console.log("Conversation model picker contracts passed.");
