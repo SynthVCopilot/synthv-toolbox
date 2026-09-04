@@ -1835,9 +1835,7 @@ function aiAuthLabel(authMethod: AiAuthMethod): string {
 }
 
 function aiProviderDisplayName(provider: AiProviderSummary): string {
-  if (provider.id === "anthropic") return "Claude / Anthropic";
-  if (provider.id === "openai-codex") return "OpenAI / Codex";
-  return provider.id === "workbuddy" ? "WorkBuddy" : "TraeCode";
+  return provider.displayName;
 }
 
 function aiProviderMark(provider: AiProviderSummary): string {
@@ -1872,7 +1870,10 @@ function renderAiProviderAccounts(provider: AiProviderSummary): string {
 function renderAiApiKeys(provider: AiProviderSummary): string {
   const entries = provider.apiKeys.length ? provider.apiKeys.map((key) => {
     const cooldown = key.cooldownUntilUtc ? ` · 冷却至 ${escapeHtml(new Date(key.cooldownUntilUtc).toLocaleString("zh-CN"))}` : "";
-    return `<article class="ai-provider-account ${key.healthy ? "healthy" : "unhealthy"}"><span class="ai-account-state" aria-label="${key.healthy ? "API Key 可用" : "API Key 不可用"}"></span><div><strong>${escapeHtml(key.label)}</strong><small>${key.models.length} 个模型 · ${key.healthy ? "可用" : "不可用"}${cooldown}</small></div><button type="button" class="secondary compact ai-account-remove" data-remove-ai-api-key="${provider.id}" data-ai-credential-id="${escapeHtml(key.id)}" ${busy ? "disabled" : ""}>移除</button></article>`;
+    const awaitingConfirmation = pendingAiAccountRemoval?.provider === provider.id
+      && pendingAiAccountRemoval.accountId === key.id;
+    const removalLabel = awaitingConfirmation ? `确认移除 ${key.label}` : `移除 API Key ${key.label}`;
+    return `<article class="ai-provider-account ${key.healthy ? "healthy" : "unhealthy"}"><span class="ai-account-state" aria-label="${key.healthy ? "API Key 可用" : "API Key 不可用"}"></span><div><strong>${escapeHtml(key.label)}</strong><small>${key.models.length} 个模型 · ${key.healthy ? "可用" : "不可用"}${cooldown}</small></div><button type="button" class="secondary compact ai-account-remove ${awaitingConfirmation ? "confirm" : ""}" data-remove-ai-api-key="${provider.id}" data-ai-credential-id="${escapeHtml(key.id)}" aria-label="${escapeHtml(removalLabel)}" ${busy ? "disabled" : ""}>${awaitingConfirmation ? "确认移除" : "移除"}</button>${awaitingConfirmation ? `<span class="visually-hidden" role="status" aria-live="assertive">再次点击以确认移除 ${escapeHtml(key.label)}；确认将在五秒后取消。</span>` : ""}</article>`;
   }).join("") : '<div class="ai-provider-empty">尚未添加 API Key。</div>';
   return `<form class="ai-api-key-form" data-ai-api-key-form data-ai-provider="${provider.id}"><div><strong>添加 API Key</strong><small>可保存多份密钥。标签只用于识别，密钥由本机后端验证并安全保存。</small></div><div class="ai-api-key-fields"><input name="label" type="text" autocomplete="off" placeholder="标签（可选，例如工作账号）" /><label class="ai-api-key-input"><span class="visually-hidden">${escapeHtml(aiProviderDisplayName(provider))} API Key</span><input id="ai-api-key-input" name="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 API Key" ${busy ? "disabled" : ""}/><button type="button" class="icon-plain" data-toggle-ai-api-key aria-label="显示 API Key">显示</button></label></div><div class="ai-api-key-actions"><button type="submit" class="primary" ${busy ? "disabled" : ""}>保存并验证</button></div></form><div class="ai-api-key-list" aria-label="已保存 API Key">${entries}</div>`;
 }
@@ -2836,10 +2837,10 @@ document.addEventListener("click", (event) => {
     clearPendingAiAccountRemoval();
     void run(async () => {
       app = await api.selectAiProvider(selectedProvider, model);
-  aiProviderPickerOpen = false;
-  aiProviderPickerSelection = undefined;
-  aiProviderPickerStep = "method";
-  aiProviderPickerQuery = "";
+      aiProviderPickerOpen = false;
+      aiProviderPickerSelection = undefined;
+      aiProviderPickerStep = "method";
+      aiProviderPickerQuery = "";
       notice = "当前 AI 提供商与模型已更新。";
     });
     return;
