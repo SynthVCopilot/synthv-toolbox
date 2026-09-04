@@ -8,3 +8,5 @@
 - 模型可选性以当前选中的认证方式决定：OAuth 需要已授权账号，API Key 需要后端返回 `apiKeyConfigured`。
 - API Key 不可复用 OAuth 凭据服务：使用独立 `com.synthvcopilot.toolbox.api-key` 服务，并在设置写入失败时恢复原钥匙串值，防止界面状态与真实凭据不一致。
 - OpenAI Platform API Key 的运行时使用 `https://api.openai.com/v1/responses`、Bearer header 且不发送 ChatGPT account id；OAuth 仍维持既有 Codex subscription endpoint 与 header。
+- 三段式认证 UI 需要同时读取 OAuth 与 API Key 两套目录；单一 `models` 字段会随全局认证状态切换而丢失另一条目录，因此摘要改为 `oauthModels` 与 `apiKeyModels`。
+- 安装态供应商标签不能写死为官方订阅，否则 API Key 页面会产生错误暗示；统一为 `Claude / Anthropic` 与 `OpenAI / Codex`，描述同时列出 OAuth 和 API Key。

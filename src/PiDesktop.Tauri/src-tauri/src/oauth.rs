@@ -69,8 +69,8 @@ impl AiProviderId {
 
     pub fn display_name(self) -> &'static str {
         match self {
-            Self::Anthropic => "Claude 官方订阅",
-            Self::OpenaiCodex => "Codex 官方订阅",
+            Self::Anthropic => "Claude / Anthropic",
+            Self::OpenaiCodex => "OpenAI / Codex",
         }
     }
 

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -126,7 +127,8 @@ pub struct AiProviderSummary {
     pub healthy_accounts: usize,
     pub total_accounts: usize,
     pub model: String,
-    pub models: Vec<String>,
+    pub oauth_models: Vec<String>,
+    pub api_key_models: Vec<String>,
     pub accounts: Vec<OAuthAccountSummary>,
     pub auth_method: AiAuthMethod,
     pub api_key_configured: bool,
@@ -535,44 +537,33 @@ pub fn model_summary(settings: &ToolboxSettings) -> ModelSummary {
                 })
                 .collect::<Vec<_>>();
             let healthy_accounts = accounts.iter().filter(|account| account.healthy).count();
+            let oauth_models = oauth_models_for(provider, discovered_codex_models.as_ref());
+            let api_key_models = api_key_models_for(settings, provider, api_key_configured);
+            let active = settings.ai_provider == provider;
             AiProviderSummary {
                 id: provider,
                 display_name: provider.display_name().to_string(),
                 description: match provider {
                     AiProviderId::Anthropic => {
-                        "通过浏览器授权 Claude Pro / Max 官方订阅。".to_string()
+                        "支持 OAuth（Claude Pro / Max）或 Anthropic API Key。".to_string()
                     }
                     AiProviderId::OpenaiCodex => {
-                        "通过浏览器授权 ChatGPT Plus / Pro 的 Codex 运行时。".to_string()
+                        "支持 OAuth（ChatGPT Plus / Pro）或 OpenAI API Key。".to_string()
                     }
                 },
-                active: settings.ai_provider == provider,
-                connected: match settings.ai_auth_method {
-                    AiAuthMethod::OAuth => accounts.iter().any(|account| account.authorized),
-                    AiAuthMethod::ApiKey => api_key_configured,
-                },
+                active,
+                connected: active
+                    && match settings.ai_auth_method {
+                        AiAuthMethod::OAuth => accounts.iter().any(|account| account.authorized),
+                        AiAuthMethod::ApiKey => api_key_configured,
+                    },
                 healthy_accounts,
                 total_accounts: accounts.len(),
                 model: (settings.ai_auth_method == AiAuthMethod::OAuth || api_key_configured)
                     .then(|| settings.model_for(provider).to_string())
                     .unwrap_or_default(),
-                models: match settings.ai_auth_method {
-                    AiAuthMethod::OAuth => provider
-                        .model_options()
-                        .iter()
-                        .filter(|model| {
-                            **model != oauth::CODEX_SPARK_MODEL_ID
-                                || discovered_codex_models
-                                    .as_ref()
-                                    .is_some_and(|models| models.contains(**model))
-                        })
-                        .map(|model| (*model).to_string())
-                        .collect(),
-                    AiAuthMethod::ApiKey if api_key_configured => {
-                        settings.api_key_models_for(provider).to_vec()
-                    }
-                    AiAuthMethod::ApiKey => Vec::new(),
-                },
+                oauth_models,
+                api_key_models,
                 accounts,
                 auth_method: settings.ai_auth_method,
                 api_key_configured,
@@ -584,6 +575,31 @@ pub fn model_summary(settings: &ToolboxSettings) -> ModelSummary {
         providers,
         legacy_configured: legacy_model_token_configured(),
     }
+}
+
+fn oauth_models_for(
+    provider: AiProviderId,
+    discovered_codex_models: Option<&HashSet<String>>,
+) -> Vec<String> {
+    provider
+        .model_options()
+        .iter()
+        .filter(|model| {
+            **model != oauth::CODEX_SPARK_MODEL_ID
+                || discovered_codex_models.is_some_and(|models| models.contains(**model))
+        })
+        .map(|model| (*model).to_string())
+        .collect()
+}
+
+fn api_key_models_for(
+    settings: &ToolboxSettings,
+    provider: AiProviderId,
+    api_key_configured: bool,
+) -> Vec<String> {
+    api_key_configured
+        .then(|| settings.api_key_models_for(provider).to_vec())
+        .unwrap_or_default()
 }
 
 pub fn validate_ai_model(
@@ -769,6 +785,22 @@ mod tests {
     }
 
     #[test]
+    fn provider_summary_has_generic_installation_labels() {
+        assert_eq!(AiProviderId::Anthropic.display_name(), "Claude / Anthropic");
+        assert_eq!(AiProviderId::OpenaiCodex.display_name(), "OpenAI / Codex");
+        let encoded = serde_json::to_value(model_summary(&ToolboxSettings::default())).unwrap();
+        let providers = encoded["providers"].as_array().unwrap();
+        assert!(providers[0]["description"]
+            .as_str()
+            .unwrap()
+            .contains("API Key"));
+        assert!(providers[1]["description"]
+            .as_str()
+            .unwrap()
+            .contains("API Key"));
+    }
+
+    #[test]
     fn provider_summary_exposes_configuration_state_not_secret_material() {
         let summary = AiProviderSummary {
             id: AiProviderId::Anthropic,
@@ -779,7 +811,8 @@ mod tests {
             healthy_accounts: 0,
             total_accounts: 0,
             model: "claude-sonnet-4-6".to_string(),
-            models: vec!["claude-sonnet-4-6".to_string()],
+            oauth_models: vec!["claude-sonnet-4-6".to_string()],
+            api_key_models: vec!["claude-opus-4-8".to_string()],
             accounts: Vec::new(),
             auth_method: AiAuthMethod::ApiKey,
             api_key_configured: true,
@@ -787,8 +820,25 @@ mod tests {
         let value = serde_json::to_value(summary).unwrap();
         assert_eq!(value["authMethod"], "api-key");
         assert_eq!(value["apiKeyConfigured"], true);
+        assert_eq!(value["oauthModels"][0], "claude-sonnet-4-6");
+        assert_eq!(value["apiKeyModels"][0], "claude-opus-4-8");
+        assert!(value.get("models").is_none());
         assert!(value.get("apiKey").is_none());
         assert!(!value.to_string().contains("sk-ant-"));
+    }
+
+    #[test]
+    fn oauth_and_api_key_model_directories_never_mix() {
+        let mut settings = ToolboxSettings::default();
+        settings.anthropic_api_key_models = vec!["claude-api-only".to_string()];
+        settings.openai_api_key_models = vec!["gpt-api-only".to_string()];
+
+        let oauth = oauth_models_for(AiProviderId::Anthropic, None);
+        let api_key = api_key_models_for(&settings, AiProviderId::Anthropic, true);
+        assert!(oauth.contains(&"claude-sonnet-4-6".to_string()));
+        assert!(!oauth.contains(&"claude-api-only".to_string()));
+        assert_eq!(api_key, vec!["claude-api-only"]);
+        assert!(api_key_models_for(&settings, AiProviderId::OpenaiCodex, false).is_empty());
     }
 
     #[test]
