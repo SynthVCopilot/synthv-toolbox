@@ -32,5 +32,20 @@ assert.doesNotMatch(synthvControl, /Foundation::\{BOOL, LPARAM\}/);
 assert.match(synthvHosts, /use std::os::windows::fs::MetadataExt;/);
 assert.match(synthvHosts, /metadata\.file_attributes\(\) & FILE_ATTRIBUTE_REPARSE_POINT != 0/);
 assert.doesNotMatch(synthvHosts, /FileTypeExt|is_reparse_point\(\)/);
+for (const macosFixture of [
+  "sv1_uses_plist_identity_and_exact_app_path",
+  "flat_uses_anthronics_scripts_and_requires_complete_ready_status",
+  "flat_process_path_with_spaces_is_detected",
+  "emits_every_matching_process_and_connects_only_status_pid",
+]) {
+  assert.match(
+    synthvHosts,
+    new RegExp(`#\\[cfg\\(target_os = "macos"\\)\\]\\s+#\\[test\\]\\s+fn ${macosFixture}\\(`),
+  );
+}
+assert.doesNotMatch(
+  synthvHosts,
+  /#\[cfg\(target_os = "macos"\)\]\s+#\[test\]\s+fn same_executable_is_disambiguated_by_app_bundle_path\(/,
+);
 
 console.log("Actions build fix contracts passed.");
