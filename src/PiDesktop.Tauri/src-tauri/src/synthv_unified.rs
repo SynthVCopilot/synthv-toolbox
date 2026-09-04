@@ -17,7 +17,7 @@ use crate::synthv_hosts::{self, HostKind, StandardSynthVHost};
 const OFFICIAL_SV2_SERVER: &str = "synthv";
 const OFFICIAL_SV1_SERVER: &str = "synthv-sv1";
 const CONNECT_RETRIES: usize = 16;
-const FLAT_LAUNCH_RETRIES: usize = 32;
+const FLAT_LAUNCH_RETRIES: usize = 80;
 const CONNECT_POLL: Duration = Duration::from_millis(250);
 const TOOL_TIMEOUT: Duration = Duration::from_secs(12);
 const LEGACY_STOP_FILE: &str = "synthv-agent-bridge-sv1-legacy.stop";
@@ -380,19 +380,23 @@ async fn connect(
 
 fn validate_flat_project_path(value: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(value);
+    if !path.is_absolute() {
+        return Err("Flat projectPath 必须是现有普通 .svp 绝对路径。".to_string());
+    }
     let is_svp = path
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("svp"));
     if !is_svp {
-        return Err("Flat projectPath 必须是现有普通 .svp 文件。".to_string());
+        return Err("Flat projectPath 必须是现有普通 .svp 绝对路径。".to_string());
     }
     let metadata = fs::symlink_metadata(&path)
-        .map_err(|_| "Flat projectPath 必须是现有普通 .svp 文件。".to_string())?;
+        .map_err(|_| "Flat projectPath 必须是现有普通 .svp 绝对路径。".to_string())?;
     if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
-        return Err("Flat projectPath 必须是现有普通 .svp 文件。".to_string());
+        return Err("Flat projectPath 必须是现有普通 .svp 绝对路径。".to_string());
     }
-    Ok(path)
+    fs::canonicalize(path)
+        .map_err(|_| "Flat projectPath 必须是现有普通 .svp 绝对路径。".to_string())
 }
 
 async fn wait_for_flat_launch(previous_process_ids: &[u32]) -> Result<StandardSynthVHost, String> {
@@ -1351,7 +1355,7 @@ mod tests {
         fs::rename(&root, &svp).unwrap();
         assert_eq!(
             validate_flat_project_path(svp.to_str().unwrap()).unwrap(),
-            svp
+            fs::canonicalize(&svp).unwrap()
         );
         assert!(validate_flat_project_path("missing.svp").is_err());
         assert!(validate_flat_project_path("not-a-project.txt").is_err());
