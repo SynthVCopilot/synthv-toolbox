@@ -16,3 +16,7 @@
 - WorkBuddy access 只在内存中使用；系统钥匙串仅保存 refresh 与 domain/user/enterprise routing envelope，序列化缓冲和凭据结构均归零。
 - TraeCode `login status` 使用短超时缓存；缺少 CLI 时 `available=false` 并提供具体 unavailableReason，不能伪造连接。
 - TraeCode `login` 使用独立 10 分钟超时；`login status` 使用短超时与短 TTL 缓存；exec 使用受管临时目录、文件 schema、`--output-last-message`、位置 prompt 和 `--skip-git-repo-check`。
+- WorkBuddy 授权状态、token 轮询与账号查询需要共享会话 Cookie；启用成熟 HTTP 客户端自带 Cookie store 比维护自定义 Cookie 解析更可靠。
+- WorkBuddy access 与 refresh/routing 分为两个钥匙串条目，避免单条 Windows Credential 大小边界，同时保证应用重启后仍能携带旧 access 完成标准刷新；两条写入和删除均有回滚。
+- 通用弹窗规则位于 AI 弹窗规则之后且同等优先级，曾覆盖其宽度、padding 与网格列；安装态截图证明这是首屏内容被挤窄的直接原因。
+- macOS 无开发者证书的构建必须显式使用 ad-hoc signing identity 才会封装 Info.plist 与资源清单；仅有链接器签名的 app 会在严格校验中报告资源未密封。

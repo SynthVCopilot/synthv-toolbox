@@ -11,3 +11,4 @@
 - 主分支集成后修正无凭据模型选择边界；Rust 全量 216 passed / 2 ignored、2 项调度集成测试、全部前端契约与生产构建通过。
 - 已移除 provider 级 `authMethod` 与 `apiKeyConfigured`，恢复 `selectAiProvider(provider, model)`，并同步 `models` 并集验证及 OAuth/API Key 数量状态展示。
 - 全量 `npm run test:contracts` 与 `npm run build` 通过。
+- 最终 Rust 验证为 219 passed / 2 ignored，另有 1、2、4 项根集成测试全部通过；安装态确认 API Key 详情保留多凭据新增、列表与逐项删除入口。

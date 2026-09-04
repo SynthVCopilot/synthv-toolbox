@@ -15,3 +15,8 @@
 - WorkBuddy 完成浏览器授权、受限轮询、Bearer account_info、刷新和 keyring routing envelope；TraeCode 完成官方 CLI login/status、虚拟账号与安全 exec 文件协议。
 - 已运行 `cargo fmt --all`、`cargo check -q`、`cargo test -q`：219 passed / 2 ignored，provider-runtime-adapters 4 passed；Trae argv 逐项契约测试通过。
 - summary 已扩展 WorkBuddy/TraeCode 的认证方式、可用性和不可用原因，并将模型字段限制为已有凭据可用模型。
+- WorkBuddy HTTP 客户端启用 Cookie store；刷新请求补齐来源头并保留上一次 domain/user/enterprise 路由，access 与 refresh/routing 分条写入系统钥匙串。
+- TraeCode 状态缓存改为 10 秒并在登录/登出后立即刷新；未登录时不再允许残留虚拟账号进入运行时 ProviderPool，缺少 CLI 的提示已中文化。
+- `@platform-kit/model-access-core` 已在 `/Users/user/development/platform-kit` 主分支同步，完整 check 通过；公共包只迁移无品牌、无域名、无秘密的三段向导与混合凭据调度契约，WorkBuddy/TRAE 协议适配保留在产品层。
+- 最终执行 Rust 全量测试、前端全部 contracts、TypeScript/Vite 生产构建和 Tauri 正式打包；app 严格签名校验与 DMG 校验通过，并安装到 `/Applications/SynthV Toolbox.app`。
+- 安装态逐页确认左右 OAuth/API Key 入口、全宽搜索、四个 OAuth 按钮、两个 API Key 按钮、WorkBuddy 独立授权页、TraeCode 中文不可用回退及快速搜索完整输入。

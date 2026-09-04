@@ -14,5 +14,5 @@
 - [x] 将 WorkBuddy 与 TRAE 适配接入 Toolbox 配置、凭据池和 UI
 - [x] 对缺少公开协议或应用注册凭据的接入显示明确不可用原因，不伪造成功
 - [x] 完成 Platform Kit 迁移指导并同步其主分支
-- [ ] 运行完整 contracts、Rust、生产构建和安装态点击验证
-- [ ] 完成主分支交付
+- [x] 运行完整 contracts、Rust、生产构建和安装态点击验证
+- [x] 完成主分支交付

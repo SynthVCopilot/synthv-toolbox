@@ -16,3 +16,6 @@
 - 已重构弹窗为 method → provider-list → provider-detail 三屏；关闭和 Escape 会重置到认证方式首屏。
 - 已同步 `oauthModels` / `apiKeyModels` 预览目录、对应 readiness 和 Claude / Anthropic、OpenAI / Codex 通用命名。
 - 再次验证 `npm run build`、`dual-auth-ui` 与 `conversation-model-picker` 定向测试通过。
+- 安装态首次复现 AI 弹窗被后置 `.fluent-dialog` 规则覆盖，认证卡被压成窄栏；已用明确作用域恢复单列弹窗和左右双卡布局。
+- 提供商搜索改为 120 ms 延迟过滤，避免逐字符重建 DOM 导致快速输入丢字；提供商和模型改回原生按钮语义，四家 OAuth 与两家 API Key 均可被辅助功能逐项枚举。
+- 最终安装态依次验证认证方式、OAuth 搜索列表、WorkBuddy 详情、TraeCode 不可用详情、API Key 搜索列表与多 Key 表单；未输入或回显任何真实密钥。

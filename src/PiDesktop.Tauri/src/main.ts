@@ -139,6 +139,7 @@ let removingComponentId: string | undefined;
 let authorizingAiProvider: AiProviderId | undefined;
 let pendingAiAccountRemoval: { provider: AiProviderId; accountId: string } | undefined;
 let pendingAiAccountRemovalTimer: number | undefined;
+let aiProviderSearchRenderTimer: number | undefined;
 let aiProviderPickerOpen = false;
 let aiProviderPickerQuery = "";
 let aiProviderPickerSelection: AiProviderId | undefined;
@@ -322,6 +323,13 @@ function clearPendingAiAccountRemoval(): void {
   if (pendingAiAccountRemovalTimer !== undefined) {
     window.clearTimeout(pendingAiAccountRemovalTimer);
     pendingAiAccountRemovalTimer = undefined;
+  }
+}
+
+function clearAiProviderSearchRender(): void {
+  if (aiProviderSearchRenderTimer !== undefined) {
+    window.clearTimeout(aiProviderSearchRenderTimer);
+    aiProviderSearchRenderTimer = undefined;
   }
 }
 
@@ -1894,7 +1902,7 @@ function renderAiProviderPickerList(): string {
   const query = aiProviderPickerQuery.trim().toLocaleLowerCase();
   const authMethod = aiProviderPickerAuthMethod;
   const providers = aiProviders().filter((provider) => provider.authMethods.includes(authMethod)).filter((provider) => [provider.displayName, provider.description, provider.id].some((value) => value.toLocaleLowerCase().includes(query)));
-  const list = providers.length ? `<div class="ai-provider-picker-list" role="listbox" aria-label="${aiAuthLabel(authMethod)} 提供商">${providers.map((provider) => { const ready = aiAuthReady(provider, authMethod); const state = !provider.available ? "不可用" : ready ? `${authMethod === "oauth" ? provider.accounts.filter((account) => account.authorized).length + " 个账号" : provider.apiKeys.length + " 个 API Key"}` : authMethod === "oauth" ? "尚未登录" : "尚未配置 API Key"; return `<button type="button" class="ai-provider-picker-option ${provider.available ? "" : "unavailable"}" role="option" aria-selected="false" data-choose-ai-provider="${provider.id}"><span class="ai-provider-mark ${aiProviderMarkClass(provider)}">${aiProviderMark(provider)}</span><span><strong>${escapeHtml(aiProviderDisplayName(provider))}</strong><small>${escapeHtml(provider.available ? provider.description : provider.unavailableReason ?? provider.description)}</small></span><span class="ai-provider-badge ${provider.available && ready ? "ready" : "warning"}">${state}</span>${icon("arrow", 16)}</button>`; }).join("")}</div>` : `<div class="ai-provider-picker-empty" role="status"><strong>没有匹配的提供商</strong><p>当前认证方式没有可用提供商。</p></div>`;
+  const list = providers.length ? `<div class="ai-provider-picker-list" role="group" aria-label="${aiAuthLabel(authMethod)} 提供商">${providers.map((provider) => { const ready = aiAuthReady(provider, authMethod); const state = !provider.available ? "不可用" : ready ? `${authMethod === "oauth" ? provider.accounts.filter((account) => account.authorized).length + " 个账号" : provider.apiKeys.length + " 个 API Key"}` : authMethod === "oauth" ? "尚未登录" : "尚未配置 API Key"; return `<button type="button" class="ai-provider-picker-option ${provider.available ? "" : "unavailable"}" data-choose-ai-provider="${provider.id}"><span class="ai-provider-mark ${aiProviderMarkClass(provider)}">${aiProviderMark(provider)}</span><span><strong>${escapeHtml(aiProviderDisplayName(provider))}</strong><small>${escapeHtml(provider.available ? provider.description : provider.unavailableReason ?? provider.description)}</small></span><span class="ai-provider-badge ${provider.available && ready ? "ready" : "warning"}">${state}</span>${icon("arrow", 16)}</button>`; }).join("")}</div>` : `<div class="ai-provider-picker-empty" role="status"><strong>没有匹配的提供商</strong><p>当前认证方式没有可用提供商。</p></div>`;
   return `<div class="ai-provider-picker-body"><button type="button" class="back-link" data-back-ai-auth-methods>${icon("arrow", 15)} 返回认证方式</button><label class="ai-provider-search"><span class="visually-hidden">搜索提供商</span><span aria-hidden="true">⌕</span><input id="ai-provider-search" type="search" value="${escapeHtml(aiProviderPickerQuery)}" placeholder="搜索提供商" autocomplete="off" /></label>${list}</div>`;
 }
 
@@ -1907,7 +1915,10 @@ function renderAiProviderPickerDetail(provider: AiProviderSummary): string {
     ? `<div class="ai-provider-auth-row"><div><strong>通过 TraeCode CLI 登录</strong><small>${escapeHtml(provider.unavailableReason ?? "使用官方 traecli login 完成登录。")}</small></div>${provider.available ? `<button type="button" class="primary" data-authorize-ai-provider="traecode" ${busy ? "disabled" : ""}>通过 TraeCode CLI 登录</button>` : `<span class="ai-provider-badge warning">不可用</span>`}</div>`
     : `<div class="ai-provider-auth-row"><div><strong>在浏览器中登录</strong><small>完成官方浏览器授权后，此处会显示本机已保存的账号。</small></div><button type="button" class="primary" data-authorize-ai-provider="${provider.id}" ${busy || !provider.available ? "disabled" : ""}>${authorizingAiProvider === provider.id ? "等待授权…" : "浏览器授权"}</button></div><div class="ai-provider-account-list">${renderAiProviderAccounts(provider)}</div>`;
   const authContent = authMethod === "oauth" ? oauthContent : renderAiApiKeys(provider);
-  const modelSection = authReady && models.length ? `<section class="ai-provider-model-list" aria-labelledby="ai-provider-model-title"><div><strong id="ai-provider-model-title">选择模型</strong><small>只显示此 ${aiAuthLabel(authMethod)} 连接可用的模型。</small></div><div role="listbox" aria-label="${escapeHtml(provider.displayName)} 模型列表">${models.map((model) => { const active = model === provider.model && isActiveAiProvider(provider); return `<button type="button" class="ai-provider-model-option ${active ? "active" : ""}" role="option" aria-selected="${active}" data-select-ai-provider-model="${escapeHtml(model)}" data-ai-provider="${provider.id}" ${busy ? "disabled" : ""}><span><strong>${escapeHtml(model)}</strong><small>${active ? "当前使用" : "点击使用此模型"}</small></span>${active ? icon("check", 18) : ""}</button>`; }).join("")}</div></section>` : `<div class="ai-provider-empty">${authMethod === "oauth" ? "完成浏览器授权后" : "保存并验证 API Key 后"}，将显示该方式匹配的模型。</div>`;
+  const modelSetupHint = provider.id === "traecode"
+    ? "完成 TraeCode CLI 登录后"
+    : authMethod === "oauth" ? "完成浏览器授权后" : "保存并验证 API Key 后";
+  const modelSection = authReady && models.length ? `<section class="ai-provider-model-list" aria-labelledby="ai-provider-model-title"><div><strong id="ai-provider-model-title">选择模型</strong><small>只显示此 ${aiAuthLabel(authMethod)} 连接可用的模型。</small></div><div role="group" aria-label="${escapeHtml(provider.displayName)} 模型列表">${models.map((model) => { const active = model === provider.model && isActiveAiProvider(provider); return `<button type="button" class="ai-provider-model-option ${active ? "active" : ""}" aria-pressed="${active}" data-select-ai-provider-model="${escapeHtml(model)}" data-ai-provider="${provider.id}" ${busy ? "disabled" : ""}><span><strong>${escapeHtml(model)}</strong><small>${active ? "当前使用" : "点击使用此模型"}</small></span>${active ? icon("check", 18) : ""}</button>`; }).join("")}</div></section>` : `<div class="ai-provider-empty">${modelSetupHint}，将显示该方式匹配的模型。</div>`;
   return `<div class="ai-provider-picker-detail"><button type="button" class="back-link" data-back-ai-provider-list>${icon("arrow", 15)} 返回提供商列表</button><section class="ai-provider-picker-current"><span class="ai-provider-mark ${aiProviderMarkClass(provider)}">${aiProviderMark(provider)}</span><div><strong>${escapeHtml(aiProviderDisplayName(provider))}</strong><small>${aiAuthLabel(authMethod)} 连接</small></div><span class="ai-provider-badge ${authReady && provider.available ? "ready" : "warning"}">${state}</span></section>${authContent}${modelSection}</div>`;
 }
 
@@ -2409,12 +2420,17 @@ document.addEventListener("input", (event) => {
   if (target instanceof HTMLInputElement && target.id === "ai-provider-search") {
     aiProviderPickerQuery = target.value;
     aiProviderPickerSelection = undefined;
-    render();
-    requestAnimationFrame(() => {
-      const search = document.querySelector<HTMLInputElement>("#ai-provider-search");
-      search?.focus();
-      search?.setSelectionRange(aiProviderPickerQuery.length, aiProviderPickerQuery.length);
-    });
+    clearAiProviderSearchRender();
+    aiProviderSearchRenderTimer = window.setTimeout(() => {
+      aiProviderSearchRenderTimer = undefined;
+      if (!aiProviderPickerOpen || aiProviderPickerStep !== "provider-list") return;
+      render();
+      requestAnimationFrame(() => {
+        const search = document.querySelector<HTMLInputElement>("#ai-provider-search");
+        search?.focus();
+        search?.setSelectionRange(aiProviderPickerQuery.length, aiProviderPickerQuery.length);
+      });
+    }, 120);
     return;
   }
   if (!target.closest(".lyric-workbench-grid")) return;
@@ -2428,6 +2444,7 @@ document.addEventListener("input", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape" || !aiProviderPickerOpen) return;
   event.preventDefault();
+  clearAiProviderSearchRender();
   aiProviderPickerOpen = false;
   aiProviderPickerSelection = undefined;
   clearPendingAiAccountRemoval();
@@ -2776,6 +2793,7 @@ document.addEventListener("click", (event) => {
   const agentWorkMode = target.dataset.agentWorkMode as AgentWorkMode | undefined;
   if (agentWorkMode) { void run(async () => { app = await api.setAgentWorkMode(agentWorkMode); notice = `Agent 已切换到 ${agentWorkMode === "solo" ? "Solo" : "Edit"} 模式。`; }); return; }
   if (target.hasAttribute("data-open-ai-provider-picker")) {
+    clearAiProviderSearchRender();
     aiProviderPickerOpen = true;
     aiProviderPickerQuery = "";
     aiProviderPickerSelection = undefined;
@@ -2785,6 +2803,7 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (target.hasAttribute("data-close-ai-provider-picker")) {
+    clearAiProviderSearchRender();
     aiProviderPickerOpen = false;
     aiProviderPickerSelection = undefined;
     aiProviderPickerStep = "method";
@@ -2795,6 +2814,7 @@ document.addEventListener("click", (event) => {
   }
   const selectedAuthMethod = target.dataset.chooseAiAuthMethod as AiAuthMethod | undefined;
   if (selectedAuthMethod === "oauth" || selectedAuthMethod === "api-key") {
+    clearAiProviderSearchRender();
     aiProviderPickerAuthMethod = selectedAuthMethod;
     aiProviderPickerStep = "provider-list";
     aiProviderPickerQuery = "";
@@ -2803,6 +2823,7 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (target.hasAttribute("data-back-ai-auth-methods")) {
+    clearAiProviderSearchRender();
     aiProviderPickerStep = "method";
     aiProviderPickerSelection = undefined;
     aiProviderPickerQuery = "";
@@ -2810,6 +2831,7 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (target.hasAttribute("data-back-ai-provider-list")) {
+    clearAiProviderSearchRender();
     aiProviderPickerStep = "provider-list";
     aiProviderPickerSelection = undefined;
     render();
@@ -2824,6 +2846,7 @@ document.addEventListener("click", (event) => {
   }
   const chosenProvider = parseAiProviderId(target.dataset.chooseAiProvider);
   if (chosenProvider) {
+    clearAiProviderSearchRender();
     aiProviderPickerSelection = chosenProvider;
     aiProviderPickerStep = "provider-detail";
     clearPendingAiAccountRemoval();

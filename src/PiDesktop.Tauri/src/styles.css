@@ -966,7 +966,7 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .ai-account-remove.confirm { border-color: color-mix(in srgb,var(--danger) 44%,var(--line)); color: var(--danger); background: color-mix(in srgb,var(--danger) 10%,var(--surface-solid)); }
 .ai-provider-empty { padding: 14px; border: 1px dashed var(--line-strong); border-radius: 6px; color: var(--muted); background: var(--surface-subtle); font-size: 10px; text-align: center; }
 .ai-provider-picker-backdrop { z-index: 130; }
-.ai-provider-picker-dialog { width: min(680px,100%); max-height: min(760px,calc(100vh - 48px)); grid-template-columns: 1fr; gap: 14px; overflow: hidden; padding: 0; }
+.fluent-dialog.ai-provider-picker-dialog { width: min(680px,100%); max-height: min(760px,calc(100vh - 48px)); grid-template-columns: minmax(0,1fr); gap: 14px; overflow: hidden; padding: 0; }
 .ai-provider-picker-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 20px 20px 0; }
 .ai-provider-picker-dialog h2 { margin: 3px 0 0; }
 .ai-provider-picker-dialog header p { margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }

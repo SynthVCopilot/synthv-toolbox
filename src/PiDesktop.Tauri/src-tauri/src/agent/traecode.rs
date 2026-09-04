@@ -18,7 +18,7 @@ use super::{
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
-const STATUS_CACHE_TTL: Duration = Duration::from_secs(2);
+const STATUS_CACHE_TTL: Duration = Duration::from_secs(10);
 static STATUS_CACHE: OnceLock<Mutex<Option<(Instant, TraeLoginStatus)>>> = OnceLock::new();
 
 fn default_timeout_secs() -> u64 {
@@ -84,7 +84,7 @@ impl TraeCodeProvider {
                 return Ok(path.clone());
             }
             return Err(AgentError::new(format!(
-                "TraeCode CLI was not found at {}",
+                "未在 {} 找到可执行的 TraeCode CLI。",
                 path.display()
             )));
         }
@@ -102,7 +102,7 @@ impl TraeCodeProvider {
             }
         }
         Err(AgentError::new(
-            "TraeCode CLI not found; install traecli or configure its executable path",
+            "未找到 TraeCode CLI；请安装 traecli 或配置可执行文件路径。",
         ))
     }
 
@@ -152,10 +152,15 @@ impl TraeCodeProvider {
         let mut status_config = self.config.clone();
         status_config.timeout_secs = status_config.timeout_secs.min(5);
         let status = Self::new(status_config).login_status()?;
+        Self::remember_login_status(&status);
+        Ok(status)
+    }
+
+    fn remember_login_status(status: &TraeLoginStatus) {
+        let cache = STATUS_CACHE.get_or_init(|| Mutex::new(None));
         if let Ok(mut guard) = cache.lock() {
             *guard = Some((Instant::now(), status.clone()));
         }
-        Ok(status)
     }
 
     pub fn login(&self) -> Result<TraeLoginStatus> {
@@ -164,13 +169,17 @@ impl TraeCodeProvider {
         let login_provider = Self::new(login_config);
         let executable = login_provider.resolve_executable()?;
         login_provider.run(&executable, &["login"])?;
-        self.login_status()
+        let status = self.login_status()?;
+        Self::remember_login_status(&status);
+        Ok(status)
     }
 
     pub fn logout(&self) -> Result<TraeLoginStatus> {
         let executable = self.resolve_executable()?;
         self.run(&executable, &["logout"])?;
-        self.login_status()
+        let status = self.login_status()?;
+        Self::remember_login_status(&status);
+        Ok(status)
     }
 
     pub fn build_exec_args(
