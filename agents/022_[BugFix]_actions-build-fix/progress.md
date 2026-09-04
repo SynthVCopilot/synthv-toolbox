@@ -15,3 +15,5 @@
 - 2026-09-03：Windows MSVC target cargo check 因本机无 MSVC C 工具链在 `ring` 的 `assert.h` 处停止；`windows-sys v0.61.2` 已先完成检查。
 - 2026-09-03：使用临时空资源占位完成 macOS `cargo test --all-targets`（202 passed、2 ignored、根集成测试 1 passed）与 `cargo clippy --all-targets -- -D warnings`；占位文件已清理。
 - 2026-09-03：依据 `windows-sys v0.61.2` 本地官方源核对 BOOL/HWND/WNDENUMPROC 与窗口函数签名；最终变更范围未包含 workflows、`package.json` 或 artifact 测试。
+- 2026-09-03：主工作树第一次合并验证在桌面子目录运行 `actionlint` 导致 workflow 路径不存在；切换到仓库根后重跑通过。
+- 2026-09-03：主工作树全量契约、`actionlint`、Rust 测试（202 passed、2 ignored，集成测试 1 passed）与严格 Clippy 通过。
