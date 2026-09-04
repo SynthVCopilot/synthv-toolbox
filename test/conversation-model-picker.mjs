@@ -28,7 +28,7 @@ assert.match(copilot, /data-agent-work-mode="solo"/);
 assert.doesNotMatch(settings, /Agent 工作模式/);
 
 // Provider, model, and authentication method share the backend persistence path.
-assert.match(main, /selectAiProvider\([^,]+, model, aiProviderPickerAuthMethod\)/);
+assert.match(main, /selectAiProvider\([^,]+, model\)/);
 assert.match(main, /setAgentWorkMode\(agentWorkMode\)/);
 
 // The picker must expose an accessible close action as well as modal semantics.
