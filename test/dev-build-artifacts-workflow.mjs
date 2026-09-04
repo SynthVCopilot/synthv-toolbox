@@ -16,6 +16,8 @@ assert.match(workflow, /bundles: nsis/);
 assert.match(workflow, /bundles: app,dmg/);
 assert.match(workflow, /target: x86_64-pc-windows-msvc/);
 assert.match(workflow, /target: universal-apple-darwin/);
+assert.match(workflow, /actions\/cache@v5/);
+assert.doesNotMatch(workflow, /actions\/cache@v4/);
 assert.equal((workflow.match(/actions\/upload-artifact@v4/g) ?? []).length, 1);
 assert.match(workflow, /name: synthv-toolbox-dev-\$\{\{ matrix\.target \}\}/);
 assert.match(workflow, /synthv-toolbox-dev-\$\{\{ matrix\.target \}\}\.app\.zip/);
