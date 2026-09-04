@@ -17,8 +17,8 @@ use crate::components::component_list;
 use crate::config::AgentWorkMode;
 use crate::creative_history;
 use crate::downloads::ComponentDownloadManager;
-use crate::mcp::McpManager;
 use crate::mcp::McpToolExecutor;
+use crate::mcp::{McpManager, SynthVConnectionProfile};
 use crate::media_import;
 use crate::media_tasks::{CoverTaskRequest, MediaTaskManager};
 use crate::solo_tuning::{self, SoloTuningRequest};
@@ -958,6 +958,24 @@ impl ToolboxAudioToolExecutor {
                     .map_err(|error| format!("调声应用参数无效：{error}"))
                     .and_then(|request| {
                         self.admit_project_mutation()?;
+                        let connected_profiles = self.runtime.block_on(async {
+                            let hosts = self.manager.connected_synthv_hosts().await;
+                            let mut profiles = Vec::with_capacity(hosts.len());
+                            for host_id in hosts.keys() {
+                                if let Some(profile) =
+                                    self.manager.synthv_connection_profile(host_id).await
+                                {
+                                    profiles.push(profile);
+                                }
+                            }
+                            profiles
+                        });
+                        if !connected_profiles.is_empty()
+                            && !connected_profiles
+                                .contains(&SynthVConnectionProfile::OfficialBridge)
+                        {
+                            return Err("当前已连接的 SynthV 宿主不支持调校参数写入。".to_string());
+                        }
                         let profile = tuning_profiles::get(&request.voice_name)?;
                         self.runtime
                             .block_on(bridge_workflows::apply_tuning_profile(

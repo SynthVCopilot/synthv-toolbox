@@ -32,6 +32,7 @@ assert.match(commands, /pub async fn learn_tuning_profile/);
 assert.match(commands, /pub async fn apply_tuning_profile/);
 assert.match(agent, /name: "learn_tuning_from_source"/);
 assert.match(agent, /name: "apply_learned_tuning"/);
+assert.match(agent, /当前已连接的 SynthV 宿主不支持调校参数写入/);
 assert.match(features, /id: "tuning-learning"/);
 assert.match(main, /id="tuning-learn-form"/);
 
