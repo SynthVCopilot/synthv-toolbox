@@ -103,7 +103,7 @@ let previewAiProviders: AiProviderSummary[] = [{
     healthy: true,
   }],
   authMethod: "oauth",
-  apiKeyConfigured: false,
+  apiKeys: [],
 }, {
   id: "openai-codex",
   displayName: "OpenAI / Codex",
@@ -124,7 +124,7 @@ let previewAiProviders: AiProviderSummary[] = [{
   apiKeyModels: ["gpt-5.4", "gpt-5.4-mini"],
   accounts: [],
   authMethod: "oauth",
-  apiKeyConfigured: false,
+  apiKeys: [],
 }];
 
 function previewAiModel() {
@@ -136,6 +136,7 @@ function previewAiModel() {
       accounts: provider.accounts.map((account) => ({ ...account })),
       oauthModels: [...provider.oauthModels],
       apiKeyModels: [...provider.apiKeyModels],
+      apiKeys: provider.apiKeys.map((key) => ({ ...key, models: [...key.models] })),
     })),
   };
 }
@@ -436,7 +437,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     if (!provider) throw new Error("未知的 AI 提供商。");
     if (authMethod !== "oauth" && authMethod !== "api-key") throw new Error("请选择认证方式。");
     if (authMethod === "oauth" && !provider.connected) throw new Error("请先通过浏览器授权此提供商。");
-    if (authMethod === "api-key" && !provider.apiKeyConfigured) throw new Error("请先保存并验证 API Key。");
+    if (authMethod === "api-key" && !provider.apiKeys.some((key) => key.healthy)) throw new Error("请先保存并验证 API Key。");
     const models = authMethod === "oauth" ? provider.oauthModels : provider.apiKeyModels;
     if (!model || !models.includes(model)) throw new Error("请选择当前认证方式可用的模型。");
     previewActiveAiProvider = provider.id;
@@ -448,19 +449,26 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     }));
     return previewState() as T;
   }
-  if (command === "configure_ai_api_key") {
+  if (command === "add_ai_api_key") {
     const provider = previewAiProvider(args?.provider);
     const apiKey = String(args?.apiKey ?? "").trim();
     if (!provider) throw new Error("未知的 AI 提供商。");
     if (!apiKey) throw new Error("请输入 API Key。");
-    provider.apiKeyConfigured = true;
+    provider.apiKeys.push({
+      id: `preview-key-${provider.id}-${Date.now()}`,
+      label: String(args?.label ?? "").trim() || "API Key",
+      models: [...provider.apiKeyModels],
+      healthy: true,
+      cooldownUntilUtc: null,
+      createdAtUtc: new Date().toISOString(),
+    });
     return previewState() as T;
   }
   if (command === "remove_ai_api_key") {
     const provider = previewAiProvider(args?.provider);
     if (!provider) throw new Error("未知的 AI 提供商。");
-    provider.apiKeyConfigured = false;
-    if (provider.authMethod === "api-key") provider.authMethod = "oauth";
+    provider.apiKeys = provider.apiKeys.filter((key) => key.id !== String(args?.credentialId ?? ""));
+    if (provider.authMethod === "api-key" && provider.apiKeys.length === 0) provider.authMethod = "oauth";
     return previewState() as T;
   }
   if (command === "remove_ai_provider_account") {
@@ -1037,10 +1045,10 @@ export const api = {
     call<BootstrapState>("authorize_ai_provider", { provider }),
   selectAiProvider: (provider: AiProviderId, model: string, authMethod: AiAuthMethod) =>
     call<BootstrapState>("select_ai_provider", { provider, model, authMethod }),
-  configureAiApiKey: (provider: AiProviderId, apiKey: string) =>
-    call<BootstrapState>("configure_ai_api_key", { provider, apiKey }),
-  removeAiApiKey: (provider: AiProviderId) =>
-    call<BootstrapState>("remove_ai_api_key", { provider }),
+  addAiApiKey: (provider: AiProviderId, label: string, apiKey: string) =>
+    call<BootstrapState>("add_ai_api_key", { provider, label, apiKey }),
+  removeAiApiKey: (provider: AiProviderId, credentialId: string) =>
+    call<BootstrapState>("remove_ai_api_key", { provider, credentialId }),
   aiProviderState: () => call<ModelSummary>("ai_provider_state"),
   opencodeProviderCatalog: (force = false) =>
     call<OpenCodeCatalog>("opencode_provider_catalog", { force }),

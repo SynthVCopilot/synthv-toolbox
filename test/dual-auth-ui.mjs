@@ -11,16 +11,19 @@ const [types, api, main, styles] = await Promise.all([
 
 assert.match(types, /AiAuthMethod\s*=\s*"oauth"\s*\|\s*"api-key"/);
 assert.match(types, /authMethod:\s*AiAuthMethod/);
-assert.match(types, /apiKeyConfigured:\s*boolean/);
+assert.match(types, /interface AiApiKeySummary/);
+assert.match(types, /apiKeys:\s*AiApiKeySummary\[\]/);
 assert.match(api, /selectAiProvider: \(provider: AiProviderId, model: string, authMethod: AiAuthMethod\)/);
-assert.match(api, /configureAiApiKey:/);
-assert.match(api, /removeAiApiKey:/);
+assert.match(api, /addAiApiKey:/);
+assert.match(api, /removeAiApiKey: \(provider: AiProviderId, credentialId: string\)/);
 assert.match(main, /data-choose-ai-auth-method="oauth"/);
 assert.match(main, /data-choose-ai-auth-method="api-key"/);
 assert.match(main, /aiProviderPickerStep:|aiProviderPickerStep/);
 assert.match(main, /oauthModels/);
 assert.match(main, /apiKeyModels/);
 assert.match(main, /data-ai-api-key-form/);
+assert.match(main, /data-ai-credential-id/);
+assert.match(main, /个 API Key/);
 assert.match(main, /input\.value = ""/);
 assert.match(main, /data-toggle-ai-api-key/);
 assert.match(main, /authMethod === "api-key"/);

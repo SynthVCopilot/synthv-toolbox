@@ -1638,7 +1638,7 @@ function renderCopilot(): string {
   const providerName = provider?.displayName ?? "尚未选择提供商";
   const providerModel = provider?.model || "选择模型";
   const providerStatus = provider?.authMethod === "api-key"
-    ? provider.apiKeyConfigured ? "API Key 已配置" : "API Key 未配置"
+    ? provider.apiKeys.some((key) => key.healthy) ? `${provider.apiKeys.length} 个 API Key 已就绪` : "API Key 未配置"
     : provider?.connected ? provider.healthyAccounts > 0 ? "OAuth 已就绪" : "待验证" : "未授权";
   return `<div class="copilot-layout">
     <aside class="sessions-panel"><div class="sessions-panel-head"><button class="primary full" data-new-conversation>${icon("plus", 17)} 新建对话</button><span class="nav-label">历史对话</span></div><div class="session-list">${conversations.length ? conversations.map((item) => `<button class="session-item ${conversation?.id === item.id ? "active" : ""}" data-conversation="${escapeHtml(item.id)}"><strong>${escapeHtml(item.title)}</strong><small>${item.messageCount} 条消息 · ${escapeHtml(item.updatedAt.slice(0, 10))}</small></button>`).join("") : '<p class="empty-small">还没有历史对话</p>'}</div></aside>
@@ -1739,7 +1739,7 @@ function fallbackAiProviders(): AiProviderSummary[] {
     apiKeyModels: [],
     accounts: [],
     authMethod: "oauth",
-    apiKeyConfigured: false,
+    apiKeys: [],
   }, {
     id: "openai-codex",
     displayName: "OpenAI / Codex",
@@ -1753,7 +1753,7 @@ function fallbackAiProviders(): AiProviderSummary[] {
     apiKeyModels: [],
     accounts: [],
     authMethod: "oauth",
-    apiKeyConfigured: false,
+    apiKeys: [],
   }];
 }
 
@@ -1776,7 +1776,7 @@ function activeAiProvider(): AiProviderSummary | undefined {
 function aiConnectionSummary(): string {
   const provider = activeAiProvider();
   if (!provider) return "请选择模型提供商";
-  if (provider.authMethod === "api-key") return provider.apiKeyConfigured ? `${aiProviderDisplayName(provider)} · API Key 已配置` : "等待 API Key 配置";
+  if (provider.authMethod === "api-key") return provider.apiKeys.some((key) => key.healthy) ? `${aiProviderDisplayName(provider)} · ${provider.apiKeys.length} 个 API Key` : "等待 API Key 配置";
   if (!provider.connected) return "等待浏览器授权模型提供商";
   if (provider.healthyAccounts === 0) return `${aiProviderDisplayName(provider)} · 已授权，首次使用时验证`;
   return `${aiProviderDisplayName(provider)}${provider.model ? ` · ${provider.model}` : ""}`;
@@ -1785,7 +1785,7 @@ function aiConnectionSummary(): string {
 function aiAuthReady(provider: AiProviderSummary, authMethod: AiAuthMethod): boolean {
   return authMethod === "oauth"
     ? provider.accounts.some((account) => account.authorized)
-    : provider.apiKeyConfigured;
+    : provider.apiKeys.some((key) => key.healthy);
 }
 
 function aiModelsForAuth(provider: AiProviderSummary, authMethod: AiAuthMethod): string[] {
@@ -1821,6 +1821,14 @@ function renderAiProviderAccounts(provider: AiProviderSummary): string {
     : '<div class="ai-provider-empty">尚未授权账号。可在此处打开官方浏览器授权。</div>';
 }
 
+function renderAiApiKeys(provider: AiProviderSummary): string {
+  const entries = provider.apiKeys.length ? provider.apiKeys.map((key) => {
+    const cooldown = key.cooldownUntilUtc ? ` · 冷却至 ${escapeHtml(new Date(key.cooldownUntilUtc).toLocaleString("zh-CN"))}` : "";
+    return `<article class="ai-provider-account ${key.healthy ? "healthy" : "unhealthy"}"><span class="ai-account-state" aria-label="${key.healthy ? "API Key 可用" : "API Key 不可用"}"></span><div><strong>${escapeHtml(key.label)}</strong><small>${key.models.length} 个模型 · ${key.healthy ? "可用" : "不可用"}${cooldown}</small></div><button type="button" class="secondary compact ai-account-remove" data-remove-ai-api-key="${provider.id}" data-ai-credential-id="${escapeHtml(key.id)}" ${busy ? "disabled" : ""}>移除</button></article>`;
+  }).join("") : '<div class="ai-provider-empty">尚未添加 API Key。</div>';
+  return `<form class="ai-api-key-form" data-ai-api-key-form data-ai-provider="${provider.id}"><div><strong>添加 API Key</strong><small>可保存多份密钥。标签只用于识别，密钥由本机后端验证并安全保存。</small></div><div class="ai-api-key-fields"><input name="label" type="text" autocomplete="off" placeholder="标签（可选，例如工作账号）" /><label class="ai-api-key-input"><span class="visually-hidden">${escapeHtml(aiProviderDisplayName(provider))} API Key</span><input id="ai-api-key-input" name="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 API Key" ${busy ? "disabled" : ""}/><button type="button" class="icon-plain" data-toggle-ai-api-key aria-label="显示 API Key">显示</button></label></div><div class="ai-api-key-actions"><button type="submit" class="primary" ${busy ? "disabled" : ""}>保存并验证</button></div></form><div class="ai-api-key-list" aria-label="已保存 API Key">${entries}</div>`;
+}
+
 function renderAiProviderPicker(): string {
   const selected = aiProviderPickerSelection ? aiProviders().find((provider) => provider.id === aiProviderPickerSelection) : undefined;
   const title = aiProviderPickerStep === "method" ? "添加 AI 连接" : aiProviderPickerStep === "provider-list" ? `选择 ${aiAuthLabel(aiProviderPickerAuthMethod)} 提供商` : selected ? aiProviderDisplayName(selected) : "配置连接";
@@ -1846,7 +1854,7 @@ function renderAiProviderPickerDetail(provider: AiProviderSummary): string {
   const authReady = aiAuthReady(provider, authMethod);
   const models = aiModelsForAuth(provider, authMethod);
   const state = authReady ? `${aiAuthLabel(authMethod)} 已配置` : authMethod === "oauth" ? "等待浏览器授权" : "等待 API Key";
-  const authContent = authMethod === "oauth" ? `<div class="ai-provider-auth-row"><div><strong>在浏览器中登录</strong><small>完成官方浏览器授权后，此处会显示本机已保存的账号。</small></div><button type="button" class="primary" data-authorize-ai-provider="${provider.id}" ${busy ? "disabled" : ""}>${authorizingAiProvider === provider.id ? "等待授权…" : "浏览器授权"}</button></div><div class="ai-provider-account-list">${renderAiProviderAccounts(provider)}</div>` : `<form class="ai-api-key-form" data-ai-api-key-form data-ai-provider="${provider.id}"><div><strong>API Key</strong><small>密钥只发送给本机后端验证与保存，不会显示、记录或返回给界面。</small></div><label class="ai-api-key-input"><span class="visually-hidden">${escapeHtml(provider.displayName)} API Key</span><input id="ai-api-key-input" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 API Key" ${busy ? "disabled" : ""}/><button type="button" class="icon-plain" data-toggle-ai-api-key aria-label="显示 API Key">显示</button></label><div class="ai-api-key-actions"><span class="ai-provider-badge ${provider.apiKeyConfigured ? "ready" : "warning"}">${provider.apiKeyConfigured ? "已配置" : "尚未配置"}</span><button type="submit" class="primary" ${busy ? "disabled" : ""}>${provider.apiKeyConfigured ? "替换并验证" : "保存并验证"}</button>${provider.apiKeyConfigured ? `<button type="button" class="secondary compact" data-remove-ai-api-key="${provider.id}" ${busy ? "disabled" : ""}>删除 API Key</button>` : ""}</div></form>`;
+  const authContent = authMethod === "oauth" ? `<div class="ai-provider-auth-row"><div><strong>在浏览器中登录</strong><small>完成官方浏览器授权后，此处会显示本机已保存的账号。</small></div><button type="button" class="primary" data-authorize-ai-provider="${provider.id}" ${busy ? "disabled" : ""}>${authorizingAiProvider === provider.id ? "等待授权…" : "浏览器授权"}</button></div><div class="ai-provider-account-list">${renderAiProviderAccounts(provider)}</div>` : renderAiApiKeys(provider);
   const modelSection = authReady && models.length ? `<section class="ai-provider-model-list" aria-labelledby="ai-provider-model-title"><div><strong id="ai-provider-model-title">选择模型</strong><small>只显示此 ${aiAuthLabel(authMethod)} 连接可用的后端模型。</small></div><div role="listbox" aria-label="${escapeHtml(provider.displayName)} 模型列表">${models.map((model) => { const active = model === provider.model && isActiveAiProvider(provider) && provider.authMethod === authMethod; return `<button type="button" class="ai-provider-model-option ${active ? "active" : ""}" role="option" aria-selected="${active}" data-select-ai-provider-model="${escapeHtml(model)}" data-ai-provider="${provider.id}" ${busy ? "disabled" : ""}><span><strong>${escapeHtml(model)}</strong><small>${active ? "当前使用" : "点击使用此模型"}</small></span>${active ? icon("check", 18) : ""}</button>`; }).join("")}</div></section>` : `<div class="ai-provider-empty">${authMethod === "oauth" ? "完成浏览器授权后" : "保存并验证 API Key 后"}，将显示该方式匹配的模型。</div>`;
   return `<div class="ai-provider-picker-detail"><button type="button" class="back-link" data-back-ai-provider-list>${icon("arrow", 15)} 返回提供商列表</button><section class="ai-provider-picker-current"><span class="ai-provider-mark ${provider.id === "anthropic" ? "claude" : "codex"}">${provider.id === "anthropic" ? "C" : "O"}</span><div><strong>${escapeHtml(provider.displayName)}</strong><small>${aiAuthLabel(authMethod)} 连接</small></div><span class="ai-provider-badge ${authReady ? "ready" : "warning"}">${state}</span></section>${authContent}${modelSection}</div>`;
 }
@@ -1889,6 +1897,7 @@ function wireForms(): void {
     const form = event.currentTarget as HTMLFormElement;
     const provider = parseAiProviderId(form.dataset.aiProvider);
     const input = form.querySelector<HTMLInputElement>("#ai-api-key-input");
+    const labelInput = form.querySelector<HTMLInputElement>('input[name="label"]');
     const apiKey = input?.value ?? "";
     if (!provider || !input || !apiKey.trim()) {
       error = "请输入 API Key。";
@@ -1898,7 +1907,7 @@ function wireForms(): void {
     }
     input.value = "";
     void run(async () => {
-      app = await api.configureAiApiKey(provider, apiKey);
+      app = await api.addAiApiKey(provider, labelInput?.value.trim() ?? "", apiKey);
       aiProviderPickerSelection = provider;
       aiProviderPickerAuthMethod = "api-key";
       notice = "API Key 已保存并验证。";
@@ -2794,10 +2803,11 @@ document.addEventListener("click", (event) => {
     return;
   }
   const apiKeyProvider = parseAiProviderId(target.dataset.removeAiApiKey);
-  if (apiKeyProvider) {
+  const apiKeyCredentialId = target.dataset.aiCredentialId;
+  if (apiKeyProvider && apiKeyCredentialId) {
     if (busy) return;
     void run(async () => {
-      app = await api.removeAiApiKey(apiKeyProvider);
+      app = await api.removeAiApiKey(apiKeyProvider, apiKeyCredentialId);
       aiProviderPickerSelection = apiKeyProvider;
       aiProviderPickerAuthMethod = "api-key";
       notice = "API Key 已从本机移除。";

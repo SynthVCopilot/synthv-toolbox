@@ -5,6 +5,15 @@ export interface AgentFileApproval { id: string; path: string; purpose: string; 
 export type AiProviderId = "anthropic" | "openai-codex";
 export type AiAuthMethod = "oauth" | "api-key";
 
+export interface AiApiKeySummary {
+  id: string;
+  label: string;
+  models: string[];
+  healthy: boolean;
+  cooldownUntilUtc: string | null;
+  createdAtUtc: string;
+}
+
 export interface AiProviderAccountSummary {
   id: string;
   label: string;
@@ -26,7 +35,7 @@ export interface AiProviderSummary {
   apiKeyModels: string[];
   accounts: AiProviderAccountSummary[];
   authMethod: AiAuthMethod;
-  apiKeyConfigured: boolean;
+  apiKeys: AiApiKeySummary[];
 }
 
 export interface ModelSummary {
