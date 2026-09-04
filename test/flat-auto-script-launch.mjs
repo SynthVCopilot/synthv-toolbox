@@ -20,7 +20,7 @@ assert.match(unified, /flat_process_ids/);
 assert.match(unified, /launch_flat\(&host, project_path\.as_deref\(\)\)/);
 assert.match(unified, /wait_for_flat_launch/);
 assert.match(unified, /BridgeShortcutAction::Refresh/);
-assert.match(unified, /synthv_control::start_bridge\(process_id\)/);
+assert.match(unified, /BridgeShortcutAction::StartLegacy/);
 assert.match(unified, /install_legacy_bridge[\s\S]*Result<bool, String>/);
 assert.match(unified, /无法连接所选 SynthV 宿主：\{error\}/);
 assert.doesNotMatch(unified, /已安装或更新；请让宿主重新扫描扩展后再次连接/);
@@ -31,6 +31,8 @@ assert.match(hosts, /command\.arg\(project_path\)/);
 assert.match(hosts, /stdin\(Stdio::null\(\)\)/);
 assert.match(hosts, /\["Synthesizer V Flat\.exe", "synthesizer-v-flat\.exe"\]/);
 assert.match(hosts, /Documents\/Anthronics\/Synthesizer V Studio\/scripts/);
+assert.match(hosts, /Documents\/Dreamtonics\/Synthesizer V Studio\/scripts/);
+assert.match(hosts, /Contents\/MacOS\/Synthesizer V Flat/);
 assert.doesNotMatch(hosts, /Command::new\("(?:sh|cmd|powershell)"\)/);
 
 console.log("Flat automatic launch and script preparation contracts passed.");

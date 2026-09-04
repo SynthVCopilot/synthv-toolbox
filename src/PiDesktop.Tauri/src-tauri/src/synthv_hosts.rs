@@ -91,8 +91,10 @@ const SYNTHV_EXECUTABLE: &str = "synthv-studio";
 #[cfg(not(windows))]
 const FLAT_EXECUTABLE_PATH: &str = "/Applications/Synthesizer V Flat.app/Contents/Resources/Synthesizer V Studio Pro/Contents/MacOS/Synthesizer V Flat";
 #[cfg(target_os = "macos")]
-const FLAT_MAC_SCRIPTS: &str =
-    "/Library/Application Support/Anthronics/Synthesizer V Studio/scripts";
+const FLAT_MAC_SCRIPTS: [&str; 2] = [
+    "/Library/Application Support/Dreamtonics/Synthesizer V Studio/scripts",
+    "/Library/Application Support/Anthronics/Synthesizer V Studio/scripts",
+];
 
 pub fn capabilities(kind: HostKind) -> HostCapabilities {
     let common_reads = vec![
@@ -242,8 +244,7 @@ fn flat_launch_executable(host: &StandardSynthVHost) -> Result<PathBuf, String> 
         .as_deref()
         .map(PathBuf::from)
         .ok_or_else(|| "Synthesizer V Flat 安装路径不可用。".to_string())?;
-    let executable = application
-        .join("Contents/Resources/Synthesizer V Studio Pro/Contents/MacOS/Synthesizer V Flat");
+    let executable = application.join("Contents/MacOS/Synthesizer V Flat");
     safe_regular_file(&executable)
         .then_some(executable)
         .ok_or_else(|| "Synthesizer V Flat 可执行文件不可用。".to_string())
@@ -626,11 +627,11 @@ fn script_directories(kind: HostKind) -> Vec<String> {
         HostKind::Flat => {
             #[cfg(target_os = "macos")]
             {
-                vec![FLAT_MAC_SCRIPTS.to_string()]
+                FLAT_MAC_SCRIPTS.into_iter().map(str::to_string).collect()
             }
             #[cfg(windows)]
             {
-                windows_flat_scripts_directory()
+                windows_flat_script_candidates()
                     .into_iter()
                     .map(|path| path.to_string_lossy().into_owned())
                     .collect()
@@ -660,16 +661,28 @@ pub fn flat_fallback_scripts_directory(host: &StandardSynthVHost) -> Result<Path
     if host.kind != HostKind::Flat {
         return Err("所选 SynthV 宿主不支持此连接方式。".to_string());
     }
-    let directory = host
+    let directories = host
         .script_directories
-        .first()
+        .iter()
         .map(PathBuf::from)
-        .ok_or_else(|| "所选 SynthV 宿主没有可验证的扩展目录。".to_string())?;
-    if safe_directory(&directory) {
-        Ok(directory)
-    } else {
-        Err("所选 SynthV 宿主没有可验证的扩展目录。".to_string())
+        .collect::<Vec<_>>();
+    if let Some(directory) = directories.iter().find(|path| safe_directory(path)) {
+        return Ok(directory.clone());
     }
+    let directory = directories
+        .first()
+        .ok_or_else(|| "所选 SynthV 宿主没有可验证的扩展目录。".to_string())?;
+    let parent = directory
+        .parent()
+        .ok_or_else(|| "所选 SynthV 宿主没有可验证的扩展目录。".to_string())?;
+    if !safe_directory(parent) {
+        return Err("所选 SynthV 宿主没有可验证的扩展目录。".to_string());
+    }
+    std::fs::create_dir(directory)
+        .map_err(|error| format!("无法创建 SynthV Flat 扩展目录：{error}"))?;
+    safe_directory(directory)
+        .then(|| directory.clone())
+        .ok_or_else(|| "所选 SynthV 宿主没有可验证的扩展目录。".to_string())
 }
 
 fn safe_directory(path: &std::path::Path) -> bool {
@@ -694,13 +707,6 @@ fn windows_sv1_scripts_directory() -> Option<PathBuf> {
 }
 
 #[cfg(windows)]
-fn windows_flat_scripts_directory() -> Option<PathBuf> {
-    windows_flat_script_candidates()
-        .into_iter()
-        .find(|path| safe_directory(path))
-}
-
-#[cfg(windows)]
 fn windows_flat_script_candidates() -> Vec<PathBuf> {
     let user_profile = std::env::var_os("USERPROFILE").map(PathBuf::from);
     let app_data = std::env::var_os("APPDATA").map(PathBuf::from);
@@ -718,10 +724,11 @@ fn windows_flat_script_candidates_from_roots(
     app_data: Option<&std::path::Path>,
     local_app_data: Option<&std::path::Path>,
 ) -> Vec<PathBuf> {
-    let mut candidates = user_profile
-        .into_iter()
-        .map(|root| root.join("Documents/Anthronics/Synthesizer V Studio/scripts"))
-        .collect::<Vec<_>>();
+    let mut candidates = Vec::new();
+    if let Some(root) = user_profile {
+        candidates.push(root.join("Documents/Dreamtonics/Synthesizer V Studio/scripts"));
+        candidates.push(root.join("Documents/Anthronics/Synthesizer V Studio/scripts"));
+    }
     candidates.extend(
         [app_data, local_app_data]
             .into_iter()
@@ -838,7 +845,7 @@ mod tests {
     }
     #[cfg(target_os = "macos")]
     #[test]
-    fn flat_uses_anthronics_scripts_and_requires_complete_ready_status() {
+    fn flat_prefers_live_script_directory_and_requires_complete_ready_status() {
         let apps = vec![app(
             HostKind::Flat,
             FLAT_APP,
@@ -850,7 +857,11 @@ mod tests {
         let hosts = build_hosts(&processes, &apps, Some(&good));
         assert!(
             hosts[0].connected
-                && hosts[0].script_directories == vec![FLAT_MAC_SCRIPTS.to_string()]
+                && hosts[0].script_directories
+                    == FLAT_MAC_SCRIPTS
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
                 && hosts[0].capabilities.singer_assignment
                 && !hosts[0].capabilities.retakes
                 && !hosts[0].capabilities.computed_pitch
@@ -938,7 +949,7 @@ mod tests {
     }
 
     #[test]
-    fn windows_flat_scripts_prioritize_documents_and_exclude_dreamtonics() {
+    fn windows_flat_scripts_cover_dreamtonics_and_anthronics_variants() {
         let candidates = windows_flat_script_candidates_from_roots(
             Some(std::path::Path::new("C:/Users/R")),
             Some(std::path::Path::new("C:/Users/R/AppData/Roaming")),
@@ -946,11 +957,11 @@ mod tests {
         );
         assert_eq!(
             candidates[0],
-            PathBuf::from("C:/Users/R/Documents/Anthronics/Synthesizer V Studio/scripts")
+            PathBuf::from("C:/Users/R/Documents/Dreamtonics/Synthesizer V Studio/scripts")
         );
         assert!(candidates
             .iter()
-            .all(|path| !path.to_string_lossy().contains("Dreamtonics")));
+            .any(|path| path.to_string_lossy().contains("Anthronics")));
     }
 
     #[test]

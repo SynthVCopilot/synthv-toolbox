@@ -507,11 +507,19 @@ async fn connect_legacy_bridge(
     if refreshed {
         synthv_control::send_shortcut(process_id, BridgeShortcutAction::Refresh)
             .map_err(standard_error)?;
-        tokio::time::sleep(CONNECT_POLL).await;
+        tokio::time::sleep(Duration::from_millis(800)).await;
     }
-    synthv_control::start_bridge(process_id)
-        .await
-        .map_err(standard_error)?;
+    let start_action = if host.kind == HostKind::Flat {
+        BridgeShortcutAction::StartLegacy
+    } else {
+        BridgeShortcutAction::Start
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        synthv_control::send_shortcut(process_id, start_action)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(standard_error)?;
     let tools = manager
         .connect_stdio_host(
             id.to_string(),
