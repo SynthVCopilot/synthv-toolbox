@@ -24,6 +24,7 @@ assert.match(tasks, /已创建检查点/);
 assert.match(tasks, /部分音符可能已经写入/);
 assert.match(tasks, /BridgeShortcutAction::Save/);
 assert.match(tasks, /BridgeShortcutAction::Refresh/);
+assert.match(tasks, /requiresHostRegistration/);
 assert.match(control, /Self::Refresh => "F5"/);
 assert.doesNotMatch(tasks, /fn ensure_bridge/);
 assert.doesNotMatch(tasks, /start_bridge_and_connect/);

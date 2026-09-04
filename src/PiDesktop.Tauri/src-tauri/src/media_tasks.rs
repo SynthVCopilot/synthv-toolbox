@@ -821,18 +821,33 @@ impl MediaTaskManager {
                 return Err(error);
             }
             let process_id = host.process_id;
-            tauri::async_runtime::spawn_blocking(move || {
+            let refreshed = tauri::async_runtime::spawn_blocking(move || {
                 synthv_control::send_shortcut(
                     process_id,
                     synthv_control::BridgeShortcutAction::Refresh,
                 )
             })
             .await
-            .map_err(|join_error| join_error.to_string())?
-            .map_err(|refresh_error| format!("{error}；自动刷新 Flat 声库失败：{refresh_error}"))?;
+            .map_err(|join_error| join_error.to_string())
+            .and_then(|result| result.map(|_| ()).map_err(|refresh_error| refresh_error));
+            if let Err(refresh_error) = refreshed {
+                return Ok(json!({
+                    "assigned": false,
+                    "requiresHostRegistration": true,
+                    "reason": format!("{error}；自动刷新 Flat 声库失败：{refresh_error}")
+                }));
+            }
             tokio::time::sleep(std::time::Duration::from_millis(750)).await;
-            self.standard_write(&host.id, "voice.assign", arguments)
-                .await?;
+            if let Err(retry_error) = self
+                .standard_write(&host.id, "voice.assign", arguments)
+                .await
+            {
+                return Ok(json!({
+                    "assigned": false,
+                    "requiresHostRegistration": true,
+                    "reason": retry_error
+                }));
+            }
         }
         Ok(json!({
             "assigned": true,
