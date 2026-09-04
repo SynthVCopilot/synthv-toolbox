@@ -12,3 +12,5 @@
 - 根目录全局 Git 忽略规则会忽略 `/test/`；契约测试需显式强制加入版本控制。
 - MCP 工具授权和 Agent 对话授权是两个不同权限面：同一回环监听器仅在任一开关开启时存在，`/mcp` 与 `/agent/chat` 分别在对应开关关闭时返回不可用。
 - 首次安装态调用 `synthv_hosts` 暴露了异步请求线程中嵌套 `Handle::block_on` 的 panic；工具调用必须通过 `spawn_blocking` 执行，不能直接在 axum handler 的 Tokio worker 上运行。
+- 最终安装态同时启用两个开关后，`/health` 返回 MCP 与 Agent 均已启用；OpenCode 远程 MCP 能重新握手，两个开关在新安装或无设置时仍默认为关闭。
+- Flat 的标准能力明确为 `voiceParameters.write=false`；调校应用工具现在会在进入官方 Bridge 前返回宿主能力错误，避免误报为固定名称的 Bridge 未连接。

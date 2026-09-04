@@ -12,3 +12,7 @@
 - 已用全新 Flat 进程和 F5 复核：Mai 可指派、赤羽 Plus 仍未注册；调整 Cover 在该边界下继续写谱并返回 `requiresHostRegistration`，不再丢失整条任务。
 - `learn_tuning_from_source` 两次被 OpenCode 的单次 MCP 超时取消；已将长音频风格分析限制为中段 45 秒窗口，真实参考 vocals 从约 3 分钟降至 14 秒。
 - 14 秒分析已进入 Rust，但被字段命名不一致拒绝；正在统一九项 camelCase 输出后完成最后重跑。
+- 统一 camelCase 后已从参考人声生成 `MEDIUM5·Chiyu PLUS` 调校档案；来源样本数为 1，并记录九项风格特征和六项目标参数。
+- Cover 任务 `6e14e2ff-ea29-4bd0-9634-35948ff0648a` 已完成到 100%，`saveVerified=true`；输出 375 音符，MIDI 置信度 0.787，工程通过 Flat 路径参数保持打开。
+- macOS 辅助功能授权完成后，应用成功发送保存快捷键，SVP 从初始占位大小增长并在任务结果中通过保存校验。
+- 最终使用 `ollama-cloud/glm-5.3` 经 Toolbox MCP 枚举宿主、连接 Flat、读取工程和任务状态，确认 1 轨、2 Part、375 音符、保存成功以及赤羽 Plus 未注册的真实边界，随后正常断开。

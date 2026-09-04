@@ -16,3 +16,6 @@
 - 已构建并首次安装应用，验证默认关闭；启用后 `/health` 与 OpenCode MCP 握手成功。
 - 安装态标准工具首次执行暴露 Tokio 嵌套运行时问题，已改为阻塞线程执行并新增回归单测。
 - 按追加需求实现独立 Agent HTTP 开关与 `/agent/chat`，MCP 与 Agent 权限分别生效；前端构建、全部契约、Rust check 和 3 个 HTTP 单测通过。
+- 授权完成后构建并替换 `/Applications/SynthV Toolbox.app`，安装态 `/health` 返回 `agentEnabled=true`、`mcpEnabled=true`、端口 17831，OpenCode `mcp list` 显示已连接。
+- 最终验证通过：Rust 206 项通过、2 项真实宿主测试按设计忽略；全部前端契约、生产 Web 构建、release Tauri 应用与 DMG 构建成功。
+- 已用安装态 HTTP MCP 连接 Flat 并调用调校应用，确认对 `voiceParameters.write=false` 返回明确不支持错误，再正常断开。

@@ -29,5 +29,5 @@
 | 021 | [BugFix] Flat连接回退 | 在 Flat 原生 MCP 缺失或不稳定时回退到兼容 Bridge。 | Windows Flat 可能不提供 MCP，连接不能依赖单一实验性后端。 | ✅ 已完成 |
 | 022 | [BugFix] actions-build-fix | 修复正式 Bridge 组件裁剪后重复构建失败及后续 Rust lint 阻断。 | 当前 main 的 Windows 与 macOS Actions 都无法进入桌面打包阶段。 | ✅ 已完成 |
 | 023 | [Feature] dev-build-artifacts | 将 main、PR 与手动验证的 Windows/macOS 开发安装包上传为 Actions artifact。 | 让未打 tag 的开发构建也可以直接下载和验收。 | ✅ 已完成 |
-| 024 | [Feature] http-mcp-interface | 为 Toolbox 增加默认关闭、仅监听本机的 HTTP MCP 接口及设置入口。 | 让 OpenCode 等外部程序在不暴露网络服务的默认状态下复用标准 SynthV 工具。 | 🚧 进行中 |
-| 025 | [Integration] opencode-ollama-cover-test | 将 OpenCode 的 Ollama Cloud GLM 模型连接到 Toolbox，并执行指定 BV 来源与风格参考的 Cover 验证。 | 用真实外部 Agent、Flat 宿主和媒体链路验证端到端可用性与失败回退。 | 🚧 进行中 |
+| 024 | [Feature] http-mcp-interface | 为 Toolbox 增加默认关闭、仅监听本机的 HTTP MCP 接口及设置入口。 | 让 OpenCode 等外部程序在不暴露网络服务的默认状态下复用标准 SynthV 工具。 | ✅ 已完成 |
+| 025 | [Integration] opencode-ollama-cover-test | 将 OpenCode 的 Ollama Cloud GLM 模型连接到 Toolbox，并执行指定 BV 来源与风格参考的 Cover 验证。 | 用真实外部 Agent、Flat 宿主和媒体链路验证端到端可用性与失败回退。 | ✅ 已完成 |

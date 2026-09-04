@@ -1,7 +1,7 @@
 # 调研与发现
 
 - 当前 OpenCode 已登记 Ollama Cloud API 授权；凭证位于 OpenCode 自身凭证存储中，本任务不读取、复制或写入密钥。
-- `opencode models` 当前列出的 Ollama Cloud GLM 最新版本为 `ollama-cloud/glm-5.2`。
+- 完整生成任务执行时，OpenCode 列出的 Ollama Cloud GLM 最新版本为 `ollama-cloud/glm-5.2`；最终验收时目录已新增 `ollama-cloud/glm-5.3`，因此另用 5.3 通过 MCP 做了安装态只读验收。
 - 本机未安装本地 `ollama` CLI，因此测试明确使用 OpenCode 的 Ollama Cloud provider，而不是假装存在本地 Ollama 服务。
 - Synthesizer V Studio 2 Pro Flat 当前正在运行；仍需通过新 MCP 入口验证宿主枚举与连接状态。
 - Flat 重启后原生 MCP 枚举到 91 个歌手，赤羽 Plus 的精确数据库名为 `MEDIUM5·Chiyu PLUS`、版本 100；目标工程已通过路径参数打开。
@@ -14,3 +14,6 @@
 - 实测 `part.assign_singer` 可成功指派已注册的 Mai，但赤羽 Plus 在重启与 F5 后仍返回未注册；歌手注册失败应成为非致命结构化结果，不能阻止已经提取出的音符写入和工程保存。
 - 完整 320 秒参考音频的 pyin 分析约需 3 分钟，超过 OpenCode MCP 工具超时；使用中段 45 秒代表窗口后保留原始总时长并在 14 秒内输出同一九字段契约。
 - 超时解决后发现 Python 输出仍为 snake_case，而 Rust `SourceStyleFeatures` 使用 camelCase；统一组件输出字段后才能真正写入调校档案。
+- 最终 Cover 任务完成并通过快捷键保存验证：生成 375 个音符，高置信度分数 0.787，工程与 MIDI、分离人声、伴奏和检查点均已落盘。
+- 赤羽 Plus 虽出现在 Flat 歌手枚举和本地声库目录中，当前 Flat 运行时仍拒绝注册版本 100；工程保留乐谱并将 `assigned=false`、`requiresHostRegistration=true` 作为真实结果。
+- 参考音频已成功形成赤羽 Plus 独立调校档案，但 Flat 的公开能力为 `voiceParameters.write=false`，因此该档案不能在 Flat 中自动写入；官方 SV2 Bridge 仍是参数写入宿主。
