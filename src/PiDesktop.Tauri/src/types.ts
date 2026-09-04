@@ -22,7 +22,8 @@ export interface AiProviderSummary {
   healthyAccounts: number;
   totalAccounts: number;
   model: string;
-  models: string[];
+  oauthModels: string[];
+  apiKeyModels: string[];
   accounts: AiProviderAccountSummary[];
   authMethod: AiAuthMethod;
   apiKeyConfigured: boolean;
