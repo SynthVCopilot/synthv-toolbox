@@ -4,3 +4,7 @@
 - 现有 API Key 以提供商 ID 作为唯一钥匙串账号，同一提供商只能保存一份密钥。
 - 多凭据调度必须先按所选模型过滤资格，再轮转健康凭据；401/403 应失效对应凭据，429/5xx/传输错误应进入有界冷却并尝试下一项。
 - OAuth/API Key 是新增凭据时的方式，不是运行时互斥模式；同一提供商与模型下两类合格凭据必须进入同一个调度池，否则无法实现用户要求的整体额度均衡。
+- API Key 元数据现在按 UUID 独立保存，钥匙串账号严格使用 credential id；删除前校验 provider+id，设置保存失败时恢复钥匙串。
+- runtime 的 route cursor 只按 provider+model 建立，候选携带 auth method，因此同一模型的 OAuth 与 API Key 会进入同一轮转队列；永久失效只能通过 upsert/重启恢复。
+- `apiKeyModels` 为 provider 下全部 API Key 模型并集，`models` 为 OAuth/API Key 运行时并集；`apiKeys` 只输出非敏感摘要和 balancer 健康/冷却状态。
+- 首次 Rust check 因 worktree 缺少受管 Bridge `node_modules` 失败，执行既有 `npm run build:bridge` 后恢复；最终 check/test 通过。
