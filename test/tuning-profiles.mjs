@@ -18,8 +18,8 @@ const main = read(join(webRoot, "main.ts"));
 
 assert.match(audio, /source-style/);
 assert.match(audio, /SOURCE_STYLE_ANALYSIS_SECONDS = 45/);
-assert.match(audio, /vibrato_rate_hz/);
-assert.match(audio, /breathiness_proxy/);
+assert.match(audio, /vibratoRateHz/);
+assert.match(audio, /breathinessProxy/);
 assert.match(workflows, /pub fn source_style/);
 assert.match(profiles, /pub struct TuningProfile/);
 assert.match(profiles, /tuning-profiles/);
