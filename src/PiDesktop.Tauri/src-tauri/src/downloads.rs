@@ -232,11 +232,9 @@ impl ComponentDownloadManager {
         item.detail = "已在开始下载前取消。".to_string();
         item.updated_at = Utc::now().to_rfc3339();
         if let Err(error) = self.persist(&queue) {
-            queue
-                .items
-                .iter_mut()
-                .find(|item| item.id == task_id)
-                .map(|item| *item = previous);
+            if let Some(item) = queue.items.iter_mut().find(|item| item.id == task_id) {
+                *item = previous;
+            }
             return Err(error);
         }
         Ok(queue.items.clone())
