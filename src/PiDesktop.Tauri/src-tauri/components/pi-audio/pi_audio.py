@@ -27,6 +27,7 @@ import numpy as np
 sys.stdout.reconfigure(encoding="utf-8")
 
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+SOURCE_STYLE_ANALYSIS_SECONDS = 45
 
 # AudioSet 中的风格/情绪类标签（供相对排序；绝对概率普遍偏低，不可单独当结论）
 GENREISH = {
@@ -330,8 +331,15 @@ def cmd_source_style(args) -> dict:
             "voiced_ratio": 0.0,
         }
 
+    # Bound synchronous analysis so MCP clients do not time out on full songs.
+    analysis_samples = SOURCE_STYLE_ANALYSIS_SECONDS * sr
+    if y.size > analysis_samples:
+        start = (y.size - analysis_samples) // 2
+        analysis_source = y[start:start + analysis_samples]
+    else:
+        analysis_source = y
     # pyin needs a meaningful analysis window; padding does not change duration_sec.
-    analysis_y = np.pad(y, (0, max(0, frame_length - y.size)))
+    analysis_y = np.pad(analysis_source, (0, max(0, frame_length - analysis_source.size)))
     try:
         f0, voiced_flag, _voiced_prob = librosa.pyin(
             analysis_y,
