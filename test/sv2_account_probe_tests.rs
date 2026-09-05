@@ -1237,6 +1237,15 @@ fn active_license_decision_is_network_free_and_preserves_failures() {
     );
 }
 
+#[test]
+fn refresh_decision_covers_near_expiry_and_one_rejected_license_retry() {
+    let fresh = Utc::now() + ChronoDuration::minutes(5);
+    let near_expiry = Utc::now() + ChronoDuration::seconds(30);
+    assert!(!should_refresh_session(fresh, false));
+    assert!(should_refresh_session(near_expiry, false));
+    assert!(should_refresh_session(fresh, true));
+}
+
 #[cfg(windows)]
 #[test]
 fn refresh_uses_the_trusted_session_client_id() {

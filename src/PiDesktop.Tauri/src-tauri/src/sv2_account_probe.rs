@@ -421,15 +421,6 @@ fn inspect_active_session_license(
         Ok(credentials) => credentials,
         Err(()) => return Sv2AccountProbeView::invalid(),
     };
-    if credentials.access_expires_at <= Utc::now() {
-        return Sv2AccountProbeView::new(
-            Sv2SessionInspectionStatus::Expired,
-            Sv2RemoteUseStatus::Unknown,
-            Sv2AuthorizationStatus::Unknown,
-            Vec::new(),
-            "账号环境正在本机使用，访问令牌已过期；未刷新或修改会话。",
-        );
-    }
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(3))
         .timeout_read(Duration::from_secs(5))
@@ -439,14 +430,77 @@ fn inspect_active_session_license(
     let Some(root) = root.as_ref() else {
         return Sv2AccountProbeView::in_use();
     };
-    read_only_authorization(
+    if should_refresh_session(credentials.access_expires_at, false) {
+        return refresh_active_session_license(
+            data_root,
+            root,
+            &fingerprint,
+            &credentials,
+            &key,
+            &agent,
+        );
+    }
+    let initial = read_only_authorization(
         data_root,
         root,
         &fingerprint,
         &credentials,
         true,
         |access| query_license_snapshot_with_agent(&agent, access),
-    )
+    );
+    match initial {
+        Some(view)
+            if !should_refresh_session(
+                credentials.access_expires_at,
+                view.session_status == Sv2SessionInspectionStatus::Invalid,
+            ) =>
+        {
+            view
+        }
+        Some(_) => refresh_active_session_license(
+            data_root,
+            root,
+            &fingerprint,
+            &credentials,
+            &key,
+            &agent,
+        ),
+        None => Sv2AccountProbeView::in_use(),
+    }
+}
+
+fn should_refresh_session(access_expires_at: DateTime<Utc>, authorization_rejected: bool) -> bool {
+    access_expires_at <= Utc::now() + ChronoDuration::seconds(60) || authorization_rejected
+}
+
+#[cfg(windows)]
+fn refresh_active_session_license(
+    data_root: &Path,
+    root: &ProbeRootKey,
+    fingerprint: &SessionCacheKey,
+    credentials: &SessionCredentials,
+    key: &[u8; 8],
+    agent: &ureq::Agent,
+) -> Sv2AccountProbeView {
+    let original_account = account_group_key(credentials.access_token());
+    let refreshed = match refresh_session_credentials(agent, credentials) {
+        Ok(value) if account_group_key(value.access_token()) == original_account => value,
+        Ok(_) => {
+            return Sv2AccountProbeView::sync_failed(
+                "刷新后的账号主体与当前会话不一致；未写入本地 session。",
+            )
+        }
+        Err(failure) => return refresh_failure_view(failure),
+    };
+    let fingerprint = match persist_refreshed_session(data_root, fingerprint, &refreshed, key) {
+        Ok(value) => value,
+        Err(()) => {
+            return Sv2AccountProbeView::sync_failed("刷新凭据无法安全写回；未继续读取授权。")
+        }
+    };
+    read_only_authorization(data_root, root, &fingerprint, &refreshed, true, |access| {
+        query_license_snapshot_with_agent(agent, access)
+    })
     .unwrap_or_else(Sv2AccountProbeView::in_use)
 }
 
@@ -2355,22 +2409,22 @@ fn refresh_windows_batch(requests: &[Sv2AccountProbeRequest<'_>]) -> Vec<Sv2Acco
                 results[sessions[authority].request_index] = Some(Sv2AccountProbeView::in_use());
                 continue;
             };
-            cache_group_view(
-                &mut results,
-                &sessions,
-                &members,
-                &view,
-                Some(sessions[authority].credentials.access_expires_at),
-            );
-            continue;
+            if view.session_status != Sv2SessionInspectionStatus::Invalid {
+                cache_group_view(
+                    &mut results,
+                    &sessions,
+                    &members,
+                    &view,
+                    Some(sessions[authority].credentials.access_expires_at),
+                );
+                continue;
+            }
         }
 
         // Only the newest physical copy for an account may consume a refresh
         // token. Normal and Sandboxie copies therefore cannot race each other
         // or submit two startup-equivalent login events merely because their
         // Keycloak login ids drifted.
-        if sessions[authority].credentials.access_expires_at
-            <= Utc::now() + ChronoDuration::seconds(60)
         {
             let refreshed =
                 match refresh_session_credentials(&agent, &sessions[authority].credentials) {
