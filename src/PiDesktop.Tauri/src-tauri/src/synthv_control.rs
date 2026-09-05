@@ -124,15 +124,15 @@ fn validate_instance_target(
         .find(|process| process.process_id == process_id)
         .ok_or_else(|| format!("没有找到 PID {process_id} 对应的 SynthV 实例。"))?;
     if !matches_control_target(&process, process_identity) {
-        return Err("目标实例已变化或不是 Synthesizer V Studio 2，操作已取消。".to_string());
+        return Err("目标实例已变化或不是 SynthV 实例，操作已取消。".to_string());
     }
     Ok(process)
 }
 
 fn matches_control_target(process: &SynthVProcess, process_identity: &str) -> bool {
-    process.is_sv2
-        && !process.process_identity.is_empty()
+    !process.process_identity.is_empty()
         && process.process_identity == process_identity
+        && is_synthv_process(&process.name, &process.command)
 }
 
 pub async fn start_bridge(process_id: u32) -> Result<SynthVProcess, String> {
@@ -224,6 +224,9 @@ fn is_sv2_executable_path(path: &str) -> bool {
 }
 
 fn product_name(path: &str, is_sv2: bool) -> String {
+    if !is_sv2 && is_sv1_executable_path(path) {
+        return "Synthesizer V Studio".to_string();
+    }
     if !is_sv2 {
         return "Synthesizer V Flat".to_string();
     }
@@ -591,10 +594,12 @@ mod platform {
         let identity = process_identity_from_handle(handle, process_id);
         let image = process_image_path_from_handle(handle);
         let valid = identity.as_deref() == Some(process_identity)
-            && image.as_deref().is_some_and(is_sv2_executable_path);
+            && image
+                .as_deref()
+                .is_some_and(is_strict_synthv_executable_path);
         if !valid {
             unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
-            return Err("目标实例已变化或不是 Synthesizer V Studio 2，操作已取消。".to_string());
+            return Err("目标实例已变化或不是 SynthV 实例，操作已取消。".to_string());
         }
         Ok(handle)
     }
@@ -837,6 +842,10 @@ mod platform {
             .unwrap_or(value.len());
         String::from_utf16_lossy(&value[..length])
     }
+}
+
+fn is_strict_synthv_executable_path(path: &str) -> bool {
+    is_sv1_executable_path(path) || is_sv2_executable_path(path) || is_flat_executable_name(path)
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]
