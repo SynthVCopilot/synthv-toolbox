@@ -430,43 +430,18 @@ fn inspect_active_session_license(
     let Some(root) = root.as_ref() else {
         return Sv2AccountProbeView::in_use();
     };
-    if should_refresh_session(credentials.access_expires_at, false) {
-        return refresh_active_session_license(
+    inspect_session_authorization(
+        &SessionProbeSource {
             data_root,
             root,
-            &fingerprint,
-            &credentials,
-            &key,
-            &agent,
-        );
-    }
-    let initial = read_only_authorization(
-        data_root,
-        root,
-        &fingerprint,
-        &credentials,
+            fingerprint: &fingerprint,
+            credentials: &credentials,
+            key: &key,
+        },
         true,
+        |credentials| refresh_session_credentials(&agent, credentials),
         |access| query_license_snapshot_with_agent(&agent, access),
-    );
-    match initial {
-        Some(view)
-            if !should_refresh_session(
-                credentials.access_expires_at,
-                view.session_status == Sv2SessionInspectionStatus::Invalid,
-            ) =>
-        {
-            view
-        }
-        Some(_) => refresh_active_session_license(
-            data_root,
-            root,
-            &fingerprint,
-            &credentials,
-            &key,
-            &agent,
-        ),
-        None => Sv2AccountProbeView::in_use(),
-    }
+    )
 }
 
 fn should_refresh_session(access_expires_at: DateTime<Utc>, authorization_rejected: bool) -> bool {
@@ -474,17 +449,69 @@ fn should_refresh_session(access_expires_at: DateTime<Utc>, authorization_reject
 }
 
 #[cfg(windows)]
-fn refresh_active_session_license(
-    data_root: &Path,
-    root: &ProbeRootKey,
-    fingerprint: &SessionCacheKey,
-    credentials: &SessionCredentials,
-    key: &[u8; 8],
-    agent: &ureq::Agent,
+struct SessionProbeSource<'a> {
+    data_root: &'a Path,
+    root: &'a ProbeRootKey,
+    fingerprint: &'a SessionCacheKey,
+    credentials: &'a SessionCredentials,
+    key: &'a [u8; 8],
+}
+
+#[cfg(windows)]
+fn inspect_session_authorization(
+    source: &SessionProbeSource<'_>,
+    active: bool,
+    refresh: impl FnOnce(&SessionCredentials) -> Result<SessionCredentials, RefreshFailure>,
+    mut fetch: impl FnMut(&str) -> RemoteOutcome,
 ) -> Sv2AccountProbeView {
-    let original_account = account_group_key(credentials.access_token());
-    let refreshed = match refresh_session_credentials(agent, credentials) {
-        Ok(value) if account_group_key(value.access_token()) == original_account => value,
+    let SessionProbeSource {
+        data_root,
+        root,
+        fingerprint,
+        credentials,
+        key,
+    } = *source;
+    if !should_refresh_session(credentials.access_expires_at, false) {
+        match read_only_authorization(
+            data_root,
+            root,
+            fingerprint,
+            credentials,
+            active,
+            &mut fetch,
+        ) {
+            Some(view) if view.session_status != Sv2SessionInspectionStatus::Invalid => {
+                return view
+            }
+            Some(_) => {}
+            None => return Sv2AccountProbeView::in_use(),
+        }
+    }
+    if inspect_session_fingerprint(data_root)
+        .ok()
+        .flatten()
+        .as_ref()
+        != Some(fingerprint)
+    {
+        return Sv2AccountProbeView::new(
+            Sv2SessionInspectionStatus::InUse,
+            Sv2RemoteUseStatus::Unknown,
+            Sv2AuthorizationStatus::Unknown,
+            Vec::new(),
+            "会话已被其他进程更新；本次未发送续期请求，请重新刷新状态。",
+        )
+        .with_account_identity(credentials.access_token());
+    }
+    let Some(original_account) = account_group_key(credentials.access_token()) else {
+        return record_active_refresh_failure(
+            root,
+            fingerprint,
+            credentials,
+            Sv2AccountProbeView::unsupported(),
+        );
+    };
+    let refreshed = match refresh(credentials) {
+        Ok(value) if account_group_key(value.access_token()) == Some(original_account) => value,
         Ok(_) => {
             return record_active_refresh_failure(
                 root,
@@ -515,10 +542,8 @@ fn refresh_active_session_license(
             )
         }
     };
-    read_only_authorization(data_root, root, &fingerprint, &refreshed, true, |access| {
-        query_license_snapshot_with_agent(agent, access)
-    })
-    .unwrap_or_else(Sv2AccountProbeView::in_use)
+    read_only_authorization(data_root, root, &fingerprint, &refreshed, active, fetch)
+        .unwrap_or_else(Sv2AccountProbeView::in_use)
 }
 
 #[cfg(windows)]
@@ -2414,42 +2439,36 @@ fn refresh_windows_batch(requests: &[Sv2AccountProbeRequest<'_>]) -> Vec<Sv2Acco
             continue;
         };
 
-        if sessions[authority].credentials.access_expires_at
-            > Utc::now() + ChronoDuration::seconds(60)
-        {
-            let one_physical_session = members.iter().all(|member| {
-                sessions[*member].fingerprint.canonical_root
-                    == sessions[authority].fingerprint.canonical_root
-            });
-            if !one_physical_session {
-                let view = Sv2AccountProbeView::sync_failed(
-                    "同一槽位请求指向多个物理会话；未接受只读授权结果或清除同步隔离。",
-                )
-                .with_account_identity(sessions[authority].credentials.access_token());
-                quarantine_group_view(&mut results, &mut sessions, &members, &view);
-                continue;
-            }
-            let Some(view) = read_only_authorization(
-                &sessions[authority].data_root,
-                &sessions[authority].root_key,
-                &sessions[authority].fingerprint,
-                &sessions[authority].credentials,
+        let one_physical_session = members.iter().all(|member| {
+            sessions[*member].fingerprint.canonical_root
+                == sessions[authority].fingerprint.canonical_root
+        });
+        if one_physical_session {
+            let source = &sessions[authority];
+            let view = inspect_session_authorization(
+                &SessionProbeSource {
+                    data_root: &source.data_root,
+                    root: &source.root_key,
+                    fingerprint: &source.fingerprint,
+                    credentials: &source.credentials,
+                    key: &key,
+                },
                 false,
+                |credentials| refresh_session_credentials(&agent, credentials),
                 |access| query_license_snapshot_with_agent(&agent, access),
-            ) else {
-                results[sessions[authority].request_index] = Some(Sv2AccountProbeView::in_use());
-                continue;
-            };
-            if view.session_status != Sv2SessionInspectionStatus::Invalid {
-                cache_group_view(
-                    &mut results,
-                    &sessions,
-                    &members,
-                    &view,
-                    Some(sessions[authority].credentials.access_expires_at),
-                );
-                continue;
+            );
+            for member in &members {
+                results[sessions[*member].request_index] = Some(view.clone());
             }
+            continue;
+        }
+        if !should_refresh_session(sessions[authority].credentials.access_expires_at, false) {
+            let view = Sv2AccountProbeView::sync_failed(
+                "同一槽位请求指向多个物理会话；未接受只读授权结果或清除同步隔离。",
+            )
+            .with_account_identity(sessions[authority].credentials.access_token());
+            quarantine_group_view(&mut results, &mut sessions, &members, &view);
+            continue;
         }
 
         // Only the newest physical copy for an account may consume a refresh
