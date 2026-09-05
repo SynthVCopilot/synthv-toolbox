@@ -160,7 +160,7 @@ pub fn dry_run(
     {
         for relative_root in category.relative_roots {
             let relative_root = safe_relative(Path::new(relative_root))?;
-            let source = source_root.join(&relative_root);
+            let source = checked_join(source_root, &relative_root)?;
             if !source.exists() {
                 continue;
             }
