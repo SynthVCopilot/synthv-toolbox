@@ -23,3 +23,5 @@
 - 按官方 SbieIni 文档核对 FileRootPath 和空 PID，清理此前 15 个仅属于本次随机 smoke fixture 的空闲测试配置；未修改其他 sandbox。
 - 提交自检只保留 package.json 原有 chatgpt-copilot-ui 测试路径引用，它不是提交署名或来源标记；无任务编号或模型署名进入代码/提交。
 - main 未受保护，按用户 Git 交付规则在本地合并并推送，随后核对远端 Windows/macOS 开发构建。
+
+- 远端 macOS 完整 Rust 测试通过；Clippy 指出两个仅 Windows 分支使用的递归参数，已明确标记平台专用参数并重新提交。

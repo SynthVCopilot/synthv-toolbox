@@ -416,9 +416,9 @@ fn verify_box_root(
     Ok(())
 }
 
-fn validate_instance_tree(path: &Path, overlay: &Path, slot: &Path) -> Result<(), String> {
+fn validate_instance_tree(path: &Path, _overlay: &Path, _slot: &Path) -> Result<(), String> {
     #[cfg(windows)]
-    if path == overlay {
+    if path == _overlay {
         let target =
             junction::get_target(path).map_err(|error| format!("无法检查隔离数据链接：{error}"))?;
         let normalize = |path: &Path| {
@@ -427,7 +427,7 @@ fn validate_instance_tree(path: &Path, overlay: &Path, slot: &Path) -> Result<()
                 .replace('/', "\\")
                 .to_lowercase()
         };
-        if normalize(&target) != normalize(slot) {
+        if normalize(&target) != normalize(_slot) {
             return Err("隔离数据链接未指向所属账号；操作已停止。".to_string());
         }
         return Ok(());
@@ -437,8 +437,8 @@ fn validate_instance_tree(path: &Path, overlay: &Path, slot: &Path) -> Result<()
         for entry in fs::read_dir(path).map_err(|error| error.to_string())? {
             validate_instance_tree(
                 &entry.map_err(|error| error.to_string())?.path(),
-                overlay,
-                slot,
+                _overlay,
+                _slot,
             )?;
         }
     }
