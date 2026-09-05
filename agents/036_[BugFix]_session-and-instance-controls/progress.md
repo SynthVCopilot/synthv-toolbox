@@ -1,4 +1,7 @@
 # 操作记录
 
-- 2026-09-05：加载 agent-mode，检查 worktree 与 git 状态，读取项目索引；创建 codex/slot-session-repair 分支。
-- 初步定位 sv2_account_probe 的 SyncFailed quarantine 和 synthv_control 的宽泛进程枚举。
+- 已读取 agent-mode 工作流、任务审计和现有 SynthV 控制实现。
+- 已将枚举收紧为精确 SV2 可执行文件或 Flat 的精确名称，并覆盖安装程序和更新程序反例。
+- 已新增产品名、文件版本、窗口标题和由启动时间构成的进程身份令牌。
+- 已注册指定实例聚焦和精确终止命令；执行前重新发现并校验 SV2 身份与令牌。
+- 已通过格式、差异空白和两个 Node 契约测试；Rust 测试受缺失 Bridge 依赖阻断。

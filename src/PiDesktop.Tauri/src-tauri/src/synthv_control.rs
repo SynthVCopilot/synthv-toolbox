@@ -17,7 +17,10 @@ const BRIDGE_STOP_KEY: &str = "F14";
 #[serde(rename_all = "camelCase")]
 pub struct SynthVProcess {
     pub process_id: u32,
+    pub process_identity: String,
     pub name: String,
+    pub product_name: String,
+    pub version: String,
     pub command: String,
     pub window_title: String,
     pub is_sv2: bool,
@@ -94,6 +97,44 @@ pub fn send_shortcut(
     Ok(process)
 }
 
+pub fn focus_instance(process_id: u32, process_identity: String) -> Result<SynthVProcess, String> {
+    let process = validate_instance_target(process_id, &process_identity)?;
+    platform::focus(process_id)?;
+    Ok(process)
+}
+
+pub fn terminate_instance(
+    process_id: u32,
+    process_identity: String,
+) -> Result<SynthVProcess, String> {
+    let process = validate_instance_target(process_id, &process_identity)?;
+    platform::terminate(process_id)?;
+    Ok(process)
+}
+
+fn validate_instance_target(
+    process_id: u32,
+    process_identity: &str,
+) -> Result<SynthVProcess, String> {
+    if process_identity.trim().is_empty() {
+        return Err("实例身份令牌不能为空。".to_string());
+    }
+    let process = list_processes()?
+        .into_iter()
+        .find(|process| process.process_id == process_id)
+        .ok_or_else(|| format!("没有找到 PID {process_id} 对应的 SynthV 实例。"))?;
+    if !matches_control_target(&process, process_identity) {
+        return Err("目标实例已变化或不是 Synthesizer V Studio 2，操作已取消。".to_string());
+    }
+    Ok(process)
+}
+
+fn matches_control_target(process: &SynthVProcess, process_identity: &str) -> bool {
+    process.is_sv2
+        && !process.process_identity.is_empty()
+        && process.process_identity == process_identity
+}
+
 pub async fn start_bridge(process_id: u32) -> Result<SynthVProcess, String> {
     tauri::async_runtime::spawn_blocking(move || {
         send_shortcut(process_id, BridgeShortcutAction::Start)
@@ -132,8 +173,7 @@ fn is_synthv_process(name: &str, command: &str) -> bool {
     if is_flat_executable_name(name) || is_flat_executable_name(command) {
         return true;
     }
-    let text = format!("{name}\n{command}").to_ascii_lowercase();
-    text.contains("synthv-studio") || text.contains("synthesizer v studio")
+    is_sv2_executable_path(command)
 }
 
 fn is_sv2_executable_path(path: &str) -> bool {
@@ -145,7 +185,10 @@ fn is_sv2_executable_path(path: &str) -> bool {
     let file_name = value.rsplit('/').next().unwrap_or_default();
     let explicit_name = matches!(
         file_name,
-        "synthesizer v studio 2 pro.exe" | "synthesizer v studio 2.exe"
+        "synthesizer v studio 2 pro.exe"
+            | "synthesizer v studio 2.exe"
+            | "svstudio2-pro.exe"
+            | "svstudio2.exe"
     );
     let known_directory = value.split('/').any(|part| {
         matches!(
@@ -154,11 +197,25 @@ fn is_sv2_executable_path(path: &str) -> bool {
                 | "synthesizer v studio 2 pro"
                 | "synthesizer v studio 2.app"
                 | "synthesizer v studio 2 pro.app"
+                | "svstudio2 pro.app"
+                | "svstudio2.app"
         )
     });
     value.contains('/')
         && (explicit_name
             || (known_directory && matches!(file_name, "synthv-studio.exe" | "synthv-studio")))
+}
+
+fn product_name(path: &str, is_sv2: bool) -> String {
+    if !is_sv2 {
+        return "Synthesizer V Flat".to_string();
+    }
+    let value = path.replace('\\', "/").to_ascii_lowercase();
+    if value.contains("pro") {
+        "SVStudio2 Pro".to_string()
+    } else {
+        "SVStudio2".to_string()
+    }
 }
 
 fn is_flat_executable_name(value: &str) -> bool {
@@ -179,7 +236,7 @@ mod platform {
 
     pub(super) fn list_processes() -> Result<Vec<SynthVProcess>, String> {
         let output = quiet_command("ps")
-            .args(["-axo", "pid=,comm=,args="])
+            .args(["-axo", "pid=,lstart=,comm=,args="])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output()
@@ -192,13 +249,21 @@ mod platform {
             .filter_map(|line| {
                 let mut fields = line.split_whitespace();
                 let process_id = fields.next()?.parse::<u32>().ok()?;
+                let started = (0..5)
+                    .map(|_| fields.next())
+                    .collect::<Option<Vec<_>>>()?
+                    .join(" ");
                 let name = fields.next()?.to_string();
                 let command = fields.collect::<Vec<_>>().join(" ");
+                let is_sv2 = is_sv2_executable_path(&command);
                 is_synthv_process(&name, &command).then_some(SynthVProcess {
                     process_id,
+                    process_identity: format!("macos:{process_id}:{started}"),
                     name,
-                    window_title: String::new(),
-                    is_sv2: is_sv2_executable_path(&command),
+                    product_name: product_name(&command, is_sv2),
+                    version: macos_bundle_version(&command),
+                    window_title: macos_window_title(process_id),
+                    is_sv2,
                     command,
                     sandboxed: Some(false),
                 })
@@ -256,6 +321,61 @@ mod platform {
             ))
         }
     }
+
+    pub(super) fn focus(process_id: u32) -> Result<(), String> {
+        let focus = format!(
+            "tell application \"System Events\" to tell (first process whose unix id is {process_id}) to set frontmost to true"
+        );
+        let output = quiet_command("osascript")
+            .args(["-e", &focus])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|error| format!("无法聚焦 SynthV：{error}"))?;
+        output.status.success().then_some(()).ok_or_else(|| {
+            "无法聚焦 SynthV。请在 macOS“辅助功能”中允许 SynthV Toolbox 控制电脑。".to_string()
+        })
+    }
+
+    pub(super) fn terminate(process_id: u32) -> Result<(), String> {
+        let result = unsafe { libc::kill(process_id as i32, libc::SIGTERM) };
+        (result == 0)
+            .then_some(())
+            .ok_or_else(|| format!("无法终止 PID {process_id} 对应的 SynthV 实例。"))
+    }
+
+    fn macos_bundle_version(command: &str) -> String {
+        let Some(index) = command.to_ascii_lowercase().find(".app/") else {
+            return String::new();
+        };
+        let bundle = &command[..index + 4];
+        let output = quiet_command("mdls")
+            .args(["-name", "kMDItemVersion", "-raw", bundle])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output();
+        output
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+            .filter(|version| !version.is_empty() && version != "(null)")
+            .unwrap_or_default()
+    }
+
+    fn macos_window_title(process_id: u32) -> String {
+        let script = format!(
+            "tell application \"System Events\" to tell (first process whose unix id is {process_id}) to get name of front window"
+        );
+        quiet_command("osascript")
+            .args(["-e", &script])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(windows)]
@@ -292,12 +412,16 @@ mod platform {
             let name = wide_text(&entry.szExeFile);
             let command = process_image_path(entry.th32ProcessID).unwrap_or_else(|| name.clone());
             if is_synthv_process(&name, &command) {
+                let is_sv2 = is_sv2_executable_path(&command);
                 processes.push(SynthVProcess {
                     process_id: entry.th32ProcessID,
+                    process_identity: process_identity(entry.th32ProcessID).unwrap_or_default(),
                     command: command.clone(),
                     name,
+                    product_name: product_name(&command, is_sv2),
+                    version: file_version(&command).unwrap_or_default(),
                     window_title: window_title(entry.th32ProcessID),
-                    is_sv2: is_sv2_executable_path(&command),
+                    is_sv2,
                     sandboxed: sandboxed(entry.th32ProcessID),
                 });
             }
@@ -312,25 +436,7 @@ mod platform {
         process_id: u32,
         action: BridgeShortcutAction,
     ) -> Result<(), String> {
-        let mut hwnd: HWND = null_mut();
-        unsafe {
-            EnumWindows(
-                Some(find_visible_window),
-                &mut WindowLookup {
-                    process_id,
-                    hwnd: &mut hwnd,
-                } as *mut _ as LPARAM,
-            );
-        }
-        if hwnd.is_null() {
-            return Err("未找到可聚焦的 SynthV 窗口。".to_string());
-        }
-        unsafe {
-            ShowWindow(hwnd, SW_RESTORE);
-            if SetForegroundWindow(hwnd) == 0 {
-                return Err("Windows 拒绝聚焦 SynthV 窗口。".to_string());
-            }
-        }
+        focus(process_id)?;
         let mut input = match action {
             BridgeShortcutAction::Start | BridgeShortcutAction::StartLegacy => vec![
                 keyboard_input(0x7C, 0),
@@ -369,6 +475,51 @@ mod platform {
         } else {
             Err(format!("无法向 SynthV 发送 {}。", action.label()))
         }
+    }
+
+    pub(super) fn focus(process_id: u32) -> Result<(), String> {
+        let mut hwnd: HWND = null_mut();
+        unsafe {
+            EnumWindows(
+                Some(find_visible_window),
+                &mut WindowLookup {
+                    process_id,
+                    hwnd: &mut hwnd,
+                } as *mut _ as LPARAM,
+            );
+        }
+        if hwnd.is_null() {
+            return Err("未找到可聚焦的 SynthV 窗口。".to_string());
+        }
+        unsafe {
+            ShowWindow(hwnd, SW_RESTORE);
+            if SetForegroundWindow(hwnd) == 0 {
+                return Err("Windows 拒绝聚焦 SynthV 窗口。".to_string());
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn terminate(process_id: u32) -> Result<(), String> {
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, TerminateProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+        };
+
+        let handle = unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
+                0,
+                process_id,
+            )
+        };
+        if handle.is_null() {
+            return Err(format!("无法打开 PID {process_id} 对应的 SynthV 实例。"));
+        }
+        let terminated = unsafe { TerminateProcess(handle, 0) } != 0;
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
+        terminated
+            .then_some(())
+            .ok_or_else(|| format!("无法终止 PID {process_id} 对应的 SynthV 实例。"))
     }
 
     struct WindowLookup {
@@ -414,6 +565,72 @@ mod platform {
             windows_sys::Win32::Foundation::CloseHandle(handle);
         }
         ok.then(|| String::from_utf16_lossy(&buffer[..length as usize]))
+    }
+
+    fn process_identity(process_id: u32) -> Option<String> {
+        use windows_sys::Win32::Foundation::FILETIME;
+        use windows_sys::Win32::System::Threading::{
+            GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
+        if handle.is_null() {
+            return None;
+        }
+        let mut created: FILETIME = unsafe { zeroed() };
+        let mut exited: FILETIME = unsafe { zeroed() };
+        let mut kernel: FILETIME = unsafe { zeroed() };
+        let mut user: FILETIME = unsafe { zeroed() };
+        let ok =
+            unsafe { GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) }
+                != 0;
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
+        ok.then(|| {
+            let created =
+                (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
+            format!("windows:{process_id}:{created}")
+        })
+    }
+
+    fn file_version(path: &str) -> Option<String> {
+        use std::ffi::c_void;
+        use std::os::windows::ffi::OsStrExt;
+        use std::ptr::{null_mut, NonNull};
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW, VS_FIXEDFILEINFO,
+        };
+
+        let path = std::ffi::OsStr::new(path)
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<_>>();
+        let size = unsafe { GetFileVersionInfoSizeW(path.as_ptr(), null_mut()) };
+        if size == 0 {
+            return None;
+        }
+        let mut data = vec![0_u8; size as usize];
+        if unsafe { GetFileVersionInfoW(path.as_ptr(), 0, size, data.as_mut_ptr().cast()) } == 0 {
+            return None;
+        }
+        let mut value: *mut c_void = null_mut();
+        let mut length = 0_u32;
+        let root = ['\\' as u16, 0];
+        if unsafe { VerQueryValueW(data.as_ptr().cast(), root.as_ptr(), &mut value, &mut length) }
+            == 0
+            || length < std::mem::size_of::<VS_FIXEDFILEINFO>() as u32
+        {
+            return None;
+        }
+        let fixed = NonNull::new(value.cast::<VS_FIXEDFILEINFO>())?;
+        let fixed = unsafe { fixed.as_ref() };
+        (fixed.dwSignature == 0xFEEF_04BD).then(|| {
+            format!(
+                "{}.{}.{}",
+                fixed.dwFileVersionMS >> 16,
+                fixed.dwFileVersionMS & 0xffff,
+                fixed.dwFileVersionLS >> 16
+            )
+        })
     }
 
     fn sandboxed(process_id: u32) -> Option<bool> {
@@ -537,6 +754,14 @@ mod platform {
         _action: BridgeShortcutAction,
     ) -> Result<(), String> {
         Err("当前平台尚未实现 SynthV 进程快捷键控制。".to_string())
+    }
+
+    pub(super) fn focus(_process_id: u32) -> Result<(), String> {
+        Err("当前平台尚未实现 SynthV 实例聚焦。".to_string())
+    }
+
+    pub(super) fn terminate(_process_id: u32) -> Result<(), String> {
+        Err("当前平台尚未实现 SynthV 实例终止。".to_string())
     }
 }
 
