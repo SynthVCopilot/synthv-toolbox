@@ -76,8 +76,21 @@ impl Fixture {
     }
 
     fn replace(&self, credentials: &SessionCredentials) -> Vec<u8> {
+        let path = self.path.join("license/session");
+        let before = fs::metadata(&path).unwrap();
         let encrypted = encrypt_session(credentials.buffer.as_bytes(), &self.key).unwrap();
-        fs::write(self.path.join("license/session"), &*encrypted).unwrap();
+        assert_eq!(encrypted.len() as u64, before.len());
+        fs::write(&path, &*encrypted).unwrap();
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(before.modified().unwrap()))
+            .unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().last_write_time(),
+            before.last_write_time()
+        );
         encrypted.to_vec()
     }
 }

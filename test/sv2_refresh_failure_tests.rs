@@ -46,6 +46,7 @@ fn current_refresh_failure_is_visible_without_replacing_existing_quarantine() {
         canonical_root: fixture.clone(),
         session_len: 12,
         last_write_time: 7,
+        content_hash: [0; 32],
     };
     let credentials = fixture_credentials();
     let old = Sv2AccountProbeView::sync_failed("previous rotation state");

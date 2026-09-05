@@ -105,6 +105,7 @@ fn batch_session(
             canonical_root: PathBuf::from(format!("synthetic-{request_index}")),
             session_len: 8,
             last_write_time: request_index as u64,
+            content_hash: [0; 32],
         },
         root_key: ProbeRootKey::AccountEnvironment {
             slot_id: slot_id.clone(),
@@ -466,11 +467,13 @@ fn sync_quarantine_overrides_changed_fingerprints_until_repaired() {
         canonical_root: PathBuf::from(format!("synthetic-canonical-{unique}")),
         session_len: 8,
         last_write_time: 10,
+        content_hash: [0; 32],
     };
     let moved_fingerprint = SessionCacheKey {
         canonical_root: PathBuf::from(format!("synthetic-parked-{unique}")),
         session_len: 16,
         last_write_time: 20,
+        content_hash: [0; 32],
     };
     let ready = Sv2AccountProbeView::not_checked(true);
     cache_put(moved_fingerprint.clone(), &root_key, &ready, None);
@@ -918,6 +921,7 @@ fn shared_slot_alias_receives_authority_result_without_quarantine() {
         canonical_root: root,
         session_len: 8,
         last_write_time: 1,
+        content_hash: [0; 32],
     };
     let authority = Sv2AccountProbeView::new(
         Sv2SessionInspectionStatus::Ready,
@@ -1329,6 +1333,7 @@ fn active_license_cache_requires_matching_fingerprint_and_unexpired_access() {
         canonical_root: PathBuf::from("C:/synthetic/slot-cache"),
         session_len: 8,
         last_write_time: 1,
+        content_hash: [0; 32],
     };
     let view = Sv2AccountProbeView::new(
         Sv2SessionInspectionStatus::InUse,
@@ -1351,6 +1356,11 @@ fn active_license_cache_requires_matching_fingerprint_and_unexpired_access() {
         Some(Utc::now() + ChronoDuration::minutes(1)),
     );
     assert!(cache_get(&fingerprint, &root).is_some());
+    let changed_content = SessionCacheKey {
+        content_hash: [1; 32],
+        ..fingerprint.clone()
+    };
+    assert!(cache_get(&changed_content, &root).is_none());
     let changed = SessionCacheKey {
         last_write_time: 2,
         ..fingerprint

@@ -1506,6 +1506,7 @@ struct SessionCacheKey {
     canonical_root: PathBuf,
     session_len: u64,
     last_write_time: u64,
+    content_hash: [u8; 32],
 }
 
 #[cfg(windows)]
@@ -1553,6 +1554,7 @@ struct ProbeCacheKey {
     root: ProbeRootKey,
     session_len: u64,
     last_write_time: u64,
+    content_hash: [u8; 32],
 }
 
 #[cfg(windows)]
@@ -1562,6 +1564,7 @@ impl ProbeCacheKey {
             root: root.clone(),
             session_len: fingerprint.session_len,
             last_write_time: fingerprint.last_write_time,
+            content_hash: fingerprint.content_hash,
         }
     }
 }
@@ -1586,6 +1589,7 @@ impl PartialEq for SessionCacheKey {
         self.canonical_root == other.canonical_root
             && self.session_len == other.session_len
             && self.last_write_time == other.last_write_time
+            && self.content_hash == other.content_hash
     }
 }
 
@@ -1595,6 +1599,7 @@ impl Hash for SessionCacheKey {
         self.canonical_root.hash(state);
         self.session_len.hash(state);
         self.last_write_time.hash(state);
+        self.content_hash.hash(state);
     }
 }
 
@@ -3244,23 +3249,7 @@ fn validate_session_hierarchy(data_root: &Path) -> Result<Option<(PathBuf, Metad
 
 #[cfg(windows)]
 fn inspect_session_fingerprint(data_root: &Path) -> Result<Option<SessionCacheKey>, ()> {
-    for _ in 0..2 {
-        let Some((_, before)) = validate_session_hierarchy(data_root)? else {
-            return Ok(None);
-        };
-        let canonical_root = fs::canonicalize(data_root).map_err(|_| ())?;
-        let Some((_, after)) = validate_session_hierarchy(data_root)? else {
-            continue;
-        };
-        if signature(&before) == signature(&after) {
-            return Ok(Some(SessionCacheKey {
-                canonical_root,
-                session_len: after.len(),
-                last_write_time: after.last_write_time(),
-            }));
-        }
-    }
-    Err(())
+    read_stable_session(data_root).map(|snapshot| snapshot.map(|(_, fingerprint)| fingerprint))
 }
 
 #[cfg(windows)]
@@ -3364,12 +3353,14 @@ fn read_stable_session_once(
     if identity_before != identity_after {
         return StableRead::Changed;
     }
+    let content_hash = Sha256::digest(&*bytes).into();
     StableRead::Ready(
         bytes,
         SessionCacheKey {
             canonical_root,
             session_len: handle_after.len(),
             last_write_time: handle_after.last_write_time(),
+            content_hash,
         },
     )
 }
@@ -3434,12 +3425,16 @@ fn persist_refreshed_session(
         }
         Ok(())
     })();
-    drop(encrypted);
     if write_result.is_err() {
         let _ = fs::remove_file(&temporary);
         return Err(());
     }
-    inspect_session_fingerprint(data_root)?.ok_or(())
+    let persisted = inspect_session_fingerprint(data_root)?.ok_or(())?;
+    let expected_hash: [u8; 32] = Sha256::digest(&*encrypted).into();
+    if persisted.content_hash != expected_hash {
+        return Err(());
+    }
+    Ok(persisted)
 }
 
 #[cfg(test)]
