@@ -128,7 +128,6 @@ export interface Sv2ConcurrentContent {
 
 export interface Sv2ConcurrentSlot {
   ready: boolean;
-  boxName: string;
   dataPath: string;
   runningPids: number[];
   detail: string;
@@ -464,6 +463,9 @@ export interface SynthVProcess {
   processId: number;
   name: string;
   command: string;
+  windowTitle?: string;
+  isSv2: boolean;
+  sandboxed: boolean | null;
 }
 
 export interface SynthVShortcutProfile {

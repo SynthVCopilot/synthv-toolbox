@@ -57,8 +57,13 @@ pub fn categories() -> Vec<Sv2SyncCategory> {
         Sv2SyncCategory {
             id: Sv2SyncCategoryId::SafeSettings,
             label: "安全设置",
-            description: "仅同步明确允许的非账号设置子目录。",
-            relative_roots: &["settings/shortcuts", "settings/theme", "settings/ui"],
+            description: "同步 SV2 设置文件和明确允许的界面设置；不包含登录态或声库。",
+            relative_roots: &[
+                "settings/settings.xml",
+                "settings/shortcuts",
+                "settings/theme",
+                "settings/ui",
+            ],
         },
     ]
 }
@@ -105,6 +110,35 @@ pub struct Sv2SyncResult {
     pub conflicts: u32,
 }
 
+pub fn sync_defaults(source_root: &Path, target_root: &Path) -> Result<Sv2SyncResult, String> {
+    validate_root(source_root, true)?;
+    if source_root == target_root
+        || (target_root.exists()
+            && fs::canonicalize(source_root).ok() == fs::canonicalize(target_root).ok())
+    {
+        return Ok(Sv2SyncResult {
+            copied: 0,
+            updated: 0,
+            skipped: 0,
+            conflicts: 0,
+        });
+    }
+    let selected = [
+        Sv2SyncCategoryId::SafeSettings,
+        Sv2SyncCategoryId::Scripts,
+        Sv2SyncCategoryId::UserDictionaries,
+        Sv2SyncCategoryId::Presets,
+    ];
+    let manifest = dry_run(source_root, target_root, &selected, true)?;
+    execute(
+        source_root,
+        target_root,
+        &selected,
+        &manifest,
+        &manifest.token,
+    )
+}
+
 pub fn dry_run(
     source_root: &Path,
     target_root: &Path,
@@ -126,11 +160,11 @@ pub fn dry_run(
     {
         for relative_root in category.relative_roots {
             let relative_root = safe_relative(Path::new(relative_root))?;
-            let source = source_root.join(&relative_root);
+            let source = checked_join(source_root, &relative_root)?;
             if !source.exists() {
                 continue;
             }
-            walk_files(&source, &relative_root, &mut |path, relative| {
+            let mut visit = |path: &Path, relative: &Path| {
                 let source_info = file_info(path)?;
                 let target = checked_join(target_root, relative)?;
                 let target_info = if target.exists() {
@@ -154,7 +188,12 @@ pub fn dry_run(
                     target_sha256: target_info.map(|info| info.1),
                 });
                 Ok(())
-            })?;
+            };
+            if source.is_file() {
+                visit(&source, &relative_root)?;
+            } else {
+                walk_files(&source, &relative_root, &mut visit)?;
+            }
         }
     }
     entries.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
@@ -484,120 +523,5 @@ fn hex_digest(bytes: impl AsRef<[u8]>) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn roots() -> (PathBuf, PathBuf, PathBuf) {
-        let base = std::env::temp_dir().join(format!("sv2-sync-test-{}", Uuid::new_v4()));
-        let source = base.join("source");
-        let target = base.join("target");
-        fs::create_dir_all(source.join("dicts")).unwrap();
-        fs::create_dir_all(&target).unwrap();
-        (base, source, target)
-    }
-
-    #[test]
-    fn preview_and_execute_copy_only_allowlisted_content() {
-        let (base, source, target) = roots();
-        fs::write(source.join("dicts/user.json"), b"hello").unwrap();
-        fs::create_dir_all(source.join("license")).unwrap();
-        fs::write(source.join("license/token"), b"secret").unwrap();
-        let selected = [Sv2SyncCategoryId::UserDictionaries];
-        let preview = dry_run(&source, &target, &selected, false).unwrap();
-        assert_eq!(preview.entries.len(), 1);
-        assert_eq!(preview.entries[0].action, Sv2SyncAction::Copy);
-        let result = execute(&source, &target, &selected, &preview, &preview.token).unwrap();
-        assert_eq!(result.copied, 1);
-        assert!(!target.join("license/token").exists());
-        fs::remove_dir_all(base).unwrap();
-    }
-
-    #[test]
-    fn differing_target_is_conflict_unless_overwrite_was_previewed() {
-        let (base, source, target) = roots();
-        fs::write(source.join("dicts/a"), b"new").unwrap();
-        fs::create_dir_all(target.join("dicts")).unwrap();
-        fs::write(target.join("dicts/a"), b"old").unwrap();
-        let selected = [Sv2SyncCategoryId::UserDictionaries];
-        assert_eq!(
-            dry_run(&source, &target, &selected, false).unwrap().entries[0].action,
-            Sv2SyncAction::Conflict
-        );
-        assert_eq!(
-            dry_run(&source, &target, &selected, true).unwrap().entries[0].action,
-            Sv2SyncAction::Update
-        );
-        fs::remove_dir_all(base).unwrap();
-    }
-
-    #[test]
-    fn stale_or_tampered_manifest_is_rejected() {
-        let (base, source, target) = roots();
-        fs::write(source.join("dicts/a"), b"one").unwrap();
-        let selected = [Sv2SyncCategoryId::UserDictionaries];
-        let preview = dry_run(&source, &target, &selected, false).unwrap();
-        fs::write(source.join("dicts/a"), b"two").unwrap();
-        assert!(execute(&source, &target, &selected, &preview, &preview.token).is_err());
-        assert!(execute(&source, &target, &selected, &preview, "bad").is_err());
-        fs::remove_dir_all(base).unwrap();
-    }
-
-    #[test]
-    fn manifest_is_bound_to_the_previewed_slot_pair() {
-        let (base, source, target) = roots();
-        let alternate_target = base.join("alternate-target");
-        fs::create_dir_all(&alternate_target).unwrap();
-        fs::write(source.join("dicts/a"), b"one").unwrap();
-        let selected = [Sv2SyncCategoryId::UserDictionaries];
-        let preview = dry_run(&source, &target, &selected, false).unwrap();
-        assert!(execute(
-            &source,
-            &alternate_target,
-            &selected,
-            &preview,
-            &preview.token
-        )
-        .is_err());
-        fs::remove_dir_all(base).unwrap();
-    }
-
-    #[test]
-    fn traversal_and_protected_names_are_rejected() {
-        assert!(safe_relative(Path::new("../license")).is_err());
-        assert!(safe_relative(Path::new("settings/session/cache")).is_err());
-        assert!(safe_relative(Path::new("dicts/good.json")).is_ok());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn symlink_in_category_is_rejected() {
-        use std::os::unix::fs::symlink;
-        let (base, source, target) = roots();
-        symlink(&target, source.join("dicts/link")).unwrap();
-        assert!(dry_run(
-            &source,
-            &target,
-            &[Sv2SyncCategoryId::UserDictionaries],
-            false
-        )
-        .is_err());
-        fs::remove_dir_all(base).unwrap();
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn directory_junction_in_category_is_rejected() {
-        use std::os::windows::fs::symlink_dir;
-        let (base, source, target) = roots();
-        if symlink_dir(&target, source.join("dicts/link")).is_ok() {
-            assert!(dry_run(
-                &source,
-                &target,
-                &[Sv2SyncCategoryId::UserDictionaries],
-                false
-            )
-            .is_err());
-        }
-        fs::remove_dir_all(base).unwrap();
-    }
-}
+#[path = "../../../../test/sv2_sync_tests.rs"]
+mod tests;

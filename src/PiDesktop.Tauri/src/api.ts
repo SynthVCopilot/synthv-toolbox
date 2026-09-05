@@ -70,6 +70,12 @@ let previewHttpApiStatus: HttpApiStatus = {
   lastError: null,
 };
 let previewBridgeConnected = true;
+let previewSynthvPid = 4203;
+let previewSynthvProcesses: SynthVProcess[] = [
+  { processId: 4201, name: "Synthesizer V Studio 2 Pro", command: "/Applications/Synthesizer V Studio 2 Pro.app/Contents/MacOS/synthv-studio", windowTitle: "Project A.svp - Synthesizer V Studio 2 Pro", isSv2: true, sandboxed: false },
+  { processId: 4202, name: "Synthesizer V Studio 2 Pro", command: "C:\\Sandbox\\Synthesizer V Studio 2 Pro.exe", windowTitle: "Project B.svp - Synthesizer V Studio 2 Pro", isSv2: true, sandboxed: true },
+  { processId: 4203, name: "Synthesizer V Flat", command: "C:\\Apps\\Synthesizer V Flat.exe", windowTitle: "Synthesizer V Flat", isSv2: false, sandboxed: null },
+];
 let previewDownloads: ComponentDownload[] = [];
 let previewMediaTasks: MediaTaskSnapshot[] = [];
 let previewLyricProjects: LyricProject[] = [];
@@ -258,7 +264,7 @@ let previewProfiles: Sv2ProfilesState = {
     lastActivatedAtUtc: new Date().toISOString(),
     isActive: true,
     sessionCached: true,
-    dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2",
+    dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\slots\\11111111-1111-4111-8111-111111111111",
     sessionProtection: {
       status: "monitoring",
       snapshotAvailable: true,
@@ -285,15 +291,14 @@ let previewProfiles: Sv2ProfilesState = {
     },
     concurrent: {
       ready: true,
-      boxName: "SV2TB111111111111411181111111",
-      dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\concurrent\\11111111-1111-4111-8111-111111111111\\box\\user\\current\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2",
-      runningPids: [],
-      detail: "隔离副本已准备；本地变化不会自动覆盖普通槽位。",
+      dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\slots\\11111111-1111-4111-8111-111111111111",
+      runningPids: [4202],
+      detail: "隔离环境已准备；同账号实例共用此槽位数据。",
       content: {
         appSettings: "global",
-        voiceLibraries: "off",
-        effectiveAppSettings: true,
-        effectiveVoiceLibraries: false,
+        voiceLibraries: "on",
+        effectiveAppSettings: false,
+        effectiveVoiceLibraries: true,
       },
     },
   }, {
@@ -342,15 +347,14 @@ let previewProfiles: Sv2ProfilesState = {
     },
     concurrent: {
       ready: true,
-      boxName: "SV2TB222222222222422282222222",
-      dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\concurrent\\22222222-2222-4222-8222-222222222222\\box\\user\\current\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2",
+      dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\slots\\22222222-2222-4222-8222-222222222222",
       runningPids: [],
-      detail: "隔离副本已准备；本地变化不会自动覆盖普通槽位。",
+      detail: "隔离环境已准备；同账号实例共用此槽位数据。",
       content: {
         appSettings: "on",
-        voiceLibraries: "global",
-        effectiveAppSettings: true,
-        effectiveVoiceLibraries: false,
+        voiceLibraries: "on",
+        effectiveAppSettings: false,
+        effectiveVoiceLibraries: true,
       },
     },
   }],
@@ -590,7 +594,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     previewBridgeConnected = true;
     return { succeeded: true, summary: "SynthV Bridge 已连接。", detail: "预览模式" } as T;
   }
-  if (command === "list_synthv_processes") return [{ processId: 4201, name: "Synthesizer V Studio 2 Pro", command: "/Applications/Synthesizer V Studio 2 Pro.app/Contents/MacOS/synthv-studio" }] as T;
+  if (command === "list_synthv_processes") return previewSynthvProcesses as T;
   if (command === "preview_media_source") return { sourceUrl: String(args?.source ?? ""), canonicalUrl: String(args?.source ?? ""), platform: "BiliBili", mediaId: "BV1Preview", title: "预览媒体", uploader: "预览作者", durationSeconds: 183.2, thumbnailUrl: null } as T;
   if (command === "synthv_shortcut_profile") return { bridgeStart: "F13", bridgeStop: "F14", projectSave: "⌘S", detail: "F13 触发 Bridge 启动或重连，F14 触发停止；Cover 保存使用标准快捷键。" } as T;
   if (command === "send_synthv_bridge_shortcut") return { succeeded: true, summary: `已向预览 SynthV 进程发送 ${String(args?.action === "stop" ? "F14" : "F13")}。`, detail: "预览模式" } as T;
@@ -693,15 +697,14 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       },
       concurrent: {
         ready: false,
-        boxName: `SV2TB${id.replaceAll("-", "").slice(0, 24)}`,
         dataPath: `${previewProfiles.vaultPath}\\concurrent\\${id}\\box\\user\\current\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2`,
         runningPids: [],
         detail: "尚未准备隔离副本。",
         content: {
           appSettings: "global",
-          voiceLibraries: "global",
-          effectiveAppSettings: previewProfiles.concurrentDefaults.appSettings,
-          effectiveVoiceLibraries: previewProfiles.concurrentDefaults.voiceLibraries,
+          voiceLibraries: "on",
+          effectiveAppSettings: false,
+          effectiveVoiceLibraries: true,
         },
       },
     });
@@ -753,12 +756,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       voiceLibraries: Boolean(args?.voiceLibraries),
     };
     previewProfiles.slots.forEach((slot) => {
-      slot.concurrent.content.effectiveAppSettings = slot.concurrent.content.appSettings === "global"
-        ? previewProfiles.concurrentDefaults.appSettings
-        : slot.concurrent.content.appSettings === "on";
-      slot.concurrent.content.effectiveVoiceLibraries = slot.concurrent.content.voiceLibraries === "global"
-        ? previewProfiles.concurrentDefaults.voiceLibraries
-        : slot.concurrent.content.voiceLibraries === "on";
+      slot.concurrent.content.effectiveAppSettings = false;
+      slot.concurrent.content.effectiveVoiceLibraries = true;
     });
     return previewProfiles as T;
   }
@@ -767,12 +766,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     if (slot) {
       slot.concurrent.content.appSettings = args?.appSettings as Sv2IsolationPreference;
       slot.concurrent.content.voiceLibraries = args?.voiceLibraries as Sv2IsolationPreference;
-      slot.concurrent.content.effectiveAppSettings = slot.concurrent.content.appSettings === "global"
-        ? previewProfiles.concurrentDefaults.appSettings
-        : slot.concurrent.content.appSettings === "on";
-      slot.concurrent.content.effectiveVoiceLibraries = slot.concurrent.content.voiceLibraries === "global"
-        ? previewProfiles.concurrentDefaults.voiceLibraries
-        : slot.concurrent.content.voiceLibraries === "on";
+      slot.concurrent.content.effectiveAppSettings = false;
+      slot.concurrent.content.effectiveVoiceLibraries = true;
     }
     return previewProfiles as T;
   }
@@ -784,6 +779,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "launch_sv2_profile" || command === "force_launch_sv2_profile") {
     previewProfiles.activeSlotId = String(args?.slotId ?? "");
     previewProfiles.slots.forEach((slot) => { slot.isActive = slot.id === previewProfiles.activeSlotId; });
+    previewSynthvProcesses.push({ processId: ++previewSynthvPid, name: "Synthesizer V Studio 2 Pro", command: "C:\\Program Files\\Dreamtonics\\Synthesizer V Studio 2 Pro.exe", windowTitle: "Synthesizer V Studio 2 Pro", isSv2: true, sandboxed: false });
     if (command === "force_launch_sv2_profile") previewProfiles.blockers = [];
     return {
       succeeded: true,
@@ -791,11 +787,21 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       detail: "预览模式",
     } as T;
   }
+  if (command === "launch_sv2_concurrent_profile") {
+    const slot = previewProfiles.slots.find((item) => item.id === args?.slotId);
+    if (slot) {
+      slot.concurrent.ready = true;
+      const processId = ++previewSynthvPid;
+      slot.concurrent.runningPids = [...slot.concurrent.runningPids, processId];
+      previewSynthvProcesses.push({ processId, name: "Synthesizer V Studio 2 Pro", command: "C:\\Sandbox\\Synthesizer V Studio 2 Pro.exe", windowTitle: `Synthesizer V Studio 2 Pro · ${slot.displayName}`, isSv2: true, sandboxed: true });
+    }
+    return { succeeded: true, summary: "已启动隔离 SV2 实例。", detail: "预览模式" } as T;
+  }
   if (command === "prepare_sv2_concurrent_profile") {
     const slot = previewProfiles.slots.find((item) => item.id === args?.slotId);
     if (slot) {
       slot.concurrent.ready = true;
-      slot.concurrent.detail = "隔离副本已准备；本地变化不会自动覆盖普通槽位。";
+      slot.concurrent.detail = "账号目录已就绪；普通与并发实例共用槽位数据。";
     }
     return previewProfiles as T;
   }
