@@ -282,9 +282,9 @@ let previewProfiles: Sv2ProfilesState = {
     concurrent: {
       ready: true,
       boxName: "SV2TB111111111111411181111111",
-      dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\concurrent\\11111111-1111-4111-8111-111111111111\\box\\user\\current\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2",
+      dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2",
       runningPids: [],
-      detail: "隔离副本已准备；本地变化不会自动覆盖普通槽位。",
+      detail: "隔离环境已准备；同账号实例共用此槽位数据。",
       content: {
         appSettings: "global",
         voiceLibraries: "off",
@@ -341,7 +341,7 @@ let previewProfiles: Sv2ProfilesState = {
       boxName: "SV2TB222222222222422282222222",
       dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\slots\\22222222-2222-4222-8222-222222222222",
       runningPids: [],
-      detail: "隔离副本已准备；本地变化不会自动覆盖普通槽位。",
+      detail: "隔离环境已准备；同账号实例共用此槽位数据。",
       content: {
         appSettings: "on",
         voiceLibraries: "global",
