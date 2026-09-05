@@ -407,6 +407,68 @@ fn cached_active_session_view(
     view
 }
 
+#[cfg(windows)]
+fn inspect_active_session_license(
+    data_root: &Path,
+    logical_identity: Option<(&str, bool)>,
+) -> Sv2AccountProbeView {
+    let root = probe_root_key_for_identity(data_root, logical_identity);
+    if let Some(view) = root
+        .as_ref()
+        .and_then(|root| sync_quarantine_get(&root.quarantine_key()))
+    {
+        return view;
+    }
+    let Some((ciphertext, fingerprint)) = (match read_stable_session(data_root) {
+        Ok(value) => value,
+        Err(()) => return Sv2AccountProbeView::invalid(),
+    }) else {
+        return Sv2AccountProbeView::not_checked(false);
+    };
+    let key = match read_machine_key() {
+        Ok(key) => key,
+        Err(()) => return Sv2AccountProbeView::unsupported(),
+    };
+    let credentials = match decrypt_session(ciphertext, &key).and_then(parse_session_plaintext) {
+        Ok(credentials) => credentials,
+        Err(()) => return Sv2AccountProbeView::invalid(),
+    };
+    if credentials.access_expires_at <= Utc::now() {
+        return Sv2AccountProbeView::new(
+            Sv2SessionInspectionStatus::Expired,
+            Sv2RemoteUseStatus::Unknown,
+            Sv2AuthorizationStatus::Unknown,
+            Vec::new(),
+            "账号环境正在本机使用，访问令牌已过期；未刷新或修改会话。",
+        );
+    }
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(3))
+        .timeout_read(Duration::from_secs(5))
+        .timeout_write(Duration::from_secs(5))
+        .redirects(0)
+        .build();
+    let licenses = query_license_snapshot_with_agent(&agent, credentials.access_token());
+    if inspect_session_fingerprint(data_root)
+        .ok()
+        .flatten()
+        .as_ref()
+        != Some(&fingerprint)
+    {
+        return Sv2AccountProbeView::in_use();
+    }
+    let view = view_from_active_license(licenses).with_account_identity(credentials.access_token());
+    if let Some(root) = root.as_ref() {
+        cache_put(
+            fingerprint,
+            root,
+            &view,
+            Some(credentials.access_expires_at),
+        );
+    }
+    view
+}
+
 #[derive(Clone)]
 enum RemoteOutcome {
     Authorized(Vec<String>),
@@ -490,6 +552,20 @@ fn view_from_remote(licenses: RemoteOutcome, enroll: EnrollOutcome) -> Sv2Accoun
         voices,
         detail,
     )
+}
+
+fn view_from_active_license(licenses: RemoteOutcome) -> Sv2AccountProbeView {
+    let view = view_from_remote(licenses, EnrollOutcome::Unknown);
+    if view.session_status == Sv2SessionInspectionStatus::Invalid {
+        return view;
+    }
+    let mut active = Sv2AccountProbeView::in_use_with_cached_authorization(Some(&view));
+    if active.authorization_status == Sv2AuthorizationStatus::Verified {
+        active.detail = "账号环境正在本机使用；已只读读取当前会话的声库授权。".to_string();
+    } else if view.session_status == Sv2SessionInspectionStatus::Offline {
+        active.detail = "账号环境正在本机使用；授权服务暂时不可达。".to_string();
+    }
+    active
 }
 
 struct SessionCredentials {
@@ -1983,7 +2059,7 @@ fn apply_equivalent_session_aliases(
 fn refresh_windows_batch(requests: &[Sv2AccountProbeRequest<'_>]) -> Vec<Sv2AccountProbeView> {
     let mut results = vec![None; requests.len()];
     let mut equivalent_session_aliases = (0..requests.len()).map(|_| None).collect::<Vec<_>>();
-    let mut pending = Vec::new();
+    let mut pending = Vec::<PendingBatchSession>::new();
     let blocked_account_scopes = requests
         .iter()
         .filter(|request| request.source_in_use)
@@ -2000,7 +2076,7 @@ fn refresh_windows_batch(requests: &[Sv2AccountProbeRequest<'_>]) -> Vec<Sv2Acco
                 .account_scope
                 .is_some_and(|scope| blocked_account_scopes.contains(&scope))
         {
-            results[request_index] = Some(cached_active_session_view(
+            results[request_index] = Some(inspect_active_session_license(
                 request.data_root,
                 request.quarantine_identity(),
             ));
