@@ -50,6 +50,15 @@ pub enum AiAuthMethod {
     ApiKey,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AiLoadStrategy {
+    #[default]
+    RoundRobin,
+    WeightedRoundRobin,
+    Failover,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerConfig {
@@ -103,6 +112,22 @@ pub struct ToolboxSettings {
     pub openai_api_keys: Vec<ApiKeyMetadata>,
     #[serde(default)]
     pub oauth_accounts: Vec<OAuthAccountMetadata>,
+    #[serde(default = "default_true")]
+    pub anthropic_oauth_enabled: bool,
+    #[serde(default = "default_true")]
+    pub openai_codex_oauth_enabled: bool,
+    #[serde(default = "default_true")]
+    pub workbuddy_oauth_enabled: bool,
+    #[serde(default = "default_true")]
+    pub traecode_oauth_enabled: bool,
+    #[serde(default)]
+    pub anthropic_load_strategy: AiLoadStrategy,
+    #[serde(default)]
+    pub openai_codex_load_strategy: AiLoadStrategy,
+    #[serde(default)]
+    pub workbuddy_load_strategy: AiLoadStrategy,
+    #[serde(default)]
+    pub traecode_load_strategy: AiLoadStrategy,
     #[serde(default)]
     pub http_api_enabled: bool,
     #[serde(default)]
@@ -119,6 +144,10 @@ pub struct ApiKeyMetadata {
     pub label: String,
     pub models: Vec<String>,
     pub created_at_utc: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_weight")]
+    pub weight: u8,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -129,6 +158,8 @@ pub struct OAuthAccountSummary {
     pub expires_at: i64,
     pub authorized: bool,
     pub healthy: bool,
+    pub enabled: bool,
+    pub weight: u8,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -148,6 +179,8 @@ pub struct AiProviderSummary {
     pub accounts: Vec<OAuthAccountSummary>,
     pub api_keys: Vec<AiApiKeySummary>,
     pub auth_methods: Vec<AiAuthMethod>,
+    pub oauth_enabled: bool,
+    pub load_strategy: AiLoadStrategy,
     pub available: bool,
     pub unavailable_reason: Option<String>,
 }
@@ -161,6 +194,8 @@ pub struct AiApiKeySummary {
     pub healthy: bool,
     pub cooldown_until_utc: Option<String>,
     pub created_at_utc: String,
+    pub enabled: bool,
+    pub weight: u8,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -196,6 +231,14 @@ impl Default for ToolboxSettings {
             anthropic_api_keys: Vec::new(),
             openai_api_keys: Vec::new(),
             oauth_accounts: Vec::new(),
+            anthropic_oauth_enabled: true,
+            openai_codex_oauth_enabled: true,
+            workbuddy_oauth_enabled: true,
+            traecode_oauth_enabled: true,
+            anthropic_load_strategy: AiLoadStrategy::RoundRobin,
+            openai_codex_load_strategy: AiLoadStrategy::RoundRobin,
+            workbuddy_load_strategy: AiLoadStrategy::RoundRobin,
+            traecode_load_strategy: AiLoadStrategy::RoundRobin,
             http_api_enabled: false,
             http_agent_enabled: false,
             http_api_port: DEFAULT_HTTP_API_PORT,
@@ -205,6 +248,10 @@ impl Default for ToolboxSettings {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_weight() -> u8 {
+    1
 }
 
 fn schema_version() -> u32 {
@@ -282,26 +329,68 @@ impl ToolboxSettings {
         }
     }
 
+    pub fn oauth_enabled(&self, provider: AiProviderId) -> bool {
+        match provider {
+            AiProviderId::Anthropic => self.anthropic_oauth_enabled,
+            AiProviderId::OpenaiCodex => self.openai_codex_oauth_enabled,
+            AiProviderId::Workbuddy => self.workbuddy_oauth_enabled,
+            AiProviderId::Traecode => self.traecode_oauth_enabled,
+        }
+    }
+
+    pub fn set_oauth_enabled(&mut self, provider: AiProviderId, enabled: bool) {
+        match provider {
+            AiProviderId::Anthropic => self.anthropic_oauth_enabled = enabled,
+            AiProviderId::OpenaiCodex => self.openai_codex_oauth_enabled = enabled,
+            AiProviderId::Workbuddy => self.workbuddy_oauth_enabled = enabled,
+            AiProviderId::Traecode => self.traecode_oauth_enabled = enabled,
+        }
+    }
+
+    pub fn load_strategy(&self, provider: AiProviderId) -> AiLoadStrategy {
+        match provider {
+            AiProviderId::Anthropic => self.anthropic_load_strategy,
+            AiProviderId::OpenaiCodex => self.openai_codex_load_strategy,
+            AiProviderId::Workbuddy => self.workbuddy_load_strategy,
+            AiProviderId::Traecode => self.traecode_load_strategy,
+        }
+    }
+
+    pub fn set_load_strategy(&mut self, provider: AiProviderId, strategy: AiLoadStrategy) {
+        match provider {
+            AiProviderId::Anthropic => self.anthropic_load_strategy = strategy,
+            AiProviderId::OpenaiCodex => self.openai_codex_load_strategy = strategy,
+            AiProviderId::Workbuddy => self.workbuddy_load_strategy = strategy,
+            AiProviderId::Traecode => self.traecode_load_strategy = strategy,
+        }
+    }
+
     pub fn credential_routes(&self, catalog: &RuntimeModelCatalog) -> Vec<CredentialRoute> {
         let mut routes = self
             .oauth_accounts
             .iter()
+            .filter(|account| account.enabled && self.oauth_enabled(account.provider))
             .map(|account| CredentialRoute {
                 id: account.id.clone(),
                 provider: account.provider,
                 auth_method: AiAuthMethod::OAuth,
                 models: catalog.models_for(account.provider).to_vec(),
+                weight: account.weight,
+                strategy: self.load_strategy(account.provider),
             })
             .collect::<Vec<_>>();
         routes.extend(
             self.anthropic_api_keys
                 .iter()
                 .chain(self.openai_api_keys.iter())
+                .filter(|key| key.enabled)
                 .map(|key| CredentialRoute {
                     id: key.id.clone(),
                     provider: key.provider,
                     auth_method: AiAuthMethod::ApiKey,
                     models: key.models.clone(),
+                    weight: key.weight,
+                    strategy: self.load_strategy(key.provider),
                 }),
         );
         routes
@@ -617,6 +706,8 @@ pub fn model_summary(
                     healthy: health.healthy,
                     cooldown_until_utc: cooldown_until_utc(health.cooldown_until_ms),
                     created_at_utc: key.created_at_utc.clone(),
+                    enabled: key.enabled,
+                    weight: key.weight,
                 }
             })
             .collect::<Vec<_>>();
@@ -630,18 +721,8 @@ pub fn model_summary(
             && !account_metadata.is_empty())
         .then(|| oauth::discover_codex_models(&account_metadata).ok())
         .flatten();
-        let trae_status = (provider == AiProviderId::Traecode).then(|| {
-            TraeCodeProvider::new(TraeCodeConfig::new(provider.default_model()))
-                .cached_login_status()
-        });
-        let trae_available = trae_status
-            .as_ref()
-            .and_then(|status| status.as_ref().ok())
-            .is_some_and(|status| status.available);
-        let trae_connected = trae_status
-            .as_ref()
-            .and_then(|status| status.as_ref().ok())
-            .is_some_and(|status| status.logged_in);
+        let trae_available = false;
+        let trae_connected = false;
         if provider == AiProviderId::Traecode
             && trae_connected
             && !account_metadata
@@ -653,6 +734,8 @@ pub fn model_summary(
                 provider,
                 label: "TraeCode account".to_string(),
                 expires_at: 0,
+                enabled: true,
+                weight: 1,
             });
         }
         let accounts = account_metadata
@@ -679,6 +762,8 @@ pub fn model_summary(
                     healthy: authorized
                         && (matches!(provider, AiProviderId::Workbuddy | AiProviderId::Traecode)
                             || oauth::credential_healthy(account)),
+                    enabled: account.enabled,
+                    weight: account.weight,
                 }
             })
             .collect::<Vec<_>>();
@@ -701,11 +786,7 @@ pub fn model_summary(
             AiProviderId::Workbuddy | AiProviderId::Traecode => vec![AiAuthMethod::OAuth],
         };
         let available = provider != AiProviderId::Traecode || trae_available;
-        let unavailable_reason = trae_status.and_then(|status| match status {
-            Ok(status) if status.available => None,
-            Ok(status) => Some(status.detail),
-            Err(error) => Some(error.to_string()),
-        });
+        let unavailable_reason = (provider == AiProviderId::Traecode).then(|| "TraeCode 企业 CLI 的 per-app TRAE_HOME、认证状态和 JSONL 模型能力合同尚未验证。".to_string());
         AiProviderSummary {
             id: provider,
             display_name: provider.display_name().to_string(),
@@ -730,6 +811,8 @@ pub fn model_summary(
             accounts,
             api_keys,
             auth_methods,
+            oauth_enabled: settings.oauth_enabled(provider),
+            load_strategy: settings.load_strategy(provider),
             available,
             unavailable_reason,
         }
@@ -936,6 +1019,8 @@ mod tests {
             provider: AiProviderId::OpenaiCodex,
             label: "Test account".to_string(),
             expires_at: 0,
+            enabled: true,
+            weight: 1,
         });
         assert!(validate_ai_model(
             &settings,
@@ -1042,6 +1127,8 @@ mod tests {
             accounts: Vec::new(),
             api_keys: Vec::new(),
             auth_methods: vec![AiAuthMethod::OAuth, AiAuthMethod::ApiKey],
+            oauth_enabled: true,
+            load_strategy: AiLoadStrategy::RoundRobin,
             available: true,
             unavailable_reason: None,
         };
@@ -1062,6 +1149,8 @@ mod tests {
                 label: "A".to_string(),
                 models: vec!["claude-api-only".to_string()],
                 created_at_utc: "2026-01-01T00:00:00Z".to_string(),
+                enabled: true,
+                weight: 1,
             }],
             openai_api_keys: vec![ApiKeyMetadata {
                 id: "key-2".to_string(),
@@ -1069,6 +1158,8 @@ mod tests {
                 label: "B".to_string(),
                 models: vec!["gpt-api-only".to_string()],
                 created_at_utc: "2026-01-01T00:00:00Z".to_string(),
+                enabled: true,
+                weight: 1,
             }],
             ..ToolboxSettings::default()
         };

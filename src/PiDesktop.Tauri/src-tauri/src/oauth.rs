@@ -128,7 +128,14 @@ pub struct OAuthAccountMetadata {
     pub provider: AiProviderId,
     pub label: String,
     pub expires_at: i64,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_weight")]
+    pub weight: u8,
 }
+
+fn default_true() -> bool { true }
+fn default_weight() -> u8 { 1 }
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -373,6 +380,8 @@ pub fn authorize(provider: AiProviderId) -> Result<AuthorizedAccount, String> {
             AiProviderId::Traecode => "TraeCode account".to_string(),
         },
         expires_at: credential.expires_at,
+        enabled: true,
+        weight: 1,
     };
     Ok(AuthorizedAccount {
         metadata,

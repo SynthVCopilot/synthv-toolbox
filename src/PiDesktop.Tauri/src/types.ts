@@ -4,6 +4,7 @@ export interface AgentFileApproval { id: string; path: string; purpose: string; 
 
 export type AiProviderId = "anthropic" | "openai-codex" | "workbuddy" | "traecode";
 export type AiAuthMethod = "oauth" | "api-key";
+export type AiLoadStrategy = "round-robin" | "weighted-round-robin" | "failover";
 export type ModelCatalogSource = "models-dev" | "built-in-fallback";
 
 export interface AiApiKeySummary {
@@ -11,6 +12,8 @@ export interface AiApiKeySummary {
   label: string;
   models: string[];
   healthy: boolean;
+  enabled: boolean;
+  weight: number;
   cooldownUntilUtc: string | null;
   createdAtUtc: string;
 }
@@ -21,6 +24,8 @@ export interface AiProviderAccountSummary {
   expiresAt: number;
   authorized: boolean;
   healthy: boolean;
+  enabled: boolean;
+  weight: number;
 }
 
 export interface AiProviderSummary {
@@ -38,6 +43,8 @@ export interface AiProviderSummary {
   accounts: AiProviderAccountSummary[];
   apiKeys: AiApiKeySummary[];
   authMethods: AiAuthMethod[];
+  oauthEnabled: boolean;
+  loadStrategy: AiLoadStrategy;
   available: boolean;
   unavailableReason: string | null;
 }
