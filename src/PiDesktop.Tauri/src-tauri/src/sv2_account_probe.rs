@@ -387,12 +387,6 @@ fn cached_active_session_view(
     logical_identity: Option<(&str, bool)>,
 ) -> Sv2AccountProbeView {
     let root = probe_root_key_for_identity(data_root, logical_identity);
-    if let Some(view) = root
-        .as_ref()
-        .and_then(|root| sync_quarantine_get(&root.quarantine_key()))
-    {
-        return view;
-    }
     let cached = inspect_session_fingerprint(data_root)
         .ok()
         .flatten()
@@ -413,12 +407,6 @@ fn inspect_active_session_license(
     logical_identity: Option<(&str, bool)>,
 ) -> Sv2AccountProbeView {
     let root = probe_root_key_for_identity(data_root, logical_identity);
-    if let Some(view) = root
-        .as_ref()
-        .and_then(|root| sync_quarantine_get(&root.quarantine_key()))
-    {
-        return view;
-    }
     let Some((ciphertext, fingerprint)) = (match read_stable_session(data_root) {
         Ok(value) => value,
         Err(()) => return Sv2AccountProbeView::invalid(),
@@ -459,6 +447,9 @@ fn inspect_active_session_license(
     }
     let view = view_from_active_license(licenses).with_account_identity(credentials.access_token());
     if let Some(root) = root.as_ref() {
+        if view.authorization_status == Sv2AuthorizationStatus::Verified {
+            clear_sync_quarantine(&root.quarantine_key());
+        }
         cache_put(
             fingerprint,
             root,
@@ -1036,6 +1027,7 @@ struct TokenRefreshResponse<'a> {
 enum RefreshFailure {
     Expired,
     Unavailable(u16),
+    Rejected(u16),
     Ambiguous,
 }
 
@@ -1072,6 +1064,8 @@ fn refresh_failure_for_http_response(status: u16, body: &[u8]) -> RefreshFailure
     }
     if contains_json_string(body, b"invalid_grant") || contains_json_string(body, RELOGIN_ERROR) {
         RefreshFailure::Expired
+    } else if (400..500).contains(&status) {
+        RefreshFailure::Rejected(status)
     } else {
         RefreshFailure::Ambiguous
     }
@@ -1829,6 +1823,13 @@ fn refresh_failure_view(failure: RefreshFailure) -> Sv2AccountProbeView {
             Vec::new(),
             &format!("账号令牌端点暂不可用（HTTP {status}）；未刷新或修改本地会话。"),
         ),
+        RefreshFailure::Rejected(status) => Sv2AccountProbeView::new(
+            Sv2SessionInspectionStatus::Offline,
+            Sv2RemoteUseStatus::Unknown,
+            Sv2AuthorizationStatus::Unknown,
+            Vec::new(),
+            &format!("账号令牌请求被拒绝（HTTP {status}）；未刷新或修改本地会话。"),
+        ),
         RefreshFailure::Ambiguous => Sv2AccountProbeView::sync_failed(
             "refresh 请求可能已被令牌端点接收，但未取得可安全验证的完整响应；服务端可能已经轮换 refresh token，本组等待下一次显式预检修复。",
         ),
@@ -2297,6 +2298,28 @@ fn refresh_windows_batch(requests: &[Sv2AccountProbeRequest<'_>]) -> Vec<Sv2Acco
                 &agent,
                 sessions[authority].credentials.access_token(),
             );
+            if inspect_session_fingerprint(&sessions[authority].data_root)
+                .ok()
+                .flatten()
+                .as_ref()
+                != Some(&sessions[authority].fingerprint)
+            {
+                let view = Sv2AccountProbeView::in_use();
+                results[sessions[authority].request_index] = Some(view);
+                continue;
+            }
+            let one_physical_session = members.iter().all(|member| {
+                sessions[*member].fingerprint.canonical_root
+                    == sessions[authority].fingerprint.canonical_root
+            });
+            if !one_physical_session {
+                let view = Sv2AccountProbeView::sync_failed(
+                    "同一槽位请求指向多个物理会话；未接受只读授权结果或清除同步隔离。",
+                )
+                .with_account_identity(sessions[authority].credentials.access_token());
+                quarantine_group_view(&mut results, &mut sessions, &members, &view);
+                continue;
+            }
             let verified = matches!(&licenses, RemoteOutcome::Authorized(_));
             let view = view_from_remote(licenses, EnrollOutcome::Unknown)
                 .with_account_identity(sessions[authority].credentials.access_token());
