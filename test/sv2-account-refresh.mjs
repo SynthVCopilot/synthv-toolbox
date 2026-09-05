@@ -29,8 +29,8 @@ assert.match(probeTests, /active_session_reuses_only_fresh_cached_authorization/
 assert.match(probeTests, /shared_slot_alias_receives_authority_result_without_quarantine/);
 assert.match(profiles, /account_usage_snapshot_for_slot/);
 assert.match(profiles, /enrich_account_probes\(paths, &mut state, false, None\)/);
-assert.match(profiles, /Use the prepared Sandboxie root as authority/);
-assert.match(profiles, /\.find\(\|\(_, \(index, concurrent, _, _, _\)\)\|/);
+assert.match(profiles, /slot\.account_probe = view\.clone\(\);\s*slot\.concurrent_account_probe = view;/);
+assert.match(profiles, /!slot\.concurrent\.running_pids\.is_empty\(\)/);
 assert.match(commands, /sv2_account_usage_snapshot_for_slot/);
 assert.match(library, /commands::sv2_account_usage_snapshot_for_slot/);
 assert.match(api, /sv2AccountUsageSnapshotForSlot/);

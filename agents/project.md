@@ -1,6 +1,6 @@
 # Pi Desktop 项目索引
 
-> 最后更新：2026-09-04
+> 最后更新：2026-09-05
 
 ## 项目目标
 
@@ -16,7 +16,7 @@
 ## 模块结构
 
 - `src/PiDesktop.Tauri/src-tauri/src/sv2_profiles.rs`：账号槽位、切换和启动编排。
-- `src/PiDesktop.Tauri/src-tauri/src/sv2_concurrent.rs`：Sandboxie 副本与共享内容配置。
+- `src/PiDesktop.Tauri/src-tauri/src/sv2_concurrent.rs`：Sandboxie 账号环境与单份槽位数据映射。
 - `src/PiDesktop.Tauri/src-tauri/src/sv2_account_probe.rs`：显式账号预检与授权摘要。
 - `src/PiDesktop.Tauri/src-tauri/src/sv2_sync.rs`：安全的槽位资源同步。
 - `src/PiDesktop.Tauri/src`：Tauri 前端。

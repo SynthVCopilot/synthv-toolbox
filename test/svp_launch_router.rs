@@ -396,7 +396,8 @@ fn running_account_can_route_another_concurrent_instance() {
     assert_eq!(conflicted.selected_slot_id, None);
 
     state.slots[0].concurrent_account_probe.remote_use = Sv2RemoteUseStatus::Clear;
-    state.slots[0].concurrent_session_protection.status = Sv2SessionProtectionStatus::RecoveryPending;
+    state.slots[0].concurrent_session_protection.status =
+        Sv2SessionProtectionStatus::RecoveryPending;
     let recovering = build_route_plan(path.to_str().unwrap(), &state).unwrap();
     assert_eq!(recovering.selected_slot_id, None);
     fs::remove_dir_all(root).unwrap();
