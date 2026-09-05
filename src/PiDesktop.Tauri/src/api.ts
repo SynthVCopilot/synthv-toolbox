@@ -71,7 +71,11 @@ let previewHttpApiStatus: HttpApiStatus = {
 };
 let previewBridgeConnected = true;
 let previewSynthvPid = 4200;
-let previewSynthvProcesses: SynthVProcess[] = [];
+let previewSynthvProcesses: SynthVProcess[] = [
+  { processId: 4201, name: "Synthesizer V Studio 2 Pro", command: "/Applications/Synthesizer V Studio 2 Pro.app/Contents/MacOS/synthv-studio", windowTitle: "Synthesizer V Studio 2 Pro", isSv2: true, sandboxed: false },
+  { processId: 4202, name: "Synthesizer V Studio 2 Pro", command: "C:\\Sandbox\\Synthesizer V Studio 2 Pro.exe", windowTitle: "Synthesizer V Studio 2 Pro", isSv2: true, sandboxed: true },
+  { processId: 4203, name: "Synthesizer V Flat", command: "C:\\Apps\\Synthesizer V Flat.exe", windowTitle: "Synthesizer V Flat", isSv2: false, sandboxed: null },
+];
 let previewDownloads: ComponentDownload[] = [];
 let previewMediaTasks: MediaTaskSnapshot[] = [];
 let previewLyricProjects: LyricProject[] = [];
