@@ -1,6 +1,7 @@
 import "./styles.css";
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { registerModelAuthElement } from "@model-auth/vue/custom-element";
 import { api } from "./api";
 import { icon } from "./icons";
 import { featureCatalog, toolGroups, type FeatureCatalogItem, type ToolGroup } from "./featureCatalog";
@@ -11,6 +12,7 @@ import type {
   AgentWorkMode,
   AgentFileApproval,
   AiProviderSummary,
+  AiLoadStrategy,
   AppMode,
   AudioCaptureCapability,
   AudioCaptureTarget,
@@ -47,6 +49,8 @@ import type {
   WorkflowRecipe,
   WorkflowResult,
 } from "./types";
+
+registerModelAuthElement();
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 if (!root) throw new Error("Missing #app root");
@@ -145,6 +149,7 @@ let aiProviderPickerQuery = "";
 let aiProviderPickerSelection: AiProviderId | undefined;
 let aiProviderPickerAuthMethod: AiAuthMethod = "oauth";
 let aiProviderPickerStep: "method" | "provider-list" | "provider-detail" = "method";
+void aiProviderPickerSelection;
 let downloadPollTimer: number | undefined;
 let mediaTaskPollTimer: number | undefined;
 let toastDismissTimer: number | undefined;
@@ -552,7 +557,7 @@ function render(): void {
   const wiredMarkup = `${pageHtml}\u0000${overlayHtml}`;
   if (wiredMarkup !== lastWiredMarkup) {
     lastWiredMarkup = wiredMarkup;
-    shellController.afterUpdate(wireForms);
+    shellController.afterUpdate(() => { wireForms(); wireModelAuthDialog(); });
   }
   scheduleDownloadPoll();
   scheduleMediaTaskPoll();
@@ -1751,6 +1756,8 @@ function fallbackAiProviders(): AiProviderSummary[] {
     models: [],
     authMethods: ["oauth", "api-key"],
     available: true,
+    oauthEnabled: true,
+    loadStrategy: "round-robin",
     unavailableReason: null,
   }, {
     id: "openai-codex",
@@ -1768,6 +1775,8 @@ function fallbackAiProviders(): AiProviderSummary[] {
     models: [],
     authMethods: ["oauth", "api-key"],
     available: true,
+    oauthEnabled: true,
+    loadStrategy: "round-robin",
     unavailableReason: null,
   }, {
     id: "workbuddy",
@@ -1785,6 +1794,8 @@ function fallbackAiProviders(): AiProviderSummary[] {
     apiKeys: [],
     authMethods: ["oauth"],
     available: true,
+    oauthEnabled: true,
+    loadStrategy: "round-robin",
     unavailableReason: null,
   }, {
     id: "traecode",
@@ -1802,6 +1813,8 @@ function fallbackAiProviders(): AiProviderSummary[] {
     apiKeys: [],
     authMethods: ["oauth"],
     available: false,
+    oauthEnabled: true,
+    loadStrategy: "round-robin",
     unavailableReason: "未检测到 TraeCode CLI；请先安装并登录 traecli。",
   }];
 }
@@ -1888,14 +1901,38 @@ function renderAiApiKeys(provider: AiProviderSummary): string {
 }
 
 function renderAiProviderPicker(): string {
-  const selected = aiProviderPickerSelection ? aiProviders().find((provider) => provider.id === aiProviderPickerSelection) : undefined;
-  const catalogLabel = app?.model?.catalogSource === "models-dev"
-    ? "模型目录：models.dev"
-    : "模型目录：内置离线回退";
-  const title = aiProviderPickerStep === "method" ? "添加 AI 连接" : aiProviderPickerStep === "provider-list" ? `选择 ${aiAuthLabel(aiProviderPickerAuthMethod)} 提供商` : selected ? aiProviderDisplayName(selected) : "配置连接";
-  const description = aiProviderPickerStep === "method" ? `选择你要使用的认证方式。${catalogLabel}。` : aiProviderPickerStep === "provider-list" ? `${catalogLabel}；只显示当前后端可执行的提供商。` : `使用 ${aiAuthLabel(aiProviderPickerAuthMethod)} 配置此提供商。`;
-  const body = aiProviderPickerStep === "method" ? renderAiAuthMethodChoice() : aiProviderPickerStep === "provider-list" ? renderAiProviderPickerList() : selected ? renderAiProviderPickerDetail(selected) : renderAiAuthMethodChoice();
-  return `<div class="dialog-backdrop ai-provider-picker-backdrop" role="presentation"><section class="fluent-dialog ai-provider-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="ai-provider-picker-title" aria-describedby="ai-provider-picker-description"><header><div><span class="eyebrow">AI 运行时</span><h2 id="ai-provider-picker-title">${escapeHtml(title)}</h2><p id="ai-provider-picker-description">${escapeHtml(description)}</p></div><button type="button" class="icon-plain" data-close-ai-provider-picker aria-label="关闭连接设置">×</button></header>${body}</section></div>`;
+  return "<model-auth-dialog></model-auth-dialog>";
+}
+
+function wireModelAuthDialog(): void {
+  const dialog = document.querySelector<HTMLElement>("model-auth-dialog") as (HTMLElement & Record<string, unknown>) | null;
+  if (!dialog) return;
+  const catalog = app?.model;
+  dialog.open = true;
+  dialog.theme = "system";
+  dialog.providers = aiProviders().map((provider) => ({
+    id: provider.id, name: provider.displayName, description: provider.description, authMethods: provider.authMethods,
+    available: provider.available, unavailableReason: provider.unavailableReason, oauthEnabled: provider.oauthEnabled,
+    loadStrategy: provider.loadStrategy, mark: aiProviderMark(provider),
+    authorizeLabel: provider.id === "traecode" ? "通过 TraeCode CLI 登录" : "浏览器授权",
+    models: provider.models, oauthModels: provider.oauthModels, apiKeyModels: provider.apiKeyModels,
+    oauthCredentials: provider.accounts.map((account) => ({ id: account.id, label: account.label, account: account.label, healthy: account.healthy, enabled: account.enabled, weight: account.weight, models: provider.oauthModels })),
+    apiKeyCredentials: provider.apiKeys.map((key) => ({ id: key.id, label: key.label, healthy: key.healthy, enabled: key.enabled, weight: key.weight, models: key.models, cooldownUntilUtc: key.cooldownUntilUtc })),
+  }));
+  dialog.model = catalog ? { providerId: catalog.activeProvider, model: aiProviders().find((item) => item.id === catalog.activeProvider)?.model ?? "" } : null;
+  dialog.catalogStatus = { state: catalog?.catalogError ? "error" : "ready", source: catalog?.catalogSource === "models-dev" ? "models.dev" : "fallback", checkedAt: catalog?.catalogGeneratedAt ? new Date(catalog.catalogGeneratedAt).toISOString() : undefined, error: catalog?.catalogError };
+  const detail = (event: Event): unknown[] => Array.isArray((event as CustomEvent<unknown>).detail) ? (event as CustomEvent<unknown[]>).detail : [(event as CustomEvent<unknown>).detail];
+  const execute = (event: Event, operation: () => Promise<void>) => { event.stopPropagation(); void run(operation); };
+  dialog.addEventListener("close", () => { aiProviderPickerOpen = false; render(); }, { once: true });
+  dialog.addEventListener("authorize-oauth", (event) => execute(event, async () => { const [provider] = detail(event) as [AiProviderId]; app = await api.authorizeAiProvider(provider); notice = "官方账号授权已更新。"; }), { once: true });
+  dialog.addEventListener("add-api-key", (event) => execute(event, async () => { const [payload] = detail(event) as [{ providerId: AiProviderId; label: string; apiKey: string }]; app = await api.addAiApiKey(payload.providerId, payload.label, payload.apiKey); notice = "API Key 已保存并验证。"; }), { once: true });
+  dialog.addEventListener("remove-oauth", (event) => execute(event, async () => { const [provider, id] = detail(event) as [AiProviderId, string]; app = await api.removeAiProviderAccount(provider, id); }), { once: true });
+  dialog.addEventListener("remove-api-key", (event) => execute(event, async () => { const [provider, id] = detail(event) as [AiProviderId, string]; app = await api.removeAiApiKey(provider, id); }), { once: true });
+  dialog.addEventListener("update-credential", (event) => execute(event, async () => { const [payload] = detail(event) as [{ providerId: AiProviderId; credentialId: string; enabled: boolean; weight: number }]; app = await api.updateAiCredential(payload.providerId, payload.credentialId, payload.enabled, payload.weight); }), { once: true });
+  dialog.addEventListener("update-provider", (event) => execute(event, async () => { const [payload] = detail(event) as [{ providerId: AiProviderId; oauthEnabled: boolean }]; app = await api.updateAiProvider(payload.providerId, payload.oauthEnabled); }), { once: true });
+  dialog.addEventListener("select-model", (event) => execute(event, async () => { const [payload] = detail(event) as [{ providerId: AiProviderId; model: string }]; app = await api.selectAiProvider(payload.providerId, payload.model); aiProviderPickerOpen = false; notice = "当前 AI 提供商与模型已更新。"; }), { once: true });
+  dialog.addEventListener("update-provider-strategy", (event) => execute(event, async () => { const [payload] = detail(event) as [{ providerId: AiProviderId; strategy: AiLoadStrategy }]; app = await api.updateAiProviderStrategy(payload.providerId, payload.strategy); }), { once: true });
+  dialog.addEventListener("refresh-catalog", (event) => { event.stopPropagation(); refreshAiCatalogLive(); }, { once: true });
 }
 
 function renderAiAuthMethodChoice(): string {
@@ -1947,6 +1984,10 @@ function renderAiProviderPickerDetail(provider: AiProviderSummary): string {
   const modelSection = authReady && models.length ? `<section class="ai-provider-model-list" aria-labelledby="ai-provider-model-title"><div><strong id="ai-provider-model-title">选择模型</strong><small>只显示此 ${aiAuthLabel(authMethod)} 连接可用的模型。</small></div><div role="group" aria-label="${escapeHtml(provider.displayName)} 模型列表">${models.map((model) => { const active = model === provider.model && isActiveAiProvider(provider); return `<button type="button" class="ai-provider-model-option ${active ? "active" : ""}" aria-pressed="${active}" data-select-ai-provider-model="${escapeHtml(model)}" data-ai-provider="${provider.id}" ${busy ? "disabled" : ""}><span><strong>${escapeHtml(model)}</strong><small>${active ? "当前使用" : "点击使用此模型"}</small></span>${active ? icon("check", 18) : ""}</button>`; }).join("")}</div></section>` : `<div class="ai-provider-empty">${modelSetupHint}，将显示该方式匹配的模型。</div>`;
   return `<div class="ai-provider-picker-detail"><button type="button" class="back-link" data-back-ai-provider-list>${icon("arrow", 15)} 返回提供商列表</button><section class="ai-provider-picker-current"><span class="ai-provider-mark ${aiProviderMarkClass(provider)}">${aiProviderMark(provider)}</span><div><strong>${escapeHtml(aiProviderDisplayName(provider))}</strong><small>${aiAuthLabel(authMethod)} 连接</small></div><span class="ai-provider-badge ${authReady && provider.available ? "ready" : "warning"}">${state}</span></section>${authContent}${modelSection}</div>`;
 }
+
+void renderAiAuthMethodChoice;
+void renderAiProviderPickerList;
+void renderAiProviderPickerDetail;
 
 function renderAiProviderSettings(): string {
   const legacyWarning = app?.model?.legacyConfigured

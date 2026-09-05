@@ -24,7 +24,7 @@ assert.match(main, /aiProviderPickerStep:|aiProviderPickerStep/);
 assert.match(main, /oauthModels/);
 assert.match(main, /apiKeyModels/);
 assert.match(main, /authMethods\.includes\(authMethod\)/);
-assert.match(main, /模型目录：models\.dev/);
+assert.match(main, /catalogStatus/);
 assert.match(types, /catalogSource:\s*ModelCatalogSource/);
 assert.match(main, /refreshAiCatalogLive/);
 assert.match(main, /data-refresh-ai-catalog/);

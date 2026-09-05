@@ -100,6 +100,8 @@ let previewAiProviders: AiProviderSummary[] = [{
     expiresAt: Date.now() + 55 * 60_000,
     authorized: true,
     healthy: true,
+    enabled: true,
+    weight: 1,
   }],
   models: [
     "claude-sonnet-4-6",
@@ -111,6 +113,8 @@ let previewAiProviders: AiProviderSummary[] = [{
   apiKeys: [],
   authMethods: ["oauth", "api-key"],
   available: true,
+  oauthEnabled: true,
+  loadStrategy: "round-robin",
   unavailableReason: null,
 }, {
   id: "openai-codex",
@@ -135,6 +139,8 @@ let previewAiProviders: AiProviderSummary[] = [{
   apiKeys: [],
   authMethods: ["oauth", "api-key"],
   available: true,
+  oauthEnabled: true,
+  loadStrategy: "round-robin",
   unavailableReason: null,
 }, {
   id: "workbuddy",
@@ -152,6 +158,8 @@ let previewAiProviders: AiProviderSummary[] = [{
   apiKeys: [],
   authMethods: ["oauth"],
   available: true,
+  oauthEnabled: true,
+  loadStrategy: "round-robin",
   unavailableReason: null,
 }, {
   id: "traecode",
@@ -169,6 +177,8 @@ let previewAiProviders: AiProviderSummary[] = [{
   apiKeys: [],
   authMethods: ["oauth"],
   available: false,
+  oauthEnabled: true,
+  loadStrategy: "round-robin",
   unavailableReason: "未检测到 TraeCode CLI；请先安装并登录 traecli。",
 }];
 
@@ -467,6 +477,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       expiresAt: Date.now() + 55 * 60_000,
       authorized: true,
       healthy: true,
+      enabled: true,
+      weight: 1,
     });
     if (provider.id === "openai-codex" && !provider.oauthModels.includes("gpt-5.3-codex-spark")) {
       provider.oauthModels.push("gpt-5.3-codex-spark");
@@ -503,6 +515,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       models: [...provider.apiKeyModels],
       healthy: true,
       cooldownUntilUtc: null,
+      enabled: true,
+      weight: 1,
       createdAtUtc: new Date().toISOString(),
     });
     refreshPreviewAiProvider(provider);
@@ -521,6 +535,32 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     if (!provider) throw new Error("未知的 AI 提供商。");
     provider.accounts = provider.accounts.filter((account) => account.id !== accountId);
     refreshPreviewAiProvider(provider);
+    return previewState() as T;
+  }
+  if (command === "update_ai_credential") {
+    const provider = previewAiProvider(args?.provider);
+    const credentialId = String(args?.credentialId ?? "");
+    const enabled = Boolean(args?.enabled);
+    const weight = Number(args?.weight);
+    if (!provider || !credentialId || !Number.isInteger(weight) || weight < 1 || weight > 100) throw new Error("凭据设置无效。");
+    const account = provider.accounts.find((item) => item.id === credentialId);
+    const key = provider.apiKeys.find((item) => item.id === credentialId);
+    if (!account && !key) throw new Error("未找到凭据。");
+    if (account) { account.enabled = enabled; account.weight = weight; }
+    if (key) { key.enabled = enabled; key.weight = weight; }
+    return previewState() as T;
+  }
+  if (command === "update_ai_provider") {
+    const provider = previewAiProvider(args?.provider);
+    if (!provider) throw new Error("未知的 AI 提供商。");
+    provider.oauthEnabled = Boolean(args?.oauthEnabled);
+    return previewState() as T;
+  }
+  if (command === "update_ai_provider_strategy") {
+    const provider = previewAiProvider(args?.provider);
+    const strategy = String(args?.strategy);
+    if (!provider || !["round-robin", "weighted-round-robin", "failover"].includes(strategy)) throw new Error("负载策略无效。");
+    provider.loadStrategy = strategy as AiProviderSummary["loadStrategy"];
     return previewState() as T;
   }
   if (command === "ai_provider_state") return previewAiModel() as T;
@@ -1099,6 +1139,12 @@ export const api = {
     call<OpenCodeCatalog>("opencode_provider_catalog", { force }),
   removeAiProviderAccount: (provider: AiProviderId, accountId: string) =>
     call<BootstrapState>("remove_ai_provider_account", { provider, accountId }),
+  updateAiCredential: (provider: AiProviderId, credentialId: string, enabled: boolean, weight: number) =>
+    call<BootstrapState>("update_ai_credential", { provider, credentialId, enabled, weight }),
+  updateAiProvider: (provider: AiProviderId, oauthEnabled: boolean) =>
+    call<BootstrapState>("update_ai_provider", { provider, oauthEnabled }),
+  updateAiProviderStrategy: (provider: AiProviderId, strategy: import("./types").AiLoadStrategy) =>
+    call<BootstrapState>("update_ai_provider_strategy", { provider, strategy }),
   scanSynthV: () => call<SynthVInstallation[]>("scan_synthv"),
   checkToolboxUpdate: () => call<ToolboxUpdateCheck>("check_toolbox_update"),
   openToolboxReleases: () => call<OperationResult>("open_toolbox_releases"),

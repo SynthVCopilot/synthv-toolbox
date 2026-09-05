@@ -4,6 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::{DateTime, Utc};
 
 pub use crate::config::AiAuthMethod;
+use crate::config::AiLoadStrategy;
 pub use crate::oauth::AiProviderId;
 
 const TRANSIENT_BASE_MS: i64 = 15_000;
@@ -17,6 +18,8 @@ pub struct CredentialRoute {
     pub provider: AiProviderId,
     pub auth_method: AiAuthMethod,
     pub models: Vec<String>,
+    pub weight: u8,
+    pub strategy: AiLoadStrategy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,6 +126,21 @@ impl CredentialBalancer {
         if eligible.is_empty() {
             return Vec::new();
         }
+        let route_strategy = self.routes.get(&eligible[0].0).map(|route| route.strategy).unwrap_or(AiLoadStrategy::RoundRobin);
+        if route_strategy == AiLoadStrategy::Failover {
+            return eligible.into_iter().map(|(_, candidate)| candidate).collect();
+        }
+        if route_strategy == AiLoadStrategy::WeightedRoundRobin {
+            let mut weighted = eligible.iter().flat_map(|(key, candidate)| {
+                let weight = self.routes.get(key).map(|route| route.weight.clamp(1, 100)).unwrap_or(1);
+                std::iter::repeat(candidate.clone()).take(usize::from(weight))
+            }).collect::<Vec<_>>();
+            let cursor_key = format!("{}\u{0000}{model}", provider.as_str());
+            let start = self.cursors.get(&cursor_key).copied().unwrap_or_default() % weighted.len();
+            self.cursors.insert(cursor_key, (start + 1) % weighted.len());
+            weighted.rotate_left(start);
+            return weighted;
+        }
         let key = format!("{}\u{0000}{model}", provider.as_str());
         let start = self.cursors.get(&key).copied().unwrap_or_default() % eligible.len();
         self.cursors.insert(key, (start + 1) % eligible.len());
@@ -226,6 +244,8 @@ mod tests {
             provider: AiProviderId::Anthropic,
             auth_method,
             models: models.iter().map(|value| (*value).to_string()).collect(),
+            weight: 1,
+            strategy: AiLoadStrategy::RoundRobin,
         }
     }
 

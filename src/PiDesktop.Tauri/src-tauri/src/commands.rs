@@ -31,7 +31,7 @@ use crate::components::{
 };
 use crate::config::{
     model_summary, save_settings, settings_path, validate_ai_model, validate_mcp_server,
-    AgentWorkMode, AiAuthMethod, ApiKeyMetadata, AppMode, McpServerConfig, ModelSummary,
+    AgentWorkMode, AiAuthMethod, AiLoadStrategy, ApiKeyMetadata, AppMode, McpServerConfig, ModelSummary,
     ToolboxSettings,
 };
 use crate::creative_history::{
@@ -414,6 +414,9 @@ fn build_ai_provider(
     balancer: std::sync::Arc<std::sync::Mutex<CredentialBalancer>>,
 ) -> Result<ProviderPool, String> {
     let provider_id = settings.ai_provider;
+    if provider_id == AiProviderId::Traecode {
+        return Err("TraeCode 企业 CLI 的 per-app TRAE_HOME 与 JSONL 能力合同尚未验证，已禁用运行时调用。".to_string());
+    }
     let model = settings.model_for(provider_id).to_string();
     let mut accounts = settings
         .oauth_accounts
@@ -421,6 +424,7 @@ fn build_ai_provider(
         .filter(|account| account.provider == provider_id)
         .cloned()
         .collect::<Vec<_>>();
+    accounts.retain(|account| account.enabled && settings.oauth_enabled(provider_id));
     let trae_connected = provider_id == AiProviderId::Traecode
         && TraeCodeProvider::new(TraeCodeConfig::new(provider_id.default_model()))
             .cached_login_status()
@@ -437,13 +441,15 @@ fn build_ai_provider(
                 provider: provider_id,
                 label: "TraeCode account".to_string(),
                 expires_at: 0,
+                enabled: true,
+                weight: 1,
             });
         }
     }
     let api_keys = settings
         .api_keys_for(provider_id)
         .iter()
-        .filter(|key| key.models.iter().any(|available| available == &model))
+        .filter(|key| key.enabled && key.models.iter().any(|available| available == &model))
         .cloned()
         .collect::<Vec<_>>();
     if accounts.is_empty() && api_keys.is_empty() {
@@ -468,6 +474,8 @@ fn build_ai_provider(
                 provider: provider_id,
                 auth_method: AiAuthMethod::OAuth,
                 models: vec![provider_id.default_model().to_string()],
+                weight: 1,
+                strategy: AiLoadStrategy::RoundRobin,
             });
         }
     }
@@ -741,6 +749,8 @@ fn authorize_workbuddy() -> Result<(OAuthAccountMetadata, crate::agent::WorkBudd
             provider: AiProviderId::Workbuddy,
             label,
             expires_at: credential.expires_at,
+            enabled: true,
+            weight: 1,
         },
         credential,
     ))
@@ -788,48 +798,13 @@ pub async fn authorize_ai_provider(
                 provider,
                 auth_method: AiAuthMethod::OAuth,
                 models: WorkBuddyOAuthConfig::builtin().models,
+                weight: metadata.weight,
+                strategy: AiLoadStrategy::RoundRobin,
             });
         return build_bootstrap(&state).await;
     }
     if provider == AiProviderId::Traecode {
-        let status = tauri::async_runtime::spawn_blocking(|| {
-            TraeCodeProvider::new(TraeCodeConfig::new(AiProviderId::Traecode.default_model()))
-                .login()
-        })
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())?;
-        if !status.available {
-            return Err(status.detail);
-        }
-        if !status.logged_in {
-            return Err(status.detail);
-        }
-        let metadata = OAuthAccountMetadata {
-            id: "oauth:traecode:local".to_string(),
-            provider,
-            label: "TraeCode account".to_string(),
-            expires_at: 0,
-        };
-        {
-            let mut settings = state.settings.write().await;
-            let mut next = settings.clone();
-            next.ai_provider = provider;
-            next.upsert_oauth_account(metadata.clone());
-            save_settings(&next)?;
-            *settings = next;
-        }
-        state
-            .credential_balancer
-            .lock()
-            .map_err(|_| "凭据调度器不可用。".to_string())?
-            .upsert(crate::credential_balancer::CredentialRoute {
-                id: metadata.id,
-                provider,
-                auth_method: AiAuthMethod::OAuth,
-                models: vec![provider.default_model().to_string()],
-            });
-        return build_bootstrap(&state).await;
+        return Err("TraeCode 企业 CLI 需要已验证的 per-app TRAE_HOME、认证状态与 JSONL 模型能力合同；当前版本不会调用用户全局 CLI 登录。".to_string());
     }
     let authorized = tauri::async_runtime::spawn_blocking(move || oauth::authorize(provider))
         .await
@@ -870,6 +845,8 @@ pub async fn authorize_ai_provider(
                 .iter()
                 .map(|model| (*model).to_string())
                 .collect(),
+            weight: route_metadata.weight,
+            strategy: AiLoadStrategy::RoundRobin,
         });
     build_bootstrap(&state).await
 }
@@ -942,6 +919,8 @@ pub async fn add_ai_api_key(
         label: sanitize_api_key_label(&label, api_key.as_str()),
         models,
         created_at_utc: Utc::now().to_rfc3339(),
+        enabled: true,
+        weight: 1,
     };
     {
         let mut settings = state.settings.write().await;
@@ -976,6 +955,8 @@ pub async fn add_ai_api_key(
             provider,
             auth_method: AiAuthMethod::ApiKey,
             models: metadata.models.clone(),
+            weight: metadata.weight,
+            strategy: AiLoadStrategy::RoundRobin,
         });
     build_bootstrap(&state).await
 }
@@ -1056,6 +1037,74 @@ pub async fn ai_provider_state(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn update_ai_credential(
+    provider: AiProviderId,
+    credential_id: String,
+    enabled: bool,
+    weight: u8,
+    state: State<'_, AppState>,
+) -> Result<BootstrapState, String> {
+    require_ai(&state).await?;
+    if !(1..=100).contains(&weight) { return Err("凭据权重必须在 1 到 100 之间。".to_string()); }
+    let mut settings = state.settings.write().await;
+    let mut next = settings.clone();
+    let mut found = false;
+    for account in &mut next.oauth_accounts {
+        if account.provider == provider && account.id == credential_id {
+            account.enabled = enabled;
+            account.weight = weight;
+            found = true;
+        }
+    }
+    let mut keys = next.api_keys_for(provider).to_vec();
+    for key in &mut keys {
+        if key.id == credential_id {
+            key.enabled = enabled;
+            key.weight = weight;
+            found = true;
+        }
+    }
+    if !found { return Err("没有找到该提供商的凭据。".to_string()); }
+    next.set_api_keys_for(provider, keys);
+    save_settings(&next)?;
+    *settings = next;
+    drop(settings);
+    build_bootstrap(&state).await
+}
+
+#[tauri::command]
+pub async fn update_ai_provider(
+    provider: AiProviderId,
+    oauth_enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<BootstrapState, String> {
+    require_ai(&state).await?;
+    let mut settings = state.settings.write().await;
+    let mut next = settings.clone();
+    next.set_oauth_enabled(provider, oauth_enabled);
+    save_settings(&next)?;
+    *settings = next;
+    drop(settings);
+    build_bootstrap(&state).await
+}
+
+#[tauri::command]
+pub async fn update_ai_provider_strategy(
+    provider: AiProviderId,
+    strategy: AiLoadStrategy,
+    state: State<'_, AppState>,
+) -> Result<BootstrapState, String> {
+    require_ai(&state).await?;
+    let mut settings = state.settings.write().await;
+    let mut next = settings.clone();
+    next.set_load_strategy(provider, strategy);
+    save_settings(&next)?;
+    *settings = next;
+    drop(settings);
+    build_bootstrap(&state).await
 }
 
 #[tauri::command]
