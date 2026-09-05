@@ -9,6 +9,7 @@ const webRoot = join(repositoryRoot, "src", "PiDesktop.Tauri", "src");
 const read = (path) => readFileSync(path, "utf8");
 
 const profiles = read(join(rustRoot, "sv2_profiles.rs"));
+const profileTests = read(join(repositoryRoot, "test", "sv2_profiles_tests.rs"));
 const main = read(join(webRoot, "main.ts"));
 const readme = read(join(repositoryRoot, "README.md"));
 
@@ -17,7 +18,7 @@ assert.match(profiles, /join\("Library\/Application Support"\)/);
 assert.match(profiles, /join\("Dreamtonics"\)/);
 assert.match(profiles, /fs2::FileExt/);
 assert.match(profiles, /\/usr\/sbin\/lsof/);
-assert.match(profiles, /macos_paths_stay_under_the_current_users_application_support/);
+assert.match(profileTests, /macos_paths_stay_under_the_current_users_application_support/);
 assert.match(main, /app\.platform === "macos"/);
 assert.match(main, /supportsWindowsSv2Extensions/);
 assert.match(main, /macOS v1 不会强制结束进程，也不会启动并发实例/);
