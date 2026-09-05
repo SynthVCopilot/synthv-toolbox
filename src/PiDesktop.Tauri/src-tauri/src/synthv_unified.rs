@@ -9,7 +9,7 @@ use serde_json::{json, Map, Value};
 use uuid::Uuid;
 
 use crate::agent::ToolDefinition;
-use crate::mcp::McpManager;
+use crate::mcp::{McpManager, SynthVConnectionProfile};
 use crate::synthv::{bridge_is_bundled, find_node};
 use crate::synthv_control::{self, BridgeShortcutAction};
 use crate::synthv_hosts::{self, HostKind, StandardSynthVHost};
@@ -17,6 +17,8 @@ use crate::synthv_hosts::{self, HostKind, StandardSynthVHost};
 const OFFICIAL_SV2_SERVER: &str = "synthv";
 const OFFICIAL_SV1_SERVER: &str = "synthv-sv1";
 const CONNECT_RETRIES: usize = 16;
+const FLAT_LAUNCH_RETRIES: usize = 80;
+const FLAT_NATIVE_GRACE_RETRIES: usize = 20;
 const CONNECT_POLL: Duration = Duration::from_millis(250);
 const TOOL_TIMEOUT: Duration = Duration::from_secs(12);
 const LEGACY_STOP_FILE: &str = "synthv-agent-bridge-sv1-legacy.stop";
@@ -35,6 +37,7 @@ pub const TOOL_NAMES: &[&str] = &[
 #[serde(rename_all = "camelCase")]
 struct HostRequest {
     host_id: String,
+    project_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -78,7 +81,13 @@ pub fn definitions() -> Vec<ToolDefinition> {
             "Connect one standard SynthV host. The adapter hides Bridge, shortcut, and local HTTP details.",
             json!({
                 "type": "object",
-                "properties": { "hostId": { "type": "string" } },
+                "properties": {
+                    "hostId": { "type": "string" },
+                    "projectPath": {
+                        "type": "string",
+                        "description": "Only for hostId=flat. Must be an existing regular .svp file and is passed as the sole Flat launch argument."
+                    }
+                },
                 "required": ["hostId"],
                 "additionalProperties": false
             }),
@@ -173,7 +182,13 @@ pub async fn execute(
         "synthv_hosts" => list_public_hosts(manager).await,
         "synthv_connect" => {
             let request = parse::<HostRequest>(arguments)?;
-            connect(manager, bridge_dir, &request.host_id).await
+            connect(
+                manager,
+                bridge_dir,
+                &request.host_id,
+                request.project_path.as_deref(),
+            )
+            .await
         }
         "synthv_disconnect" => {
             let request = parse::<HostRequest>(arguments)?;
@@ -210,7 +225,16 @@ async fn discovered_with_connections(
     let mut hosts = synthv_hosts::discover()?;
     let connected = manager.connected_synthv_hosts().await;
     for host in &mut hosts {
-        host.connected = connected.contains_key(&host.id);
+        if connected.contains_key(&host.id) {
+            host.connected = true;
+            if manager.synthv_connection_profile(&host.id).await
+                == Some(SynthVConnectionProfile::LegacyBridge)
+            {
+                host.capabilities = synthv_hosts::capabilities(HostKind::OfficialSv1);
+            }
+        } else {
+            host.connected = false;
+        }
     }
     Ok(hosts)
 }
@@ -280,33 +304,44 @@ fn server_id(host: &StandardSynthVHost) -> String {
     }
 }
 
+fn flat_fallback_server_id(host: &StandardSynthVHost) -> String {
+    format!(
+        "synthv-flat-fallback-{}",
+        host.process_id.unwrap_or_default()
+    )
+}
+
 async fn connect(
     manager: &Arc<McpManager>,
     bridge_dir: &Path,
     host_id: &str,
+    project_path: Option<&str>,
 ) -> Result<Value, String> {
-    let host = synthv_hosts::discover()?
+    let mut host = synthv_hosts::discover()?
         .into_iter()
         .find(|host| host.id == host_id)
         .ok_or_else(|| format!("没有发现 SynthV 宿主 {host_id}。"))?;
+    let project_path = match (host.kind, project_path) {
+        (HostKind::Flat, Some(path)) => Some(validate_flat_project_path(path)?),
+        (HostKind::Flat, None) => None,
+        (_, Some(_)) => return Err("projectPath 仅支持 hostId=flat。".to_string()),
+        (_, None) => None,
+    };
     if !host.running {
-        return Err("所选 SynthV 宿主尚未运行。".to_string());
+        if host.kind != HostKind::Flat {
+            return Err("所选 SynthV 宿主尚未运行。".to_string());
+        }
+        let previous_process_ids = synthv_hosts::flat_process_ids()?;
+        synthv_hosts::launch_flat(&host, project_path.as_deref())?;
+        host = wait_for_flat_launch(&previous_process_ids).await?;
+        host = wait_for_flat_native_ready(host).await?;
     }
     let id = server_id(&host);
     if manager.synthv_server_id(&host.id).await.is_some() {
         return Ok(json!({ "hostId": host.id, "connected": true, "alreadyConnected": true }));
     }
-    let _tools = match host.kind {
-        HostKind::Flat => {
-            let endpoint = host
-                .endpoint
-                .clone()
-                .ok_or_else(|| "所选 SynthV 宿主的内置扩展尚未就绪。".to_string())?;
-            manager
-                .connect_http(id.clone(), "SynthV Host".to_string(), endpoint)
-                .await
-                .map_err(standard_error)?
-        }
+    let connected: Result<(String, SynthVConnectionProfile), String> = match host.kind {
+        HostKind::Flat => connect_flat(manager, bridge_dir, &host, &id).await,
         HostKind::OfficialSv2 => {
             if !bridge_is_bundled(bridge_dir) {
                 return Err("当前应用包不包含所需的 SynthV 扩展。".to_string());
@@ -322,13 +357,139 @@ async fn connect(
                 bridge_dir.to_path_buf(),
             )
             .await
-            .map_err(standard_error)?
-            .1
+            .map_err(standard_error)
+            .map(|_| (id.clone(), SynthVConnectionProfile::OfficialBridge))
         }
-        HostKind::OfficialSv1 => connect_sv1(manager, bridge_dir, &host, &id).await?,
+        HostKind::OfficialSv1 => connect_sv1(manager, bridge_dir, &host, &id)
+            .await
+            .map(|_| (id.clone(), SynthVConnectionProfile::LegacyBridge)),
     };
-    manager.bind_synthv_host(host.id.clone(), id).await;
+    let (bound_id, profile) = match connected {
+        Ok(connected) => connected,
+        Err(error) => {
+            manager.release_legacy_synthv_host(&host.id).await;
+            return Err(error);
+        }
+    };
+    manager
+        .bind_synthv_host(host.id.clone(), bound_id, profile)
+        .await;
+    if profile == SynthVConnectionProfile::LegacyBridge {
+        manager.release_legacy_synthv_host(&host.id).await;
+    }
     Ok(json!({ "hostId": host.id, "connected": true }))
+}
+
+fn validate_flat_project_path(value: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(value);
+    if !path.is_absolute() {
+        return Err("Flat projectPath 必须是现有普通 .svp 绝对路径。".to_string());
+    }
+    let is_svp = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("svp"));
+    if !is_svp {
+        return Err("Flat projectPath 必须是现有普通 .svp 绝对路径。".to_string());
+    }
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|_| "Flat projectPath 必须是现有普通 .svp 绝对路径。".to_string())?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err("Flat projectPath 必须是现有普通 .svp 绝对路径。".to_string());
+    }
+    fs::canonicalize(path)
+        .map_err(|_| "Flat projectPath 必须是现有普通 .svp 绝对路径。".to_string())
+}
+
+async fn wait_for_flat_launch(previous_process_ids: &[u32]) -> Result<StandardSynthVHost, String> {
+    for _ in 0..FLAT_LAUNCH_RETRIES {
+        if let Some(host) = synthv_hosts::discover()?.into_iter().find(|host| {
+            host.kind == HostKind::Flat
+                && host.running
+                && host
+                    .process_id
+                    .is_some_and(|pid| !previous_process_ids.contains(&pid))
+        }) {
+            return Ok(host);
+        }
+        tokio::time::sleep(CONNECT_POLL).await;
+    }
+    Err("已启动 Synthesizer V Flat，但未在限定时间内发现新的宿主进程。请检查应用是否被系统阻止启动。".to_string())
+}
+
+async fn wait_for_flat_native_ready(
+    mut host: StandardSynthVHost,
+) -> Result<StandardSynthVHost, String> {
+    for _ in 0..FLAT_NATIVE_GRACE_RETRIES {
+        if host.endpoint.is_some() {
+            return Ok(host);
+        }
+        tokio::time::sleep(CONNECT_POLL).await;
+        if let Some(refreshed) = synthv_hosts::discover()?
+            .into_iter()
+            .find(|candidate| candidate.id == host.id)
+        {
+            host = refreshed;
+        }
+    }
+    Ok(host)
+}
+
+async fn connect_flat(
+    manager: &Arc<McpManager>,
+    bridge_dir: &Path,
+    host: &StandardSynthVHost,
+    native_id: &str,
+) -> Result<(String, SynthVConnectionProfile), String> {
+    let fallback_id = flat_fallback_server_id(host);
+    let (_tools, profile) = prefer_native_flat(
+        host.endpoint.clone(),
+        |endpoint| async {
+            let result = manager
+                .connect_http(native_id.to_string(), "SynthV Host".to_string(), endpoint)
+                .await;
+            if result.is_err() {
+                manager.disconnect(native_id).await;
+            }
+            result
+        },
+        || async {
+            let scripts = synthv_hosts::flat_fallback_scripts_directory(host)?;
+            manager.reserve_legacy_synthv_host(&host.id).await?;
+            connect_legacy_bridge(manager, bridge_dir, host, &fallback_id, scripts).await
+        },
+    )
+    .await?;
+    Ok((
+        if profile == SynthVConnectionProfile::NativeFlat {
+            native_id.to_string()
+        } else {
+            fallback_id
+        },
+        profile,
+    ))
+}
+
+async fn prefer_native_flat<T, Native, Fallback, NativeFuture, FallbackFuture>(
+    endpoint: Option<String>,
+    native: Native,
+    fallback: Fallback,
+) -> Result<(T, SynthVConnectionProfile), String>
+where
+    Native: FnOnce(String) -> NativeFuture,
+    Fallback: FnOnce() -> FallbackFuture,
+    NativeFuture: std::future::Future<Output = Result<T, String>>,
+    FallbackFuture: std::future::Future<Output = Result<T, String>>,
+{
+    if let Some(endpoint) = endpoint {
+        if let Ok(result) = native(endpoint).await {
+            return Ok((result, SynthVConnectionProfile::NativeFlat));
+        }
+    }
+    fallback()
+        .await
+        .map(|result| (result, SynthVConnectionProfile::LegacyBridge))
+        .map_err(|error| standard_error(format!("无法连接所选 SynthV 宿主：{error}")))
 }
 
 async fn connect_sv1(
@@ -337,17 +498,48 @@ async fn connect_sv1(
     host: &StandardSynthVHost,
     id: &str,
 ) -> Result<Vec<String>, String> {
+    let scripts = host
+        .script_directories
+        .first()
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir())
+        .ok_or_else(|| "所选 SynthV 宿主没有可用的扩展目录。".to_string())?;
+    manager.reserve_legacy_synthv_host(&host.id).await?;
+    connect_legacy_bridge(manager, bridge_dir, host, id, scripts).await
+}
+
+async fn connect_legacy_bridge(
+    manager: &Arc<McpManager>,
+    bridge_dir: &Path,
+    host: &StandardSynthVHost,
+    id: &str,
+    scripts: PathBuf,
+) -> Result<Vec<String>, String> {
     let cli = bridge_dir.join("dist/legacy-sv1/src/cli.js");
     if !cli.is_file() {
         return Err("当前应用包不包含所需的兼容扩展。".to_string());
     }
     let node = find_node().ok_or_else(|| "未找到兼容的本地扩展运行时。".to_string())?;
-    install_sv1_bridge(bridge_dir, host, &node)?;
+    let refreshed = install_legacy_bridge(bridge_dir, &scripts, &node)?;
     let process_id = host
         .process_id
         .ok_or_else(|| "宿主进程不可用。".to_string())?;
-    synthv_control::send_shortcut(process_id, BridgeShortcutAction::Start)
-        .map_err(standard_error)?;
+    if refreshed {
+        synthv_control::send_shortcut(process_id, BridgeShortcutAction::Refresh)
+            .map_err(standard_error)?;
+        tokio::time::sleep(Duration::from_millis(800)).await;
+    }
+    let start_action = if host.kind == HostKind::Flat {
+        BridgeShortcutAction::StartLegacy
+    } else {
+        BridgeShortcutAction::Start
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        synthv_control::send_shortcut(process_id, start_action)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(standard_error)?;
     let tools = manager
         .connect_stdio_host(
             id.to_string(),
@@ -370,16 +562,7 @@ async fn connect_sv1(
     Err(format!("宿主扩展未在限定时间内就绪：{last_error}"))
 }
 
-fn install_sv1_bridge(
-    bridge_dir: &Path,
-    host: &StandardSynthVHost,
-    node: &str,
-) -> Result<(), String> {
-    let scripts = host
-        .script_directories
-        .first()
-        .map(PathBuf::from)
-        .ok_or_else(|| "所选宿主没有可用的扩展目录。".to_string())?;
+fn install_legacy_bridge(bridge_dir: &Path, scripts: &Path, node: &str) -> Result<bool, String> {
     if !scripts.is_dir() {
         return Err("所选宿主的扩展目录不存在。".to_string());
     }
@@ -391,19 +574,24 @@ fn install_sv1_bridge(
         && installed.is_file()
         && fs::read(&source).ok() == fs::read(&installed).ok()
     {
-        return Ok(());
+        return Ok(false);
     }
     let output = std::process::Command::new(node)
         .arg(bridge_dir.join("scripts/install-sv1-legacy-bridge.mjs"))
         .arg("--target")
-        .arg(&scripts)
+        .arg(scripts)
         .current_dir(bridge_dir)
         .output()
         .map_err(|error| format!("无法准备宿主扩展：{error}"))?;
     if output.status.success() {
-        Err("宿主扩展已安装或更新；请让宿主重新扫描扩展后再次连接。".to_string())
+        Ok(true)
     } else {
-        Err("无法准备宿主扩展。".to_string())
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if detail.is_empty() {
+            "无法准备所需的 SynthV Flat 兼容扩展。".to_string()
+        } else {
+            format!("无法准备所需的 SynthV Flat 兼容扩展：{detail}")
+        })
     }
 }
 
@@ -414,11 +602,15 @@ async fn disconnect(manager: &McpManager, host_id: &str) -> Result<Value, String
     let Some(id) = manager.synthv_server_id(host_id).await else {
         return Ok(json!({ "hostId": host_id, "connected": false, "alreadyDisconnected": true }));
     };
+    let profile = manager.synthv_connection_profile(host_id).await;
     manager.disconnect(&id).await;
-    let stop_warning = match host.as_ref().map(|host| host.kind) {
-        None => Some("宿主进程已退出；已清理本地连接。".to_string()),
-        Some(HostKind::Flat) => None,
-        Some(HostKind::OfficialSv1) => {
+    let stop_warning = match (host.as_ref().map(|host| host.kind), profile) {
+        (None, _) => Some("宿主进程已退出；已清理本地连接。".to_string()),
+        (Some(HostKind::Flat), Some(SynthVConnectionProfile::NativeFlat)) => None,
+        (
+            Some(HostKind::Flat | HostKind::OfficialSv1),
+            Some(SynthVConnectionProfile::LegacyBridge),
+        ) => {
             let shortcut_warning =
                 host.as_ref()
                     .and_then(|host| host.process_id)
@@ -430,13 +622,13 @@ async fn disconnect(manager: &McpManager, host_id: &str) -> Result<Value, String
                 .map(|error| error.to_string());
             stop_warning.or(shortcut_warning)
         }
-        Some(HostKind::OfficialSv2) => {
-            host.as_ref()
-                .and_then(|host| host.process_id)
-                .and_then(|process_id| {
-                    synthv_control::send_shortcut(process_id, BridgeShortcutAction::Stop).err()
-                })
-        }
+        (Some(HostKind::OfficialSv2), Some(SynthVConnectionProfile::OfficialBridge)) => host
+            .as_ref()
+            .and_then(|host| host.process_id)
+            .and_then(|process_id| {
+                synthv_control::send_shortcut(process_id, BridgeShortcutAction::Stop).err()
+            }),
+        _ => None,
     };
     Ok(json!({
         "hostId": host_id,
@@ -461,17 +653,27 @@ async fn read(manager: &McpManager, request: ReadRequest) -> Result<Value, Strin
         .synthv_server_id(&host.id)
         .await
         .ok_or_else(|| "所选 SynthV 宿主尚未连接。".to_string())?;
-    let data = match host.kind {
-        HostKind::Flat | HostKind::OfficialSv1 => {
+    let profile = manager
+        .synthv_connection_profile(&host.id)
+        .await
+        .ok_or_else(|| "所选 SynthV 宿主尚未连接。".to_string())?;
+    let data = match profile {
+        SynthVConnectionProfile::NativeFlat | SynthVConnectionProfile::LegacyBridge => {
             let remote = canonical_read_tool(&request.operation)?;
-            let args = canonical_read_arguments(host.kind, &request.operation, request.arguments)?;
+            let direct_kind = if profile == SynthVConnectionProfile::NativeFlat {
+                HostKind::Flat
+            } else {
+                HostKind::OfficialSv1
+            };
+            let args =
+                canonical_read_arguments(direct_kind, &request.operation, request.arguments)?;
             normalize_direct(
-                host.kind,
+                direct_kind,
                 &request.operation,
                 call_payload(manager, &id, remote, args).await?,
             )
         }
-        HostKind::OfficialSv2 => {
+        SynthVConnectionProfile::OfficialBridge => {
             read_sv2(
                 manager,
                 &id,
@@ -593,18 +795,22 @@ async fn write(manager: &McpManager, request: WriteRequest) -> Result<Value, Str
         .synthv_server_id(&host.id)
         .await
         .ok_or_else(|| "所选 SynthV 宿主尚未连接。".to_string())?;
-    let data = match host.kind {
-        HostKind::Flat => normalize_direct(
-            host.kind,
+    let profile = manager
+        .synthv_connection_profile(&host.id)
+        .await
+        .ok_or_else(|| "所选 SynthV 宿主尚未连接。".to_string())?;
+    let data = match profile {
+        SynthVConnectionProfile::NativeFlat => normalize_direct(
+            HostKind::Flat,
             &request.operation,
             write_direct(manager, &id, &request.operation, request.arguments, false).await?,
         ),
-        HostKind::OfficialSv1 => normalize_direct(
-            host.kind,
+        SynthVConnectionProfile::LegacyBridge => normalize_direct(
+            HostKind::OfficialSv1,
             &request.operation,
             write_direct(manager, &id, &request.operation, request.arguments, true).await?,
         ),
-        HostKind::OfficialSv2 => {
+        SynthVConnectionProfile::OfficialBridge => {
             write_sv2(
                 manager,
                 &id,
@@ -650,32 +856,38 @@ async fn write_direct(
     };
     let mut args = object(arguments)?;
     if legacy {
-        if operation == "project.open"
-            || operation.starts_with("sequence.")
-            || operation == "voice.assign"
-        {
-            return Err("所选宿主不提供此标准写入操作。".to_string());
-        }
-        if matches!(operation, "part.update" | "note.update") {
-            let mut changes = Map::new();
-            let locator_keys = if operation == "part.update" {
-                ["trackIndex", "partIndex", ""]
-            } else {
-                ["trackIndex", "partIndex", "noteIndex"]
-            };
-            let keys = args.keys().cloned().collect::<Vec<_>>();
-            for key in keys {
-                if key != "writeIntent" && !locator_keys.contains(&key.as_str()) {
-                    if let Some(value) = args.remove(&key) {
-                        changes.insert(key, value);
-                    }
-                }
-            }
-            args.insert("changes".to_string(), Value::Object(changes));
-        }
-        args.insert("writeIntent".to_string(), Value::Bool(true));
+        args = object(legacy_write_arguments(operation, Value::Object(args))?)?;
     }
     call_payload(manager, id, remote, Value::Object(args)).await
+}
+
+fn legacy_write_arguments(operation: &str, arguments: Value) -> Result<Value, String> {
+    if operation == "project.open"
+        || operation.starts_with("sequence.")
+        || operation == "voice.assign"
+    {
+        return Err("所选宿主不提供此标准写入操作。".to_string());
+    }
+    let mut args = object(arguments)?;
+    if matches!(operation, "part.update" | "note.update") {
+        let mut changes = Map::new();
+        let locator_keys = if operation == "part.update" {
+            ["trackIndex", "partIndex", ""]
+        } else {
+            ["trackIndex", "partIndex", "noteIndex"]
+        };
+        let keys = args.keys().cloned().collect::<Vec<_>>();
+        for key in keys {
+            if key != "writeIntent" && !locator_keys.contains(&key.as_str()) {
+                if let Some(value) = args.remove(&key) {
+                    changes.insert(key, value);
+                }
+            }
+        }
+        args.insert("changes".to_string(), Value::Object(changes));
+    }
+    args.insert("writeIntent".to_string(), Value::Bool(true));
+    Ok(Value::Object(args))
 }
 
 async fn write_sv2(
@@ -1113,6 +1325,7 @@ fn safe_label(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn sv2_indices_and_terms_are_normalized() {
@@ -1163,11 +1376,122 @@ mod tests {
     }
 
     #[test]
+    fn flat_project_path_must_be_an_existing_regular_svp_file() {
+        let root = std::env::temp_dir().join(format!("flat-project-{}", Uuid::new_v4()));
+        fs::write(&root, b"svp").unwrap();
+        let svp = root.with_extension("svp");
+        fs::rename(&root, &svp).unwrap();
+        assert_eq!(
+            validate_flat_project_path(svp.to_str().unwrap()).unwrap(),
+            fs::canonicalize(&svp).unwrap()
+        );
+        assert!(validate_flat_project_path("missing.svp").is_err());
+        assert!(validate_flat_project_path("not-a-project.txt").is_err());
+        fs::remove_file(svp).unwrap();
+    }
+
+    #[test]
     fn transport_details_are_hidden_from_standard_errors() {
         let error = standard_error("Flat MCP stdio Bridge failed after F13".to_string());
         for private_term in ["Flat MCP", "stdio", "Bridge", "F13"] {
             assert!(!error.contains(private_term));
         }
+    }
+
+    #[tokio::test]
+    async fn missing_flat_endpoint_uses_legacy_fallback() {
+        let native_calls = AtomicUsize::new(0);
+        let fallback_calls = AtomicUsize::new(0);
+        let (value, profile) = prefer_native_flat(
+            None,
+            |_| async {
+                native_calls.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, String>("native")
+            },
+            || async {
+                fallback_calls.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, String>("legacy")
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(value, "legacy");
+        assert_eq!(profile, SynthVConnectionProfile::LegacyBridge);
+        assert_eq!(native_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(fallback_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn failed_flat_handshake_uses_legacy_fallback() {
+        let native_calls = AtomicUsize::new(0);
+        let fallback_calls = AtomicUsize::new(0);
+        let (value, profile) = prefer_native_flat(
+            Some("http://127.0.0.1:17580/mcp".to_string()),
+            |_| async {
+                native_calls.fetch_add(1, Ordering::SeqCst);
+                Err::<&str, _>("handshake failed".to_string())
+            },
+            || async {
+                fallback_calls.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, String>("legacy")
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(value, "legacy");
+        assert_eq!(profile, SynthVConnectionProfile::LegacyBridge);
+        assert_eq!(native_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(fallback_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn successful_flat_native_connection_does_not_fallback() {
+        let native_calls = AtomicUsize::new(0);
+        let fallback_calls = AtomicUsize::new(0);
+        let (value, profile) = prefer_native_flat(
+            Some("http://127.0.0.1:17580/mcp".to_string()),
+            |_| async {
+                native_calls.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, String>("native")
+            },
+            || async {
+                fallback_calls.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, String>("legacy")
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(value, "native");
+        assert_eq!(profile, SynthVConnectionProfile::NativeFlat);
+        assert_eq!(native_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(fallback_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn legacy_writes_use_the_legacy_shape_and_reject_native_only_operations() {
+        let part = legacy_write_arguments(
+            "part.update",
+            json!({ "trackIndex": 0, "partIndex": 1, "name": "Verse" }),
+        )
+        .unwrap();
+        assert_eq!(part["writeIntent"], true);
+        assert_eq!(part["changes"]["name"], "Verse");
+        assert!(part.get("name").is_none());
+        assert!(legacy_write_arguments("voice.assign", json!({})).is_err());
+        assert!(legacy_write_arguments("sequence.set_tempo", json!({})).is_err());
+    }
+
+    #[test]
+    fn legacy_profile_exposes_the_sv1_common_capability_subset() {
+        let capabilities = synthv_hosts::capabilities(HostKind::OfficialSv1);
+        assert!(capabilities.write_operations.contains(&"transport.seek"));
+        assert!(capabilities.audio_capture);
+        assert!(!capabilities.read_operations.contains(&"singers"));
+        assert!(!capabilities.write_operations.contains(&"voice.assign"));
+        assert!(!capabilities.write_operations.contains(&"project.open"));
+        assert!(!capabilities
+            .write_operations
+            .contains(&"sequence.set_tempo"));
     }
 
     #[tokio::test]
@@ -1179,7 +1503,9 @@ mod tests {
             .find(|host| host.kind == HostKind::Flat && host.running && host.endpoint.is_some())
             .expect("running Flat MCP host");
         let manager = Arc::new(McpManager::default());
-        connect(&manager, Path::new("."), &host.id).await.unwrap();
+        connect(&manager, Path::new("."), &host.id, None)
+            .await
+            .unwrap();
         let status = read_value(&manager, &host.id, "status", json!({}))
             .await
             .unwrap();

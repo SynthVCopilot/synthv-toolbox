@@ -25,4 +25,18 @@
 | 017 | [BugFix] 组件原生下载 | 使用 ureq 内置流式下载替换 aria2，覆盖媒体导入器、组件源码、Windows FFmpeg 与 Sandboxie。 | 修复发布包依赖外部 aria2c 导致的组件下载断链。 | ✅ 已完成 |
 | 018 | [Feature] 统一SynthV宿主MCP | 将官方 SV1、Flat 与官方 SV2 收敛为内置 Agent 的标准宿主连接和创作工具。 | 隐藏连接协议、索引与能力差异，同时保留真实的不支持边界。 | ✅ 已完成 |
 | 019 | [Refactor] bridge-formal-component | 将 SynthV Agent Bridge 从 Git 子模块迁入应用组件目录，并保持开发、构建与打包可用。 | 让该运行时随主仓库统一版本管理与发布。 | ✅ 已完成 |
-| 020 | [BugFix] concurrent-slots | 修复并发启动、统一账号数据、探测授权和实例跟踪。 | 支持同账号多实例及主槽切换，避免水印声库混用。 | 🔄 进行中 |
+| 020 | [Feature] Agent文件访问审批 | 为内置 Agent 提供标准文件枚举与两级审批策略。 | 音频/SynthV 工作文件应直接通过，其他文件在非 Solo 模式必须由人工批准。 | ✅ 已完成 |
+| 021 | [BugFix] Flat连接回退 | 在 Flat 原生 MCP 缺失或不稳定时回退到兼容 Bridge。 | Windows Flat 可能不提供 MCP，连接不能依赖单一实验性后端。 | ✅ 已完成 |
+| 022 | [BugFix] actions-build-fix | 修复正式 Bridge 组件裁剪后重复构建失败及后续 Rust lint 阻断。 | 当前 main 的 Windows 与 macOS Actions 都无法进入桌面打包阶段。 | ✅ 已完成 |
+| 023 | [Feature] dev-build-artifacts | 将 main、PR 与手动验证的 Windows/macOS 开发安装包上传为 Actions artifact。 | 让未打 tag 的开发构建也可以直接下载和验收。 | ✅ 已完成 |
+| 024 | [Feature] http-mcp-interface | 为 Toolbox 增加默认关闭、仅监听本机的 HTTP MCP 接口及设置入口。 | 让 OpenCode 等外部程序在不暴露网络服务的默认状态下复用标准 SynthV 工具。 | ✅ 已完成 |
+| 025 | [Integration] opencode-ollama-cover-test | 将 OpenCode 的 Ollama Cloud GLM 模型连接到 Toolbox，并执行指定 BV 来源与风格参考的 Cover 验证。 | 用真实外部 Agent、Flat 宿主和媒体链路验证端到端可用性与失败回退。 | ✅ 已完成 |
+| 026 | [Feature] 对话模型与模式选择 | 将模型提供商改为可搜索弹窗列表，并把 Edit/Solo 工作模式移入对话界面。 | 让模型和执行强度在开始对话时可见、可点击选择，减少设置页层级。 | ✅ 已完成 |
+| 027 | [Feature] Flat脚本自动准备与参数启动 | 连接 Flat 时自动安装或更新兼容脚本，并允许使用工程路径参数启动后继续连接。 | 让无原生 MCP 或未运行的 Flat 不再要求用户手动复制脚本、重扫和重试。 | ✅ 已完成 |
+| 028 | [BugFix] ChatGPT风格对话界面 | 在 Copilot 中显示当前供应商/模型，并修复深色历史栏与过高输入区，形成 ChatGPT 风格的紧凑对话布局。 | 模型入口隐藏在设置页且深色界面存在明显亮色块，用户无法在对话中确认当前模型。 | ✅ 已完成 |
+| 029 | [Feature] OAuth与APIKey双认证 | 在模型登录弹窗中允许选择 OAuth 或 API Key，并为 Claude/OpenAI 提供安全存储、验证、模型发现与运行时路由。 | 只有 OAuth 按钮且搜索框布局损坏，无法使用平台 API Key 完成模型接入。 | ✅ 已完成 |
+| 030 | [Feature] 多凭据模型负载均衡 | 同一提供商支持多个 API Key 与多个 OAuth 账号，按模型资格、健康状态和轮转顺序调度。 | 单凭据或固定首账号无法利用多份额度，也会让限流和临时故障阻断整个 Agent。 | ✅ 已完成 |
+| 031 | [Refactor] 可复用模型接入包 | 将认证、模型目录和凭据调度提取为可迁移技术包，并评估接入 WorkBuddy 与 TRAE。 | 降低在其他桌面 Agent 中复用模型登录能力的维护成本，同时只发布有官方协议依据的适配。 | ✅ 已完成 |
+| 032 | [Refactor] models.dev运行时目录 | 连接向导与运行时资格以 models.dev 为来源，保留协议能力与离线约束。 | 统一模型配置来源。 | ✅ 已完成 |
+| 033 | [BugFix] 开发构建回归 | 修复 Windows 条件编译、测试清单和 Clippy 拒绝项，两平台产物已上传。 | 恢复跨平台开发构建交付。 | ✅ 已完成 |
+| 034 | [BugFix] concurrent-slots | 修复并发启动、统一账号数据、探测授权和实例跟踪。 | 支持同账号多实例及主槽切换，避免水印声库混用。 | 🔄 进行中 |

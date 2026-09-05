@@ -7,6 +7,7 @@ const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const rustRoot = join(repositoryRoot, "src", "PiDesktop.Tauri", "src-tauri");
 const read = (path) => readFileSync(path, "utf8");
 const tasks = read(join(rustRoot, "src", "media_tasks.rs"));
+const control = read(join(rustRoot, "src", "synthv_control.rs"));
 const workflows = read(join(rustRoot, "src", "bridge_workflows.rs"));
 const parser = read(join(rustRoot, "components", "synthv-agent-bridge", "scripts", "cover-score-notes.mjs"));
 
@@ -22,6 +23,9 @@ assert.match(tasks, /validate_cover_notes/);
 assert.match(tasks, /已创建检查点/);
 assert.match(tasks, /部分音符可能已经写入/);
 assert.match(tasks, /BridgeShortcutAction::Save/);
+assert.match(tasks, /BridgeShortcutAction::Refresh/);
+assert.match(tasks, /requiresHostRegistration/);
+assert.match(control, /Self::Refresh => "F5"/);
 assert.doesNotMatch(tasks, /fn ensure_bridge/);
 assert.doesNotMatch(tasks, /start_bridge_and_connect/);
 

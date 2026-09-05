@@ -21,14 +21,14 @@ SynthV Toolbox 将官方 Synthesizer V Studio Pro、Synthesizer V Flat 和官方
 Agent 先调用 `synthv_hosts`。只有一个已连接宿主时，后续读写可省略 `hostId`；存在多个连接时必须明确选择。
 
 - 官方 SV1 和 SV2：Toolbox 聚焦对应 PID，默认发送 F13 启动或重连 Bridge；断开时发送 F14。原始快捷键和 Bridge 工具不会进入 Agent 工具表。
-- Flat：Toolbox 只连接 Flat 声明的 `127.0.0.1` 本机 MCP 端点，不加载 Lua Bridge，也不发送 F13/F14。
+- Flat：先尝试 Flat 声明并经严格校验的 `127.0.0.1` 本机 MCP endpoint。endpoint 缺失、握手失败或无法列出工具时，Toolbox 自动改用兼容 Bridge；只有这一回退路径才发送 F13/F14。Agent 的工具、连接结果和能力数据不暴露所选后端。
 - 官方 SV1 首次安装兼容扩展后需要宿主完成脚本重扫。之后连接和断开均由 Agent 自动执行。
 
 ## 真实能力差异
 
 `synthv_capabilities` 中的 `readOperations` 和 `writeOperations` 是权威清单。调用缺失操作会在进入宿主前返回标准“不支持”错误。
 
-- Flat 可以枚举已在 Flat 中注册的歌手并按精确 `databaseName` 分配，但当前没有安全的播放头定位操作，因此不能执行定点音频片段捕获。
+- Flat 原生连接可以枚举已在 Flat 中注册的歌手并按精确 `databaseName` 分配，但当前没有安全的播放头定位操作，因此不能执行定点音频片段捕获。若切换到兼容 Bridge，能力会自动收敛为 SV1 共同子集：可定位和捕获，但不提供歌手枚举/分配、工程打开或时间轴写入。
 - 官方 SV1 可以读写基础轨道、Part 和音符，也可控制并定位播放；不提供 SV2 的 Retake、computed pitch 或歌手身份选择。
 - 官方 SV2 提供完整的 Guard/Context 写入、Voice 参数、Retake 和 computed pitch；官方脚本 API 不提供歌手数据库枚举或身份分配。
 
@@ -45,3 +45,5 @@ Agent 先调用 `synthv_hosts`。只有一个已连接宿主时，后续读写�
 7. 完成后调用 `synthv_disconnect`。
 
 连接失败时先重新调用 `synthv_hosts`：进程退出、PID 变化或宿主扩展未就绪都会反映在标准状态中。不要直接调用或缓存底层宿主工具。
+
+Windows 上，Flat 的兼容扩展目录优先为 `%USERPROFILE%\Documents\Anthronics\Synthesizer V Studio\scripts`；仅在该目录不可用时才会使用实际存在且安全的 Anthronics APPDATA/LOCALAPPDATA 候选。官方 SV1 使用独立的 `%USERPROFILE%\Documents\Dreamtonics\Synthesizer V Studio\scripts`，两者绝不混用。Windows 原生 MCP 状态只从 Anthronics 的 PROGRAMDATA、APPDATA、LOCALAPPDATA 设置候选中只读验证；不会扫描端口或读取代理配置。

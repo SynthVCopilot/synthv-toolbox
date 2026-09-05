@@ -1,0 +1,12 @@
+# 调研与发现
+
+- 目标分支为 `codex/dev-build-artifacts`，初始工作区干净。
+- `.github/workflows/ffmpeg-verify.yml` 已按 Windows NSIS 与 macOS universal app/DMG 矩阵执行一次 `npm run tauri build`，后续步骤只做输出校验。
+- `src/PiDesktop.Tauri/package.json` 的 `test:contracts` 由根 `/test` 下的 Node `.mjs` 契约串联，未使用直接声明的 YAML 解析依赖，因此新契约采用静态文本断言。
+- 任务范围明确排除 Rust 和 `ensure-bridge`；本任务只涉及 workflow、根测试和 package script，以及 `/agents` 审计记录。
+- 首次验证从 `src/PiDesktop.Tauri` 执行根测试路径，导致 Node 找不到 `src/PiDesktop.Tauri/test/...`；改为从 worktree 根目录执行后重试。
+- 最终静态契约、Ruby YAML 解析、`actionlint` 和完整 `npm run --prefix src/PiDesktop.Tauri test:contracts` 均通过。
+- [集成复核] -> 双平台分别维护 upload 步骤会重复 artifact 策略 -> 收敛为一个矩阵通用上传步骤，产物名统一为 `synthv-toolbox-dev-${{ matrix.target }}`。
+- [首次真实 Actions 复验] -> Windows 已通过原 TS2688 失败点，但 Git checkout 将 YAML 换行转为 CRLF，静态契约首行仅匹配 LF -> 读取 workflow 后先归一化 CRLF，保留所有结构断言。
+- [Actions 运行时警告] -> `actions/cache@v4` 使用已弃用的 Node 20 runtime -> 升级到官方 Node 24 版本 `actions/cache@v5`，当前 hosted runner 版本满足最低要求。
+- 首次验证从 `src/PiDesktop.Tauri` 执行根测试路径，导致 Node 找不到 `src/PiDesktop.Tauri/test/...`；改为从 worktree 根目录执行后重试。

@@ -1,4 +1,4 @@
-name: Toolbox PR Verification
+name: Toolbox Dev Build
 
 on:
   pull_request:
@@ -55,7 +55,7 @@ jobs:
           components: rustfmt,clippy
 
       - name: Cache Rust build
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -149,6 +149,9 @@ jobs:
           $bundle = "src/PiDesktop.Tauri/src-tauri/target/${{ matrix.target }}/release/bundle/nsis"
           $installer = Get-ChildItem -Path $bundle -Filter *.exe -File | Select-Object -First 1
           if ($null -eq $installer) { throw "NSIS bundle was not produced" }
+          $artifactRoot = Join-Path $env:RUNNER_TEMP "synthv-toolbox-artifacts/${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
+          Copy-Item -LiteralPath $installer.FullName -Destination (Join-Path $artifactRoot "synthv-toolbox-dev-${{ matrix.target }}-nsis.exe")
 
       - name: Verify macOS universal app and DMG output
         if: runner.os == 'macOS'
@@ -156,9 +159,22 @@ jobs:
         run: |
           set -euo pipefail
           bundle_root="src/PiDesktop.Tauri/src-tauri/target/${{ matrix.target }}/release/bundle"
-          test -n "$(find "$bundle_root/dmg" -maxdepth 1 -name '*.dmg' -print -quit)"
+          dmg_path="$(find "$bundle_root/dmg" -maxdepth 1 -name '*.dmg' -print -quit)"
+          test -n "$dmg_path"
           app_path="$(find "$bundle_root/macos" -maxdepth 1 -name '*.app' -print -quit)"
           test -n "$app_path"
           executable="$(find "$app_path/Contents/MacOS" -maxdepth 1 -type f -print -quit)"
           archs="$(lipo -archs "$executable")"
           test "$archs" = "x86_64 arm64" || test "$archs" = "arm64 x86_64"
+          artifact_root="$RUNNER_TEMP/synthv-toolbox-artifacts/${{ matrix.target }}"
+          mkdir -p "$artifact_root"
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "$artifact_root/synthv-toolbox-dev-${{ matrix.target }}.app.zip"
+          cp "$dmg_path" "$artifact_root/synthv-toolbox-dev-${{ matrix.target }}.dmg"
+
+      - name: Upload development build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: synthv-toolbox-dev-${{ matrix.target }}
+          path: ${{ runner.temp }}/synthv-toolbox-artifacts/${{ matrix.target }}
+          if-no-files-found: error
+          retention-days: 14

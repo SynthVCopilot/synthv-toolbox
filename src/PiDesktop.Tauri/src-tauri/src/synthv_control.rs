@@ -1,10 +1,13 @@
 use std::path::PathBuf;
-use std::process::Stdio;
 use std::time::Duration;
+
+#[cfg(target_os = "macos")]
+use std::process::Stdio;
 
 use serde::{Deserialize, Serialize};
 
 use crate::mcp::McpManager;
+#[cfg(target_os = "macos")]
 use crate::synthv::quiet_command;
 
 const BRIDGE_START_KEY: &str = "F13";
@@ -31,15 +34,17 @@ pub struct SynthVShortcutProfile {
 #[serde(rename_all = "camelCase")]
 pub enum BridgeShortcutAction {
     Start,
+    StartLegacy,
     Stop,
     Save,
     Undo,
+    Refresh,
 }
 
 impl BridgeShortcutAction {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Start => BRIDGE_START_KEY,
+            Self::Start | Self::StartLegacy => BRIDGE_START_KEY,
             Self::Stop => BRIDGE_STOP_KEY,
             Self::Save => {
                 if cfg!(target_os = "macos") {
@@ -55,6 +60,7 @@ impl BridgeShortcutAction {
                     "Ctrl+Z"
                 }
             }
+            Self::Refresh => "F5",
         }
     }
 }
@@ -85,17 +91,21 @@ pub fn send_shortcut(
     Ok(process)
 }
 
+pub async fn start_bridge(process_id: u32) -> Result<SynthVProcess, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        send_shortcut(process_id, BridgeShortcutAction::Start)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 pub async fn start_bridge_and_connect(
     process_id: u32,
     manager: &McpManager,
     node: String,
     bridge_dir: PathBuf,
 ) -> Result<(SynthVProcess, Vec<String>), String> {
-    let process = tauri::async_runtime::spawn_blocking(move || {
-        send_shortcut(process_id, BridgeShortcutAction::Start)
-    })
-    .await
-    .map_err(|error| error.to_string())??;
+    let process = start_bridge(process_id).await?;
     let mut last_error = "Bridge 尚未就绪。".to_string();
     for _ in 0..16 {
         manager.disconnect("synthv").await;
@@ -116,8 +126,23 @@ pub async fn start_bridge_and_connect(
 }
 
 fn is_synthv_process(name: &str, command: &str) -> bool {
+    if is_flat_executable_name(name) || is_flat_executable_name(command) {
+        return true;
+    }
     let text = format!("{name}\n{command}").to_ascii_lowercase();
     text.contains("synthv-studio") || text.contains("synthesizer v studio")
+}
+
+fn is_flat_executable_name(value: &str) -> bool {
+    let trimmed = value.trim().trim_matches('"');
+    let file_name = std::path::Path::new(trimmed)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(trimmed);
+    matches!(
+        file_name.to_ascii_lowercase().as_str(),
+        "synthesizer v flat" | "synthesizer v flat.exe" | "synthesizer-v-flat.exe"
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -156,18 +181,31 @@ mod platform {
         process_id: u32,
         action: BridgeShortcutAction,
     ) -> Result<(), String> {
-        let key = match action {
+        let command = match action {
             BridgeShortcutAction::Start => "key code 105".to_string(),
+            BridgeShortcutAction::StartLegacy => format!(
+                "tell application \"System Events\" to tell (first process whose unix id is {process_id}) to click menu item \"SynthV Agent Bridge SV1 Legacy\" of menu 1 of menu item \"SynthV Agent Bridge\" of menu \"Scripts\" of menu bar 1"
+            ),
             BridgeShortcutAction::Stop => "key code 107".to_string(),
             BridgeShortcutAction::Save => "keystroke \"s\" using command down".to_string(),
             BridgeShortcutAction::Undo => "keystroke \"z\" using command down".to_string(),
+            BridgeShortcutAction::Refresh => format!(
+                "tell application \"System Events\" to tell (first process whose unix id is {process_id}) to click menu item \"Rescan\" of menu \"Scripts\" of menu bar 1"
+            ),
         };
         let focus = format!(
             "tell application \"System Events\" to tell (first process whose unix id is {process_id}) to set frontmost to true"
         );
-        let key = format!("tell application \"System Events\" to {key}");
+        let command = if matches!(
+            action,
+            BridgeShortcutAction::StartLegacy | BridgeShortcutAction::Refresh
+        ) {
+            command
+        } else {
+            format!("tell application \"System Events\" to {command}")
+        };
         let output = quiet_command("osascript")
-            .args(["-e", &focus, "-e", "delay 0.12", "-e", &key])
+            .args(["-e", &focus, "-e", "delay 0.12", "-e", &command])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output()
@@ -189,11 +227,38 @@ mod platform {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matches_flat_only_by_exact_executable_name() {
+        assert!(is_synthv_process(
+            "Synthesizer V Flat.exe",
+            "C:\\Apps\\Synthesizer V Flat.exe"
+        ));
+        assert!(is_synthv_process(
+            "Synthesizer V Flat",
+            "/Applications/Synthesizer V Flat"
+        ));
+        assert!(!is_synthv_process(
+            "flat-helper.exe",
+            "C:\\Apps\\flat-helper.exe"
+        ));
+        assert!(!is_synthv_process(
+            "Synthesizer V Flat Helper.exe",
+            "C:\\Apps\\Synthesizer V Flat Helper.exe"
+        ));
+    }
+}
+
 #[cfg(windows)]
 mod platform {
     use std::mem::{size_of, zeroed};
+    use std::ptr::null_mut;
 
-    use windows_sys::Win32::Foundation::{BOOL, LPARAM};
+    use windows_sys::core::BOOL;
+    use windows_sys::Win32::Foundation::{HWND, LPARAM};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
         TH32CS_SNAPPROCESS,
@@ -237,7 +302,7 @@ mod platform {
         process_id: u32,
         action: BridgeShortcutAction,
     ) -> Result<(), String> {
-        let mut hwnd = 0isize;
+        let mut hwnd: HWND = null_mut();
         unsafe {
             EnumWindows(
                 Some(find_visible_window),
@@ -247,7 +312,7 @@ mod platform {
                 } as *mut _ as LPARAM,
             );
         }
-        if hwnd == 0 {
+        if hwnd.is_null() {
             return Err("未找到可聚焦的 SynthV 窗口。".to_string());
         }
         unsafe {
@@ -257,7 +322,7 @@ mod platform {
             }
         }
         let mut input = match action {
-            BridgeShortcutAction::Start => vec![
+            BridgeShortcutAction::Start | BridgeShortcutAction::StartLegacy => vec![
                 keyboard_input(0x7C, 0),
                 keyboard_input(0x7C, KEYEVENTF_KEYUP),
             ],
@@ -277,6 +342,10 @@ mod platform {
                 keyboard_input(0x5A, KEYEVENTF_KEYUP),
                 keyboard_input(0x11, KEYEVENTF_KEYUP),
             ],
+            BridgeShortcutAction::Refresh => vec![
+                keyboard_input(0x74, 0),
+                keyboard_input(0x74, KEYEVENTF_KEYUP),
+            ],
         };
         let sent = unsafe {
             SendInput(
@@ -294,10 +363,10 @@ mod platform {
 
     struct WindowLookup {
         process_id: u32,
-        hwnd: *mut isize,
+        hwnd: *mut HWND,
     }
 
-    unsafe extern "system" fn find_visible_window(hwnd: isize, lparam: LPARAM) -> BOOL {
+    unsafe extern "system" fn find_visible_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
         if IsWindowVisible(hwnd) == 0 {
             return 1;
         }

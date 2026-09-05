@@ -19,6 +19,8 @@ use crate::components::{managed_media_fetcher_binary, resolved_ffmpeg_directory}
 use crate::synthv::{find_node, quiet_command};
 
 const MAX_METADATA_BYTES: usize = 4 * 1024 * 1024;
+const MAX_LOCAL_AUDIO_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const LOCAL_AUDIO_EXTENSIONS: &[&str] = &["wav", "flac", "mp3", "m4a", "aac", "ogg", "opus"];
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -180,6 +182,90 @@ pub async fn import_audio_cancellable(
     result
 }
 
+pub fn adopt_managed_audio(
+    source: String,
+    rights_confirmed: bool,
+) -> Result<MediaImportResult, String> {
+    if !rights_confirmed {
+        return Err("导入前必须确认你拥有该内容或已取得足够授权。".to_string());
+    }
+    let source_path = PathBuf::from(&source);
+    let metadata =
+        fs::symlink_metadata(&source_path).map_err(|error| format!("无法读取本地音频：{error}"))?;
+    if !source_path.is_absolute() || !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("本地 Cover 输入必须是受管目录中的普通绝对路径音频文件。".to_string());
+    }
+    if metadata.len() == 0 || metadata.len() > MAX_LOCAL_AUDIO_BYTES {
+        return Err("本地 Cover 音频必须在 1 byte 到 2 GiB 之间。".to_string());
+    }
+    let canonical =
+        fs::canonicalize(&source_path).map_err(|error| format!("无法解析本地音频路径：{error}"))?;
+    let managed_root =
+        fs::canonicalize(data_root()).map_err(|error| format!("无法解析受管数据目录：{error}"))?;
+    if !canonical.starts_with(&managed_root) {
+        return Err("本地 Cover 音频必须位于 Toolbox 受管数据目录。".to_string());
+    }
+    let extension = canonical
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        .filter(|value| LOCAL_AUDIO_EXTENSIONS.contains(&value.as_str()))
+        .ok_or_else(|| "本地 Cover 输入不是受支持的音频格式。".to_string())?;
+    let import_id = Uuid::new_v4().to_string();
+    let directory = imports_root()?.join(&import_id);
+    fs::create_dir(&directory).map_err(|error| format!("无法创建媒体导入目录：{error}"))?;
+    let result = (|| {
+        let audio_path = directory.join(format!("source.{extension}"));
+        fs::copy(&canonical, &audio_path)
+            .map_err(|error| format!("无法复制本地 Cover 音频：{error}"))?;
+        let sha256 = sha256_file(&audio_path)?;
+        let imported_at_utc = Utc::now().to_rfc3339();
+        let title = canonical
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("managed-audio")
+            .to_string();
+        let source = MediaSourcePreview {
+            source_url: canonical.to_string_lossy().into_owned(),
+            canonical_url: canonical.to_string_lossy().into_owned(),
+            platform: "managed-local".to_string(),
+            media_id: title.clone(),
+            title,
+            uploader: "本地受管文件".to_string(),
+            duration_seconds: None,
+            thumbnail_url: None,
+        };
+        let metadata_path = directory.join("source.json");
+        let manifest_path = directory.join("manifest.json");
+        write_json(&metadata_path, &source)?;
+        write_json(
+            &manifest_path,
+            &json!({
+                "schemaVersion": 1,
+                "importId": import_id,
+                "sourcePath": canonical,
+                "rightsConfirmed": true,
+                "rightsConfirmedAtUtc": imported_at_utc,
+                "audio": audio_path.file_name().and_then(|name| name.to_str()).unwrap_or("source.wav"),
+                "sha256": sha256,
+            }),
+        )?;
+        Ok(MediaImportResult {
+            import_id,
+            source,
+            audio_path: audio_path.to_string_lossy().into_owned(),
+            metadata_path: metadata_path.to_string_lossy().into_owned(),
+            manifest_path: manifest_path.to_string_lossy().into_owned(),
+            sha256,
+            imported_at_utc,
+        })
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&directory);
+    }
+    result
+}
+
 async fn preview_cancellable(
     source: &str,
     cancelled: &Arc<AtomicBool>,
@@ -234,9 +320,9 @@ fn normalize_source(source: &str) -> Result<String, String> {
             .chars()
             .all(|character| character.is_ascii_alphanumeric())
     {
-        return Ok(format!("https://www.bilibili.com/video/{source}"));
+        return Ok(format!("https://www.bilibili.com/video/{source}/"));
     }
-    let parsed = Url::parse(source)
+    let mut parsed = Url::parse(source)
         .map_err(|_| "请输入完整的 Bilibili/YouTube URL 或 BV 号。".to_string())?;
     if parsed.scheme() != "https" {
         return Err("媒体来源必须使用 HTTPS。".to_string());
@@ -250,6 +336,13 @@ fn normalize_source(source: &str) -> Result<String, String> {
         || host == "b23.tv";
     if !allowed {
         return Err("当前只支持 Bilibili 与 YouTube 来源。".to_string());
+    }
+    if (host == "bilibili.com" || host.ends_with(".bilibili.com"))
+        && parsed.path().starts_with("/video/BV")
+        && !parsed.path().ends_with('/')
+    {
+        let normalized_path = format!("{}/", parsed.path());
+        parsed.set_path(&normalized_path);
     }
     Ok(parsed.to_string())
 }
@@ -371,4 +464,21 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     file.write_all(&bytes).map_err(|error| error.to_string())?;
     file.sync_all().map_err(|error| error.to_string())?;
     fs::rename(&temporary, path).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_source;
+
+    #[test]
+    fn bilibili_video_urls_have_a_stable_trailing_slash() {
+        assert_eq!(
+            normalize_source("BV1ba4y1x7pg").unwrap(),
+            "https://www.bilibili.com/video/BV1ba4y1x7pg/"
+        );
+        assert_eq!(
+            normalize_source("https://www.bilibili.com/video/BV1JTnTzWEPc").unwrap(),
+            "https://www.bilibili.com/video/BV1JTnTzWEPc/"
+        );
+    }
 }

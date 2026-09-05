@@ -163,23 +163,30 @@ pub fn game_to_midi(
     game_midi_result(data, advanced)
 }
 
+pub struct GameToMidiRequest {
+    pub vocal_path: String,
+    pub instrumental_path: String,
+    pub lyrics: Option<String>,
+    pub tolerance: f64,
+    pub advanced: bool,
+    pub resource_dir: PathBuf,
+    pub cancelled: Arc<AtomicBool>,
+    pub task_id: String,
+}
+
 pub async fn game_to_midi_cancellable(
-    vocal_path: String,
-    instrumental_path: String,
-    lyrics: Option<String>,
-    tolerance: f64,
-    advanced: bool,
-    resource_dir: PathBuf,
-    cancelled: Arc<AtomicBool>,
-    task_id: String,
+    request: GameToMidiRequest,
 ) -> Result<WorkflowResult, String> {
-    Uuid::parse_str(&task_id).map_err(|_| "Cover 任务 ID 无效。".to_string())?;
-    let vocal = validate_input(&vocal_path, "人声轨", AUDIO_EXTENSIONS)?;
-    let instrumental = validate_input(&instrumental_path, "伴奏轨", AUDIO_EXTENSIONS)?;
-    if !(0.02..=0.25).contains(&tolerance) {
+    Uuid::parse_str(&request.task_id).map_err(|_| "Cover 任务 ID 无效。".to_string())?;
+    let vocal = validate_input(&request.vocal_path, "人声轨", AUDIO_EXTENSIONS)?;
+    let instrumental = validate_input(&request.instrumental_path, "伴奏轨", AUDIO_EXTENSIONS)?;
+    if !(0.02..=0.25).contains(&request.tolerance) {
         return Err("匹配容差必须在 0.02–0.25 秒之间。".to_string());
     }
-    let output_directory = data_root().join("output").join("covers").join(&task_id);
+    let output_directory = data_root()
+        .join("output")
+        .join("covers")
+        .join(&request.task_id);
     if let Ok(metadata) = fs::symlink_metadata(&output_directory) {
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
             return Err("Cover 输出目录不是安全的普通目录。".to_string());
@@ -199,12 +206,12 @@ pub async fn game_to_midi_cancellable(
         "--midi".to_string(),
         midi_path.to_string_lossy().into_owned(),
         "--tol".to_string(),
-        format!("{tolerance:.3}"),
+        format!("{:.3}", request.tolerance),
     ];
-    if advanced {
+    if request.advanced {
         args.push("--advanced".to_string());
     }
-    if let Some(lyrics) = lyrics.filter(|value| !value.trim().is_empty()) {
+    if let Some(lyrics) = request.lyrics.filter(|value| !value.trim().is_empty()) {
         if lyrics.len() > 256 * 1024 {
             let _ = fs::remove_dir_all(&output_directory);
             return Err("Cover 歌词超过 256 KiB 限制。".to_string());
@@ -221,9 +228,10 @@ pub async fn game_to_midi_cancellable(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    configure_ffmpeg_environment(command.as_std_mut(), &resource_dir)?;
+    configure_ffmpeg_environment(command.as_std_mut(), &request.resource_dir)?;
     let output =
-        crate::managed_process::run_managed_command(command, &cancelled, "Cover 旋律提取").await;
+        crate::managed_process::run_managed_command(command, &request.cancelled, "Cover 旋律提取")
+            .await;
     let output = match output {
         Ok(output) => output,
         Err(error) => {
@@ -248,7 +256,7 @@ pub async fn game_to_midi_cancellable(
             .unwrap_or_else(|| tail(&String::from_utf8_lossy(&output.stderr), 1600));
         return Err(format!("Cover 旋律提取失败：{detail}"));
     }
-    game_midi_result(data, advanced)
+    game_midi_result(data, request.advanced)
 }
 
 fn game_midi_result(data: Value, advanced: bool) -> Result<WorkflowResult, String> {

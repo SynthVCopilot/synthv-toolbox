@@ -517,13 +517,17 @@ impl MediaTaskManager {
         cancelled: Arc<AtomicBool>,
     ) -> Result<Value, String> {
         self.update(id, 5, "正在导入 Cover 来源音频。", None);
-        let imported = media_import::import_audio_cancellable(
-            request.source.clone(),
-            request.rights_confirmed,
-            self.resource_dir.clone(),
-            cancelled.clone(),
-        )
-        .await?;
+        let imported = if Path::new(&request.source).is_absolute() {
+            media_import::adopt_managed_audio(request.source.clone(), request.rights_confirmed)?
+        } else {
+            media_import::import_audio_cancellable(
+                request.source.clone(),
+                request.rights_confirmed,
+                self.resource_dir.clone(),
+                cancelled.clone(),
+            )
+            .await?
+        };
         self.ensure_not_cancelled(&cancelled)?;
 
         self.update(id, 30, "正在分离人声与伴奏。", None);
@@ -541,16 +545,16 @@ impl MediaTaskManager {
         self.ensure_not_cancelled(&cancelled)?;
 
         self.update(id, 60, "正在提取旋律并写入歌词 MIDI。", None);
-        let midi = workflows::game_to_midi_cancellable(
+        let midi = workflows::game_to_midi_cancellable(workflows::GameToMidiRequest {
             vocal_path,
-            instrumental_path.clone(),
-            request.lyrics.clone(),
-            request.tolerance,
-            request.advanced,
-            self.resource_dir.clone(),
-            cancelled.clone(),
-            id.to_string(),
-        )
+            instrumental_path: instrumental_path.clone(),
+            lyrics: request.lyrics.clone(),
+            tolerance: request.tolerance,
+            advanced: request.advanced,
+            resource_dir: self.resource_dir.clone(),
+            cancelled: cancelled.clone(),
+            task_id: id.to_string(),
+        })
         .await?;
         let midi_path = midi
             .output_path
@@ -809,8 +813,42 @@ impl MediaTaskManager {
         {
             arguments["version"] = Value::String(version.to_string());
         }
-        self.standard_write(&host.id, "voice.assign", arguments)
-            .await?;
+        if let Err(error) = self
+            .standard_write(&host.id, "voice.assign", arguments.clone())
+            .await
+        {
+            if !error.contains("did not register singer") {
+                return Err(error);
+            }
+            let process_id = host.process_id;
+            let refreshed = tauri::async_runtime::spawn_blocking(move || {
+                synthv_control::send_shortcut(
+                    process_id,
+                    synthv_control::BridgeShortcutAction::Refresh,
+                )
+            })
+            .await
+            .map_err(|join_error| join_error.to_string())
+            .and_then(|result| result.map(|_| ()));
+            if let Err(refresh_error) = refreshed {
+                return Ok(json!({
+                    "assigned": false,
+                    "requiresHostRegistration": true,
+                    "reason": format!("{error}；自动刷新 Flat 声库失败：{refresh_error}")
+                }));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+            if let Err(retry_error) = self
+                .standard_write(&host.id, "voice.assign", arguments)
+                .await
+            {
+                return Ok(json!({
+                    "assigned": false,
+                    "requiresHostRegistration": true,
+                    "reason": retry_error
+                }));
+            }
+        }
         Ok(json!({
             "assigned": true,
             "singer": {

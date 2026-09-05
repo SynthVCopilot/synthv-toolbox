@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import type {
   AiProviderId,
   AgentWorkMode,
+  AgentFileApproval,
   AiProviderSummary,
   AppMode,
   AudioCaptureCapability,
@@ -25,6 +26,7 @@ import type {
   LyricSectionRequest,
   MediaSourcePreview,
   MediaTaskSnapshot,
+  HttpApiStatus,
   OperationResult,
   ProjectCheckpoint,
   Sv2AccountProbe,
@@ -58,6 +60,15 @@ let previewConcurrentDisclaimerAccepted = false;
 let previewSv2ConcurrentEnabled = true;
 let previewSv2AccountIndicatorEnabled = false;
 let previewSmartSvpLaunchEnabled = false;
+let previewHttpApiStatus: HttpApiStatus = {
+  enabled: false,
+  agentEnabled: false,
+  running: false,
+  port: 17831,
+  endpoint: null,
+  agentEndpoint: null,
+  lastError: null,
+};
 let previewBridgeConnected = true;
 let previewDownloads: ComponentDownload[] = [];
 let previewMediaTasks: MediaTaskSnapshot[] = [];
@@ -68,20 +79,21 @@ let previewActiveAiProvider: AiProviderId = "anthropic";
 let previewAiAccountSequence = 2;
 let previewAiProviders: AiProviderSummary[] = [{
   id: "anthropic",
-  displayName: "Claude 官方订阅",
-  description: "通过浏览器授权 Claude 账号，并使用官方订阅提供的模型。",
+  displayName: "Claude / Anthropic",
+  description: "可通过 Claude 账号 OAuth 或 Anthropic API Key 连接。",
   active: true,
   connected: true,
   healthyAccounts: 1,
   totalAccounts: 1,
   model: "claude-sonnet-4-6",
-  models: [
+  oauthModels: [
     "claude-sonnet-4-6",
     "claude-sonnet-5",
     "claude-haiku-4-5",
     "claude-opus-4-8",
     "claude-opus-5",
   ],
+  apiKeyModels: ["claude-sonnet-4-6", "claude-haiku-4-5", "claude-opus-4-8"],
   accounts: [{
     id: "preview-anthropic-1",
     label: "Claude official account",
@@ -89,16 +101,27 @@ let previewAiProviders: AiProviderSummary[] = [{
     authorized: true,
     healthy: true,
   }],
+  models: [
+    "claude-sonnet-4-6",
+    "claude-sonnet-5",
+    "claude-haiku-4-5",
+    "claude-opus-4-8",
+    "claude-opus-5",
+  ],
+  apiKeys: [],
+  authMethods: ["oauth", "api-key"],
+  available: true,
+  unavailableReason: null,
 }, {
   id: "openai-codex",
-  displayName: "Codex 官方订阅",
-  description: "通过浏览器授权 ChatGPT 账号，并使用账号可用的 Codex 模型。",
+  displayName: "OpenAI / Codex",
+  description: "可通过 ChatGPT OAuth 或 OpenAI API Key 连接。",
   active: false,
   connected: false,
   healthyAccounts: 0,
   totalAccounts: 0,
   model: "gpt-5.6-terra",
-  models: [
+  oauthModels: [
     "gpt-5.6-luna",
     "gpt-5.6-terra",
     "gpt-5.6-sol",
@@ -106,17 +129,62 @@ let previewAiProviders: AiProviderSummary[] = [{
     "gpt-5.4",
     "gpt-5.4-mini",
   ],
+  apiKeyModels: ["gpt-5.4", "gpt-5.4-mini"],
   accounts: [],
+  models: [],
+  apiKeys: [],
+  authMethods: ["oauth", "api-key"],
+  available: true,
+  unavailableReason: null,
+}, {
+  id: "workbuddy",
+  displayName: "WorkBuddy",
+  description: "通过 WorkBuddy OAuth 连接，使用 WorkBuddy 助理模型。",
+  active: false,
+  connected: false,
+  healthyAccounts: 0,
+  totalAccounts: 0,
+  model: "glm-5.2",
+  models: [],
+  oauthModels: ["glm-5.2"],
+  apiKeyModels: [],
+  accounts: [],
+  apiKeys: [],
+  authMethods: ["oauth"],
+  available: true,
+  unavailableReason: null,
+}, {
+  id: "traecode",
+  displayName: "TraeCode",
+  description: "通过本机 TraeCode CLI 登录并调用只读 Agent。",
+  active: false,
+  connected: false,
+  healthyAccounts: 0,
+  totalAccounts: 0,
+  model: "trae-account-default",
+  models: ["trae-account-default"],
+  oauthModels: ["trae-account-default"],
+  apiKeyModels: [],
+  accounts: [],
+  apiKeys: [],
+  authMethods: ["oauth"],
+  available: false,
+  unavailableReason: "未检测到 TraeCode CLI；请先安装并登录 traecli。",
 }];
 
 function previewAiModel() {
   return {
     activeProvider: previewActiveAiProvider,
     legacyConfigured: false,
+    catalogSource: "models-dev" as const,
+    catalogGeneratedAt: Date.now(),
+    catalogError: null,
     providers: previewAiProviders.map((provider) => ({
       ...provider,
       accounts: provider.accounts.map((account) => ({ ...account })),
-      models: [...provider.models],
+      oauthModels: [...provider.oauthModels],
+      apiKeyModels: [...provider.apiKeyModels],
+      apiKeys: provider.apiKeys.map((key) => ({ ...key, models: [...key.models] })),
     })),
   };
 }
@@ -129,6 +197,7 @@ function refreshPreviewAiProvider(provider: AiProviderSummary): void {
   provider.totalAccounts = provider.accounts.length;
   provider.healthyAccounts = provider.accounts.filter((account) => account.healthy).length;
   provider.connected = provider.accounts.some((account) => account.authorized);
+  provider.models = [...new Set([...provider.oauthModels, ...provider.apiKeys.flatMap((key) => key.models)])];
 }
 
 function previewAccountProbe(overrides: Partial<Sv2AccountProbe> = {}): Sv2AccountProbe {
@@ -360,6 +429,23 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     previewSmartSvpLaunchEnabled = Boolean(args?.enabled);
     return previewState() as T;
   }
+  if (command === "get_http_api_status") return { ...previewHttpApiStatus } as T;
+  if (command === "configure_http_api") {
+    const enabled = Boolean(args?.enabled);
+    const agentEnabled = Boolean(args?.agentEnabled);
+    const port = Number(args?.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("端口必须是 1 到 65535 之间的整数。");
+    previewHttpApiStatus = {
+      enabled,
+      agentEnabled,
+      running: enabled || agentEnabled,
+      port,
+      endpoint: enabled ? `http://127.0.0.1:${port}/mcp` : null,
+      agentEndpoint: agentEnabled ? `http://127.0.0.1:${port}/agent/chat` : null,
+      lastError: null,
+    };
+    return { ...previewHttpApiStatus } as T;
+  }
   if (command === "set_sv2_account_indicator") {
     const enabled = Boolean(args?.enabled);
     if (enabled && !previewSv2AccountIndicatorEnabled && !Boolean(args?.acknowledged)) {
@@ -382,8 +468,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       authorized: true,
       healthy: true,
     });
-    if (provider.id === "openai-codex" && !provider.models.includes("gpt-5.3-codex-spark")) {
-      provider.models.push("gpt-5.3-codex-spark");
+    if (provider.id === "openai-codex" && !provider.oauthModels.includes("gpt-5.3-codex-spark")) {
+      provider.oauthModels.push("gpt-5.3-codex-spark");
     }
     refreshPreviewAiProvider(provider);
     previewActiveAiProvider = provider.id;
@@ -397,14 +483,36 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     const provider = previewAiProvider(args?.provider);
     const model = String(args?.model ?? "").trim();
     if (!provider) throw new Error("未知的 AI 提供商。");
-    if (!provider.connected) throw new Error("请先通过浏览器授权此提供商。");
-    if (!model || !provider.models.includes(model)) throw new Error("请选择此账号可用的模型。");
+    if (!model || !provider.models.includes(model)) throw new Error("请选择已配置凭据可用的模型。");
     previewActiveAiProvider = provider.id;
     previewAiProviders = previewAiProviders.map((item) => ({
       ...item,
       active: item.id === provider.id,
       model: item.id === provider.id ? model : item.model,
     }));
+    return previewState() as T;
+  }
+  if (command === "add_ai_api_key") {
+    const provider = previewAiProvider(args?.provider);
+    const apiKey = String(args?.apiKey ?? "").trim();
+    if (!provider) throw new Error("未知的 AI 提供商。");
+    if (!apiKey) throw new Error("请输入 API Key。");
+    provider.apiKeys.push({
+      id: `preview-key-${provider.id}-${Date.now()}`,
+      label: String(args?.label ?? "").trim() || "API Key",
+      models: [...provider.apiKeyModels],
+      healthy: true,
+      cooldownUntilUtc: null,
+      createdAtUtc: new Date().toISOString(),
+    });
+    refreshPreviewAiProvider(provider);
+    return previewState() as T;
+  }
+  if (command === "remove_ai_api_key") {
+    const provider = previewAiProvider(args?.provider);
+    if (!provider) throw new Error("未知的 AI 提供商。");
+    provider.apiKeys = provider.apiKeys.filter((key) => key.id !== String(args?.credentialId ?? ""));
+    refreshPreviewAiProvider(provider);
     return previewState() as T;
   }
   if (command === "remove_ai_provider_account") {
@@ -419,9 +527,9 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "opencode_provider_catalog") return {
     generatedAt: Date.now(),
     providers: [
-      { id: "anthropic", name: "Anthropic", modelCount: 12, package: "@ai-sdk/anthropic" },
-      { id: "openai", name: "OpenAI", modelCount: 18, package: "@ai-sdk/openai" },
-      { id: "google", name: "Google", modelCount: 15, package: "@ai-sdk/google" },
+      { id: "anthropic", name: "Anthropic", modelCount: 12, package: "@ai-sdk/anthropic", models: ["claude-sonnet-4-6"] },
+      { id: "openai", name: "OpenAI", modelCount: 18, package: "@ai-sdk/openai", models: ["gpt-5.6-terra"] },
+      { id: "google", name: "Google", modelCount: 15, package: "@ai-sdk/google", models: ["gemini-preview"] },
     ],
   } as T;
   if (command === "bootstrap" || command === "complete_onboarding" || command === "set_mode" || command.endsWith("settings") || command.endsWith("server") || command === "save_scripts_path" || command === "delete_mcp_server") {
@@ -954,6 +1062,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "list_conversations") return [] as T;
   if (command === "new_conversation") return { id: "preview", title: "新对话", messages: [] } as T;
   if (command === "open_conversation") return { id: "preview", title: "预览对话", messages: [] } as T;
+  if (command === "agent_file_approvals") return [] as T;
   if (command === "send_message") return [{ role: "assistant", content: "这是本地视觉预览回复。" }] as T;
   if (command.startsWith("run_") || ["add_project_reference", "export_project_without_parameters", "export_project_lyrics"].includes(command)) return {
     kind: command.replace(/^run_/, "").replaceAll("_", "-"),
@@ -980,7 +1089,12 @@ export const api = {
     call<BootstrapState>("authorize_ai_provider", { provider }),
   selectAiProvider: (provider: AiProviderId, model: string) =>
     call<BootstrapState>("select_ai_provider", { provider, model }),
-  aiProviderState: () => call<ModelSummary>("ai_provider_state"),
+  addAiApiKey: (provider: AiProviderId, label: string, apiKey: string) =>
+    call<BootstrapState>("add_ai_api_key", { provider, label, apiKey }),
+  removeAiApiKey: (provider: AiProviderId, credentialId: string) =>
+    call<BootstrapState>("remove_ai_api_key", { provider, credentialId }),
+  aiProviderState: (forceCatalog = false) =>
+    call<ModelSummary>("ai_provider_state", { forceCatalog }),
   opencodeProviderCatalog: (force = false) =>
     call<OpenCodeCatalog>("opencode_provider_catalog", { force }),
   removeAiProviderAccount: (provider: AiProviderId, accountId: string) =>
@@ -1131,7 +1245,12 @@ export const api = {
   newConversation: () => call<ConversationSnapshot>("new_conversation"),
   openConversation: (id: string) => call<ConversationSnapshot>("open_conversation", { id }),
   sendMessage: (input: string) => call<ChatMessage[]>("send_message", { input }),
+  agentFileApprovals: () => call<AgentFileApproval[]>("agent_file_approvals"),
+  decideAgentFileApproval: (id: string, approve: boolean) => call<void>("decide_agent_file_approval", { id, approve }),
   saveMcpServer: (server: McpServerConfig) => call<BootstrapState>("save_mcp_server", { server }),
   deleteMcpServer: (id: string) => call<BootstrapState>("delete_mcp_server", { id }),
   testMcpServer: (id: string) => call<OperationResult>("test_mcp_server", { id }),
+  getHttpApiStatus: () => call<HttpApiStatus>("get_http_api_status"),
+  configureHttpApi: (enabled: boolean, agentEnabled: boolean, port: number) =>
+    call<HttpApiStatus>("configure_http_api", { enabled, agentEnabled, port }),
 };

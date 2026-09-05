@@ -18,6 +18,8 @@ assert.match(components, /"vocal-separation"/);
 assert.match(components, /"separation"/);
 assert.match(requirements, /demucs==4\.0\.1/);
 assert.match(requirements, /torch==2\.7\.1/);
+assert.match(requirements, /torchaudio==2\.7\.1/);
+assert.match(requirements, /soundfile==0\.14\.0/);
 assert.match(separator, /--two-stems/);
 assert.match(separator, /htdemucs/);
 assert.match(separator, /vocals\.wav/);

@@ -1,0 +1,25 @@
+# Progress
+
+- 2026-09-03：读取 agent-mode 规范、项目索引和任务追踪；确认任务 022 已登记为进行中。
+- 2026-09-03：确认指定 worktree 与分支，初始工作树干净；完成 Bridge 脚本、目标 Rust 文件和现有契约测试的初步定位。
+- 2026-09-03：修改 `ensure-bridge.mjs`、`downloads.rs`、`workflows.rs`、`media_tasks.rs`，新增根 `/test/actions-build-fix.mjs`；Bridge 有效 dist 跳过构建，缺失时以 `--include=dev` 恢复依赖。
+- 2026-09-03：复核后补正 `request.resource_dir`，并将 Bridge 有效判定收紧为 native 与 SV1 legacy 两个 dist CLI 入口同时存在。
+- 2026-09-03：Node actions-build、formal Bridge、Cover 契约通过；`cargo fmt --check`、`cargo test --all-targets`（202 passed、1 integration passed、2 ignored）和 `cargo clippy --all-targets -- -D warnings` 通过。Rust 验证使用了临时空资源入口，随后已清理。
+- 2026-09-03：子分支提交 `b38ced3`，提交前检查确认未修改 `.github/workflows` 或 `package.json`。
+- 2026-09-03：合并后将预构建跳过收紧为 `CI=true` 专用，并增加 TypeScript/节点类型构建依赖完整性检查。
+- 2026-09-03：执行全量 `actionlint` 并修复既有发布 workflow 的 SC2016 格式串问题。
+- 2026-09-03：将 `actions-build-fix.mjs` 接入桌面全量契约脚本，并同步 Bridge package-lock 中的 SV1 legacy CLI bin 入口。
+- 2026-09-03：拉取真实 run 33824920882 / job 100875483752 日志，确认 Windows x64 的 `windows-sys` 0.61 类型/API错误与平台未使用 import；更新任务审计计划。
+- 2026-09-03：修复 `synthv_control.rs` 的官方 `windows_sys::core::BOOL`、`Foundation::HWND` 与窗口回调类型；修复 `synthv_hosts.rs` 的 `MetadataExt::file_attributes` reparse 检查，并将 macOS-only imports 条件化。
+- 2026-09-03：更新根 `/test/actions-build-fix.mjs` 的 Windows API 静态契约；`cargo fmt`、契约测试和 `git diff --check` 通过。
+- 2026-09-03：Windows MSVC target cargo check 因本机无 MSVC C 工具链在 `ring` 的 `assert.h` 处停止；`windows-sys v0.61.2` 已先完成检查。
+- 2026-09-03：使用临时空资源占位完成 macOS `cargo test --all-targets`（202 passed、2 ignored、根集成测试 1 passed）与 `cargo clippy --all-targets -- -D warnings`；占位文件已清理。
+- 2026-09-03：依据 `windows-sys v0.61.2` 本地官方源核对 BOOL/HWND/WNDENUMPROC 与窗口函数签名；最终变更范围未包含 workflows、`package.json` 或 artifact 测试。
+- 2026-09-03：主工作树第一次合并验证在桌面子目录运行 `actionlint` 导致 workflow 路径不存在；切换到仓库根后重跑通过。
+- 2026-09-03：主工作树全量契约、`actionlint`、Rust 测试（202 passed、2 ignored，集成测试 1 passed）与严格 Clippy 通过。
+- 2026-09-03：拉取 run 33826067978 / Windows job 100878878085 日志，确认编译成功、203 个测试通过，仅四个 macOS host fixture 失败；Windows 专用 host 测试均通过。
+- 2026-09-03：仅为四个指定测试添加 `cfg(target_os = "macos")`，并按平台收窄两个关联常量；根 `actions-build-fix.mjs` 契约同时保护 `same_executable_is_disambiguated_by_app_bundle_path` 继续跨平台运行。
+- 2026-09-03：`cargo fmt --check`、根契约与 `git diff --check` 通过；使用临时空资源占位完成 macOS `cargo test --all-targets`（202 passed、2 ignored、根集成测试 1 passed）及 `cargo clippy --all-targets -- -D warnings`，随后清理占位。
+- 2026-09-03：读取 run 33826755787 Windows Clippy 日志，确认平台编译与测试均通过；收窄 macOS 常量、`parse_processes` 与 `app_from_args` 的编译条件。
+- 2026-09-03：根据 run 33827377637 恢复 `SYNTHV_EXECUTABLE` 跨平台定义，避免 Windows 宿主匹配与显示路径缺少该符号。
+- 2026-09-03：GitHub Actions run 33827781511 成功；Windows hosted runner 的 Bridge、前端、契约、Rust、Clippy、FFmpeg、NSIS 与 artifact 步骤全部通过。
