@@ -253,8 +253,7 @@ impl Sv2AccountProbeView {
     }
 }
 
-/// One input to an explicit batch account precheck.  Callers must mark roots
-/// that may be changing so the batch never reads or writes an active session.
+/// Callers identify active roots so prechecks can avoid changing device enrollment.
 #[derive(Clone, Copy)]
 pub struct Sv2AccountProbeRequest<'a> {
     pub data_root: &'a Path,
@@ -301,8 +300,7 @@ impl<'a> Sv2AccountProbeRequest<'a> {
     }
 }
 
-/// Performs explicit, consent-gated account prechecks. Results preserve input
-/// order and never read a root that the caller marked as in use.
+/// Performs explicit account prechecks, preserving the input order.
 pub fn refresh_sv2_account_probes(
     requests: &[Sv2AccountProbeRequest<'_>],
 ) -> Vec<Sv2AccountProbeView> {
@@ -503,7 +501,7 @@ fn inspect_session_authorization(
         .with_account_identity(credentials.access_token());
     }
     let Some(original_account) = account_group_key(credentials.access_token()) else {
-        return record_active_refresh_failure(
+        return record_session_refresh_failure(
             root,
             fingerprint,
             credentials,
@@ -513,7 +511,7 @@ fn inspect_session_authorization(
     let refreshed = match refresh(credentials) {
         Ok(value) if account_group_key(value.access_token()) == Some(original_account) => value,
         Ok(_) => {
-            return record_active_refresh_failure(
+            return record_session_refresh_failure(
                 root,
                 fingerprint,
                 credentials,
@@ -523,7 +521,7 @@ fn inspect_session_authorization(
             )
         }
         Err(failure) => {
-            return record_active_refresh_failure(
+            return record_session_refresh_failure(
                 root,
                 fingerprint,
                 credentials,
@@ -534,7 +532,7 @@ fn inspect_session_authorization(
     let fingerprint = match persist_refreshed_session(data_root, fingerprint, &refreshed, key) {
         Ok(value) => value,
         Err(()) => {
-            return record_active_refresh_failure(
+            return record_session_refresh_failure(
                 root,
                 fingerprint,
                 credentials,
@@ -547,14 +545,16 @@ fn inspect_session_authorization(
 }
 
 #[cfg(windows)]
-fn record_active_refresh_failure(
+fn record_session_refresh_failure(
     root: &ProbeRootKey,
     fingerprint: &SessionCacheKey,
     credentials: &SessionCredentials,
     view: Sv2AccountProbeView,
 ) -> Sv2AccountProbeView {
     let view = view.with_account_identity(credentials.access_token());
-    set_sync_quarantine(&root.quarantine_key(), &view);
+    if view.session_status == Sv2SessionInspectionStatus::SyncFailed {
+        set_sync_quarantine(&root.quarantine_key(), &view);
+    }
     cache_put(fingerprint.clone(), root, &view, None);
     view
 }
@@ -1426,7 +1426,7 @@ fn interpret_license_response(status: u16, body: Zeroizing<Vec<u8>>) -> RemoteOu
     if contains_json_string(&body, CONCURRENT_ERROR) || contains_json_string(&body, KICKOUT_ERROR) {
         return RemoteOutcome::ConcurrentUse;
     }
-    if status == 401 || status == 403 {
+    if status == 401 || contains_json_string(&body, RELOGIN_ERROR) {
         return RemoteOutcome::Unauthorized;
     }
     if status != 200 {
@@ -1671,6 +1671,12 @@ fn set_sync_quarantine(key: &SyncQuarantineKey, view: &Sv2AccountProbeView) {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(key.clone(), view.clone());
+    if let Some(cache) = PROBE_CACHE.get() {
+        cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retain(|cache_key, _| !cache_key.root.belongs_to_quarantine(key));
+    }
 }
 
 #[cfg(windows)]
@@ -1722,6 +1728,18 @@ fn cached_view_for_fingerprint(
     fingerprint: &SessionCacheKey,
     root: &ProbeRootKey,
 ) -> Option<Sv2AccountProbeView> {
+    if let Some(view) = cache_get(fingerprint, root) {
+        if matches!(
+            view.session_status,
+            Sv2SessionInspectionStatus::Offline
+                | Sv2SessionInspectionStatus::Expired
+                | Sv2SessionInspectionStatus::Unsupported
+                | Sv2SessionInspectionStatus::Invalid
+                | Sv2SessionInspectionStatus::SyncFailed
+        ) {
+            return Some(view);
+        }
+    }
     if let Some(view) = sync_quarantine_get(&root.quarantine_key()) {
         return Some(view);
     }
@@ -1797,7 +1815,17 @@ fn cache_put(
         (Sv2SessionInspectionStatus::Expired, _, _) => Duration::from_secs(15),
         _ => Duration::from_secs(5),
     };
-    if let Some(expires_at) = access_expires_at {
+    let current_quarantine_failure = matches!(
+        view.session_status,
+        Sv2SessionInspectionStatus::Offline
+            | Sv2SessionInspectionStatus::Expired
+            | Sv2SessionInspectionStatus::Unsupported
+            | Sv2SessionInspectionStatus::Invalid
+    ) && sync_quarantine_get(&root.quarantine_key()).is_some();
+    if current_quarantine_failure {
+        // Keep the latest precheck failure visible until the quarantined session is checked again.
+        ttl = Duration::MAX;
+    } else if let Some(expires_at) = access_expires_at {
         let Ok(remaining) = (expires_at - Utc::now()).to_std() else {
             return;
         };
@@ -2196,26 +2224,14 @@ fn finish_batch_results(
     requests: &[Sv2AccountProbeRequest<'_>],
     mut results: Vec<Option<Sv2AccountProbeView>>,
 ) -> Vec<Sv2AccountProbeView> {
-    // No error or placeholder may downgrade an existing root quarantine. This
-    // final overlay also covers stable-read, machine-key and decrypt failures,
-    // plus an explicitly rejected refresh of a previously quarantined root.
+    // Preserve the latest precheck result while retaining unresolved quarantine state separately.
     for (request_index, request) in requests.iter().enumerate() {
         let Some(root) =
             probe_root_key_for_identity(request.data_root, request.quarantine_identity())
         else {
             continue;
         };
-        if matches!(
-            results[request_index]
-                .as_ref()
-                .map(|view| view.session_status),
-            Some(
-                Sv2SessionInspectionStatus::Missing
-                    | Sv2SessionInspectionStatus::InUse
-                    | Sv2SessionInspectionStatus::AccountMismatch
-                    | Sv2SessionInspectionStatus::SyncFailed
-            )
-        ) {
+        if results[request_index].is_some() {
             continue;
         }
         if let Some(view) = sync_quarantine_get(&root.quarantine_key()) {
@@ -2256,10 +2272,7 @@ fn refresh_windows_batch(requests: &[Sv2AccountProbeRequest<'_>]) -> Vec<Sv2Acco
         .filter_map(|request| request.account_scope)
         .collect::<HashSet<_>>();
 
-    // Take stable snapshots of every idle root before any refresh can rotate a
-    // credential. If either physical environment of an account slot is active,
-    // the whole slot is excluded: rotating only the idle sibling would leave
-    // the running client with an obsolete refresh token.
+    // Active roots use conditional session writeback without changing device enrollment.
     for (request_index, request) in requests.iter().enumerate() {
         if request.source_in_use
             || request
@@ -3436,3 +3449,11 @@ mod tests;
 #[cfg(all(test, windows))]
 #[path = "../../../../test/sv2_refresh_diagnostic.rs"]
 mod refresh_diagnostic;
+
+#[cfg(all(test, windows))]
+#[path = "../../../../test/sv2_refresh_failure_tests.rs"]
+mod refresh_failure_tests;
+
+#[cfg(all(test, windows))]
+#[path = "../../../../test/sv2_refresh_flow_tests.rs"]
+mod refresh_flow_tests;

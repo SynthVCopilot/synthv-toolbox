@@ -2,7 +2,7 @@ use super::*;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::TimeZone;
 
-static PROBE_TEST_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(super) static PROBE_TEST_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn make_jwt(exp: Option<i64>, iat: i64) -> String {
     let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256","typ":"JWT"}"#);
@@ -740,6 +740,31 @@ fn concurrent_error_codes_are_detected_without_exposing_body() {
             RemoteOutcome::ConcurrentUse
         ));
     }
+}
+
+#[test]
+fn only_license_authentication_rejection_requests_token_refresh() {
+    for status in [403, 429, 500, 503] {
+        assert!(matches!(
+            interpret_license_response(
+                status,
+                Zeroizing::new(b"<html>unavailable</html>".to_vec())
+            ),
+            RemoteOutcome::Unknown
+        ));
+    }
+    assert!(matches!(
+        interpret_license_response(401, Zeroizing::new(Vec::new())),
+        RemoteOutcome::Unauthorized
+    ));
+    let relogin = format!(
+        "{{\"error\":\"{}\"}}",
+        std::str::from_utf8(RELOGIN_ERROR).unwrap()
+    );
+    assert!(matches!(
+        interpret_license_response(403, Zeroizing::new(relogin.into_bytes())),
+        RemoteOutcome::Unauthorized
+    ));
 }
 
 #[cfg(windows)]
