@@ -42,7 +42,10 @@ fn run(config: Config) -> Result<(), String> {
         Ok(actual) => {
             let matched = actual == expected;
             if matched {
-                fs::write(official.join("sandboxie-smoke-nonce.txt"), &config.nonce)
+                fs::write(
+                    official.join(format!("sandboxie-smoke-{}.txt", config.nonce)),
+                    &config.nonce,
+                )
                     .map_err(|error| error.to_string())?;
             }
             Report { actual: actual.to_string_lossy().into_owned(), expected: expected.to_string_lossy().into_owned(), matched, error: None }

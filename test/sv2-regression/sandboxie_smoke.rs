@@ -67,7 +67,7 @@ fn sandboxie_routes_each_helper_to_its_own_slot() {
     launch_slot(&provider, &vault, &second, &helper, Some(&second_config), &slot_root(&vault, &second), content).unwrap();
     let first_pids = slot_running_pids(&provider, &vault, &first).unwrap();
     let second_pids = slot_running_pids(&provider, &vault, &second).unwrap();
-    assert!(!first_pids.is_empty());
+    assert!(first_pids.len() >= 2, "two same-slot helpers must overlap");
     assert!(!second_pids.is_empty());
     assert!(first_pids.iter().all(|pid| !second_pids.contains(pid)));
     let first_overlay = vault.join("instances").join(Uuid::parse_str(&first).unwrap().simple().to_string()[..16].to_string());
@@ -81,8 +81,19 @@ fn sandboxie_routes_each_helper_to_its_own_slot() {
         let report = report(&slot, nonce);
         assert!(report.matched, "{} != {}: {:?}", report.actual, report.expected, report.error);
     }
-    let first_nonce = fs::read(slot_root(&vault, &first).join("sandboxie-smoke-nonce.txt")).unwrap();
-    assert!(first_nonce == b"first-a" || first_nonce == b"first-b");
-    assert_eq!(fs::read(slot_root(&vault, &second).join("sandboxie-smoke-nonce.txt")).unwrap(), b"second");
+    for nonce in ["first-a", "first-b"] {
+        assert_eq!(fs::read(slot_root(&vault, &first).join(format!("sandboxie-smoke-{nonce}.txt"))).unwrap(), nonce.as_bytes());
+        assert!(!slot_root(&vault, &second).join(format!("sandboxie-smoke-{nonce}.txt")).exists());
+    }
+    assert_eq!(fs::read(slot_root(&vault, &second).join("sandboxie-smoke-second.txt")).unwrap(), b"second");
+    for _ in 0..75 {
+        if slot_running_pids(&provider, &vault, &first).unwrap().is_empty()
+            && slot_running_pids(&provider, &vault, &second).unwrap().is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    assert!(slot_running_pids(&provider, &vault, &first).unwrap().is_empty());
+    assert!(slot_running_pids(&provider, &vault, &second).unwrap().is_empty());
     let _ = fs::remove_dir_all(root);
 }
