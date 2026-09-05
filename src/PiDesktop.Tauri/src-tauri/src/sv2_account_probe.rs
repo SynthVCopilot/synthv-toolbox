@@ -3382,3 +3382,7 @@ fn persist_refreshed_session(
 #[cfg(test)]
 #[path = "../../../../test/sv2_account_probe_tests.rs"]
 mod tests;
+
+#[cfg(all(test, windows))]
+#[path = "../../../../test/sv2_refresh_diagnostic.rs"]
+mod refresh_diagnostic;
