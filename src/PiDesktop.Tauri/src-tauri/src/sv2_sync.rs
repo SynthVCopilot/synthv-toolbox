@@ -57,8 +57,13 @@ pub fn categories() -> Vec<Sv2SyncCategory> {
         Sv2SyncCategory {
             id: Sv2SyncCategoryId::SafeSettings,
             label: "安全设置",
-            description: "仅同步明确允许的非账号设置子目录。",
-            relative_roots: &["settings/shortcuts", "settings/theme", "settings/ui"],
+            description: "同步 SV2 设置文件和明确允许的界面设置；不包含登录态或声库。",
+            relative_roots: &[
+                "settings/settings.xml",
+                "settings/shortcuts",
+                "settings/theme",
+                "settings/ui",
+            ],
         },
     ]
 }
