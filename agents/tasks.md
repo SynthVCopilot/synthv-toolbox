@@ -39,4 +39,4 @@
 | 031 | [Refactor] 可复用模型接入包 | 将认证、模型目录和凭据调度提取为可迁移技术包，并评估接入 WorkBuddy 与 TRAE。 | 降低在其他桌面 Agent 中复用模型登录能力的维护成本，同时只发布有官方协议依据的适配。 | ✅ 已完成 |
 | 032 | [Refactor] models.dev运行时目录 | 连接向导与运行时资格以 models.dev 为来源，保留协议能力与离线约束。 | 统一模型配置来源。 | ✅ 已完成 |
 | 033 | [BugFix] 开发构建回归 | 修复 Windows 条件编译、测试清单和 Clippy 拒绝项，两平台产物已上传。 | 恢复跨平台开发构建交付。 | ✅ 已完成 |
-| 034 | [Integration] shared-model-auth | 将实际模型认证向导替换为已发布的共享 Vue 组件，并补齐 Toolbox 的共享宿主动作映射。 | 让 SynthV Toolbox 复用统一的 OAuth/API Key、多凭据和 models.dev 交互契约。 | 🔄 进行中 |
+| 035 | [Integration] shared-model-auth | 替换共享认证组件，接通原生宿主动作、取消、重连和策略。 | 统一多项目模型接入。 | ✅ 代码与本地验证完成 |
