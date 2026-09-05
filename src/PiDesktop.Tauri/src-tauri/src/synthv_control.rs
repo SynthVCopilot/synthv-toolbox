@@ -99,7 +99,7 @@ pub fn send_shortcut(
 
 pub fn focus_instance(process_id: u32, process_identity: String) -> Result<SynthVProcess, String> {
     let process = validate_instance_target(process_id, &process_identity)?;
-    platform::focus(process_id)?;
+    platform::focus_verified(process_id, &process_identity)?;
     Ok(process)
 }
 
@@ -108,7 +108,7 @@ pub fn terminate_instance(
     process_identity: String,
 ) -> Result<SynthVProcess, String> {
     let process = validate_instance_target(process_id, &process_identity)?;
-    platform::terminate(process_id)?;
+    platform::terminate_verified(process_id, &process_identity)?;
     Ok(process)
 }
 
@@ -173,7 +173,22 @@ fn is_synthv_process(name: &str, command: &str) -> bool {
     if is_flat_executable_name(name) || is_flat_executable_name(command) {
         return true;
     }
-    is_sv2_executable_path(command)
+    is_sv1_executable_path(command) || is_sv2_executable_path(command)
+}
+
+fn is_sv1_executable_path(path: &str) -> bool {
+    let value = path
+        .trim()
+        .trim_matches('"')
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    let file_name = value.rsplit('/').next().unwrap_or_default();
+    let known_directory = value
+        .split('/')
+        .any(|part| matches!(part, "synthesizer v studio" | "synthesizer v studio pro"));
+    value.contains('/')
+        && (matches!(file_name, "synthesizer v studio.exe" | "svstudio.exe")
+            || (known_directory && matches!(file_name, "synthv-studio.exe" | "synthv-studio")))
 }
 
 fn is_sv2_executable_path(path: &str) -> bool {
@@ -189,6 +204,8 @@ fn is_sv2_executable_path(path: &str) -> bool {
             | "synthesizer v studio 2.exe"
             | "svstudio2-pro.exe"
             | "svstudio2.exe"
+            | "svstudio2 pro"
+            | "svstudio2"
     );
     let known_directory = value.split('/').any(|part| {
         matches!(
@@ -211,11 +228,50 @@ fn product_name(path: &str, is_sv2: bool) -> String {
         return "Synthesizer V Flat".to_string();
     }
     let value = path.replace('\\', "/").to_ascii_lowercase();
-    if value.contains("pro") {
+    let file_name = value.rsplit('/').next().unwrap_or_default();
+    let is_pro = matches!(
+        file_name,
+        "svstudio2-pro.exe" | "synthesizer v studio 2 pro.exe"
+    ) || value.split('/').any(|part| {
+        matches!(
+            part,
+            "synthesizer v studio 2 pro" | "synthesizer v studio 2 pro.app" | "svstudio2 pro.app"
+        )
+    });
+    if is_pro {
         "SVStudio2 Pro".to_string()
     } else {
         "SVStudio2".to_string()
     }
+}
+
+fn parse_macos_processes(output: &str) -> Vec<(u32, String, String)> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let process_id = fields.next()?.parse::<u32>().ok()?;
+            let started = (0..5)
+                .map(|_| fields.next())
+                .collect::<Option<Vec<_>>>()?
+                .join(" ");
+            let command = fields.collect::<Vec<_>>().join(" ");
+            (!command.is_empty()).then_some((
+                process_id,
+                format!("macos:{process_id}:{started}"),
+                command,
+            ))
+        })
+        .collect()
+}
+
+fn executable_name(command: &str) -> String {
+    command
+        .replace('\\', "/")
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn is_flat_executable_name(value: &str) -> bool {
@@ -244,21 +300,14 @@ mod platform {
         if !output.status.success() {
             return Err("macOS 进程枚举失败。".to_string());
         }
-        let mut processes = String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter_map(|line| {
-                let mut fields = line.split_whitespace();
-                let process_id = fields.next()?.parse::<u32>().ok()?;
-                let started = (0..5)
-                    .map(|_| fields.next())
-                    .collect::<Option<Vec<_>>>()?
-                    .join(" ");
-                let name = fields.next()?.to_string();
-                let command = fields.collect::<Vec<_>>().join(" ");
+        let mut processes = parse_macos_processes(&String::from_utf8_lossy(&output.stdout))
+            .into_iter()
+            .filter_map(|(process_id, process_identity, command)| {
+                let name = executable_name(&command);
                 let is_sv2 = is_sv2_executable_path(&command);
                 is_synthv_process(&name, &command).then_some(SynthVProcess {
                     process_id,
-                    process_identity: format!("macos:{process_id}:{started}"),
+                    process_identity,
                     name,
                     product_name: product_name(&command, is_sv2),
                     version: macos_bundle_version(&command),
@@ -322,7 +371,7 @@ mod platform {
         }
     }
 
-    pub(super) fn focus(process_id: u32) -> Result<(), String> {
+    pub(super) fn focus_verified(process_id: u32, _process_identity: &str) -> Result<(), String> {
         let focus = format!(
             "tell application \"System Events\" to tell (first process whose unix id is {process_id}) to set frontmost to true"
         );
@@ -337,7 +386,10 @@ mod platform {
         })
     }
 
-    pub(super) fn terminate(process_id: u32) -> Result<(), String> {
+    pub(super) fn terminate_verified(
+        process_id: u32,
+        _process_identity: &str,
+    ) -> Result<(), String> {
         let result = unsafe { libc::kill(process_id as i32, libc::SIGTERM) };
         (result == 0)
             .then_some(())
@@ -436,7 +488,7 @@ mod platform {
         process_id: u32,
         action: BridgeShortcutAction,
     ) -> Result<(), String> {
-        focus(process_id)?;
+        focus_window(process_id)?;
         let mut input = match action {
             BridgeShortcutAction::Start | BridgeShortcutAction::StartLegacy => vec![
                 keyboard_input(0x7C, 0),
@@ -477,7 +529,14 @@ mod platform {
         }
     }
 
-    pub(super) fn focus(process_id: u32) -> Result<(), String> {
+    pub(super) fn focus_verified(process_id: u32, process_identity: &str) -> Result<(), String> {
+        let handle = open_verified_process(process_id, process_identity, false)?;
+        let result = focus_window(process_id);
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
+        result
+    }
+
+    fn focus_window(process_id: u32) -> Result<(), String> {
         let mut hwnd: HWND = null_mut();
         unsafe {
             EnumWindows(
@@ -500,26 +559,44 @@ mod platform {
         Ok(())
     }
 
-    pub(super) fn terminate(process_id: u32) -> Result<(), String> {
-        use windows_sys::Win32::System::Threading::{
-            OpenProcess, TerminateProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
-        };
+    pub(super) fn terminate_verified(
+        process_id: u32,
+        process_identity: &str,
+    ) -> Result<(), String> {
+        use windows_sys::Win32::System::Threading::TerminateProcess;
 
-        let handle = unsafe {
-            OpenProcess(
-                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
-                0,
-                process_id,
-            )
-        };
-        if handle.is_null() {
-            return Err(format!("无法打开 PID {process_id} 对应的 SynthV 实例。"));
-        }
+        let handle = open_verified_process(process_id, process_identity, true)?;
         let terminated = unsafe { TerminateProcess(handle, 0) } != 0;
         unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
         terminated
             .then_some(())
             .ok_or_else(|| format!("无法终止 PID {process_id} 对应的 SynthV 实例。"))
+    }
+
+    fn open_verified_process(
+        process_id: u32,
+        process_identity: &str,
+        terminate: bool,
+    ) -> Result<windows_sys::Win32::Foundation::HANDLE, String> {
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+        };
+
+        let access =
+            PROCESS_QUERY_LIMITED_INFORMATION | if terminate { PROCESS_TERMINATE } else { 0 };
+        let handle = unsafe { OpenProcess(access, 0, process_id) };
+        if handle.is_null() {
+            return Err(format!("无法打开 PID {process_id} 对应的 SynthV 实例。"));
+        }
+        let identity = process_identity_from_handle(handle, process_id);
+        let image = process_image_path_from_handle(handle);
+        let valid = identity.as_deref() == Some(process_identity)
+            && image.as_deref().is_some_and(is_sv2_executable_path);
+        if !valid {
+            unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
+            return Err("目标实例已变化或不是 Synthesizer V Studio 2，操作已取消。".to_string());
+        }
+        Ok(handle)
     }
 
     struct WindowLookup {
@@ -551,32 +628,52 @@ mod platform {
 
     fn process_image_path(process_id: u32) -> Option<String> {
         use windows_sys::Win32::System::Threading::{
-            OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
         };
         let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
         if handle.is_null() {
             return None;
         }
+        let result = process_image_path_from_handle(handle);
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(handle);
+        }
+        result
+    }
+
+    fn process_image_path_from_handle(
+        handle: windows_sys::Win32::Foundation::HANDLE,
+    ) -> Option<String> {
+        use windows_sys::Win32::System::Threading::QueryFullProcessImageNameW;
+
         let mut buffer = vec![0u16; 32768];
         let mut length = buffer.len() as u32;
         let ok =
             unsafe { QueryFullProcessImageNameW(handle, 0, buffer.as_mut_ptr(), &mut length) } != 0;
-        unsafe {
-            windows_sys::Win32::Foundation::CloseHandle(handle);
-        }
         ok.then(|| String::from_utf16_lossy(&buffer[..length as usize]))
     }
 
     fn process_identity(process_id: u32) -> Option<String> {
-        use windows_sys::Win32::Foundation::FILETIME;
         use windows_sys::Win32::System::Threading::{
-            GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
         };
 
         let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
         if handle.is_null() {
             return None;
         }
+        let result = process_identity_from_handle(handle, process_id);
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
+        result
+    }
+
+    fn process_identity_from_handle(
+        handle: windows_sys::Win32::Foundation::HANDLE,
+        process_id: u32,
+    ) -> Option<String> {
+        use windows_sys::Win32::Foundation::FILETIME;
+        use windows_sys::Win32::System::Threading::GetProcessTimes;
+
         let mut created: FILETIME = unsafe { zeroed() };
         let mut exited: FILETIME = unsafe { zeroed() };
         let mut kernel: FILETIME = unsafe { zeroed() };
@@ -584,7 +681,6 @@ mod platform {
         let ok =
             unsafe { GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) }
                 != 0;
-        unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
         ok.then(|| {
             let created =
                 (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
@@ -595,7 +691,7 @@ mod platform {
     fn file_version(path: &str) -> Option<String> {
         use std::ffi::c_void;
         use std::os::windows::ffi::OsStrExt;
-        use std::ptr::{null_mut, NonNull};
+        use std::ptr::null_mut;
         use windows_sys::Win32::Storage::FileSystem::{
             GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW, VS_FIXEDFILEINFO,
         };
@@ -621,8 +717,10 @@ mod platform {
         {
             return None;
         }
-        let fixed = NonNull::new(value.cast::<VS_FIXEDFILEINFO>())?;
-        let fixed = unsafe { fixed.as_ref() };
+        if value.is_null() {
+            return None;
+        }
+        let fixed = unsafe { std::ptr::read_unaligned(value.cast::<VS_FIXEDFILEINFO>()) };
         (fixed.dwSignature == 0xFEEF_04BD).then(|| {
             format!(
                 "{}.{}.{}",
@@ -756,11 +854,14 @@ mod platform {
         Err("当前平台尚未实现 SynthV 进程快捷键控制。".to_string())
     }
 
-    pub(super) fn focus(_process_id: u32) -> Result<(), String> {
+    pub(super) fn focus_verified(_process_id: u32, _process_identity: &str) -> Result<(), String> {
         Err("当前平台尚未实现 SynthV 实例聚焦。".to_string())
     }
 
-    pub(super) fn terminate(_process_id: u32) -> Result<(), String> {
+    pub(super) fn terminate_verified(
+        _process_id: u32,
+        _process_identity: &str,
+    ) -> Result<(), String> {
         Err("当前平台尚未实现 SynthV 实例终止。".to_string())
     }
 }
