@@ -59,6 +59,13 @@ pub enum AiLoadStrategy {
     Failover,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AiModelMode {
+    Catalog,
+    AccountDefaultReadonly,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerConfig {
@@ -173,6 +180,7 @@ pub struct AiProviderSummary {
     pub healthy_accounts: usize,
     pub total_accounts: usize,
     pub model: String,
+    pub model_mode: AiModelMode,
     pub models: Vec<String>,
     pub oauth_models: Vec<String>,
     pub api_key_models: Vec<String>,
@@ -805,13 +813,18 @@ pub fn model_summary(
                     "支持 OAuth（ChatGPT Plus / Pro）或 OpenAI API Key。".to_string()
                 }
                 AiProviderId::Workbuddy => "支持 WorkBuddy OAuth。".to_string(),
-                AiProviderId::Traecode => "通过官方 TraeCode CLI 登录。".to_string(),
+                AiProviderId::Traecode => "通过官方 TraeCode CLI 登录；仅使用账号默认模型，不能作为 models.dev 模型元数据。".to_string(),
             },
             active,
             connected: accounts.iter().any(|account| account.authorized) || !api_keys.is_empty(),
             healthy_accounts,
             total_accounts: accounts.len(),
             model: settings.model_for(provider).to_string(),
+            model_mode: if provider == AiProviderId::Traecode {
+                AiModelMode::AccountDefaultReadonly
+            } else {
+                AiModelMode::Catalog
+            },
             models,
             oauth_models,
             api_key_models,
@@ -863,6 +876,15 @@ pub fn validate_ai_model(
         character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | ':')
     }) {
         return Err("模型 ID 包含不受支持的字符。".to_string());
+    }
+    if provider == AiProviderId::Traecode {
+        if model != AiProviderId::Traecode.default_model() {
+            return Err("TraeCode 仅支持只读的账号默认模型。".to_string());
+        }
+        let authenticated = TraeCodeProvider::new(TraeCodeConfig::new(model))
+            .cached_login_status()
+            .is_ok_and(|status| status.logged_in);
+        return authenticated.then(|| model.to_string()).ok_or_else(|| "TraeCode CLI 尚未登录。".to_string());
     }
     let oauth_connected = match provider {
         AiProviderId::Workbuddy => settings
@@ -1125,6 +1147,7 @@ mod tests {
             healthy_accounts: 0,
             total_accounts: 0,
             model: "claude-sonnet-4-6".to_string(),
+            model_mode: AiModelMode::Catalog,
             models: vec![
                 "claude-opus-4-8".to_string(),
                 "claude-sonnet-4-6".to_string(),
@@ -1140,6 +1163,7 @@ mod tests {
             unavailable_reason: None,
         };
         let value = serde_json::to_value(summary).unwrap();
+        assert_eq!(value["modelMode"], "catalog");
         assert_eq!(value["oauthModels"][0], "claude-sonnet-4-6");
         assert_eq!(value["apiKeyModels"][0], "claude-opus-4-8");
         assert_eq!(value["models"].as_array().unwrap().len(), 2);
