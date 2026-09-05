@@ -38,16 +38,19 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../../../external/synthv-agent-bridge/dist": "synthv-agent-bridge/dist",
-      "../../../external/synthv-agent-bridge/scripts": "synthv-agent-bridge/scripts",
-      "../../../external/synthv-agent-bridge/synthv": "synthv-agent-bridge/synthv",
-      "../../../external/synthv-agent-bridge/node_modules": "synthv-agent-bridge/node_modules",
-      "../../../external/synthv-agent-bridge/package.json": "synthv-agent-bridge/package.json",
-      "../../../external/synthv-agent-bridge/package-lock.json": "synthv-agent-bridge/package-lock.json",
-      "../../../external/synthv-agent-bridge/LICENSE": "synthv-agent-bridge/LICENSE",
+      "components/synthv-agent-bridge/dist": "components/synthv-agent-bridge/dist",
+      "components/synthv-agent-bridge/scripts": "components/synthv-agent-bridge/scripts",
+      "components/synthv-agent-bridge/synthv": "components/synthv-agent-bridge/synthv",
+      "components/synthv-agent-bridge/node_modules": "components/synthv-agent-bridge/node_modules",
+      "components/synthv-agent-bridge/package.json": "components/synthv-agent-bridge/package.json",
+      "components/synthv-agent-bridge/package-lock.json": "components/synthv-agent-bridge/package-lock.json",
+      "components/synthv-agent-bridge/LICENSE": "components/synthv-agent-bridge/LICENSE",
+      "components/synthv-agent-bridge/legacy-sv1": "components/synthv-agent-bridge/legacy-sv1",
       "components/cvrs/cvrs.py": "components/cvrs/cvrs.py",
       "components/pi-audio/pi_audio.py": "components/pi-audio/pi_audio.py",
-      "components/pi-audio/requirements.txt": "components/pi-audio/requirements.txt"
+      "components/pi-audio/requirements.txt": "components/pi-audio/requirements.txt",
+      "components/vocal-separation/separate.py": "components/vocal-separation/separate.py",
+      "components/vocal-separation/requirements.txt": "components/vocal-separation/requirements.txt"
     },
     "category": "Music",
     "shortDescription": "Cross-platform Synthesizer V creative toolbox",

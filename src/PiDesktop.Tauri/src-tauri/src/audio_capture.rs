@@ -11,15 +11,26 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::agent::{AgentError, ToolCall, ToolDefinition, ToolExecutor, ToolResult};
+use crate::agent_files::FileApprovalManager;
+use crate::bridge_workflows;
+use crate::components::component_list;
+use crate::config::AgentWorkMode;
+use crate::creative_history;
+use crate::downloads::ComponentDownloadManager;
 use crate::mcp::McpToolExecutor;
-use crate::mcp::{extract_mcp_json, McpManager};
+use crate::mcp::{McpManager, SynthVConnectionProfile};
+use crate::media_import;
+use crate::media_tasks::{CoverTaskRequest, MediaTaskManager};
+use crate::solo_tuning::{self, SoloTuningRequest};
+use crate::synthv_unified;
+use crate::tuning_profiles::{self, TuningParameters};
+use crate::workflows;
 use tokio::runtime::Handle;
 
 const MAX_CLIP_SECONDS: f64 = 30.0;
 const MAX_GUARD_SECONDS: f64 = 2.0;
 const MAX_WAV_BYTES: u64 = 128 * 1024 * 1024;
 const PLAYBACK_POLL_INTERVAL: Duration = Duration::from_millis(45);
-const PLAYBACK_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -152,7 +163,32 @@ pub fn capability() -> AudioCaptureCapability {
             },
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        match macos_version() {
+            Some((major, minor)) if major > 14 || (major == 14 && minor >= 2) => {
+                AudioCaptureCapability {
+                    supported: true,
+                    backend: "core-audio-process-tap".to_string(),
+                    detail: "使用 Core Audio Process Tap，只捕获所选 SynthV 进程的输出。首次开始录制时，macOS 会请求系统音频录制权限。".to_string(),
+                    max_clip_seconds: MAX_CLIP_SECONDS,
+                }
+            }
+            Some((major, minor)) => AudioCaptureCapability {
+                supported: false,
+                backend: "unavailable".to_string(),
+                detail: format!("当前 macOS {major}.{minor} 不支持 Core Audio Process Tap；需要 macOS 14.2 或更高版本。"),
+                max_clip_seconds: MAX_CLIP_SECONDS,
+            },
+            None => AudioCaptureCapability {
+                supported: false,
+                backend: "unavailable".to_string(),
+                detail: "无法确认 macOS 版本，已停用进程级音频捕获。".to_string(),
+                max_clip_seconds: MAX_CLIP_SECONDS,
+            },
+        }
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         AudioCaptureCapability {
             supported: false,
@@ -161,6 +197,22 @@ pub fn capability() -> AudioCaptureCapability {
             max_clip_seconds: MAX_CLIP_SECONDS,
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_version() -> Option<(u32, u32)> {
+    let output = std::process::Command::new("sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let mut parts = std::str::from_utf8(&output.stdout).ok()?.trim().split('.');
+    Some((
+        parts.next()?.parse().ok()?,
+        parts.next().unwrap_or("0").parse().ok()?,
+    ))
 }
 
 #[cfg(windows)]
@@ -190,9 +242,9 @@ pub async fn capture_clip(
         return Err(capability().detail);
     }
     let target = resolve_target(request.process_id)?;
-    let session_before = bridge_status(manager).await?;
+    let session_before = synthv_unified::capture_status(manager, target.process_id).await?;
     let session_token = recursive_string(&session_before, "sessionToken").map(str::to_string);
-    let playback_before = playback(manager, "status", None).await?;
+    let playback_before = playback(manager, target.process_id, "status", None).await?;
     let status = recursive_string(&playback_before, "status").unwrap_or("unknown");
     if status != "stopped" {
         return Err(
@@ -212,7 +264,7 @@ pub async fn capture_clip(
     let output_path = output_dir.join(format!("{file_stem}.wav"));
     let metadata_path = output_dir.join(format!("{file_stem}.json"));
 
-    playback(manager, "seek", Some(play_from)).await?;
+    playback(manager, target.process_id, "seek", Some(play_from)).await?;
     let raw_for_start = raw_path.clone();
     let process_id = target.process_id;
     let capture_start = tauri::async_runtime::spawn_blocking(move || {
@@ -224,7 +276,7 @@ pub async fn capture_clip(
     let mut capture = match capture_start {
         Ok(capture) => capture,
         Err(error) => {
-            let _ = playback(manager, "seek", Some(original_playhead)).await;
+            let _ = playback(manager, target.process_id, "seek", Some(original_playhead)).await;
             cleanup_capture_files(&[&raw_path]);
             return Err(error);
         }
@@ -232,13 +284,13 @@ pub async fn capture_clip(
     let capture_armed_at = Instant::now();
 
     let play_call_started = Instant::now();
-    let play_result = playback(manager, "play", None).await;
+    let play_result = playback(manager, target.process_id, "play", None).await;
     let play_call_finished = Instant::now();
     if let Err(error) = play_result {
         capture.stop();
         let _ = tauri::async_runtime::spawn_blocking(move || capture.finish()).await;
-        let _ = playback(manager, "stop", None).await;
-        let _ = playback(manager, "seek", Some(original_playhead)).await;
+        let _ = playback(manager, target.process_id, "stop", None).await;
+        let _ = playback(manager, target.process_id, "seek", Some(original_playhead)).await;
         cleanup_capture_files(&[&raw_path]);
         return Err(error);
     }
@@ -252,7 +304,7 @@ pub async fn capture_clip(
             break Err("等待 SynthV 播放到片段终点超时。".to_string());
         }
         tokio::time::sleep(PLAYBACK_POLL_INTERVAL).await;
-        match playback(manager, "status", None).await {
+        match playback(manager, target.process_id, "status", None).await {
             Ok(state) => {
                 let state_status = recursive_string(&state, "status").unwrap_or("unknown");
                 let playhead = recursive_f64(&state, "playheadSeconds").unwrap_or(play_from);
@@ -269,14 +321,15 @@ pub async fn capture_clip(
         }
     };
 
-    let stop_result = playback(manager, "stop", None).await;
+    let stop_result = playback(manager, target.process_id, "stop", None).await;
     tokio::time::sleep(Duration::from_millis(80)).await;
     capture.stop();
     let native_result = tauri::async_runtime::spawn_blocking(move || capture.finish())
         .await
         .map_err(|error| format!("等待音频捕获完成失败：{error}"))
         .and_then(|result| result);
-    let restore_result = playback(manager, "seek", Some(original_playhead)).await;
+    let restore_result =
+        playback(manager, target.process_id, "seek", Some(original_playhead)).await;
 
     if let Err(error) = playback_result {
         cleanup_capture_files(&[&raw_path]);
@@ -305,7 +358,7 @@ pub async fn capture_clip(
         ));
     }
 
-    let session_after = match bridge_status(manager).await {
+    let session_after = match synthv_unified::capture_status(manager, target.process_id).await {
         Ok(status) => status,
         Err(error) => {
             cleanup_capture_files(&[&raw_path]);
@@ -455,19 +508,56 @@ pub struct ToolboxAudioToolExecutor {
     mcp: McpToolExecutor,
     manager: Arc<McpManager>,
     runtime: Handle,
+    bridge_dir: PathBuf,
+    resource_dir: PathBuf,
+    components_dir: PathBuf,
+    downloads: Arc<ComponentDownloadManager>,
+    media_tasks: Arc<MediaTaskManager>,
+    file_approvals: Arc<FileApprovalManager>,
+    conversation_id: String,
+    work_mode: AgentWorkMode,
+    mode_state: std::sync::Mutex<ModeExecutionState>,
+}
+
+pub struct ToolboxAudioToolContext {
+    pub(crate) manager: Arc<McpManager>,
+    pub(crate) runtime: Handle,
+    pub(crate) bridge_dir: PathBuf,
+    pub(crate) resource_dir: PathBuf,
+    pub(crate) components_dir: PathBuf,
+    pub(crate) downloads: Arc<ComponentDownloadManager>,
+    pub(crate) media_tasks: Arc<MediaTaskManager>,
+    pub(crate) file_approvals: Arc<FileApprovalManager>,
+    pub(crate) conversation_id: String,
+    pub(crate) work_mode: AgentWorkMode,
+}
+
+#[derive(Default)]
+struct ModeExecutionState {
+    checkpoint_created: bool,
+    project_mutations: u8,
 }
 
 impl ToolboxAudioToolExecutor {
-    pub fn new(mcp: McpToolExecutor, manager: Arc<McpManager>, runtime: Handle) -> Self {
+    pub fn new(mcp: McpToolExecutor, context: ToolboxAudioToolContext) -> Self {
         Self {
             mcp,
-            manager,
-            runtime,
+            manager: context.manager,
+            runtime: context.runtime,
+            bridge_dir: context.bridge_dir,
+            resource_dir: context.resource_dir,
+            components_dir: context.components_dir,
+            downloads: context.downloads,
+            media_tasks: context.media_tasks,
+            file_approvals: context.file_approvals,
+            conversation_id: context.conversation_id,
+            work_mode: context.work_mode,
+            mode_state: std::sync::Mutex::new(ModeExecutionState::default()),
         }
     }
 
     fn local_tools(&self) -> Vec<ToolDefinition> {
-        let mut tools = vec![ToolDefinition {
+        let mut tools = vec![ToolDefinition { name: "agent_file_list".to_string(), description: "List only path, type, size and decision for a directory. Never reads file content.".to_string(), input_schema_json: json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}).to_string() }, ToolDefinition { name: "agent_file_access".to_string(), description: "Request access to one file. pass is immediate; ordinary Edit files require UI approval and cannot be approved by model arguments.".to_string(), input_schema_json: json!({"type":"object","properties":{"path":{"type":"string"},"purpose":{"type":"string"}},"required":["path","purpose"],"additionalProperties":false}).to_string() }, ToolDefinition {
             name: "compare_audio_clips".to_string(),
             description: "Fast local A/B comparison for two WAV clips. Aligns capture latency and returns only structured difference metrics; it never uploads or embeds audio.".to_string(),
             input_schema_json: json!({
@@ -481,6 +571,232 @@ impl ToolboxAudioToolExecutor {
                 "additionalProperties": false
             }).to_string(),
         }];
+        tools.extend([
+            ToolDefinition {
+                name: "preview_media_source".to_string(),
+                description: "Preview one explicit Bilibili/YouTube URL or BV identifier using the managed media-fetcher. It is read-only and never uses browser cookies or playlists.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": { "source": { "type": "string" } },
+                    "required": ["source"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
+                name: "import_media_audio".to_string(),
+                description: "Queue one explicitly supplied Bilibili/YouTube source for a cancellable managed WAV import. rightsConfirmed must be true. Returns a persisted media task.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": {
+                        "source": { "type": "string" },
+                        "rightsConfirmed": { "type": "boolean" }
+                    },
+                    "required": ["source", "rightsConfirmed"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
+                name: "list_media_tasks".to_string(),
+                description: "List persisted media import and processing tasks.".to_string(),
+                input_schema_json: json!({ "type": "object", "additionalProperties": false }).to_string(),
+            },
+            ToolDefinition {
+                name: "cancel_media_task".to_string(),
+                description: "Cancel a queued or running media task. Running child process trees are terminated.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": { "taskId": { "type": "string", "format": "uuid" } },
+                    "required": ["taskId"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
+                name: "retry_media_task".to_string(),
+                description: "Retry one failed or cancelled media task from its persisted request.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": { "taskId": { "type": "string", "format": "uuid" } },
+                    "required": ["taskId"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
+                name: "create_cover_from_source".to_string(),
+                description: "Queue the full cancellable Cover pipeline for one Bilibili BV/URL or YouTube URL: managed audio import, vocal/instrumental separation, melody MIDI extraction, optional lyric mapping, automatic F13 Bridge connection, and import into the current SynthV project. The requested voice name is recorded and reported, but SynthV's official scripting API cannot assign singer identity.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": {
+                        "source": { "type": "string" },
+                        "lyrics": { "type": ["string", "null"] },
+                        "voiceName": { "type": "string" },
+                        "processId": { "type": ["integer", "null"], "minimum": 1 },
+                        "trackIndex": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 1 },
+                        "groupName": { "type": "string", "maxLength": 200, "default": "Toolbox Cover" },
+                        "rightsConfirmed": { "type": "boolean" },
+                        "tolerance": { "type": "number", "minimum": 0.02, "maximum": 0.25, "default": 0.08 },
+                        "advanced": { "type": "boolean", "default": true }
+                    },
+                    "required": ["source", "voiceName", "trackIndex", "groupName", "rightsConfirmed", "tolerance", "advanced"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
+                name: "create_cover_from_audio".to_string(),
+                description: "Queue the same cancellable Cover pipeline from an existing audio file inside the Toolbox managed data directory. Use this after an explicitly authorized platform download has already produced local audio.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": {
+                        "audioPath": { "type": "string" },
+                        "lyrics": { "type": ["string", "null"] },
+                        "voiceName": { "type": "string" },
+                        "processId": { "type": ["integer", "null"], "minimum": 1 },
+                        "trackIndex": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 1 },
+                        "groupName": { "type": "string", "maxLength": 200, "default": "Toolbox Cover" },
+                        "rightsConfirmed": { "type": "boolean" },
+                        "tolerance": { "type": "number", "minimum": 0.02, "maximum": 0.25, "default": 0.08 },
+                        "advanced": { "type": "boolean", "default": true }
+                    },
+                    "required": ["audioPath", "voiceName", "trackIndex", "groupName", "rightsConfirmed", "tolerance", "advanced"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
+                name: "create_project_checkpoint".to_string(),
+                description: "Create a recoverable managed copy of one saved .svp project before autonomous mutations.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": {
+                        "projectPath": { "type": "string" },
+                        "label": { "type": "string", "maxLength": 100 }
+                    },
+                    "required": ["projectPath", "label"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
+                name: "learn_tuning_from_source".to_string(),
+                description: "Analyze one local reference vocal offline and update the isolated tuning profile for an exact voice-library name.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": {
+                        "audioPath": { "type": "string" },
+                        "voiceName": { "type": "string", "maxLength": 200 }
+                    },
+                    "required": ["audioPath", "voiceName"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
+                name: "list_tuning_profiles".to_string(),
+                description: "List every local per-voice tuning profile and its source/A-B sample counts.".to_string(),
+                input_schema_json: json!({ "type": "object", "additionalProperties": false }).to_string(),
+            },
+            ToolDefinition {
+                name: "record_tuning_outcome".to_string(),
+                description: "Update one voice-specific profile from a bounded A/B improvement score after comparing a candidate.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": {
+                        "voiceName": { "type": "string" },
+                        "candidate": { "type": "object", "properties": {
+                            "loudness": { "type": "number", "minimum": -48, "maximum": 12 },
+                            "tension": { "type": "number", "minimum": -1, "maximum": 1 },
+                            "breathiness": { "type": "number", "minimum": -1, "maximum": 1 },
+                            "gender": { "type": "number", "minimum": -1, "maximum": 1 },
+                            "toneShift": { "type": "number", "minimum": -1, "maximum": 1 },
+                            "vibratoStrength": { "type": "number", "minimum": 0, "maximum": 2 }
+                        }, "required": ["loudness", "tension", "breathiness", "gender", "toneShift", "vibratoStrength"], "additionalProperties": false },
+                        "improvement": { "type": "number", "minimum": -1, "maximum": 1 }
+                    },
+                    "required": ["voiceName", "candidate", "improvement"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
+                name: "apply_learned_tuning".to_string(),
+                description: "Apply one voice-specific learned Group Voice profile to a fingerprint-guarded SynthV group. This changes parameters, never singer identity.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": {
+                        "voiceName": { "type": "string" },
+                        "trackIndex": { "type": "integer", "minimum": 1 },
+                        "groupIndex": { "type": "integer", "minimum": 1, "default": 1 }
+                    },
+                    "required": ["voiceName", "trackIndex", "groupIndex"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
+                name: "run_solo_tuning".to_string(),
+                description: "Run one bounded Solo tuning round: checkpoint, baseline capture, learned profile application, candidate capture, source-feature scoring, save on improvement or verified Undo on regression. Windows process loopback or macOS 14.2+ Process Tap capture is required.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": {
+                        "referenceAudioPath": { "type": "string" },
+                        "voiceName": { "type": "string" },
+                        "projectPath": { "type": "string" },
+                        "processId": { "type": "integer", "minimum": 1 },
+                        "trackIndex": { "type": "integer", "minimum": 1 },
+                        "groupIndex": { "type": "integer", "minimum": 1 },
+                        "startSeconds": { "type": "number", "minimum": 0 },
+                        "endSeconds": { "type": "number", "exclusiveMinimum": 0 }
+                    },
+                    "required": ["referenceAudioPath", "voiceName", "projectPath", "processId", "trackIndex", "groupIndex", "startSeconds", "endSeconds"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
+                name: "separate_vocals_and_instrumental".to_string(),
+                description: "Queue a cancellable managed Demucs separation for one local audio file. Returns a persisted media task; use list_media_tasks to observe vocals.wav and instrumental.wav outputs.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": { "audioPath": { "type": "string" } },
+                    "required": ["audioPath"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
+                name: "list_managed_components".to_string(),
+                description: "List managed local components and their installation status.".to_string(),
+                input_schema_json: json!({ "type": "object", "additionalProperties": false }).to_string(),
+            },
+            ToolDefinition {
+                name: "list_component_tasks".to_string(),
+                description: "List persisted component installation tasks and their current status.".to_string(),
+                input_schema_json: json!({ "type": "object", "additionalProperties": false }).to_string(),
+            },
+            ToolDefinition {
+                name: "queue_component_install".to_string(),
+                description: "Queue one allowlisted managed component for serial installation.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": { "componentId": { "type": "string", "enum": ["ffmpeg", "pi-audio", "cvrs", "media-fetcher", "vocal-separation", "sandboxie"] } },
+                    "required": ["componentId"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
+                name: "cancel_component_task".to_string(),
+                description: "Cancel a component task only while it is still queued and has not started changing files.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": { "taskId": { "type": "string", "format": "uuid" } },
+                    "required": ["taskId"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+            ToolDefinition {
+                name: "retry_component_task".to_string(),
+                description: "Retry one failed or cancelled persisted component task.".to_string(),
+                input_schema_json: json!({
+                    "type": "object",
+                    "properties": { "taskId": { "type": "string", "format": "uuid" } },
+                    "required": ["taskId"],
+                    "additionalProperties": false
+                }).to_string(),
+            },
+        ]);
+        tools.extend(synthv_unified::definitions());
         if capability().supported {
             tools.push(ToolDefinition {
                 name: "capture_synthv_clip".to_string(),
@@ -505,6 +821,234 @@ impl ToolboxAudioToolExecutor {
 
     fn execute_local(&self, call: &ToolCall) -> Option<ToolResult> {
         let result = match call.tool_name.as_str() {
+            "agent_file_list" => Some(
+                serde_json::from_str::<AgentFileListRequest>(&call.arguments_json)
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| self.file_approvals.list(&r.path, self.work_mode))
+                    .and_then(|v| serde_json::to_string(&v).map_err(|e| e.to_string())),
+            ),
+            "agent_file_access" => Some(
+                serde_json::from_str::<AgentFileAccessRequest>(&call.arguments_json)
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| {
+                        self.file_approvals.admit_or_request(
+                            &r.path,
+                            &r.purpose,
+                            self.work_mode,
+                            &self.conversation_id,
+                        )
+                    })
+                    .and_then(|value| serde_json::to_string(&value).map_err(|e| e.to_string())),
+            ),
+            name if synthv_unified::is_tool(name) => Some((|| {
+                if synthv_unified::is_mutation(name) {
+                    self.admit_project_mutation()?;
+                }
+                let value = self.runtime.block_on(synthv_unified::execute(
+                    name,
+                    &call.arguments_json,
+                    &self.manager,
+                    &self.bridge_dir,
+                ))?;
+                serde_json::to_string(&value).map_err(|error| error.to_string())
+            })()),
+            "preview_media_source" => Some(
+                serde_json::from_str::<MediaSourceToolRequest>(&call.arguments_json)
+                    .map_err(|error| format!("媒体来源参数无效：{error}"))
+                    .and_then(|request| media_import::preview(&request.source))
+                    .and_then(|value| {
+                        serde_json::to_string(&value).map_err(|error| error.to_string())
+                    }),
+            ),
+            "import_media_audio" => Some(
+                serde_json::from_str::<MediaSourceToolRequest>(&call.arguments_json)
+                    .map_err(|error| format!("媒体导入参数无效：{error}"))
+                    .and_then(|request| {
+                        let (snapshot, start_worker) = self
+                            .media_tasks
+                            .enqueue_import(request.source, request.rights_confirmed)?;
+                        self.start_media_worker(start_worker);
+                        serde_json::to_string(&snapshot).map_err(|error| error.to_string())
+                    }),
+            ),
+            "list_media_tasks" => Some(
+                serde_json::to_string(&self.media_tasks.snapshot())
+                    .map_err(|error| error.to_string()),
+            ),
+            "cancel_media_task" => Some(
+                serde_json::from_str::<TaskIdRequest>(&call.arguments_json)
+                    .map_err(|error| format!("媒体任务参数无效：{error}"))
+                    .and_then(|request| self.media_tasks.cancel(&request.task_id))
+                    .and_then(|snapshot| {
+                        serde_json::to_string(&snapshot).map_err(|error| error.to_string())
+                    }),
+            ),
+            "retry_media_task" => Some(
+                serde_json::from_str::<TaskIdRequest>(&call.arguments_json)
+                    .map_err(|error| format!("媒体任务参数无效：{error}"))
+                    .and_then(|request| self.media_tasks.retry(&request.task_id))
+                    .and_then(|(snapshot, start_worker)| {
+                        self.start_media_worker(start_worker);
+                        serde_json::to_string(&snapshot).map_err(|error| error.to_string())
+                    }),
+            ),
+            "create_cover_from_source" => Some(
+                serde_json::from_str::<CoverTaskRequest>(&call.arguments_json)
+                    .map_err(|error| format!("Cover 任务参数无效：{error}"))
+                    .and_then(|request| self.media_tasks.enqueue_cover(request))
+                    .and_then(|(snapshot, start_worker)| {
+                        self.start_media_worker(start_worker);
+                        serde_json::to_string(&snapshot).map_err(|error| error.to_string())
+                    }),
+            ),
+            "create_cover_from_audio" => Some(
+                serde_json::from_str::<LocalCoverTaskRequest>(&call.arguments_json)
+                    .map_err(|error| format!("本地 Cover 任务参数无效：{error}"))
+                    .and_then(|request| self.media_tasks.enqueue_cover(request.into()))
+                    .and_then(|(snapshot, start_worker)| {
+                        self.start_media_worker(start_worker);
+                        serde_json::to_string(&snapshot).map_err(|error| error.to_string())
+                    }),
+            ),
+            "create_project_checkpoint" => Some(
+                serde_json::from_str::<CheckpointToolRequest>(&call.arguments_json)
+                    .map_err(|error| format!("检查点参数无效：{error}"))
+                    .and_then(|request| {
+                        let checkpoint = creative_history::create_checkpoint(
+                            &request.project_path,
+                            &request.label,
+                        )?;
+                        if let Ok(mut state) = self.mode_state.lock() {
+                            state.checkpoint_created = true;
+                        }
+                        serde_json::to_string(&checkpoint).map_err(|error| error.to_string())
+                    }),
+            ),
+            "learn_tuning_from_source" => Some(
+                serde_json::from_str::<LearnTuningToolRequest>(&call.arguments_json)
+                    .map_err(|error| format!("调声学习参数无效：{error}"))
+                    .and_then(|request| {
+                        let features =
+                            workflows::source_style(request.audio_path, &self.resource_dir)?;
+                        tuning_profiles::learn(&request.voice_name, features)
+                    })
+                    .and_then(|profile| {
+                        serde_json::to_string(&profile).map_err(|error| error.to_string())
+                    }),
+            ),
+            "list_tuning_profiles" => Some(tuning_profiles::list().and_then(|profiles| {
+                serde_json::to_string(&profiles).map_err(|error| error.to_string())
+            })),
+            "record_tuning_outcome" => Some(
+                serde_json::from_str::<TuningOutcomeToolRequest>(&call.arguments_json)
+                    .map_err(|error| format!("调声反馈参数无效：{error}"))
+                    .and_then(|request| {
+                        tuning_profiles::record_outcome(
+                            &request.voice_name,
+                            request.candidate,
+                            request.improvement,
+                        )
+                    })
+                    .and_then(|profile| {
+                        serde_json::to_string(&profile).map_err(|error| error.to_string())
+                    }),
+            ),
+            "apply_learned_tuning" => Some(
+                serde_json::from_str::<ApplyTuningToolRequest>(&call.arguments_json)
+                    .map_err(|error| format!("调声应用参数无效：{error}"))
+                    .and_then(|request| {
+                        self.admit_project_mutation()?;
+                        let connected_profiles = self.runtime.block_on(async {
+                            let hosts = self.manager.connected_synthv_hosts().await;
+                            let mut profiles = Vec::with_capacity(hosts.len());
+                            for host_id in hosts.keys() {
+                                if let Some(profile) =
+                                    self.manager.synthv_connection_profile(host_id).await
+                                {
+                                    profiles.push(profile);
+                                }
+                            }
+                            profiles
+                        });
+                        if !connected_profiles.is_empty()
+                            && !connected_profiles
+                                .contains(&SynthVConnectionProfile::OfficialBridge)
+                        {
+                            return Err("当前已连接的 SynthV 宿主不支持调校参数写入。".to_string());
+                        }
+                        let profile = tuning_profiles::get(&request.voice_name)?;
+                        self.runtime
+                            .block_on(bridge_workflows::apply_tuning_profile(
+                                &self.manager,
+                                &profile,
+                                request.track_index,
+                                request.group_index,
+                            ))
+                    })
+                    .and_then(|result| {
+                        serde_json::to_string(&result).map_err(|error| error.to_string())
+                    }),
+            ),
+            "run_solo_tuning" => Some(
+                serde_json::from_str::<SoloTuningRequest>(&call.arguments_json)
+                    .map_err(|error| format!("Solo 调声参数无效：{error}"))
+                    .and_then(|request| {
+                        self.runtime.block_on(solo_tuning::run(
+                            request,
+                            self.work_mode,
+                            &self.manager,
+                            &self.resource_dir,
+                        ))
+                    })
+                    .and_then(|result| {
+                        serde_json::to_string(&result).map_err(|error| error.to_string())
+                    }),
+            ),
+            "separate_vocals_and_instrumental" => Some(
+                serde_json::from_str::<AudioPathToolRequest>(&call.arguments_json)
+                    .map_err(|error| format!("分离参数无效：{error}"))
+                    .and_then(|request| {
+                        let (snapshot, start_worker) =
+                            self.media_tasks.enqueue_separation(request.audio_path)?;
+                        self.start_media_worker(start_worker);
+                        serde_json::to_string(&snapshot).map_err(|error| error.to_string())
+                    }),
+            ),
+            "list_managed_components" => Some(
+                serde_json::to_string(&component_list(&self.resource_dir))
+                    .map_err(|error| error.to_string()),
+            ),
+            "list_component_tasks" => Some(
+                serde_json::to_string(&self.downloads.snapshot())
+                    .map_err(|error| error.to_string()),
+            ),
+            "queue_component_install" => Some(
+                serde_json::from_str::<ComponentTaskRequest>(&call.arguments_json)
+                    .map_err(|error| format!("组件任务参数无效：{error}"))
+                    .and_then(|request| {
+                        let (snapshot, start_worker) =
+                            self.downloads.enqueue(&request.component_id)?;
+                        self.start_component_worker(start_worker);
+                        serde_json::to_string(&snapshot).map_err(|error| error.to_string())
+                    }),
+            ),
+            "cancel_component_task" => Some(
+                serde_json::from_str::<TaskIdRequest>(&call.arguments_json)
+                    .map_err(|error| format!("组件任务参数无效：{error}"))
+                    .and_then(|request| self.downloads.cancel_queued(&request.task_id))
+                    .and_then(|snapshot| {
+                        serde_json::to_string(&snapshot).map_err(|error| error.to_string())
+                    }),
+            ),
+            "retry_component_task" => Some(
+                serde_json::from_str::<TaskIdRequest>(&call.arguments_json)
+                    .map_err(|error| format!("组件任务参数无效：{error}"))
+                    .and_then(|request| self.downloads.retry(&request.task_id))
+                    .and_then(|(snapshot, start_worker)| {
+                        self.start_component_worker(start_worker);
+                        serde_json::to_string(&snapshot).map_err(|error| error.to_string())
+                    }),
+            ),
             "capture_synthv_clip" => Some(
                 serde_json::from_str::<CaptureClipRequest>(&call.arguments_json)
                     .map_err(|error| format!("片段捕获参数无效：{error}"))
@@ -536,6 +1080,124 @@ impl ToolboxAudioToolExecutor {
             },
         })
     }
+
+    fn start_component_worker(&self, start_worker: bool) {
+        if !start_worker {
+            return;
+        }
+        let manager = self.downloads.clone();
+        let components_dir = self.components_dir.clone();
+        let resource_dir = self.resource_dir.clone();
+        self.runtime.spawn(async move {
+            manager.run_worker(components_dir, resource_dir).await;
+        });
+    }
+
+    fn start_media_worker(&self, start_worker: bool) {
+        if !start_worker {
+            return;
+        }
+        let manager = self.media_tasks.clone();
+        self.runtime.spawn(async move {
+            manager.run_worker().await;
+        });
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MediaSourceToolRequest {
+    source: String,
+    #[serde(default)]
+    rights_confirmed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalCoverTaskRequest {
+    audio_path: String,
+    lyrics: Option<String>,
+    voice_name: String,
+    process_id: Option<u32>,
+    track_index: u32,
+    group_name: String,
+    rights_confirmed: bool,
+    tolerance: f64,
+    advanced: bool,
+}
+
+impl From<LocalCoverTaskRequest> for CoverTaskRequest {
+    fn from(request: LocalCoverTaskRequest) -> Self {
+        Self {
+            source: request.audio_path,
+            lyrics: request.lyrics,
+            voice_name: request.voice_name,
+            process_id: request.process_id,
+            track_index: request.track_index,
+            group_name: request.group_name,
+            rights_confirmed: request.rights_confirmed,
+            tolerance: request.tolerance,
+            advanced: request.advanced,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AudioPathToolRequest {
+    audio_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentFileListRequest {
+    path: String,
+}
+#[derive(Debug, Deserialize)]
+struct AgentFileAccessRequest {
+    path: String,
+    purpose: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ComponentTaskRequest {
+    component_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskIdRequest {
+    task_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckpointToolRequest {
+    project_path: String,
+    label: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LearnTuningToolRequest {
+    audio_path: String,
+    voice_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TuningOutcomeToolRequest {
+    voice_name: String,
+    candidate: TuningParameters,
+    improvement: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApplyTuningToolRequest {
+    voice_name: String,
+    track_index: u32,
+    group_index: u32,
 }
 
 impl ToolExecutor for ToolboxAudioToolExecutor {
@@ -546,11 +1208,104 @@ impl ToolExecutor for ToolboxAudioToolExecutor {
     }
 
     fn execute(&self, call: &ToolCall) -> Result<ToolResult, AgentError> {
+        if !matches!(
+            call.tool_name.as_str(),
+            "agent_file_list" | "agent_file_access"
+        ) {
+            if let Ok(value) = serde_json::from_str::<Value>(&call.arguments_json) {
+                if let Err(error) = admit_paths(
+                    &value,
+                    &self.file_approvals,
+                    self.work_mode,
+                    &self.conversation_id,
+                    &call.tool_name,
+                ) {
+                    return Ok(ToolResult {
+                        tool_call_id: call.id.clone(),
+                        result_json: json!({"error":error}).to_string(),
+                        is_error: true,
+                    });
+                }
+            }
+        }
         if let Some(result) = self.execute_local(call) {
             Ok(result)
         } else {
+            if call.tool_name == "sv_command" {
+                if let Err(error) = self.admit_project_mutation() {
+                    return Ok(ToolResult {
+                        tool_call_id: call.id.clone(),
+                        result_json: json!({ "error": error }).to_string(),
+                        is_error: true,
+                    });
+                }
+            }
             self.mcp.execute(call)
         }
+    }
+}
+
+fn admit_paths(
+    value: &Value,
+    approvals: &FileApprovalManager,
+    mode: AgentWorkMode,
+    conversation_id: &str,
+    tool_name: &str,
+) -> Result<(), String> {
+    match value {
+        Value::Object(map) => {
+            for (key, item) in map {
+                if crate::agent_files::is_path_key(key) {
+                    if let Some(path) = item.as_str() {
+                        let decision = approvals.admit_or_request(
+                            path,
+                            &format!("{tool_name} 工具访问文件"),
+                            mode,
+                            conversation_id,
+                        )?;
+                        if decision.decision != "pass" {
+                            return Err(format!(
+                                "文件需要人工批准；requestId={}",
+                                decision.request_id.unwrap_or_default()
+                            ));
+                        }
+                    }
+                }
+                admit_paths(item, approvals, mode, conversation_id, tool_name)?;
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                admit_paths(item, approvals, mode, conversation_id, tool_name)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+impl ToolboxAudioToolExecutor {
+    fn admit_project_mutation(&self) -> Result<(), String> {
+        let mut state = self
+            .mode_state
+            .lock()
+            .map_err(|_| "Agent 工作模式状态锁已损坏。".to_string())?;
+        match self.work_mode {
+            AgentWorkMode::Edit if state.project_mutations >= 1 => {
+                return Err("Edit 模式每轮只允许一次 SynthV 项目修改。".to_string())
+            }
+            AgentWorkMode::Solo if !state.checkpoint_created => {
+                return Err(
+                    "Solo 模式修改 SynthV 前必须先调用 create_project_checkpoint。".to_string(),
+                )
+            }
+            AgentWorkMode::Solo if state.project_mutations >= 8 => {
+                return Err("Solo 模式每轮最多执行八次 SynthV 项目修改。".to_string())
+            }
+            _ => {}
+        }
+        state.project_mutations += 1;
+        Ok(())
     }
 }
 
@@ -606,35 +1361,13 @@ fn resolve_target(process_id: Option<u32>) -> Result<AudioCaptureTarget, String>
     }
 }
 
-async fn bridge_status(manager: &McpManager) -> Result<Value, String> {
-    call_bridge(manager, "sv_status", json!({})).await
-}
-
 async fn playback(
     manager: &McpManager,
+    process_id: u32,
     operation: &str,
     time_seconds: Option<f64>,
 ) -> Result<Value, String> {
-    let mut args = json!({ "operation": operation });
-    if let Some(value) = time_seconds {
-        args["timeSeconds"] = json!(value);
-    }
-    call_bridge(
-        manager,
-        "sv_ui",
-        json!({ "action": "playback", "args": args }),
-    )
-    .await
-}
-
-async fn call_bridge(manager: &McpManager, tool: &str, args: Value) -> Result<Value, String> {
-    let response = tokio::time::timeout(
-        PLAYBACK_COMMAND_TIMEOUT,
-        manager.call_bridge_tool(tool, args),
-    )
-    .await
-    .map_err(|_| format!("{tool} 调用超时。"))??;
-    extract_mcp_json(&response)
+    synthv_unified::capture_playback(manager, process_id, operation, time_seconds).await
 }
 
 fn recursive_string<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
@@ -1286,7 +2019,184 @@ mod platform {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+mod platform {
+    use std::ffi::{c_char, c_int, c_void, CString};
+    use std::path::PathBuf;
+
+    use super::AudioCaptureTarget;
+
+    #[repr(C)]
+    #[derive(Debug, Default)]
+    struct NativeCaptureStats {
+        hresult: i32,
+        sample_rate: u32,
+        channels: u32,
+        bits_per_sample: u32,
+        discontinuities: u32,
+        frames_written: u64,
+        first_qpc_100ns: u64,
+        last_qpc_100ns: u64,
+    }
+
+    #[link(name = "synthv_macos_process_tap", kind = "static")]
+    unsafe extern "C" {
+        fn synthv_macos_process_tap_start(
+            process_id: u32,
+            output_path: *const c_char,
+            stats: *mut NativeCaptureStats,
+            error: *mut c_char,
+            error_capacity: usize,
+        ) -> *mut c_void;
+        fn synthv_macos_process_tap_stop(capture: *mut c_void) -> c_int;
+        fn synthv_macos_process_tap_finish(capture: *mut c_void) -> c_int;
+    }
+
+    pub(super) struct NativeCaptureResult {
+        pub(super) discontinuities: u32,
+    }
+
+    pub(super) struct NativeCapture {
+        raw: *mut c_void,
+        stats: Box<NativeCaptureStats>,
+    }
+
+    struct StartedCapture {
+        raw: *mut c_void,
+        stats: Box<NativeCaptureStats>,
+        error: [i8; 512],
+    }
+
+    unsafe impl Send for StartedCapture {}
+
+    impl Drop for StartedCapture {
+        fn drop(&mut self) {
+            if !self.raw.is_null() {
+                unsafe { synthv_macos_process_tap_finish(self.raw) };
+                self.raw = std::ptr::null_mut();
+            }
+        }
+    }
+
+    unsafe impl Send for NativeCapture {}
+
+    impl NativeCapture {
+        pub(super) fn start(process_id: u32, output_path: PathBuf) -> Result<Self, String> {
+            let output_path = CString::new(output_path.as_os_str().as_encoded_bytes())
+                .map_err(|_| "音频输出路径包含不支持的 NUL 字符。".to_string())?;
+            let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let cancelled_for_start = cancelled.clone();
+            let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+            std::thread::spawn(move || {
+                let mut stats = Box::<NativeCaptureStats>::default();
+                let mut error = [0i8; 512];
+                let raw = unsafe {
+                    synthv_macos_process_tap_start(
+                        process_id,
+                        output_path.as_ptr(),
+                        &mut *stats,
+                        error.as_mut_ptr(),
+                        error.len(),
+                    )
+                };
+                let outcome = StartedCapture { raw, stats, error };
+                if cancelled_for_start.load(std::sync::atomic::Ordering::Acquire) {
+                    return;
+                }
+                let _ = sender.send(outcome);
+            });
+            let mut outcome = receiver
+                .recv_timeout(std::time::Duration::from_secs(12))
+                .map_err(|_| {
+                    cancelled.store(true, std::sync::atomic::Ordering::Release);
+                    "初始化 macOS Process Tap 超时；后台启动若随后完成会立即清理资源。".to_string()
+                })?;
+            if outcome.raw.is_null() {
+                let detail = unsafe { std::ffi::CStr::from_ptr(outcome.error.as_ptr()) }
+                    .to_string_lossy()
+                    .trim()
+                    .to_string();
+                return Err(if detail.is_empty() {
+                    "无法启动 macOS 指定进程音频捕获。请确认 macOS 14.2+、目标 PID 仍在运行，并在系统设置中允许此应用录制系统音频。".to_string()
+                } else {
+                    detail
+                });
+            }
+            Ok(Self {
+                raw: std::mem::replace(&mut outcome.raw, std::ptr::null_mut()),
+                stats: std::mem::take(&mut outcome.stats),
+            })
+        }
+
+        pub(super) fn stop(&mut self) {
+            if !self.raw.is_null() {
+                unsafe { synthv_macos_process_tap_stop(self.raw) };
+            }
+        }
+
+        pub(super) fn finish(mut self) -> Result<NativeCaptureResult, String> {
+            let status = unsafe { synthv_macos_process_tap_finish(self.raw) };
+            self.raw = std::ptr::null_mut();
+            if status != 0 || self.stats.hresult != 0 {
+                return Err(format!(
+                    "macOS Core Audio Process Tap 捕获失败（OSStatus {}）。请确认已允许系统音频录制且目标进程仍在输出音频。",
+                    if self.stats.hresult != 0 { self.stats.hresult } else { status }
+                ));
+            }
+            if self.stats.frames_written == 0 {
+                return Err("macOS Process Tap 没有返回任何音频帧。请确认所选 SynthV 进程在捕获区间内确实播放音频。".to_string());
+            }
+            Ok(NativeCaptureResult {
+                discontinuities: self.stats.discontinuities,
+            })
+        }
+    }
+
+    impl Drop for NativeCapture {
+        fn drop(&mut self) {
+            if !self.raw.is_null() {
+                unsafe { synthv_macos_process_tap_finish(self.raw) };
+                self.raw = std::ptr::null_mut();
+            }
+        }
+    }
+
+    pub(super) fn list_targets() -> Result<Vec<AudioCaptureTarget>, String> {
+        let output = std::process::Command::new("ps")
+            .args(["-axo", "pid=,comm="])
+            .output()
+            .map_err(|error| format!("无法枚举 macOS 进程：{error}"))?;
+        if !output.status.success() {
+            return Err("macOS 进程枚举失败。".to_string());
+        }
+        let mut targets = std::str::from_utf8(&output.stdout)
+            .map_err(|_| "macOS 进程列表不是 UTF-8。".to_string())?
+            .lines()
+            .filter_map(|line| {
+                let (pid, command) = line.trim().split_once(char::is_whitespace)?;
+                let process_id = pid.parse().ok()?;
+                let name = command.rsplit('/').next()?.to_string();
+                is_synthv_standalone(&name).then_some(AudioCaptureTarget { process_id, name })
+            })
+            .collect::<Vec<_>>();
+        targets.sort_by_key(|target| target.process_id);
+        Ok(targets)
+    }
+
+    fn is_synthv_standalone(name: &str) -> bool {
+        [
+            "synthv-studio",
+            "synthesizer v flat",
+            "synthesizer v studio 2 pro",
+            "synthesizer v studio pro",
+            "synthesizer v studio",
+        ]
+        .iter()
+        .any(|candidate| name.eq_ignore_ascii_case(candidate))
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 mod platform {
     use std::path::PathBuf;
 

@@ -1,13 +1,19 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 use serde::Serialize;
 use serde_json::Value;
+use tokio::process::Command as AsyncCommand;
+use uuid::Uuid;
 
+use crate::agent::data_root;
 use crate::audio_prep::configure_ffmpeg_environment;
 use crate::components::{component_usage_guard, ComponentUsageGuard};
 use crate::config::model_config_path;
+use crate::tuning_profiles::SourceStyleFeatures;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,6 +49,89 @@ pub fn audio_probe(
     })
 }
 
+pub fn source_style(
+    audio_path: String,
+    resource_dir: &Path,
+) -> Result<SourceStyleFeatures, String> {
+    let audio = validate_input(&audio_path, "参考人声", AUDIO_EXTENSIONS)?;
+    let runtime = python_component("audio", None)?;
+    let args = vec![
+        "source-style".to_string(),
+        audio.to_string_lossy().into_owned(),
+    ];
+    let data = run_python(&runtime, &args, "参考人声特征学习", resource_dir)?;
+    serde_json::from_value(data).map_err(|error| format!("参考人声特征格式无效：{error}"))
+}
+
+pub async fn separate_audio_cancellable(
+    audio_path: String,
+    resource_dir: PathBuf,
+    cancelled: Arc<AtomicBool>,
+    output_id: String,
+) -> Result<WorkflowResult, String> {
+    Uuid::parse_str(&output_id).map_err(|_| "分离任务 ID 无效。".to_string())?;
+    let audio = validate_input(&audio_path, "待分离音频", AUDIO_EXTENSIONS)?;
+    let runtime = python_component("separation", None)?;
+    let args = vec![
+        runtime.script.to_string_lossy().into_owned(),
+        audio.to_string_lossy().into_owned(),
+        "--output-id".to_string(),
+        output_id.clone(),
+    ];
+    let mut command = AsyncCommand::new(&runtime.python);
+    command
+        .args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_ffmpeg_environment(command.as_std_mut(), &resource_dir)?;
+    let output =
+        crate::managed_process::run_managed_command(command, &cancelled, "人声伴奏分离").await;
+    let output_directory = data_root()
+        .join("output")
+        .join("separations")
+        .join(&output_id);
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&output_directory);
+            return Err(error);
+        }
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let data: Value = serde_json::from_str(stdout.trim()).map_err(|error| {
+        let _ = fs::remove_dir_all(&output_directory);
+        format!(
+            "人声伴奏分离未返回有效结果：{error}\n{}",
+            tail(&String::from_utf8_lossy(&output.stderr), 1200)
+        )
+    })?;
+    if !output.status.success() || data.get("error").is_some() {
+        let _ = fs::remove_dir_all(&output_directory);
+        let detail = data
+            .get("error")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| tail(&String::from_utf8_lossy(&output.stderr), 1600));
+        return Err(format!("人声伴奏分离失败：{detail}"));
+    }
+    separation_result(data)
+}
+
+fn separation_result(data: Value) -> Result<WorkflowResult, String> {
+    let vocal_path = data.get("vocalPath").and_then(Value::as_str);
+    let instrumental_path = data.get("instrumentalPath").and_then(Value::as_str);
+    if vocal_path.is_none() || instrumental_path.is_none() {
+        return Err("分离组件没有返回 vocals/inst 输出路径。".to_string());
+    }
+    Ok(WorkflowResult {
+        kind: "source-separation".to_string(),
+        summary: "人声与伴奏分离完成，已生成受管 vocals/inst WAV。".to_string(),
+        output_path: vocal_path.map(str::to_string),
+        data,
+    })
+}
+
 pub fn game_to_midi(
     vocal_path: String,
     instrumental_path: String,
@@ -71,6 +160,106 @@ pub fn game_to_midi(
         args.push("--advanced".to_string());
     }
     let data = run_python(&runtime, &args, "Game → MIDI", resource_dir)?;
+    game_midi_result(data, advanced)
+}
+
+pub struct GameToMidiRequest {
+    pub vocal_path: String,
+    pub instrumental_path: String,
+    pub lyrics: Option<String>,
+    pub tolerance: f64,
+    pub advanced: bool,
+    pub resource_dir: PathBuf,
+    pub cancelled: Arc<AtomicBool>,
+    pub task_id: String,
+}
+
+pub async fn game_to_midi_cancellable(
+    request: GameToMidiRequest,
+) -> Result<WorkflowResult, String> {
+    Uuid::parse_str(&request.task_id).map_err(|_| "Cover 任务 ID 无效。".to_string())?;
+    let vocal = validate_input(&request.vocal_path, "人声轨", AUDIO_EXTENSIONS)?;
+    let instrumental = validate_input(&request.instrumental_path, "伴奏轨", AUDIO_EXTENSIONS)?;
+    if !(0.02..=0.25).contains(&request.tolerance) {
+        return Err("匹配容差必须在 0.02–0.25 秒之间。".to_string());
+    }
+    let output_directory = data_root()
+        .join("output")
+        .join("covers")
+        .join(&request.task_id);
+    if let Ok(metadata) = fs::symlink_metadata(&output_directory) {
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err("Cover 输出目录不是安全的普通目录。".to_string());
+        }
+        fs::remove_dir_all(&output_directory)
+            .map_err(|error| format!("无法清理上次 Cover 临时输出：{error}"))?;
+    }
+    fs::create_dir_all(&output_directory)
+        .map_err(|error| format!("无法创建 Cover 输出目录：{error}"))?;
+    let midi_path = output_directory.join("cover.mid");
+    let runtime = python_component("audio", None)?;
+    let mut args = vec![
+        runtime.script.to_string_lossy().into_owned(),
+        "pair-diff".to_string(),
+        vocal.to_string_lossy().into_owned(),
+        instrumental.to_string_lossy().into_owned(),
+        "--midi".to_string(),
+        midi_path.to_string_lossy().into_owned(),
+        "--tol".to_string(),
+        format!("{:.3}", request.tolerance),
+    ];
+    if request.advanced {
+        args.push("--advanced".to_string());
+    }
+    if let Some(lyrics) = request.lyrics.filter(|value| !value.trim().is_empty()) {
+        if lyrics.len() > 256 * 1024 {
+            let _ = fs::remove_dir_all(&output_directory);
+            return Err("Cover 歌词超过 256 KiB 限制。".to_string());
+        }
+        let lyrics_path = output_directory.join("lyrics.txt");
+        fs::write(&lyrics_path, lyrics.as_bytes())
+            .map_err(|error| format!("无法写入 Cover 歌词：{error}"))?;
+        args.push("--lyrics-file".to_string());
+        args.push(lyrics_path.to_string_lossy().into_owned());
+    }
+    let mut command = AsyncCommand::new(&runtime.python);
+    command
+        .args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_ffmpeg_environment(command.as_std_mut(), &request.resource_dir)?;
+    let output =
+        crate::managed_process::run_managed_command(command, &request.cancelled, "Cover 旋律提取")
+            .await;
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&output_directory);
+            return Err(error);
+        }
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let data: Value = serde_json::from_str(stdout.trim()).map_err(|error| {
+        let _ = fs::remove_dir_all(&output_directory);
+        format!(
+            "Cover 旋律提取未返回有效结果：{error}\n{}",
+            tail(&String::from_utf8_lossy(&output.stderr), 1200)
+        )
+    })?;
+    if !output.status.success() || data.get("error").is_some() {
+        let _ = fs::remove_dir_all(&output_directory);
+        let detail = data
+            .get("error")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| tail(&String::from_utf8_lossy(&output.stderr), 1600));
+        return Err(format!("Cover 旋律提取失败：{detail}"));
+    }
+    game_midi_result(data, request.advanced)
+}
+
+fn game_midi_result(data: Value, advanced: bool) -> Result<WorkflowResult, String> {
     let output_path = data
         .get("midi_out")
         .and_then(Value::as_str)
@@ -368,6 +557,7 @@ fn component_name(key: &str) -> &str {
     match key {
         "audio" => "pi-audio",
         "cvrs" => "CVRS",
+        "separation" => "人声伴奏分离",
         _ => key,
     }
 }

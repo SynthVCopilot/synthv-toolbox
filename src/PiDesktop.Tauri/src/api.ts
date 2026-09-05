@@ -2,6 +2,8 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
   AiProviderId,
+  AgentWorkMode,
+  AgentFileApproval,
   AiProviderSummary,
   AppMode,
   AudioJobSnapshot,
@@ -20,6 +22,7 @@ import type {
   ChatMessage,
   ChineseRhymeLookup,
   ComponentDownload,
+  CoverTaskRequest,
   CreativeHistoryEntry,
   ConversationSnapshot,
   ConversationSummary,
@@ -28,7 +31,12 @@ import type {
   OpenCodeCatalog,
   LyricCandidateRequest,
   LyricCandidateSet,
+  LyricProject,
+  LyricProjectSummary,
   LyricSectionRequest,
+  MediaSourcePreview,
+  MediaTaskSnapshot,
+  HttpApiStatus,
   OperationResult,
   ProjectCheckpoint,
   Sv2AccountProbe,
@@ -42,7 +50,12 @@ import type {
   Sv2SyncResult,
   SvpLaunchMode,
   SvpRoutePlan,
+  SoloTuningRequest,
   SynthVInstallation,
+  SynthVProcess,
+  SynthVShortcutProfile,
+  TuningParameters,
+  TuningProfile,
   ToolboxUpdateCheck,
   WorkflowRecipe,
   WorkflowResult,
@@ -52,26 +65,61 @@ import type {
 const preview = import.meta.env.DEV && !isTauri();
 const AUDIO_FILE_EXTENSIONS = ["wav", "flac", "mp3", "m4a", "aac", "ogg", "opus", "aif", "aiff"];
 let previewMode: AppMode = "toolbox";
+let previewAgentWorkMode: AgentWorkMode = "edit";
 let previewOnboarding = false;
 let previewConcurrentDisclaimerAccepted = false;
 let previewSv2ConcurrentEnabled = true;
 let previewSv2AccountIndicatorEnabled = false;
 let previewSmartSvpLaunchEnabled = false;
+let previewHttpApiStatus: HttpApiStatus = {
+  enabled: false,
+  agentEnabled: false,
+  running: false,
+  port: 17831,
+  endpoint: null,
+  agentEndpoint: null,
+  lastError: null,
+};
 let previewBridgeConnected = true;
+let previewSynthvPid = 4203;
+let previewSynthvProcesses: SynthVProcess[] = [
+  { processId: 4201, name: "Synthesizer V Studio 2 Pro", command: "/Applications/Synthesizer V Studio 2 Pro.app/Contents/MacOS/synthv-studio", windowTitle: "Project A.svp - Synthesizer V Studio 2 Pro", isSv2: true, sandboxed: false },
+  { processId: 4202, name: "Synthesizer V Studio 2 Pro", command: "C:\\Sandbox\\Synthesizer V Studio 2 Pro.exe", windowTitle: "Project B.svp - Synthesizer V Studio 2 Pro", isSv2: true, sandboxed: true },
+  { processId: 4203, name: "Synthesizer V Flat", command: "C:\\Apps\\Synthesizer V Flat.exe", windowTitle: "Synthesizer V Flat", isSv2: false, sandboxed: null },
+];
 let previewDownloads: ComponentDownload[] = [];
-const previewManagedComponentIds = new Set(["pi-audio", "cvrs"]);
+let previewMediaTasks: MediaTaskSnapshot[] = [];
+let previewLyricProjects: LyricProject[] = [];
+const previewManagedComponentIds = new Set(["pi-audio", "cvrs", "media-fetcher", "vocal-separation"]);
 const previewInstalledManagedComponentIds = new Set(["cvrs"]);
 let previewActiveAiProvider: AiProviderId = "anthropic";
 let previewAiAccountSequence = 2;
 let previewAiProviders: AiProviderSummary[] = [{
   id: "anthropic",
-  displayName: "Claude 官方订阅",
-  description: "通过浏览器授权 Claude 账号，并使用官方订阅提供的模型。",
+  displayName: "Claude / Anthropic",
+  description: "可通过 Claude 账号 OAuth 或 Anthropic API Key 连接。",
   active: true,
   connected: true,
   healthyAccounts: 1,
   totalAccounts: 1,
   model: "claude-sonnet-4-6",
+  oauthModels: [
+    "claude-sonnet-4-6",
+    "claude-sonnet-5",
+    "claude-haiku-4-5",
+    "claude-opus-4-8",
+    "claude-opus-5",
+  ],
+  apiKeyModels: ["claude-sonnet-4-6", "claude-haiku-4-5", "claude-opus-4-8"],
+  accounts: [{
+    id: "preview-anthropic-1",
+    label: "Claude official account",
+    expiresAt: Date.now() + 55 * 60_000,
+    authorized: true,
+    healthy: true,
+    enabled: true,
+    weight: 1,
+  }],
   models: [
     "claude-sonnet-4-6",
     "claude-sonnet-5",
@@ -79,23 +127,22 @@ let previewAiProviders: AiProviderSummary[] = [{
     "claude-opus-4-8",
     "claude-opus-5",
   ],
-  accounts: [{
-    id: "preview-anthropic-1",
-    label: "Claude official account",
-    expiresAt: Date.now() + 55 * 60_000,
-    authorized: true,
-    healthy: true,
-  }],
+  apiKeys: [],
+  authMethods: ["oauth", "api-key"],
+  available: true,
+  oauthEnabled: true,
+  loadStrategy: "round-robin",
+  unavailableReason: null,
 }, {
   id: "openai-codex",
-  displayName: "Codex 官方订阅",
-  description: "通过浏览器授权 ChatGPT 账号，并使用账号可用的 Codex 模型。",
+  displayName: "OpenAI / Codex",
+  description: "可通过 ChatGPT OAuth 或 OpenAI API Key 连接。",
   active: false,
   connected: false,
   healthyAccounts: 0,
   totalAccounts: 0,
   model: "gpt-5.6-terra",
-  models: [
+  oauthModels: [
     "gpt-5.6-luna",
     "gpt-5.6-terra",
     "gpt-5.6-sol",
@@ -103,17 +150,68 @@ let previewAiProviders: AiProviderSummary[] = [{
     "gpt-5.4",
     "gpt-5.4-mini",
   ],
+  apiKeyModels: ["gpt-5.4", "gpt-5.4-mini"],
   accounts: [],
+  models: [],
+  apiKeys: [],
+  authMethods: ["oauth", "api-key"],
+  available: true,
+  oauthEnabled: true,
+  loadStrategy: "round-robin",
+  unavailableReason: null,
+}, {
+  id: "workbuddy",
+  displayName: "WorkBuddy",
+  description: "通过 WorkBuddy OAuth 连接，使用 WorkBuddy 助理模型。",
+  active: false,
+  connected: false,
+  healthyAccounts: 0,
+  totalAccounts: 0,
+  model: "glm-5.2",
+  models: [],
+  oauthModels: ["glm-5.2"],
+  apiKeyModels: [],
+  accounts: [],
+  apiKeys: [],
+  authMethods: ["oauth"],
+  available: true,
+  oauthEnabled: true,
+  loadStrategy: "round-robin",
+  unavailableReason: null,
+}, {
+  id: "traecode",
+  displayName: "TraeCode",
+  description: "通过本机 TraeCode CLI 登录并调用只读 Agent。",
+  active: false,
+  connected: false,
+  healthyAccounts: 0,
+  totalAccounts: 0,
+  model: "trae-account-default",
+  models: ["trae-account-default"],
+  oauthModels: ["trae-account-default"],
+  apiKeyModels: [],
+  accounts: [],
+  apiKeys: [],
+  authMethods: ["oauth"],
+  available: false,
+  oauthEnabled: true,
+  loadStrategy: "round-robin",
+  unavailableReason: "未检测到 TraeCode CLI；请先安装并登录 traecli。",
 }];
 
 function previewAiModel() {
   return {
     activeProvider: previewActiveAiProvider,
     legacyConfigured: false,
+    catalogSource: "models-dev" as const,
+    catalogGeneratedAt: Date.now(),
+    catalogError: null,
     providers: previewAiProviders.map((provider) => ({
       ...provider,
       accounts: provider.accounts.map((account) => ({ ...account })),
-      models: [...provider.models],
+      oauthModels: [...provider.oauthModels],
+      apiKeyModels: [...provider.apiKeyModels],
+      apiKeys: provider.apiKeys.map((key) => ({ ...key, models: [...key.models] })),
     })),
   };
 }
@@ -126,6 +224,7 @@ function refreshPreviewAiProvider(provider: AiProviderSummary): void {
   provider.totalAccounts = provider.accounts.length;
   provider.healthyAccounts = provider.accounts.filter((account) => account.healthy).length;
   provider.connected = provider.accounts.some((account) => account.authorized);
+  provider.models = [...new Set([...provider.oauthModels, ...provider.apiKeys.flatMap((key) => key.models)])];
 }
 
 function previewAccountProbe(overrides: Partial<Sv2AccountProbe> = {}): Sv2AccountProbe {
@@ -176,7 +275,7 @@ let previewProfiles: Sv2ProfilesState = {
     lastActivatedAtUtc: new Date().toISOString(),
     isActive: true,
     sessionCached: true,
-    dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2",
+    dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\slots\\11111111-1111-4111-8111-111111111111",
     sessionProtection: {
       status: "monitoring",
       snapshotAvailable: true,
@@ -203,15 +302,14 @@ let previewProfiles: Sv2ProfilesState = {
     },
     concurrent: {
       ready: true,
-      boxName: "SV2TB111111111111411181111111",
-      dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\concurrent\\11111111-1111-4111-8111-111111111111\\box\\user\\current\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2",
-      runningPids: [],
-      detail: "隔离副本已准备；本地变化不会自动覆盖普通槽位。",
+      dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\slots\\11111111-1111-4111-8111-111111111111",
+      runningPids: [4202],
+      detail: "隔离环境已准备；同账号实例共用此槽位数据。",
       content: {
         appSettings: "global",
-        voiceLibraries: "off",
-        effectiveAppSettings: true,
-        effectiveVoiceLibraries: false,
+        voiceLibraries: "on",
+        effectiveAppSettings: false,
+        effectiveVoiceLibraries: true,
       },
     },
   }, {
@@ -260,15 +358,14 @@ let previewProfiles: Sv2ProfilesState = {
     },
     concurrent: {
       ready: true,
-      boxName: "SV2TB222222222222422282222222",
-      dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\concurrent\\22222222-2222-4222-8222-222222222222\\box\\user\\current\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2",
+      dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\slots\\22222222-2222-4222-8222-222222222222",
       runningPids: [],
-      detail: "隔离副本已准备；本地变化不会自动覆盖普通槽位。",
+      detail: "隔离环境已准备；同账号实例共用此槽位数据。",
       content: {
         appSettings: "on",
-        voiceLibraries: "global",
-        effectiveAppSettings: true,
-        effectiveVoiceLibraries: false,
+        voiceLibraries: "on",
+        effectiveAppSettings: false,
+        effectiveVoiceLibraries: true,
       },
     },
   }],
@@ -277,6 +374,7 @@ let previewProfiles: Sv2ProfilesState = {
 const previewState = (): BootstrapState => ({
   onboardingCompleted: previewOnboarding,
   mode: previewMode,
+  agentWorkMode: previewAgentWorkMode,
   platform: "preview",
   appVersion: "0.1.1",
   configPath: "~/.SynthVcopilot/config.json",
@@ -292,9 +390,11 @@ const previewState = (): BootstrapState => ({
   }],
   components: [
     { id: "ffmpeg", displayName: "FFmpeg", description: "音视频转码与抽取；所有音频流程的基础。", audience: "AI 与人工", installed: true, downloaded: false, installable: true, removable: false, status: "已就绪" },
-    { id: "pi-audio", displayName: "pi-audio 音频探针", description: "特征指纹、BPM、乐器与风格倾向。", audience: "AI 与人工", installed: previewInstalledManagedComponentIds.has("pi-audio"), downloaded: false, installable: true, removable: previewInstalledManagedComponentIds.has("pi-audio"), status: previewInstalledManagedComponentIds.has("pi-audio") ? "已就绪" : "可通过 aria2 下载" },
-    { id: "cvrs", displayName: "CVRS 工程工具", description: "工程探测、安全副本、无参导出与 LRC。", audience: "AI 与人工", installed: previewInstalledManagedComponentIds.has("cvrs"), downloaded: false, installable: true, removable: previewInstalledManagedComponentIds.has("cvrs"), status: previewInstalledManagedComponentIds.has("cvrs") ? "已就绪" : "可通过 aria2 下载" },
-    { id: "sandboxie", displayName: "Sandboxie Plus 1.18.2", description: "SynthV Toolbox 并发隔离提供方；下载官方安装包后由用户交互安装。", audience: "Windows 并发隔离", installed: false, downloaded: false, installable: true, removable: false, status: "可通过 aria2 下载官方 x64 安装包" },
+    { id: "pi-audio", displayName: "pi-audio 音频探针", description: "特征指纹、BPM、乐器与风格倾向。", audience: "AI 与人工", installed: previewInstalledManagedComponentIds.has("pi-audio"), downloaded: false, installable: true, removable: previewInstalledManagedComponentIds.has("pi-audio"), status: previewInstalledManagedComponentIds.has("pi-audio") ? "已就绪" : "可由 Toolbox 内置下载器下载" },
+    { id: "cvrs", displayName: "CVRS 工程工具", description: "工程探测、安全副本、无参导出与 LRC。", audience: "AI 与人工", installed: previewInstalledManagedComponentIds.has("cvrs"), downloaded: false, installable: true, removable: previewInstalledManagedComponentIds.has("cvrs"), status: previewInstalledManagedComponentIds.has("cvrs") ? "已就绪" : "可由 Toolbox 内置下载器下载" },
+    { id: "media-fetcher", displayName: "媒体导入器", description: "固定版本 yt-dlp，用于显式 Bilibili/YouTube URL 导入。", audience: "AI 与人工", installed: previewInstalledManagedComponentIds.has("media-fetcher"), downloaded: false, installable: true, removable: previewInstalledManagedComponentIds.has("media-fetcher"), status: previewInstalledManagedComponentIds.has("media-fetcher") ? "已就绪" : "可由 Toolbox 内置下载器下载" },
+    { id: "vocal-separation", displayName: "人声伴奏分离", description: "使用 Demucs htdemucs 把单个混音分成 vocals 与 inst。", audience: "AI 与人工", installed: previewInstalledManagedComponentIds.has("vocal-separation"), downloaded: false, installable: true, removable: previewInstalledManagedComponentIds.has("vocal-separation"), status: previewInstalledManagedComponentIds.has("vocal-separation") ? "已就绪" : "可安装本地运行环境" },
+    { id: "sandboxie", displayName: "Sandboxie Plus 1.18.2", description: "SynthV Toolbox 并发隔离提供方；下载官方安装包后由用户交互安装。", audience: "Windows 并发隔离", installed: false, downloaded: false, installable: true, removable: false, status: "可由 Toolbox 内置下载器下载官方 x64 安装包" },
   ],
   downloads: previewDownloads,
   mcpServers: previewMode === "ai" ? [{ id: "demo", name: "Demo tools", command: "node", args: ["server.mjs"], enabled: true }] : [],
@@ -354,6 +454,23 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     previewSmartSvpLaunchEnabled = Boolean(args?.enabled);
     return previewState() as T;
   }
+  if (command === "get_http_api_status") return { ...previewHttpApiStatus } as T;
+  if (command === "configure_http_api") {
+    const enabled = Boolean(args?.enabled);
+    const agentEnabled = Boolean(args?.agentEnabled);
+    const port = Number(args?.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("端口必须是 1 到 65535 之间的整数。");
+    previewHttpApiStatus = {
+      enabled,
+      agentEnabled,
+      running: enabled || agentEnabled,
+      port,
+      endpoint: enabled ? `http://127.0.0.1:${port}/mcp` : null,
+      agentEndpoint: agentEnabled ? `http://127.0.0.1:${port}/agent/chat` : null,
+      lastError: null,
+    };
+    return { ...previewHttpApiStatus } as T;
+  }
   if (command === "set_sv2_account_indicator") {
     const enabled = Boolean(args?.enabled);
     if (enabled && !previewSv2AccountIndicatorEnabled && !Boolean(args?.acknowledged)) {
@@ -369,15 +486,23 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     const provider = previewAiProvider(args?.provider);
     if (!provider) throw new Error("未知的 AI 提供商。");
     const accountNumber = previewAiAccountSequence++;
-    provider.accounts.push({
-      id: `preview-${provider.id}-${accountNumber}`,
+    const credentialId = String(args?.credentialId ?? "").trim();
+    const account = {
+      id: credentialId || `preview-${provider.id}-${accountNumber}`,
       label: `${provider.id === "anthropic" ? "Claude" : "ChatGPT"} official account ${accountNumber}`,
       expiresAt: Date.now() + 55 * 60_000,
       authorized: true,
       healthy: true,
-    });
-    if (provider.id === "openai-codex" && !provider.models.includes("gpt-5.3-codex-spark")) {
-      provider.models.push("gpt-5.3-codex-spark");
+      enabled: true,
+      weight: 1,
+    };
+    if (credentialId) {
+      const index = provider.accounts.findIndex((item) => item.id === credentialId);
+      if (index < 0) throw new Error("没有找到要重新授权的账号。");
+      provider.accounts.splice(index, 1, account);
+    } else provider.accounts.push(account);
+    if (provider.id === "openai-codex" && !provider.oauthModels.includes("gpt-5.3-codex-spark")) {
+      provider.oauthModels.push("gpt-5.3-codex-spark");
     }
     refreshPreviewAiProvider(provider);
     previewActiveAiProvider = provider.id;
@@ -391,14 +516,38 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     const provider = previewAiProvider(args?.provider);
     const model = String(args?.model ?? "").trim();
     if (!provider) throw new Error("未知的 AI 提供商。");
-    if (!provider.connected) throw new Error("请先通过浏览器授权此提供商。");
-    if (!model || !provider.models.includes(model)) throw new Error("请选择此账号可用的模型。");
+    if (!model || !provider.models.includes(model)) throw new Error("请选择已配置凭据可用的模型。");
     previewActiveAiProvider = provider.id;
     previewAiProviders = previewAiProviders.map((item) => ({
       ...item,
       active: item.id === provider.id,
       model: item.id === provider.id ? model : item.model,
     }));
+    return previewState() as T;
+  }
+  if (command === "add_ai_api_key") {
+    const provider = previewAiProvider(args?.provider);
+    const apiKey = String(args?.apiKey ?? "").trim();
+    if (!provider) throw new Error("未知的 AI 提供商。");
+    if (!apiKey) throw new Error("请输入 API Key。");
+    provider.apiKeys.push({
+      id: `preview-key-${provider.id}-${Date.now()}`,
+      label: String(args?.label ?? "").trim() || "API Key",
+      models: [...provider.apiKeyModels],
+      healthy: true,
+      cooldownUntilUtc: null,
+      enabled: true,
+      weight: 1,
+      createdAtUtc: new Date().toISOString(),
+    });
+    refreshPreviewAiProvider(provider);
+    return previewState() as T;
+  }
+  if (command === "remove_ai_api_key") {
+    const provider = previewAiProvider(args?.provider);
+    if (!provider) throw new Error("未知的 AI 提供商。");
+    provider.apiKeys = provider.apiKeys.filter((key) => key.id !== String(args?.credentialId ?? ""));
+    refreshPreviewAiProvider(provider);
     return previewState() as T;
   }
   if (command === "remove_ai_provider_account") {
@@ -409,13 +558,39 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     refreshPreviewAiProvider(provider);
     return previewState() as T;
   }
+  if (command === "update_ai_credential") {
+    const provider = previewAiProvider(args?.provider);
+    const credentialId = String(args?.credentialId ?? "");
+    const enabled = Boolean(args?.enabled);
+    const weight = Number(args?.weight);
+    if (!provider || !credentialId || !Number.isInteger(weight) || weight < 1 || weight > 100) throw new Error("凭据设置无效。");
+    const account = provider.accounts.find((item) => item.id === credentialId);
+    const key = provider.apiKeys.find((item) => item.id === credentialId);
+    if (!account && !key) throw new Error("未找到凭据。");
+    if (account) { account.enabled = enabled; account.weight = weight; }
+    if (key) { key.enabled = enabled; key.weight = weight; }
+    return previewState() as T;
+  }
+  if (command === "update_ai_provider") {
+    const provider = previewAiProvider(args?.provider);
+    if (!provider) throw new Error("未知的 AI 提供商。");
+    provider.oauthEnabled = Boolean(args?.oauthEnabled);
+    return previewState() as T;
+  }
+  if (command === "update_ai_provider_strategy") {
+    const provider = previewAiProvider(args?.provider);
+    const strategy = String(args?.strategy);
+    if (!provider || !["round-robin", "weighted-round-robin", "failover"].includes(strategy)) throw new Error("负载策略无效。");
+    provider.loadStrategy = strategy as AiProviderSummary["loadStrategy"];
+    return previewState() as T;
+  }
   if (command === "ai_provider_state") return previewAiModel() as T;
   if (command === "opencode_provider_catalog") return {
     generatedAt: Date.now(),
     providers: [
-      { id: "anthropic", name: "Anthropic", modelCount: 12, package: "@ai-sdk/anthropic" },
-      { id: "openai", name: "OpenAI", modelCount: 18, package: "@ai-sdk/openai" },
-      { id: "google", name: "Google", modelCount: 15, package: "@ai-sdk/google" },
+      { id: "anthropic", name: "Anthropic", modelCount: 12, package: "@ai-sdk/anthropic", models: ["claude-sonnet-4-6"] },
+      { id: "openai", name: "OpenAI", modelCount: 18, package: "@ai-sdk/openai", models: ["gpt-5.6-terra"] },
+      { id: "google", name: "Google", modelCount: 15, package: "@ai-sdk/google", models: ["gemini-preview"] },
     ],
   } as T;
   if (command === "ffmpeg_status") return {
@@ -500,10 +675,22 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "bootstrap" || command === "complete_onboarding" || command === "set_mode" || command.endsWith("settings") || command.endsWith("server") || command === "save_scripts_path" || command === "delete_mcp_server") {
     return previewState() as T;
   }
+  if (command === "set_agent_work_mode") {
+    previewAgentWorkMode = args?.mode === "solo" ? "solo" : "edit";
+    return previewState() as T;
+  }
   if (command === "scan_synthv") return previewState().installations as T;
   if (command === "connect_bridge") {
     previewBridgeConnected = true;
     return { succeeded: true, summary: "SynthV Bridge 已连接。", detail: "预览模式" } as T;
+  }
+  if (command === "list_synthv_processes") return previewSynthvProcesses as T;
+  if (command === "preview_media_source") return { sourceUrl: String(args?.source ?? ""), canonicalUrl: String(args?.source ?? ""), platform: "BiliBili", mediaId: "BV1Preview", title: "预览媒体", uploader: "预览作者", durationSeconds: 183.2, thumbnailUrl: null } as T;
+  if (command === "synthv_shortcut_profile") return { bridgeStart: "F13", bridgeStop: "F14", projectSave: "⌘S", detail: "F13 触发 Bridge 启动或重连，F14 触发停止；Cover 保存使用标准快捷键。" } as T;
+  if (command === "send_synthv_bridge_shortcut") return { succeeded: true, summary: `已向预览 SynthV 进程发送 ${String(args?.action === "stop" ? "F14" : "F13")}。`, detail: "预览模式" } as T;
+  if (command === "auto_connect_synthv_bridge") {
+    previewBridgeConnected = true;
+    return { succeeded: true, summary: "已连接预览 SynthV Bridge。", detail: "F13 已触发。" } as T;
   }
   if (command === "audio_capture_capability") return {
     supported: true,
@@ -600,15 +787,14 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       },
       concurrent: {
         ready: false,
-        boxName: `SV2TB${id.replaceAll("-", "").slice(0, 24)}`,
         dataPath: `${previewProfiles.vaultPath}\\concurrent\\${id}\\box\\user\\current\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2`,
         runningPids: [],
         detail: "尚未准备隔离副本。",
         content: {
           appSettings: "global",
-          voiceLibraries: "global",
-          effectiveAppSettings: previewProfiles.concurrentDefaults.appSettings,
-          effectiveVoiceLibraries: previewProfiles.concurrentDefaults.voiceLibraries,
+          voiceLibraries: "on",
+          effectiveAppSettings: false,
+          effectiveVoiceLibraries: true,
         },
       },
     });
@@ -660,12 +846,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       voiceLibraries: Boolean(args?.voiceLibraries),
     };
     previewProfiles.slots.forEach((slot) => {
-      slot.concurrent.content.effectiveAppSettings = slot.concurrent.content.appSettings === "global"
-        ? previewProfiles.concurrentDefaults.appSettings
-        : slot.concurrent.content.appSettings === "on";
-      slot.concurrent.content.effectiveVoiceLibraries = slot.concurrent.content.voiceLibraries === "global"
-        ? previewProfiles.concurrentDefaults.voiceLibraries
-        : slot.concurrent.content.voiceLibraries === "on";
+      slot.concurrent.content.effectiveAppSettings = false;
+      slot.concurrent.content.effectiveVoiceLibraries = true;
     });
     return previewProfiles as T;
   }
@@ -674,12 +856,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     if (slot) {
       slot.concurrent.content.appSettings = args?.appSettings as Sv2IsolationPreference;
       slot.concurrent.content.voiceLibraries = args?.voiceLibraries as Sv2IsolationPreference;
-      slot.concurrent.content.effectiveAppSettings = slot.concurrent.content.appSettings === "global"
-        ? previewProfiles.concurrentDefaults.appSettings
-        : slot.concurrent.content.appSettings === "on";
-      slot.concurrent.content.effectiveVoiceLibraries = slot.concurrent.content.voiceLibraries === "global"
-        ? previewProfiles.concurrentDefaults.voiceLibraries
-        : slot.concurrent.content.voiceLibraries === "on";
+      slot.concurrent.content.effectiveAppSettings = false;
+      slot.concurrent.content.effectiveVoiceLibraries = true;
     }
     return previewProfiles as T;
   }
@@ -691,6 +869,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "launch_sv2_profile" || command === "force_launch_sv2_profile") {
     previewProfiles.activeSlotId = String(args?.slotId ?? "");
     previewProfiles.slots.forEach((slot) => { slot.isActive = slot.id === previewProfiles.activeSlotId; });
+    previewSynthvProcesses.push({ processId: ++previewSynthvPid, name: "Synthesizer V Studio 2 Pro", command: "C:\\Program Files\\Dreamtonics\\Synthesizer V Studio 2 Pro.exe", windowTitle: "Synthesizer V Studio 2 Pro", isSv2: true, sandboxed: false });
     if (command === "force_launch_sv2_profile") previewProfiles.blockers = [];
     return {
       succeeded: true,
@@ -698,11 +877,21 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       detail: "预览模式",
     } as T;
   }
+  if (command === "launch_sv2_concurrent_profile") {
+    const slot = previewProfiles.slots.find((item) => item.id === args?.slotId);
+    if (slot) {
+      slot.concurrent.ready = true;
+      const processId = ++previewSynthvPid;
+      slot.concurrent.runningPids = [...slot.concurrent.runningPids, processId];
+      previewSynthvProcesses.push({ processId, name: "Synthesizer V Studio 2 Pro", command: "C:\\Sandbox\\Synthesizer V Studio 2 Pro.exe", windowTitle: `Synthesizer V Studio 2 Pro · ${slot.displayName}`, isSv2: true, sandboxed: true });
+    }
+    return { succeeded: true, summary: "已启动隔离 SV2 实例。", detail: "预览模式" } as T;
+  }
   if (command === "prepare_sv2_concurrent_profile") {
     const slot = previewProfiles.slots.find((item) => item.id === args?.slotId);
     if (slot) {
       slot.concurrent.ready = true;
-      slot.concurrent.detail = "隔离副本已准备；本地变化不会自动覆盖普通槽位。";
+      slot.concurrent.detail = "账号目录已就绪；普通与并发实例共用槽位数据。";
     }
     return previewProfiles as T;
   }
@@ -752,15 +941,34 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
         id: crypto.randomUUID(),
         componentId,
         displayName: componentName,
-        status: "downloading",
-        progress: 38,
-        detail: "aria2 正在下载固定版本组件。",
+        status: "queued",
+        progress: 0,
+        detail: "等待前面的下载任务完成。",
         updatedAt: new Date().toISOString(),
       });
     }
     return previewDownloads as T;
   }
   if (command === "component_downloads") return previewDownloads as T;
+  if (command === "cancel_component_install") {
+    const task = previewDownloads.find((item) => item.id === String(args?.taskId ?? ""));
+    if (task?.status === "queued") {
+      task.status = "cancelled";
+      task.detail = "已在开始下载前取消。";
+      task.updatedAt = new Date().toISOString();
+    }
+    return previewDownloads as T;
+  }
+  if (command === "retry_component_install") {
+    const task = previewDownloads.find((item) => item.id === String(args?.taskId ?? ""));
+    if (task && ["failed", "cancelled"].includes(task.status)) {
+      task.status = "queued";
+      task.progress = 0;
+      task.detail = "等待前面的下载任务完成。";
+      task.updatedAt = new Date().toISOString();
+    }
+    return previewDownloads as T;
+  }
   if (command === "open_downloaded_component") return { succeeded: true, summary: "已打开 Sandboxie 安装包位置。", detail: "预览模式" } as T;
   if (command === "remove_local_component") {
     const componentId = String(args?.id ?? "");
@@ -818,6 +1026,51 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     const totalLines = sections.reduce((sum, section) => sum + section.lineCount, 0);
     return { kind: "lyric-template", summary: `已建立《${title}》的歌词结构：${sections.length} 个段落，共 ${totalLines} 行。`, data: { language: "zh-CN", title, totalLines, rhymeTargets, sections: built } } as T;
   }
+  if (command === "list_lyric_projects") {
+    const limit = Math.min(Math.max(Number(args?.limit ?? 50), 1), 200);
+    return previewLyricProjects
+      .map(({ id, title, revision, draft, updatedAtUtc }) => ({ id, title, revision, lineCount: draft.split(/\r?\n/).filter((line) => line.trim()).length, updatedAtUtc }))
+      .sort((left, right) => right.updatedAtUtc.localeCompare(left.updatedAtUtc))
+      .slice(0, limit) as T;
+  }
+  if (command === "create_lyric_project") {
+    const now = new Date().toISOString();
+    const project: LyricProject = {
+      schemaVersion: 1,
+      id: crypto.randomUUID(),
+      title: String(args?.title ?? "").trim() || "未命名歌曲",
+      draft: String(args?.draft ?? ""),
+      rhymeTargets: { ...((args?.rhymeTargets as Record<string, string> | undefined) ?? {}) },
+      sections: [...((args?.sections as LyricSectionRequest[] | undefined) ?? [])],
+      revision: 1,
+      createdAtUtc: now,
+      updatedAtUtc: now,
+    };
+    previewLyricProjects = [project, ...previewLyricProjects];
+    return project as T;
+  }
+  if (command === "save_lyric_project") {
+    const id = String(args?.id ?? "");
+    const index = previewLyricProjects.findIndex((project) => project.id === id);
+    if (index < 0) throw new Error("找不到该歌词项目。");
+    const existing = previewLyricProjects[index];
+    const project: LyricProject = {
+      ...existing,
+      title: String(args?.title ?? "").trim() || "未命名歌曲",
+      draft: String(args?.draft ?? ""),
+      rhymeTargets: { ...((args?.rhymeTargets as Record<string, string> | undefined) ?? {}) },
+      sections: [...((args?.sections as LyricSectionRequest[] | undefined) ?? [])],
+      revision: existing.revision + 1,
+      updatedAtUtc: new Date().toISOString(),
+    };
+    previewLyricProjects[index] = project;
+    return project as T;
+  }
+  if (command === "load_lyric_project") {
+    const project = previewLyricProjects.find((item) => item.id === String(args?.id ?? ""));
+    if (!project) throw new Error("找不到该歌词项目。");
+    return { ...project, rhymeTargets: { ...project.rhymeTargets }, sections: [...project.sections] } as T;
+  }
   if (command === "generate_lyric_candidates") return {
     language: "zh-CN",
     brief: String((args?.request as LyricCandidateRequest | undefined)?.brief ?? ""),
@@ -860,6 +1113,86 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       ],
     },
   } as T;
+  if (command === "queue_media_import") {
+    const now = new Date().toISOString();
+    const task: MediaTaskSnapshot = {
+      id: crypto.randomUUID(),
+      kind: "media-import",
+      status: "queued",
+      progress: 0,
+      detail: "等待前面的媒体任务完成。",
+      result: null,
+      error: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    previewMediaTasks.push(task);
+    return task as T;
+  }
+  if (command === "queue_media_separation") {
+    const now = new Date().toISOString();
+    const task: MediaTaskSnapshot = {
+      id: crypto.randomUUID(),
+      kind: "source-separation",
+      status: "queued",
+      progress: 0,
+      detail: "等待前面的媒体任务完成。",
+      result: null,
+      error: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    previewMediaTasks.push(task);
+    return task as T;
+  }
+  if (command === "queue_cover") {
+    const now = new Date().toISOString();
+    const task: MediaTaskSnapshot = {
+      id: crypto.randomUUID(),
+      kind: "cover",
+      status: "queued",
+      progress: 0,
+      detail: "等待前面的媒体任务完成。",
+      result: null,
+      error: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    previewMediaTasks.push(task);
+    return task as T;
+  }
+  if (command === "list_tuning_profiles") return [] as T;
+  if (command === "learn_tuning_profile" || command === "record_tuning_outcome") return {
+    voiceName: String(args?.voiceName ?? "Preview Voice"),
+    normalizedVoiceName: String(args?.voiceName ?? "preview voice").toLowerCase(),
+    sourceSamples: 1,
+    outcomeSamples: command === "record_tuning_outcome" ? 1 : 0,
+    averageFeatures: { durationSec: 20, medianPitchMidi: 64, pitchRangeSemitones: 14, vibratoRateHz: 5.2, vibratoDepthCents: 42, dynamicRangeDb: 18, breathinessProxy: 0.2, brightnessHz: 2200, voicedRatio: 0.8 },
+    parameters: { loudness: 0, tension: 0.1, breathiness: 0.04, gender: 0, toneShift: 0, vibratoStrength: 0.36 },
+    updatedAtUtc: new Date().toISOString(),
+  } as T;
+  if (command === "apply_tuning_profile") return { kind: "learned-tuning-apply", summary: "已应用本地学习调声参数。", data: {} } as T;
+  if (command === "media_tasks") return previewMediaTasks as T;
+  if (command === "cancel_media_task") {
+    const task = previewMediaTasks.find((item) => item.id === String(args?.taskId ?? ""));
+    if (task && ["queued", "running", "cancelling"].includes(task.status)) {
+      task.status = "cancelled";
+      task.detail = "媒体进程树已终止，临时输出已清理。";
+      task.updatedAt = new Date().toISOString();
+    }
+    return task as T;
+  }
+  if (command === "retry_media_task") {
+    const task = previewMediaTasks.find((item) => item.id === String(args?.taskId ?? ""));
+    if (task && ["failed", "cancelled"].includes(task.status)) {
+      task.status = "queued";
+      task.progress = 0;
+      task.detail = "等待前面的媒体任务完成。";
+      task.error = null;
+      task.updatedAt = new Date().toISOString();
+    }
+    return task as T;
+  }
   if (command === "run_render_review") return {
     kind: "render-quality-check",
     summary: "渲染复检通过，未发现交付阻断项。",
@@ -871,6 +1204,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "list_conversations") return [] as T;
   if (command === "new_conversation") return { id: "preview", title: "新对话", messages: [] } as T;
   if (command === "open_conversation") return { id: "preview", title: "预览对话", messages: [] } as T;
+  if (command === "agent_file_approvals") return [] as T;
   if (command === "send_message") return [{ role: "assistant", content: "这是本地视觉预览回复。" }] as T;
   if (command.startsWith("run_") || ["add_project_reference", "export_project_without_parameters", "export_project_lyrics"].includes(command)) return {
     kind: command.replace(/^run_/, "").replaceAll("_", "-"),
@@ -892,15 +1226,29 @@ export const api = {
   bootstrap: () => call<BootstrapState>("bootstrap"),
   completeOnboarding: (mode: AppMode) => call<BootstrapState>("complete_onboarding", { mode }),
   setMode: (mode: AppMode) => call<BootstrapState>("set_mode", { mode }),
-  authorizeAiProvider: (provider: AiProviderId) =>
-    call<BootstrapState>("authorize_ai_provider", { provider }),
+  setAgentWorkMode: (mode: AgentWorkMode) => call<BootstrapState>("set_agent_work_mode", { mode }),
+  authorizeAiProvider: (provider: AiProviderId, credentialId?: string, operationId?: string) =>
+    call<BootstrapState>("authorize_ai_provider", { provider, credentialId, operationId }),
+  cancelAiAuthorization: (operationId: string) =>
+    call<void>("cancel_ai_authorization", { operationId }),
   selectAiProvider: (provider: AiProviderId, model: string) =>
     call<BootstrapState>("select_ai_provider", { provider, model }),
-  aiProviderState: () => call<ModelSummary>("ai_provider_state"),
+  addAiApiKey: (provider: AiProviderId, label: string, apiKey: string) =>
+    call<BootstrapState>("add_ai_api_key", { provider, label, apiKey }),
+  removeAiApiKey: (provider: AiProviderId, credentialId: string) =>
+    call<BootstrapState>("remove_ai_api_key", { provider, credentialId }),
+  aiProviderState: (forceCatalog = false) =>
+    call<ModelSummary>("ai_provider_state", { forceCatalog }),
   opencodeProviderCatalog: (force = false) =>
     call<OpenCodeCatalog>("opencode_provider_catalog", { force }),
   removeAiProviderAccount: (provider: AiProviderId, accountId: string) =>
     call<BootstrapState>("remove_ai_provider_account", { provider, accountId }),
+  updateAiCredential: (provider: AiProviderId, credentialId: string, enabled: boolean, weight: number) =>
+    call<BootstrapState>("update_ai_credential", { provider, credentialId, enabled, weight }),
+  updateAiProvider: (provider: AiProviderId, oauthEnabled: boolean) =>
+    call<BootstrapState>("update_ai_provider", { provider, oauthEnabled }),
+  updateAiProviderStrategy: (provider: AiProviderId, strategy: import("./types").AiLoadStrategy) =>
+    call<BootstrapState>("update_ai_provider_strategy", { provider, strategy }),
   scanSynthV: () => call<SynthVInstallation[]>("scan_synthv"),
   checkToolboxUpdate: () => call<ToolboxUpdateCheck>("check_toolbox_update"),
   openToolboxReleases: () => call<OperationResult>("open_toolbox_releases"),
@@ -962,6 +1310,12 @@ export const api = {
   installBridge: (scriptsPath: string) => call<OperationResult>("install_bridge", { scriptsPath }),
   diagnoseBridge: (scriptsPath: string) => call<OperationResult>("diagnose_bridge", { scriptsPath }),
   connectBridge: () => call<OperationResult>("connect_bridge"),
+  listSynthvProcesses: () => call<SynthVProcess[]>("list_synthv_processes"),
+  synthvShortcutProfile: () => call<SynthVShortcutProfile>("synthv_shortcut_profile"),
+  sendSynthvBridgeShortcut: (processId: number, action: "start" | "stop") =>
+    call<OperationResult>("send_synthv_bridge_shortcut", { processId, action }),
+  autoConnectSynthvBridge: (processId: number) =>
+    call<OperationResult>("auto_connect_synthv_bridge", { processId }),
   audioCaptureCapability: () => call<AudioCaptureCapability>("audio_capture_capability"),
   listSynthvCaptureTargets: () => call<AudioCaptureTarget[]>("list_synthv_capture_targets"),
   captureSynthvClip: (processId: number | undefined, startSeconds: number, endSeconds: number, preRollSeconds: number, postRollSeconds: number, label: string) =>
@@ -970,6 +1324,8 @@ export const api = {
     call<WorkflowResult>("compare_synthv_clips", { baselinePath, candidatePath, maxLagMs }),
   componentDownloads: () => call<ComponentDownload[]>("component_downloads"),
   queueComponentInstall: (id: string) => call<ComponentDownload[]>("queue_component_install", { id }),
+  cancelComponentInstall: (taskId: string) => call<ComponentDownload[]>("cancel_component_install", { taskId }),
+  retryComponentInstall: (taskId: string) => call<ComponentDownload[]>("retry_component_install", { taskId }),
   openDownloadedComponent: (id: string) => call<OperationResult>("open_downloaded_component", { id }),
   removeLocalComponent: (id: string) => call<OperationResult>("remove_local_component", { id }),
   listWorkflowRecipes: () => call<WorkflowRecipe[]>("list_workflow_recipes"),
@@ -987,6 +1343,12 @@ export const api = {
     call<WorkflowResult>("build_lyric_template", { language, title, sections, rhymeTargets }),
   generateLyricCandidates: (request: LyricCandidateRequest) =>
     call<LyricCandidateSet>("generate_lyric_candidates", { request }),
+  listLyricProjects: (limit = 50) => call<LyricProjectSummary[]>("list_lyric_projects", { limit }),
+  createLyricProject: (title: string, draft: string, sections: LyricSectionRequest[], rhymeTargets: Record<string, string>) =>
+    call<LyricProject>("create_lyric_project", { title, draft, sections, rhymeTargets }),
+  saveLyricProject: (id: string, title: string, draft: string, sections: LyricSectionRequest[], rhymeTargets: Record<string, string>) =>
+    call<LyricProject>("save_lyric_project", { id, title, draft, sections, rhymeTargets }),
+  loadLyricProject: (id: string) => call<LyricProject>("load_lyric_project", { id }),
   runProjectDoctor: (projectPath: string) =>
     call<WorkflowResult>("run_project_doctor", { projectPath }),
   runPronunciationDiagnostics: (projectPath?: string, lyrics?: string) =>
@@ -1003,6 +1365,20 @@ export const api = {
     call<BatchWorkflowResult>("run_batch_workflow", { recipeId, inputPaths, options }),
   runAudioProbe: (audioPath: string, advanced: boolean) =>
     call<WorkflowResult>("run_audio_probe", { audioPath, advanced }),
+  previewMediaSource: (source: string) => call<MediaSourcePreview>("preview_media_source", { source }),
+  mediaTasks: () => call<MediaTaskSnapshot[]>("media_tasks"),
+  queueMediaImport: (source: string, rightsConfirmed: boolean) =>
+    call<MediaTaskSnapshot>("queue_media_import", { source, rightsConfirmed }),
+  queueMediaSeparation: (audioPath: string) =>
+    call<MediaTaskSnapshot>("queue_media_separation", { audioPath }),
+  queueCover: (request: CoverTaskRequest) => call<MediaTaskSnapshot>("queue_cover", { request }),
+  cancelMediaTask: (taskId: string) => call<MediaTaskSnapshot>("cancel_media_task", { taskId }),
+  retryMediaTask: (taskId: string) => call<MediaTaskSnapshot>("retry_media_task", { taskId }),
+  listTuningProfiles: () => call<TuningProfile[]>("list_tuning_profiles"),
+  learnTuningProfile: (audioPath: string, voiceName: string) => call<TuningProfile>("learn_tuning_profile", { audioPath, voiceName }),
+  recordTuningOutcome: (voiceName: string, candidate: TuningParameters, improvement: number) => call<TuningProfile>("record_tuning_outcome", { voiceName, candidate, improvement }),
+  applyTuningProfile: (voiceName: string, trackIndex: number, groupIndex: number) => call<WorkflowResult>("apply_tuning_profile", { voiceName, trackIndex, groupIndex }),
+  runSoloTuning: (request: SoloTuningRequest) => call<Record<string, unknown>>("run_solo_tuning", { request }),
   runGameToMidi: (vocalPath: string, instrumentalPath: string, outputName: string, tolerance: number, advanced: boolean) =>
     call<WorkflowResult>("run_game_to_midi", { vocalPath, instrumentalPath, outputName, tolerance, advanced }),
   runProjectProbe: (projectPath: string) =>
@@ -1053,7 +1429,12 @@ export const api = {
   newConversation: () => call<ConversationSnapshot>("new_conversation"),
   openConversation: (id: string) => call<ConversationSnapshot>("open_conversation", { id }),
   sendMessage: (input: string) => call<ChatMessage[]>("send_message", { input }),
+  agentFileApprovals: () => call<AgentFileApproval[]>("agent_file_approvals"),
+  decideAgentFileApproval: (id: string, approve: boolean) => call<void>("decide_agent_file_approval", { id, approve }),
   saveMcpServer: (server: McpServerConfig) => call<BootstrapState>("save_mcp_server", { server }),
   deleteMcpServer: (id: string) => call<BootstrapState>("delete_mcp_server", { id }),
   testMcpServer: (id: string) => call<OperationResult>("test_mcp_server", { id }),
+  getHttpApiStatus: () => call<HttpApiStatus>("get_http_api_status"),
+  configureHttpApi: (enabled: boolean, agentEnabled: boolean, port: number) =>
+    call<HttpApiStatus>("configure_http_api", { enabled, agentEnabled, port }),
 };

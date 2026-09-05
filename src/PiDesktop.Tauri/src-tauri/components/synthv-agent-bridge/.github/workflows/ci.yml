@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    strategy:
+      matrix:
+        node-version: [20, 22]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+      - run: npm ci --ignore-scripts
+      - run: npm audit --omit=dev --audit-level=moderate
+      - run: npm run check
+
+  lua:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Lua 5.4
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes -qq lua5.4
+      - run: luac -p synthv/SynthVAgentBridge.lua
+      - run: luac -p synthv/StopSynthVAgentBridge.lua
+      - run: luac -p synthv/SynthVAgentSidebar.lua
+      - name: Run mock SynthV integration smoke test
+        id: lua-smoke
+        env:
+          SYNTHV_AGENT_BRIDGE_DIR: ${{ github.workspace }}/.mock-ipc
+          BRIDGE_SCRIPT: ${{ github.workspace }}/synthv/SynthVAgentBridge.lua
+        run: |
+          mkdir -p "$SYNTHV_AGENT_BRIDGE_DIR"
+          lua5.4 scripts/mock-synthv-smoke.lua > lua-smoke.log 2>&1
+      - name: Run mock SynthV side-panel smoke test
+        id: lua-sidebar-smoke
+        env:
+          SYNTHV_AGENT_BRIDGE_DIR: ${{ github.workspace }}/.mock-sidebar-ipc
+          SIDEBAR_SCRIPT: ${{ github.workspace }}/synthv/SynthVAgentSidebar.lua
+        run: |
+          mkdir -p "$SYNTHV_AGENT_BRIDGE_DIR"
+          lua5.4 scripts/mock-synthv-sidebar-smoke.lua > lua-sidebar-smoke.log 2>&1
+      - name: Upload Lua smoke log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lua-smoke-log
+          path: |
+            lua-smoke.log
+            lua-sidebar-smoke.log
+          if-no-files-found: error
+      - name: Enforce Lua smoke result
+        if: always() && steps.lua-smoke.outcome == 'failure'
+        run: |
+          cat lua-smoke.log
+          exit 1
+      - name: Enforce Lua side-panel smoke result
+        if: always() && steps.lua-sidebar-smoke.outcome == 'failure'
+        run: |
+          cat lua-sidebar-smoke.log
+          exit 1
