@@ -1272,9 +1272,9 @@ fn build_account_precheck(state: &Sv2ProfilesState) -> Sv2AccountPrecheck {
         && account_probe.authorization_status == Sv2AuthorizationStatus::Verified
     {
         (
-            "官方服务已接受无踢出设备登录事件。".to_string(),
+            "已读取该账号的官方授权。".to_string(),
             format!(
-                "账号服务接受了与 SV2 启动一致的无踢出登录事件，并返回 {} 个可用于路由的声库授权。该结果只代表本次检查时刻。",
+                "账号服务返回 {} 个声库授权。授权读取结果不代表已确认其他设备的占用状态。",
                 account_probe.authorized_voice_count
             ),
         )

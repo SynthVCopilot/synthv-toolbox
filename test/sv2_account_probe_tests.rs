@@ -964,17 +964,25 @@ fn diagnostic_real_session_root_is_read_only() {
         .expect("second stable read failed")
         .expect("session disappeared");
     let access_payload = decode_base64url(
-        credentials.access_token().split('.').nth(1).expect("access token payload missing"),
+        credentials
+            .access_token()
+            .split('.')
+            .nth(1)
+            .expect("access token payload missing"),
     )
     .expect("access token payload is not base64url");
     let refresh_payload = decode_base64url(
-        credentials.refresh_token().split('.').nth(1).expect("refresh token payload missing"),
+        credentials
+            .refresh_token()
+            .split('.')
+            .nth(1)
+            .expect("refresh token payload missing"),
     )
     .expect("refresh token payload is not base64url");
-    let access_claims: serde_json::Value = serde_json::from_slice(&access_payload)
-        .expect("access token payload is not JSON");
-    let refresh_claims: serde_json::Value = serde_json::from_slice(&refresh_payload)
-        .expect("refresh token payload is not JSON");
+    let access_claims: serde_json::Value =
+        serde_json::from_slice(&access_payload).expect("access token payload is not JSON");
+    let refresh_claims: serde_json::Value =
+        serde_json::from_slice(&refresh_payload).expect("refresh token payload is not JSON");
     let issuer = access_claims
         .get("iss")
         .and_then(serde_json::Value::as_str)
@@ -1033,6 +1041,26 @@ fn diagnostic_real_session_root_is_read_only() {
         .expect("post-license stable read failed")
         .expect("session disappeared after read-only diagnostic");
 
+    if std::env::var("SV2_DIAGNOSTIC_PROBE_RECOVERY").as_deref() == Ok("true") {
+        assert!(credentials.access_expires_at > Utc::now() + ChronoDuration::minutes(2));
+        let probe_root = probe_root_key(None, &first.canonical_root);
+        for active in [false, true] {
+            set_sync_quarantine(
+                &probe_root.quarantine_key(),
+                &Sv2AccountProbeView::sync_failed("diagnostic failure"),
+            );
+            let views = refresh_sv2_account_probes(&[Sv2AccountProbeRequest::new(&root, active)]);
+            assert_eq!(
+                views[0].authorization_status,
+                Sv2AuthorizationStatus::Verified
+            );
+            assert!(sync_quarantine_get(&probe_root.quarantine_key()).is_none());
+            let current = inspect_session_fingerprint(&root).unwrap().unwrap();
+            assert!(current == first, "read-only recovery changed the session");
+            eprintln!("SV2 recovery diagnostic: active={active}, status={:?}, authorized={}, session_unchanged=true", views[0].session_status, views[0].authorized_voice_count);
+        }
+    }
+
     eprintln!(
         "SV2 diagnostic: stable={}, stable_after_license={}, full_cache={}, device_present={}, user_present={}, access_expired={}, refresh_expired={}, issuer={}, access_azp={}, access_azp_trusted={}, license={}",
         first == second,
@@ -1063,7 +1091,8 @@ fn refreshed_session_persists_and_reloads_in_an_isolated_fixture() {
         issued + ChronoDuration::days(31),
         issued,
     );
-    let initial_credentials = parse_session_plaintext(Zeroizing::new(initial.clone().into_bytes())).unwrap();
+    let initial_credentials =
+        parse_session_plaintext(Zeroizing::new(initial.clone().into_bytes())).unwrap();
     let initial_encrypted = encrypt_session(initial_credentials.buffer.as_bytes(), &key).unwrap();
     fs::write(license.join("session"), &*initial_encrypted).unwrap();
     let (_, fingerprint) = read_stable_session(&data_root).unwrap().unwrap();
@@ -1094,10 +1123,15 @@ fn read_only_authorization_recovers_only_an_unchanged_single_session() {
         issued + ChronoDuration::days(31),
         issued,
     );
-    let credentials = parse_session_plaintext(Zeroizing::new(plaintext.clone().into_bytes())).unwrap();
+    let credentials =
+        parse_session_plaintext(Zeroizing::new(plaintext.clone().into_bytes())).unwrap();
     let key = *b"fixture8";
     let session = license.join("session");
-    fs::write(&session, &*encrypt_session(plaintext.as_bytes(), &key).unwrap()).unwrap();
+    fs::write(
+        &session,
+        &*encrypt_session(plaintext.as_bytes(), &key).unwrap(),
+    )
+    .unwrap();
     let (_, fingerprint) = read_stable_session(&data_root).unwrap().unwrap();
     let root_key = ProbeRootKey::AccountEnvironment {
         slot_id: format!("slot-{}", uuid::Uuid::new_v4()),
@@ -1110,19 +1144,33 @@ fn read_only_authorization_recovers_only_an_unchanged_single_session() {
 
     set_sync_quarantine(&quarantine, &failed);
     let active = read_only_authorization(
-        &data_root, &root_key, &fingerprint, &credentials, true,
+        &data_root,
+        &root_key,
+        &fingerprint,
+        &credentials,
+        true,
         |_| RemoteOutcome::Authorized(vec!["Fixture Voice".to_string()]),
     )
     .unwrap();
     assert_eq!(active.session_status, Sv2SessionInspectionStatus::InUse);
-    assert_eq!(active.authorization_status, Sv2AuthorizationStatus::Verified);
+    assert_eq!(
+        active.authorization_status,
+        Sv2AuthorizationStatus::Verified
+    );
     assert!(sync_quarantine_get(&quarantine).is_none());
     assert_eq!(fs::read(&session).unwrap(), original_bytes);
-    assert_eq!(fs::metadata(&session).unwrap().last_write_time(), original_time);
+    assert_eq!(
+        fs::metadata(&session).unwrap().last_write_time(),
+        original_time
+    );
 
     set_sync_quarantine(&quarantine, &failed);
     let idle = read_only_authorization(
-        &data_root, &root_key, &fingerprint, &credentials, false,
+        &data_root,
+        &root_key,
+        &fingerprint,
+        &credentials,
+        false,
         |_| RemoteOutcome::Authorized(vec!["Fixture Voice".to_string()]),
     )
     .unwrap();
@@ -1131,8 +1179,15 @@ fn read_only_authorization_recovers_only_an_unchanged_single_session() {
 
     set_sync_quarantine(&quarantine, &failed);
     assert!(read_only_authorization(
-        &data_root, &root_key, &fingerprint, &credentials, false,
-        |_| { fs::write(&session, b"changed-session").unwrap(); RemoteOutcome::Authorized(vec!["Fixture Voice".to_string()]) },
+        &data_root,
+        &root_key,
+        &fingerprint,
+        &credentials,
+        false,
+        |_| {
+            fs::write(&session, b"changed-session").unwrap();
+            RemoteOutcome::Authorized(vec!["Fixture Voice".to_string()])
+        },
     )
     .is_none());
     assert!(sync_quarantine_get(&quarantine).is_some());
@@ -1140,7 +1195,12 @@ fn read_only_authorization_recovers_only_an_unchanged_single_session() {
     fs::write(&session, &original_bytes).unwrap();
     let (_, fingerprint) = read_stable_session(&data_root).unwrap().unwrap();
     assert!(read_only_authorization(
-        &data_root, &root_key, &fingerprint, &credentials, false, |_| RemoteOutcome::Offline,
+        &data_root,
+        &root_key,
+        &fingerprint,
+        &credentials,
+        false,
+        |_| RemoteOutcome::Offline,
     )
     .is_some());
     assert!(sync_quarantine_get(&quarantine).is_some());

@@ -3,8 +3,8 @@ import type { Sv2ProfileSlot, Sv2ProfilesState, SynthVProcess } from "./types";
 export function instanceProjectTitle(value: string | undefined): string {
   const title = value?.trim() ?? "";
   if (!title) return "未命名工程";
+  if (/^(?:Synthesizer V (?:Studio(?: 2)?(?: Pro|Basic|Flat)?|Flat)|SVStudio2(?: Pro)?)(?:\s+[\d.]+)?$/iu.test(title)) return "未命名工程";
   return title
-    .replace(/^\*\s*/u, "")
     .replace(/\s+[—-]\s+Synthesizer V Studio(?: 2)? Pro.*$/iu, "")
     .replace(/\s+·\s+Synthesizer V Studio.*$/iu, "")
     .trim() || "未命名工程";
