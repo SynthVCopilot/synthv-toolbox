@@ -18,9 +18,9 @@ use crate::sv2_concurrent::concurrent_folder;
 use crate::sv2_concurrent::{
     detect_provider as detect_concurrent_provider, launch_slot as launch_concurrent,
     prepare_slot as prepare_concurrent, provider_view as concurrent_provider_view,
-    remove_slot_data as remove_concurrent_slot_data, slot_view as concurrent_slot_view,
-    Sv2ConcurrentContentPreferences, Sv2ConcurrentDefaults, Sv2ConcurrentProviderView,
-    Sv2ConcurrentSlotView, Sv2IsolationPreference,
+    remove_slot_data as remove_concurrent_slot_data, slot_running_pids,
+    slot_view as concurrent_slot_view, Sv2ConcurrentContentPreferences, Sv2ConcurrentDefaults,
+    Sv2ConcurrentProviderView, Sv2ConcurrentSlotView, Sv2IsolationPreference,
 };
 use crate::sv2_session_guard::{
     SessionLaunchPreparation, Sv2SessionEnvironment, Sv2SessionGuardStore, Sv2SessionProtectionView,
@@ -453,7 +453,18 @@ impl Sv2ProfileService {
             let _ = fs::remove_file(paths.canonical.join(MARKER_FILE));
             return Err(error);
         }
-        ensure_shared_voice_databases(paths, &manifest)?;
+        #[cfg(windows)]
+        {
+            let slot_root = paths.parked(&id);
+            fs::create_dir_all(&paths.slots)
+                .map_err(|error| format!("无法创建槽位保管区：{error}"))?;
+            fs::rename(&paths.canonical, &slot_root)
+                .map_err(|error| format!("无法将导入数据移入账号槽位：{error}"))?;
+            if let Err(error) = create_canonical_junction(paths, &id) {
+                let _ = fs::rename(&slot_root, &paths.canonical);
+                return Err(error);
+            }
+        }
         build_state(paths, &manifest, false, String::new())
     }
 
@@ -616,10 +627,24 @@ impl Sv2ProfileService {
             {
                 switch_slot(paths, &mut manifest, &replacement)?;
             } else {
-                verify_marker(&paths.canonical, &slot_id)?;
-                detach_shared_database(&paths.canonical, &paths.shared_databases)?;
-                remove_owned_directory(&paths.canonical, "当前账号数据")?;
-                manifest.active_slot_id = None;
+                #[cfg(windows)]
+                {
+                    let metadata = fs::symlink_metadata(&paths.canonical)
+                        .map_err(|error| format!("无法检查当前账号链接：{error}"))?;
+                    if !is_reparse_metadata(&metadata) {
+                        return Err("当前账号目录不是工具箱创建的链接；不会删除。".to_string());
+                    }
+                    junction::delete(&paths.canonical)
+                        .map_err(|error| format!("无法移除当前账号链接：{error}"))?;
+                    manifest.active_slot_id = None;
+                }
+                #[cfg(not(windows))]
+                {
+                    verify_marker(&paths.canonical, &slot_id)?;
+                    detach_shared_database(&paths.canonical, &paths.shared_databases)?;
+                    remove_owned_directory(&paths.canonical, "当前账号数据")?;
+                    manifest.active_slot_id = None;
+                }
             }
         }
 
@@ -722,7 +747,6 @@ impl Sv2ProfileService {
         recover_if_needed(paths)?;
         reject_blockers(paths)?;
         let mut manifest = load_manifest(paths)?;
-        ensure_shared_voice_databases(paths, &manifest)?;
         switch_slot(paths, &mut manifest, &slot_id)?;
         build_state(paths, &manifest, false, String::new())
     }
@@ -769,7 +793,6 @@ impl Sv2ProfileService {
             reject_blockers(paths)?;
         }
         let mut manifest = load_manifest(paths)?;
-        ensure_shared_voice_databases(paths, &manifest)?;
         switch_slot(paths, &mut manifest, &slot_id)?;
         let session_preparation = Sv2SessionGuardStore::new(&paths.metadata).prepare_launch(
             &slot_id,
@@ -850,7 +873,6 @@ impl Sv2ProfileService {
         let _file_lock = acquire_switch_lock(paths)?;
         recover_if_needed(paths)?;
         let manifest = load_manifest(paths)?;
-        ensure_shared_voice_databases(paths, &manifest)?;
         let slot = manifest
             .slots
             .iter()
@@ -859,22 +881,14 @@ impl Sv2ProfileService {
         let content = slot
             .concurrent_content
             .resolve(manifest.concurrent_defaults);
-        let is_active = manifest.active_slot_id.as_deref() == Some(slot_id.as_str());
-        if is_active {
-            reject_blockers(paths)?;
-        }
-        let source = if is_active {
-            paths.canonical.clone()
-        } else {
-            paths.parked(&slot_id)
-        };
+        let source = paths.parked(&slot_id);
         verify_marker(&source, &slot_id)?;
         let provider = detect_concurrent_provider()?;
         prepare_concurrent(
             &provider,
             &paths.vault,
             &source,
-            &paths.canonical.join("databases"),
+            &paths.parked(&slot_id),
             &slot_id,
             content,
         )?;
@@ -901,7 +915,6 @@ impl Sv2ProfileService {
         let _file_lock = acquire_switch_lock(paths)?;
         recover_if_needed(paths)?;
         let manifest = load_manifest(paths)?;
-        ensure_shared_voice_databases(paths, &manifest)?;
         let slot = manifest
             .slots
             .iter()
@@ -911,32 +924,25 @@ impl Sv2ProfileService {
             .concurrent_content
             .resolve(manifest.concurrent_defaults);
         let provider = detect_concurrent_provider()?;
-        let concurrent_view =
-            concurrent_slot_view(&paths.vault, &slot_id, Some(&provider), content);
-        let data_root = PathBuf::from(&concurrent_view.data_path);
-        let running = concurrent_view.running_pids;
-        if !running.is_empty() {
-            return Err(format!(
-                "槽位的隔离实例已在运行（PID：{}）。",
-                running
-                    .iter()
-                    .map(u32::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-        let session_preparation = Sv2SessionGuardStore::new(&paths.metadata).prepare_launch(
-            &slot_id,
-            Sv2SessionEnvironment::Concurrent,
-            &data_root,
-        )?;
+        let data_root = slot_data_root(paths, &manifest, &slot_id);
+        verify_marker(&data_root, &slot_id)?;
+        let already_running = !slot_running_pids(&provider, &paths.vault, &slot_id)?.is_empty();
+        let session_preparation = if already_running {
+            SessionLaunchPreparation::default()
+        } else {
+            Sv2SessionGuardStore::new(&paths.metadata).prepare_launch(
+                &slot_id,
+                Sv2SessionEnvironment::Normal,
+                &data_root,
+            )?
+        };
         let mut result = launch_concurrent(
             &provider,
             &paths.vault,
             &slot_id,
             &executable,
             project.as_deref(),
-            &paths.canonical.join("databases"),
+            &data_root,
             content,
         )?;
         result.detail = append_session_detail(result.detail, session_preparation);
@@ -1009,18 +1015,28 @@ fn resolve_sync_roots(
             }
         }
     }
-    let root_for = |slot_id: &str| {
-        if manifest.active_slot_id.as_deref() == Some(slot_id) {
-            paths.canonical.clone()
-        } else {
-            paths.parked(slot_id)
-        }
-    };
+    let root_for = |slot_id: &str| slot_data_root(paths, manifest, slot_id);
     let source = root_for(source_slot_id);
     let target = root_for(target_slot_id);
     verify_marker(&source, source_slot_id)?;
     verify_marker(&target, target_slot_id)?;
     Ok((source, target))
+}
+
+fn slot_data_root(paths: &SlotPaths, manifest: &SlotManifest, slot_id: &str) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let _ = manifest;
+        paths.parked(slot_id)
+    }
+    #[cfg(not(windows))]
+    {
+        if manifest.active_slot_id.as_deref() == Some(slot_id) {
+            paths.canonical.clone()
+        } else {
+            paths.parked(slot_id)
+        }
+    }
 }
 
 fn unsupported_state(detail: String) -> Sv2ProfilesState {
@@ -1346,11 +1362,7 @@ fn build_state(
         .iter()
         .map(|slot| {
             let is_active = manifest.active_slot_id.as_deref() == Some(slot.id.as_str());
-            let data_path = if is_active {
-                paths.canonical.clone()
-            } else {
-                paths.parked(&slot.id)
-            };
+            let data_path = slot_data_root(paths, manifest, &slot.id);
             if !data_path.is_dir() {
                 recovery_required = true;
                 if recovery_detail.is_empty() {
@@ -1364,26 +1376,19 @@ fn build_state(
                 slot.concurrent_content
                     .resolve(manifest.concurrent_defaults),
             );
+            let slot_running =
+                (is_active && !blockers.is_empty()) || !concurrent.running_pids.is_empty();
             let session_protection = guard_store
                 .view(
                     &slot.id,
                     Sv2SessionEnvironment::Normal,
                     &data_path,
-                    is_active && !blockers.is_empty(),
+                    slot_running,
                 )
                 .unwrap_or_else(Sv2SessionProtectionView::attention);
-            let concurrent_session_protection = guard_store
-                .view(
-                    &slot.id,
-                    Sv2SessionEnvironment::Concurrent,
-                    Path::new(&concurrent.data_path),
-                    !concurrent.running_pids.is_empty(),
-                )
-                .unwrap_or_else(Sv2SessionProtectionView::attention);
+            let concurrent_session_protection = session_protection.clone();
             let session_cached = data_path.join("license/session").is_file();
-            let concurrent_session_cached = Path::new(&concurrent.data_path)
-                .join("license/session")
-                .is_file();
+            let concurrent_session_cached = session_cached;
             Sv2ProfileSlotView {
                 id: slot.id.clone(),
                 display_name: slot.display_name.clone(),
@@ -1435,50 +1440,121 @@ fn switch_slot(
     manifest: &mut SlotManifest,
     target_slot_id: &str,
 ) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        return switch_slot_windows(paths, manifest, target_slot_id);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if !manifest.slots.iter().any(|slot| slot.id == target_slot_id) {
+            return Err("找不到目标 SV2 槽位。".to_string());
+        }
+        if manifest.active_slot_id.as_deref() == Some(target_slot_id) {
+            verify_marker(&paths.canonical, target_slot_id)?;
+            return Ok(());
+        }
+        fs::create_dir_all(&paths.slots).map_err(|error| format!("无法创建槽位保管区：{error}"))?;
+        validate_managed_roots(paths)?;
+        let target = paths.parked(target_slot_id);
+        reject_reparse_point(&target)?;
+        verify_marker(&target, target_slot_id)?;
+        let current_slot_id = manifest.active_slot_id.clone();
+        if let Some(current_slot_id) = &current_slot_id {
+            reject_reparse_point(&paths.canonical)?;
+            verify_marker(&paths.canonical, current_slot_id)?;
+            if paths.parked(current_slot_id).exists() {
+                return Err("当前槽位的停放目录意外存在；为避免覆盖，切换已停止。".to_string());
+            }
+        } else if paths.canonical.exists() {
+            return Err("官方数据目录尚未导入，不能激活其他槽位。".to_string());
+        }
+
+        let mut journal = SwitchJournal {
+            schema_version: SCHEMA_VERSION,
+            transaction_id: Uuid::new_v4().to_string(),
+            current_slot_id: current_slot_id.clone(),
+            target_slot_id: target_slot_id.to_string(),
+            phase: SwitchPhase::Prepared,
+        };
+        save_journal(paths, &journal)?;
+
+        if let Some(current_slot_id) = &current_slot_id {
+            fs::rename(&paths.canonical, paths.parked(current_slot_id))
+                .map_err(|error| format!("无法停放当前槽位：{error}"))?;
+            journal.phase = SwitchPhase::CurrentParked;
+            save_journal(paths, &journal)?;
+        }
+
+        fs::rename(&target, &paths.canonical)
+            .map_err(|error| format!("无法激活目标槽位：{error}"))?;
+        journal.phase = SwitchPhase::TargetActivated;
+        save_journal(paths, &journal)?;
+        verify_marker(&paths.canonical, target_slot_id)?;
+
+        manifest.active_slot_id = Some(target_slot_id.to_string());
+        if let Some(slot) = manifest
+            .slots
+            .iter_mut()
+            .find(|slot| slot.id == target_slot_id)
+        {
+            slot.last_activated_at_utc = Some(Utc::now().to_rfc3339());
+        }
+        save_manifest(paths, manifest)?;
+        journal.phase = SwitchPhase::Committed;
+        save_journal(paths, &journal)?;
+        remove_journal(paths)?;
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn switch_slot_windows(
+    paths: &SlotPaths,
+    manifest: &mut SlotManifest,
+    target_slot_id: &str,
+) -> Result<(), String> {
     if !manifest.slots.iter().any(|slot| slot.id == target_slot_id) {
         return Err("找不到目标 SV2 槽位。".to_string());
     }
+    let target = paths.parked(target_slot_id);
+    reject_reparse_point(&target)?;
+    verify_marker(&target, target_slot_id)?;
     if manifest.active_slot_id.as_deref() == Some(target_slot_id) {
         verify_marker(&paths.canonical, target_slot_id)?;
         return Ok(());
     }
-    fs::create_dir_all(&paths.slots).map_err(|error| format!("无法创建槽位保管区：{error}"))?;
-    validate_managed_roots(paths)?;
-    let target = paths.parked(target_slot_id);
-    reject_reparse_point(&target)?;
-    verify_marker(&target, target_slot_id)?;
-    let current_slot_id = manifest.active_slot_id.clone();
-    if let Some(current_slot_id) = &current_slot_id {
-        reject_reparse_point(&paths.canonical)?;
-        verify_marker(&paths.canonical, current_slot_id)?;
-        if paths.parked(current_slot_id).exists() {
-            return Err("当前槽位的停放目录意外存在；为避免覆盖，切换已停止。".to_string());
+    if paths.canonical.exists() {
+        let current = manifest
+            .active_slot_id
+            .as_deref()
+            .ok_or_else(|| "官方数据目录未导入账号槽位，不能切换。".to_string())?;
+        verify_marker(&paths.canonical, current)?;
+        let metadata = fs::symlink_metadata(&paths.canonical)
+            .map_err(|error| format!("无法检查官方数据目录：{error}"))?;
+        if is_reparse_metadata(&metadata) {
+            let resolved = paths
+                .canonical
+                .canonicalize()
+                .map_err(|error| format!("无法解析当前账号链接：{error}"))?;
+            let expected = paths
+                .parked(current)
+                .canonicalize()
+                .map_err(|error| format!("无法解析当前账号目录：{error}"))?;
+            if resolved != expected {
+                return Err("官方数据目录链接未指向当前账号槽位；不会覆盖。".to_string());
+            }
+            junction::delete(&paths.canonical)
+                .map_err(|error| format!("无法切换当前账号链接：{error}"))?;
+        } else {
+            let current_root = paths.parked(current);
+            if current_root.exists() {
+                return Err("当前账号槽位目录已存在，无法安全收敛旧布局。".to_string());
+            }
+            fs::rename(&paths.canonical, &current_root)
+                .map_err(|error| format!("无法将旧当前账号收敛到槽位目录：{error}"))?;
         }
-    } else if paths.canonical.exists() {
-        return Err("官方数据目录尚未导入，不能激活其他槽位。".to_string());
     }
-
-    let mut journal = SwitchJournal {
-        schema_version: SCHEMA_VERSION,
-        transaction_id: Uuid::new_v4().to_string(),
-        current_slot_id: current_slot_id.clone(),
-        target_slot_id: target_slot_id.to_string(),
-        phase: SwitchPhase::Prepared,
-    };
-    save_journal(paths, &journal)?;
-
-    if let Some(current_slot_id) = &current_slot_id {
-        fs::rename(&paths.canonical, paths.parked(current_slot_id))
-            .map_err(|error| format!("无法停放当前槽位：{error}"))?;
-        journal.phase = SwitchPhase::CurrentParked;
-        save_journal(paths, &journal)?;
-    }
-
-    fs::rename(&target, &paths.canonical).map_err(|error| format!("无法激活目标槽位：{error}"))?;
-    journal.phase = SwitchPhase::TargetActivated;
-    save_journal(paths, &journal)?;
-    verify_marker(&paths.canonical, target_slot_id)?;
-
+    create_canonical_junction(paths, target_slot_id)?;
     manifest.active_slot_id = Some(target_slot_id.to_string());
     if let Some(slot) = manifest
         .slots
@@ -1487,11 +1563,23 @@ fn switch_slot(
     {
         slot.last_activated_at_utc = Some(Utc::now().to_rfc3339());
     }
-    save_manifest(paths, manifest)?;
-    journal.phase = SwitchPhase::Committed;
-    save_journal(paths, &journal)?;
-    remove_journal(paths)?;
-    Ok(())
+    save_manifest(paths, manifest)
+}
+
+#[cfg(windows)]
+fn create_canonical_junction(paths: &SlotPaths, slot_id: &str) -> Result<(), String> {
+    let target = paths.parked(slot_id);
+    verify_marker(&target, slot_id)?;
+    if paths.canonical.exists() {
+        return Err("官方数据目录已存在；不会覆盖。".to_string());
+    }
+    let parent = paths
+        .canonical
+        .parent()
+        .ok_or_else(|| "官方数据目录父路径无效。".to_string())?;
+    fs::create_dir_all(parent).map_err(|error| format!("无法创建官方数据目录父路径：{error}"))?;
+    junction::create(&target, &paths.canonical)
+        .map_err(|error| format!("无法创建当前账号链接：{error}"))
 }
 
 fn recover_if_needed(paths: &SlotPaths) -> Result<(), String> {
@@ -1842,192 +1930,12 @@ fn acquire_switch_lock(paths: &SlotPaths) -> Result<File, String> {
 }
 
 fn validate_managed_roots(paths: &SlotPaths) -> Result<(), String> {
-    for path in [
-        &paths.canonical,
-        &paths.vault,
-        &paths.slots,
-        &paths.metadata,
-    ] {
+    for path in [&paths.vault, &paths.slots, &paths.metadata] {
         reject_reparse_point(path)?;
     }
+    #[cfg(not(windows))]
+    reject_reparse_point(&paths.canonical)?;
     Ok(())
-}
-
-fn ensure_shared_voice_databases(paths: &SlotPaths, manifest: &SlotManifest) -> Result<(), String> {
-    if manifest.slots.is_empty() {
-        return Ok(());
-    }
-    if shared_database_migration_needed(paths, manifest)? {
-        reject_blockers(paths)?;
-        if let Ok(provider) = detect_concurrent_provider() {
-            let running = manifest
-                .slots
-                .iter()
-                .flat_map(|slot| {
-                    concurrent_slot_view(
-                        &paths.vault,
-                        &slot.id,
-                        Some(&provider),
-                        slot.concurrent_content
-                            .resolve(manifest.concurrent_defaults),
-                    )
-                    .running_pids
-                })
-                .collect::<Vec<_>>();
-            if !running.is_empty() {
-                return Err(format!(
-                    "共享声库迁移前必须关闭所有隔离 SV2 实例（PID：{}）。",
-                    running
-                        .iter()
-                        .map(u32::to_string)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-            }
-        }
-    }
-    let roots = manifest
-        .slots
-        .iter()
-        .map(|slot| {
-            let root = if manifest.active_slot_id.as_deref() == Some(slot.id.as_str()) {
-                paths.canonical.clone()
-            } else {
-                paths.parked(&slot.id)
-            };
-            verify_marker(&root, &slot.id)?;
-            Ok(root)
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    let shared = &paths.shared_databases;
-    if shared.exists() {
-        reject_reparse_point(shared)?;
-        for root in &roots {
-            merge_database_tree(&root.join("databases"), shared)?;
-        }
-    } else {
-        let parent = shared
-            .parent()
-            .ok_or_else(|| "共享声库目录没有父目录。".to_string())?;
-        fs::create_dir_all(parent).map_err(|error| format!("无法创建共享声库父目录：{error}"))?;
-        let staging = parent.join(format!(".shared-databases-{}", Uuid::new_v4()));
-        fs::create_dir(&staging).map_err(|error| format!("无法创建共享声库暂存目录：{error}"))?;
-        let result = (|| {
-            for root in &roots {
-                merge_database_tree(&root.join("databases"), &staging)?;
-            }
-            fs::rename(&staging, shared).map_err(|error| format!("无法提交共享声库目录：{error}"))
-        })();
-        if result.is_err() && staging.exists() {
-            let _ = remove_owned_directory(&staging, "共享声库暂存目录");
-        }
-        result?;
-    }
-    for root in &roots {
-        attach_shared_database(root, shared)?;
-    }
-    Ok(())
-}
-
-fn shared_database_migration_needed(
-    paths: &SlotPaths,
-    manifest: &SlotManifest,
-) -> Result<bool, String> {
-    if !paths.shared_databases.exists() {
-        return Ok(true);
-    }
-    for slot in &manifest.slots {
-        let root = if manifest.active_slot_id.as_deref() == Some(slot.id.as_str()) {
-            &paths.canonical
-        } else {
-            &paths.parked(&slot.id)
-        };
-        if !is_shared_database_link(&root.join("databases"), &paths.shared_databases)? {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn merge_database_tree(source: &Path, destination: &Path) -> Result<(), String> {
-    if !source.exists() || is_shared_database_link(source, destination)? {
-        return Ok(());
-    }
-    reject_reparse_point(source)?;
-    if !source.is_dir() {
-        return Err(format!("声库路径 {} 不是目录。", source.display()));
-    }
-    fs::create_dir_all(destination).map_err(|error| format!("无法创建共享声库目录：{error}"))?;
-    for entry in fs::read_dir(source).map_err(|error| format!("无法读取声库目录：{error}"))?
-    {
-        let entry = entry.map_err(|error| format!("无法读取声库目录项：{error}"))?;
-        let source_path = entry.path();
-        let destination_path = destination.join(entry.file_name());
-        let metadata = fs::symlink_metadata(&source_path)
-            .map_err(|error| format!("无法检查声库目录项：{error}"))?;
-        reject_reparse_metadata(&source_path, &metadata)?;
-        if metadata.is_dir() {
-            merge_database_tree(&source_path, &destination_path)?;
-        } else if metadata.is_file() {
-            if destination_path.exists() {
-                if !files_match(&source_path, &destination_path)? {
-                    return Err(format!(
-                        "共享声库迁移遇到内容冲突：{}。为避免覆盖，操作已停止。",
-                        source_path.display()
-                    ));
-                }
-            } else {
-                fs::copy(&source_path, &destination_path)
-                    .map_err(|error| format!("无法合并声库文件：{error}"))?;
-            }
-        } else {
-            return Err(format!(
-                "声库目录包含不支持的目录项：{}",
-                source_path.display()
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn files_match(left: &Path, right: &Path) -> Result<bool, String> {
-    let left_metadata = fs::metadata(left).map_err(|error| format!("无法读取声库文件：{error}"))?;
-    let right_metadata =
-        fs::metadata(right).map_err(|error| format!("无法读取共享声库文件：{error}"))?;
-    if left_metadata.len() != right_metadata.len() {
-        return Ok(false);
-    }
-    let mut left_file = File::open(left).map_err(|error| format!("无法打开声库文件：{error}"))?;
-    let mut right_file =
-        File::open(right).map_err(|error| format!("无法打开共享声库文件：{error}"))?;
-    let mut left_buffer = [0_u8; 64 * 1024];
-    let mut right_buffer = [0_u8; 64 * 1024];
-    loop {
-        use std::io::Read;
-        let left_read = left_file
-            .read(&mut left_buffer)
-            .map_err(|error| format!("无法读取声库文件：{error}"))?;
-        let right_read = right_file
-            .read(&mut right_buffer)
-            .map_err(|error| format!("无法读取共享声库文件：{error}"))?;
-        if left_read != right_read || left_buffer[..left_read] != right_buffer[..right_read] {
-            return Ok(false);
-        }
-        if left_read == 0 {
-            return Ok(true);
-        }
-    }
-}
-
-fn attach_shared_database(root: &Path, shared: &Path) -> Result<(), String> {
-    let database = root.join("databases");
-    if is_shared_database_link(&database, shared)? {
-        return Ok(());
-    }
-    if database.exists() {
-        remove_owned_directory(&database, "槽位声库数据库")?;
-    }
-    create_directory_junction(shared, &database)
 }
 
 fn detach_shared_database(root: &Path, shared: &Path) -> Result<(), String> {
@@ -2066,24 +1974,6 @@ fn is_shared_database_link(path: &Path, shared: &Path) -> Result<bool, String> {
         .canonicalize()
         .map_err(|error| format!("无法解析共享声库目录：{error}"))?;
     Ok(resolved == expected)
-}
-
-fn create_directory_junction(target: &Path, junction_path: &Path) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        junction::create(target, junction_path)
-            .map_err(|error| format!("无法创建共享声库链接：{error}"))
-    }
-    #[cfg(target_os = "macos")]
-    {
-        std::os::unix::fs::symlink(target, junction_path)
-            .map_err(|error| format!("无法创建共享声库链接：{error}"))
-    }
-    #[cfg(not(any(windows, target_os = "macos")))]
-    {
-        let _ = (target, junction_path);
-        Err("共享声库目录当前仅支持 Windows 和 macOS。".to_string())
-    }
 }
 
 fn remove_owned_directory(path: &Path, label: &str) -> Result<(), String> {
@@ -2820,7 +2710,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_voice_databases_merge_once_and_follow_slot_switches() {
+    fn voice_databases_remain_account_local_across_slot_switches() {
         let (root, paths) = fixture();
         let mut manifest = import_fixture(&paths, "A");
         let a = manifest.active_slot_id.clone().unwrap();
@@ -2830,41 +2720,24 @@ mod tests {
         fs::create_dir_all(paths.parked(&b).join("databases/voice-b")).unwrap();
         fs::write(paths.parked(&b).join("databases/voice-b/model"), b"b").unwrap();
 
-        ensure_shared_voice_databases(&paths, &manifest).unwrap();
-
         assert_eq!(
-            fs::read(paths.shared_databases.join("voice-a/model")).unwrap(),
+            fs::read(paths.canonical.join("databases/voice-a/model")).unwrap(),
             b"a"
         );
         assert_eq!(
-            fs::read(paths.shared_databases.join("voice-b/model")).unwrap(),
+            fs::read(paths.parked(&b).join("databases/voice-b/model")).unwrap(),
             b"b"
         );
-        assert!(is_shared_database_link(
-            &paths.canonical.join("databases"),
-            &paths.shared_databases
-        )
-        .unwrap());
-        assert!(is_shared_database_link(
-            &paths.parked(&b).join("databases"),
-            &paths.shared_databases
-        )
-        .unwrap());
 
         switch_slot(&paths, &mut manifest, &b).unwrap();
-
-        assert!(is_shared_database_link(
-            &paths.canonical.join("databases"),
-            &paths.shared_databases
-        )
-        .unwrap());
-        assert!(is_shared_database_link(
-            &paths.parked(&a).join("databases"),
-            &paths.shared_databases
-        )
-        .unwrap());
-        detach_shared_database(&paths.canonical, &paths.shared_databases).unwrap();
-        detach_shared_database(&paths.parked(&a), &paths.shared_databases).unwrap();
+        assert_eq!(
+            fs::read(paths.canonical.join("databases/voice-b/model")).unwrap(),
+            b"b"
+        );
+        assert_eq!(
+            fs::read(paths.parked(&a).join("databases/voice-a/model")).unwrap(),
+            b"a"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
