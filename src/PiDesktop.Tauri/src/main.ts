@@ -609,8 +609,8 @@ function renderAccountIndicatorConsent(): string {
       <div><span class="eyebrow">SV2 ACCOUNT LOGIN INDICATOR</span><h2 id="account-indicator-consent-title">开启账号登录指示器？</h2></div>
       <p>此功能不会启动 Synthesizer V，但它不是纯本地、纯只读检查。确认开启会完成本次进入页面的首次预检；以后只会在你重新进入「SV2 账号」页面或手动刷新时执行下列操作：</p>
       <ul>
-        <li>读取并解密普通槽位及已准备隔离副本的本地 <code>license/session</code>；若标准 JWT 含有 <code>name</code>/<code>email</code> 声明，会将姓名和邮箱显示在账号卡片及账号管理页。access/refresh token 原文仅在后端内存中处理，不会在界面展示、复制或写入日志。</li>
-        <li>同一槽位只选择一份账号 session 作为 authority；access JWT 临期或失效时可能自动刷新，并把更新后的加密 session 同步到闲置的普通/隔离副本。</li>
+        <li>每个账号槽位只保存一份本地 <code>license/session</code>；普通与并发实例共用槽位文件。若标准 JWT 含有 <code>name</code>/<code>email</code> 声明，会将姓名和邮箱显示在账号卡片及账号管理页。access/refresh token 原文仅在后端内存中处理，不会在界面展示、复制或写入日志。</li>
+        <li>运行中的普通或并发实例只使用现有 access JWT 读取授权；实例闲置后才会刷新并写回槽位 session。声库按账号独立保存，从不跨账号同步；默认同步仅包含设置、脚本等白名单文件。</li>
         <li>每个账号只执行一轮官方 <code>enroll_device</code> 启动等价检查，以确认实际启动是否会被登录冲突拒绝；所有请求固定使用 <code>kickout_other_sessions=false</code>。</li>
       </ul>
       <p class="dialog-choice-note">这不是 dry-run：官方服务会收到真实登录事件。工具箱只报告冲突，绝不会代你踢出其他会话，也不会启动客户端。你可以随时关闭此功能。</p>
@@ -766,14 +766,14 @@ const accountProbeIssueRules: Array<[
 ]> = [
   ["syncFailed", {
     cardLabel: "会话同步失败，需要修复",
-    authorizationLabel: "会话同步失败，未读取该副本授权",
-    title: "账号凭据刷新或设备身份写回后未能安全同步；该副本已被隔离，不能当作尚未预检。",
+    authorizationLabel: "会话同步失败，未读取该槽位授权",
+    title: "账号凭据刷新或设备身份写回后未能安全同步；该槽位已被隔离，不能当作尚未预检。",
     attention: true,
   }],
   ["accountMismatch", {
     cardLabel: "账号副本不一致",
-    authorizationLabel: "账号副本不一致，未读取该副本授权",
-    title: "普通与隔离副本的 JWT 账号主体不同；工具箱没有覆盖任一账号缓存。",
+    authorizationLabel: "账号主体不一致，未读取该槽位授权",
+    title: "账号槽位读取到的 JWT 账号主体不一致；工具箱没有覆盖账号缓存。",
     attention: true,
   }],
   ["inUse", {
