@@ -72,8 +72,8 @@ let previewHttpApiStatus: HttpApiStatus = {
 let previewBridgeConnected = true;
 let previewSynthvPid = 4203;
 let previewSynthvProcesses: SynthVProcess[] = [
-  { processId: 4201, name: "Synthesizer V Studio 2 Pro", command: "/Applications/Synthesizer V Studio 2 Pro.app/Contents/MacOS/synthv-studio", windowTitle: "Project A.svp - Synthesizer V Studio 2 Pro", isSv2: true, sandboxed: false },
-  { processId: 4202, name: "Synthesizer V Studio 2 Pro", command: "C:\\Sandbox\\Synthesizer V Studio 2 Pro.exe", windowTitle: "Project B.svp - Synthesizer V Studio 2 Pro", isSv2: true, sandboxed: true },
+  { processId: 4201, processIdentity: "preview-4201", productName: "SVStudio2 Pro", version: "2.3.0", name: "Synthesizer V Studio 2 Pro", command: "/Applications/Synthesizer V Studio 2 Pro.app/Contents/MacOS/synthv-studio", windowTitle: "Project A.svp - Synthesizer V Studio 2 Pro", isSv2: true, sandboxed: false },
+  { processId: 4202, processIdentity: "preview-4202", productName: "SVStudio2 Pro", version: "2.3.0", name: "Synthesizer V Studio 2 Pro", command: "C:\\Sandbox\\Synthesizer V Studio 2 Pro.exe", windowTitle: "Project B.svp - Synthesizer V Studio 2 Pro", isSv2: true, sandboxed: true },
   { processId: 4203, name: "Synthesizer V Flat", command: "C:\\Apps\\Synthesizer V Flat.exe", windowTitle: "Synthesizer V Flat", isSv2: false, sandboxed: null },
 ];
 let previewDownloads: ComponentDownload[] = [];
@@ -444,6 +444,11 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     return previewState() as T;
   }
   if (command === "get_http_api_status") return { ...previewHttpApiStatus } as T;
+  if (command === "focus_sv2_instance") return { succeeded: true, summary: "已切换到 SynthV 实例。", detail: "" } as T;
+  if (command === "terminate_sv2_instance") {
+    previewSynthvProcesses = previewSynthvProcesses.filter((item) => item.processId !== Number(args?.processId));
+    return { succeeded: true, summary: "已终止 SynthV 实例。", detail: "" } as T;
+  }
   if (command === "configure_http_api") {
     const enabled = Boolean(args?.enabled);
     const agentEnabled = Boolean(args?.agentEnabled);
@@ -1221,6 +1226,10 @@ export const api = {
   diagnoseBridge: (scriptsPath: string) => call<OperationResult>("diagnose_bridge", { scriptsPath }),
   connectBridge: () => call<OperationResult>("connect_bridge"),
   listSynthvProcesses: () => call<SynthVProcess[]>("list_synthv_processes"),
+  focusSv2Instance: (processId: number, processIdentity: string) =>
+    call<OperationResult>("focus_sv2_instance", { processId, processIdentity }),
+  terminateSv2Instance: (processId: number, processIdentity: string) =>
+    call<OperationResult>("terminate_sv2_instance", { processId, processIdentity }),
   synthvShortcutProfile: () => call<SynthVShortcutProfile>("synthv_shortcut_profile"),
   sendSynthvBridgeShortcut: (processId: number, action: "start" | "stop") =>
     call<OperationResult>("send_synthv_bridge_shortcut", { processId, action }),
