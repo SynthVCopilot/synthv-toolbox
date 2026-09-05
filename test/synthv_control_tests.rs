@@ -36,9 +36,9 @@ fn only_a_current_sv2_identity_can_be_controlled() {
     assert!(matches_control_target(&process, "windows:77:123"));
     assert!(!matches_control_target(&process, "windows:77:999"));
 
-    let mut non_sv2 = process;
-    non_sv2.is_sv2 = false;
-    assert!(!matches_control_target(&non_sv2, "windows:77:123"));
+    let mut forged = process;
+    forged.command = r"C:\Downloads\svstudio2-pro-setup-2.3.0tp1.exe".to_string();
+    assert!(!matches_control_target(&forged, "windows:77:123"));
 }
 
 #[test]
