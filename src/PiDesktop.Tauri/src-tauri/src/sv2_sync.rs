@@ -112,8 +112,16 @@ pub struct Sv2SyncResult {
 
 pub fn sync_defaults(source_root: &Path, target_root: &Path) -> Result<Sv2SyncResult, String> {
     validate_root(source_root, true)?;
-    if source_root == target_root || (target_root.exists() && fs::canonicalize(source_root).ok() == fs::canonicalize(target_root).ok()) {
-        return Ok(Sv2SyncResult { copied: 0, updated: 0, skipped: 0, conflicts: 0 });
+    if source_root == target_root
+        || (target_root.exists()
+            && fs::canonicalize(source_root).ok() == fs::canonicalize(target_root).ok())
+    {
+        return Ok(Sv2SyncResult {
+            copied: 0,
+            updated: 0,
+            skipped: 0,
+            conflicts: 0,
+        });
     }
     let selected = [
         Sv2SyncCategoryId::SafeSettings,
@@ -122,7 +130,13 @@ pub fn sync_defaults(source_root: &Path, target_root: &Path) -> Result<Sv2SyncRe
         Sv2SyncCategoryId::Presets,
     ];
     let manifest = dry_run(source_root, target_root, &selected, true)?;
-    execute(source_root, target_root, &selected, &manifest, &manifest.token)
+    execute(
+        source_root,
+        target_root,
+        &selected,
+        &manifest,
+        &manifest.token,
+    )
 }
 
 pub fn dry_run(
@@ -507,3 +521,7 @@ fn reject_link_metadata(path: &Path, metadata: &fs::Metadata) -> Result<(), Stri
 fn hex_digest(bytes: impl AsRef<[u8]>) -> String {
     bytes.as_ref().iter().map(|b| format!("{b:02x}")).collect()
 }
+
+#[cfg(test)]
+#[path = "../../../../test/sv2_sync_tests.rs"]
+mod tests;

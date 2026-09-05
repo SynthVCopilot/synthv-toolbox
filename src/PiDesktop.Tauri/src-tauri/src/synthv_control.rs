@@ -137,11 +137,28 @@ fn is_synthv_process(name: &str, command: &str) -> bool {
 }
 
 fn is_sv2_executable_path(path: &str) -> bool {
-    let value = path.trim().trim_matches('"').to_ascii_lowercase();
-    let file_name = std::path::Path::new(&value).file_name().and_then(|name| name.to_str()).unwrap_or(&value);
-    let known_name = matches!(file_name, "synthesizer v studio 2 pro.exe" | "synthesizer v studio 2.exe" | "synthesizer v studio pro.exe");
-    known_name || value.contains("synthesizer v studio 2")
-        || (cfg!(target_os = "macos") && value.ends_with("/synthv-studio") && value.contains("studio 2"))
+    let value = path
+        .trim()
+        .trim_matches('"')
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    let file_name = value.rsplit('/').next().unwrap_or_default();
+    let explicit_name = matches!(
+        file_name,
+        "synthesizer v studio 2 pro.exe" | "synthesizer v studio 2.exe"
+    );
+    let known_directory = value.split('/').any(|part| {
+        matches!(
+            part,
+            "synthesizer v studio 2"
+                | "synthesizer v studio 2 pro"
+                | "synthesizer v studio 2.app"
+                | "synthesizer v studio 2 pro.app"
+        )
+    });
+    value.contains('/')
+        && (explicit_name
+            || (known_directory && matches!(file_name, "synthv-studio.exe" | "synthv-studio")))
 }
 
 fn is_flat_executable_name(value: &str) -> bool {
@@ -180,9 +197,9 @@ mod platform {
                 is_synthv_process(&name, &command).then_some(SynthVProcess {
                     process_id,
                     name,
-                    command,
                     window_title: String::new(),
                     is_sv2: is_sv2_executable_path(&command),
+                    command,
                     sandboxed: Some(false),
                 })
             })
@@ -256,9 +273,8 @@ mod platform {
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow, ShowWindow,
-        GW_OWNER,
-        SW_RESTORE,
+        EnumWindows, GetWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+        IsWindowVisible, SetForegroundWindow, ShowWindow, GW_OWNER, SW_RESTORE,
     };
 
     use super::*;
@@ -367,50 +383,100 @@ mod platform {
     }
 
     fn window_title(process_id: u32) -> String {
-        let mut lookup = WindowTitleLookup { process_id, title: String::new(), owned_title: String::new() };
-        unsafe { EnumWindows(Some(find_window_title), &mut lookup as *mut _ as LPARAM); }
-        if lookup.title.is_empty() { lookup.owned_title } else { lookup.title }
+        let mut lookup = WindowTitleLookup {
+            process_id,
+            title: String::new(),
+            owned_title: String::new(),
+        };
+        unsafe {
+            EnumWindows(Some(find_window_title), &mut lookup as *mut _ as LPARAM);
+        }
+        if lookup.title.is_empty() {
+            lookup.owned_title
+        } else {
+            lookup.title
+        }
     }
 
     fn process_image_path(process_id: u32) -> Option<String> {
-        use windows_sys::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION};
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
         let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
-        if handle.is_null() { return None; }
-        let mut buffer = vec![0u16; 1024];
+        if handle.is_null() {
+            return None;
+        }
+        let mut buffer = vec![0u16; 32768];
         let mut length = buffer.len() as u32;
-        let ok = unsafe { QueryFullProcessImageNameW(handle, 0, buffer.as_mut_ptr(), &mut length) } != 0;
-        unsafe { windows_sys::Win32::Foundation::CloseHandle(handle); }
+        let ok =
+            unsafe { QueryFullProcessImageNameW(handle, 0, buffer.as_mut_ptr(), &mut length) } != 0;
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(handle);
+        }
         ok.then(|| String::from_utf16_lossy(&buffer[..length as usize]))
     }
 
     fn sandboxed(process_id: u32) -> Option<bool> {
-        use windows_sys::Win32::System::Diagnostics::ToolHelp::{Module32FirstW, MODULEENTRY32W, TH32CS_SNAPMODULE, TH32CS_SNAPMODULE32};
-        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, process_id) };
-        if snapshot == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE { return None; }
+        use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+            Module32FirstW, MODULEENTRY32W, TH32CS_SNAPMODULE, TH32CS_SNAPMODULE32,
+        };
+        let snapshot = unsafe {
+            CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, process_id)
+        };
+        if snapshot == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+            return None;
+        }
         let mut module: MODULEENTRY32W = unsafe { zeroed() };
         module.dwSize = size_of::<MODULEENTRY32W>() as u32;
         let mut found = false;
         let mut ok = unsafe { Module32FirstW(snapshot, &mut module) } != 0;
-        while ok {
-            if wide_text(&module.szModule).eq_ignore_ascii_case("SbieDll.dll") { found = true; break; }
-            ok = unsafe { windows_sys::Win32::System::Diagnostics::ToolHelp::Module32NextW(snapshot, &mut module) } != 0;
+        if !ok {
+            unsafe {
+                windows_sys::Win32::Foundation::CloseHandle(snapshot);
+            }
+            return None;
         }
-        unsafe { windows_sys::Win32::Foundation::CloseHandle(snapshot); }
-        Some(found)
+        while ok {
+            if wide_text(&module.szModule).eq_ignore_ascii_case("SbieDll.dll") {
+                found = true;
+                break;
+            }
+            ok = unsafe {
+                windows_sys::Win32::System::Diagnostics::ToolHelp::Module32NextW(
+                    snapshot,
+                    &mut module,
+                )
+            } != 0;
+        }
+        let completed = found
+            || unsafe { windows_sys::Win32::Foundation::GetLastError() }
+                == windows_sys::Win32::Foundation::ERROR_NO_MORE_FILES;
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(snapshot);
+        }
+        completed.then_some(found)
     }
 
     unsafe extern "system" fn find_window_title(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        if IsWindowVisible(hwnd) == 0 { return 1; }
+        if IsWindowVisible(hwnd) == 0 {
+            return 1;
+        }
         let lookup = &mut *(lparam as *mut WindowTitleLookup);
         let mut process_id = 0u32;
         GetWindowThreadProcessId(hwnd, &mut process_id);
-        if process_id != lookup.process_id { return 1; }
+        if process_id != lookup.process_id {
+            return 1;
+        }
         let length = GetWindowTextLengthW(hwnd);
-        if length <= 0 { return 1; }
+        if length <= 0 {
+            return 1;
+        }
         let mut buffer = vec![0u16; length as usize + 1];
         let actual = GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32);
         let title = wide_text(&buffer[..actual.max(0) as usize]);
-        if title.is_empty() { return 1; }
+        if title.is_empty() {
+            return 1;
+        }
         if GetWindow(hwnd, GW_OWNER).is_null() {
             lookup.title = title;
         } else if lookup.owned_title.is_empty() {
@@ -473,3 +539,7 @@ mod platform {
         Err("当前平台尚未实现 SynthV 进程快捷键控制。".to_string())
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../test/synthv_control_tests.rs"]
+mod tests;

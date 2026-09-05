@@ -1,5 +1,4 @@
-use std::fs::{self, File};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -10,8 +9,7 @@ use crate::synthv::{quiet_command, succeeded, OperationResult};
 
 // Sandboxie uses `-` (rather than a boolean `n`) for "do not alter the title".
 const BOX_NAME_TITLE_SETTING: &str = "-";
-const CONCURRENT_SCHEMA_VERSION: u32 = 1;
-const CONCURRENT_MARKER_FILE: &str = ".synthv-toolbox-concurrent.json";
+const INSTANCE_MARKER: &str = ".synthv-toolbox-instance.json";
 #[cfg(windows)]
 const PROVIDER_ENV: &str = "SV2_TOOLBOX_SANDBOXIE_HOME";
 
@@ -72,9 +70,9 @@ impl Sv2ConcurrentContentPreferences {
     pub fn resolve(self, _defaults: Sv2ConcurrentDefaults) -> Sv2ConcurrentContentView {
         Sv2ConcurrentContentView {
             app_settings: self.app_settings,
-            voice_libraries: self.voice_libraries,
+            voice_libraries: Sv2IsolationPreference::On,
             effective_app_settings: false,
-            effective_voice_libraries: false,
+            effective_voice_libraries: true,
         }
     }
 }
@@ -86,12 +84,11 @@ pub struct SandboxieProvider {
     version: (u16, u16, u16, u16),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ConcurrentMarker {
-    schema_version: u32,
+struct InstanceMarker {
     slot_id: String,
-    box_name: String,
+    instance_id: String,
 }
 
 pub fn detect_provider() -> Result<SandboxieProvider, String> {
@@ -172,15 +169,21 @@ pub fn slot_view(
     content: Sv2ConcurrentContentView,
 ) -> Sv2ConcurrentSlotView {
     let data_path = slot_data_root(vault, slot_id);
-    let ready = data_path.is_dir();
-    let detail = if ready {
+    let mut ready = validate_slot_root(vault, slot_id).is_ok();
+    let mut detail = if ready {
         "账号数据目录已就绪；每次启动会创建独立的 Sandboxie 实例。".to_string()
     } else {
         "账号数据目录不存在。".to_string()
     };
-    let running_pids = provider
-        .map(|provider| list_slot_pids(provider, vault, slot_id).unwrap_or_default())
-        .unwrap_or_default();
+    let running_pids = match provider.map(|provider| slot_running_pids(provider, vault, slot_id)) {
+        Some(Ok(pids)) => pids,
+        Some(Err(error)) => {
+            ready = false;
+            detail = error;
+            Vec::new()
+        }
+        None => Vec::new(),
+    };
     Sv2ConcurrentSlotView {
         ready,
         data_path: data_path.to_string_lossy().into_owned(),
@@ -200,12 +203,7 @@ pub fn prepare_slot(
 ) -> Result<(), String> {
     let _ = provider;
     let _ = content;
-    reject_reparse_point(vault)?;
-    reject_reparse_point(source)?;
-    if !source.is_dir() {
-        return Err("槽位源数据目录不存在。".to_string());
-    }
-    let expected = slot_data_root(vault, slot_id);
+    let expected = validate_slot_root(vault, slot_id)?;
     if source != expected {
         return Err("并发账号数据必须使用槽位权威目录。".to_string());
     }
@@ -221,14 +219,28 @@ pub fn launch_slot(
     slot_data_root: &Path,
     content: Sv2ConcurrentContentView,
 ) -> Result<OperationResult, String> {
-    if slot_data_root != slot_data_root_for(vault, slot_id).as_path() || !slot_data_root.is_dir() {
+    if slot_data_root != validate_slot_root(vault, slot_id)?.as_path() {
         return Err("并发账号数据必须使用槽位权威目录。".to_string());
     }
     let instance_id = Uuid::new_v4().to_string();
     let name = instance_box_name(slot_id, &instance_id)?;
     let root = instance_box_root(vault, slot_id, &instance_id);
-    fs::create_dir_all(&root).map_err(|error| format!("无法创建隔离实例目录：{error}"))?;
+    let parent = root.parent().ok_or("隔离实例目录无效。")?;
+    for path in [vault.join("instances"), parent.to_path_buf()] {
+        reject_reparse_point(&path)?;
+    }
+    fs::create_dir_all(parent).map_err(|error| format!("无法创建隔离实例目录：{error}"))?;
+    fs::create_dir(&root).map_err(|error| format!("无法创建独立实例目录：{error}"))?;
     configure_box(provider, &name, &root, slot_data_root, content)?;
+    fs::write(
+        root.join(INSTANCE_MARKER),
+        serde_json::to_vec(&InstanceMarker {
+            slot_id: slot_id.to_string(),
+            instance_id,
+        })
+        .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| format!("无法记录隔离实例：{error}"))?;
 
     let mut command = quiet_command(&provider.start);
     command
@@ -249,70 +261,81 @@ pub fn launch_slot(
         ));
     }
     Ok(succeeded(
-        "已在独立文件、注册表和 IPC 命名空间中启动 SV2。",
-        "隔离实例已启动。".to_string(),
+        "已在独立的注册表和 IPC 命名空间中启动 SV2。",
+        "同账号实例共用槽位数据。".to_string(),
     ))
 }
 
 #[cfg(windows)]
 pub fn concurrent_folder(vault: &Path, slot_id: &str) -> Result<PathBuf, String> {
-    let root = slot_data_root(vault, slot_id);
-    if root.is_dir() {
-        Ok(root)
-    } else {
-        Err("账号数据目录不存在。".to_string())
-    }
+    validate_slot_root(vault, slot_id)
 }
 
 pub fn remove_slot_data(vault: &Path, slot_id: &str) -> Result<(), String> {
+    validate_uuid(slot_id)?;
     let root = vault.join("instances").join(compact_slot_id(slot_id));
+    reject_reparse_point(vault)?;
+    reject_reparse_point(&vault.join("instances"))?;
+    reject_reparse_point(&root)?;
     if root.exists() {
-        reject_reparse_point(&root)?;
+        let entries = fs::read_dir(&root)
+            .map_err(|error| error.to_string())?
+            .map(|entry| {
+                entry
+                    .map(|entry| entry.path())
+                    .map_err(|error| error.to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for instance in &entries {
+            validate_uuid(
+                instance
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or("无效实例目录。")?,
+            )?;
+            validate_instance_tree(
+                instance,
+                &virtual_data_root(instance),
+                &slot_data_root(vault, slot_id),
+            )?;
+        }
+        #[cfg(windows)]
+        for instance in entries {
+            let overlay = virtual_data_root(&instance);
+            if fs::symlink_metadata(&overlay).is_ok() {
+                junction::delete(&overlay)
+                    .map_err(|error| format!("无法移除隔离数据链接：{error}"))?;
+            }
+        }
         fs::remove_dir_all(root).map_err(|error| format!("无法删除隔离实例目录：{error}"))?;
     }
     Ok(())
 }
 
-fn migrate_legacy_box(vault: &Path, slot_id: &str, box_name: &str) -> Result<(), String> {
-    let legacy = legacy_box_root(vault, slot_id);
-    let short = box_root(vault, slot_id);
-    if !legacy.exists() || short.exists() {
+fn validate_instance_tree(path: &Path, overlay: &Path, slot: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    if path == overlay {
+        let target =
+            junction::get_target(path).map_err(|error| format!("无法检查隔离数据链接：{error}"))?;
+        let normalize = |path: &Path| {
+            path.to_string_lossy()
+                .trim_start_matches(r"\\?\")
+                .replace('/', "\\")
+                .to_lowercase()
+        };
+        if normalize(&target) != normalize(slot) {
+            return Err("隔离数据链接未指向所属账号；操作已停止。".to_string());
+        }
         return Ok(());
     }
-    validate_prepared(&legacy, slot_id, box_name)?;
-    let parent = short
-        .parent()
-        .ok_or_else(|| "隔离副本路径无效。".to_string())?;
-    fs::create_dir_all(parent).map_err(|error| format!("无法创建短隔离路径：{error}"))?;
-    fs::rename(&legacy, &short).map_err(|error| format!("无法迁移隔离副本到短路径：{error}"))
-}
-
-fn remove_prepared_box(root: &Path, slot_id: &str, box_name: &str) -> Result<(), String> {
-    if !root.exists() {
-        return Ok(());
-    }
-    validate_prepared(root, slot_id, box_name)?;
-    fs::remove_dir_all(root).map_err(|error| format!("无法删除隔离副本：{error}"))
-}
-
-fn remove_copied_database(root: &Path) -> Result<(), String> {
-    let database = virtual_data_root(root).join("databases");
-    if !database.exists() {
-        return Ok(());
-    }
-    assert_tree_has_no_reparse_points(&database)?;
-    fs::remove_dir_all(&database).map_err(|error| format!("无法移除隔离副本中的重复声库：{error}"))
-}
-
-fn assert_tree_has_no_reparse_points(path: &Path) -> Result<(), String> {
-    let metadata =
-        fs::symlink_metadata(path).map_err(|error| format!("无法检查隔离副本内容：{error}"))?;
-    reject_reparse_metadata(path, &metadata)?;
-    if metadata.is_dir() {
-        for entry in fs::read_dir(path).map_err(|error| format!("无法读取隔离副本内容：{error}"))?
-        {
-            let entry = entry.map_err(|error| format!("无法读取隔离副本目录项：{error}"))?;
-            assert_tree_has_no_reparse_points(&entry.path())?;
+    reject_reparse_point(path)?;
+    if path.is_dir() {
+        for entry in fs::read_dir(path).map_err(|error| error.to_string())? {
+            validate_instance_tree(
+                &entry.map_err(|error| error.to_string())?.path(),
+                overlay,
+                slot,
+            )?;
         }
     }
     Ok(())
@@ -426,8 +449,21 @@ fn create_overlay_slot_junction(root: &Path, slot_data_root: &Path) -> Result<()
     let parent = overlay
         .parent()
         .ok_or_else(|| "隔离数据映射路径无效。".to_string())?;
+    let relative = parent
+        .strip_prefix(root)
+        .map_err(|_| "隔离映射超出实例目录。")?;
+    let mut current = root.to_path_buf();
+    reject_reparse_point(&current)?;
+    for part in relative.components() {
+        current.push(part);
+        reject_reparse_point(&current)?;
+    }
     fs::create_dir_all(parent).map_err(|error| format!("无法创建隔离数据映射父目录：{error}"))?;
-    if overlay.exists() {
+    if fs::symlink_metadata(&overlay).is_ok() {
+        #[cfg(windows)]
+        if !junction::exists(&overlay).map_err(|error| error.to_string())? {
+            return Err("隔离数据映射已存在普通目录；不会覆盖。".to_string());
+        }
         let actual = overlay
             .canonicalize()
             .map_err(|error| format!("无法解析隔离数据映射：{error}"))?;
@@ -443,10 +479,8 @@ fn create_overlay_slot_junction(root: &Path, slot_data_root: &Path) -> Result<()
     junction::create(slot_data_root, &overlay)
         .map_err(|error| format!("无法创建隔离账号数据映射：{error}"))?;
     #[cfg(not(windows))]
-    {
-        let _ = (slot_data_root, overlay);
-        return Err("并发隔离当前仅支持 Windows。".to_string());
-    }
+    return Err("并发隔离当前仅支持 Windows。".to_string());
+    #[cfg(windows)]
     Ok(())
 }
 
@@ -457,7 +491,7 @@ fn sandbox_directory_rule(path: &Path) -> Result<String, String> {
     let mut value = path.to_string_lossy().into_owned();
     if value
         .chars()
-        .any(|character| character == '\r' || character == '\n' || character == '\0')
+        .any(|character| matches!(character, '\r' | '\n' | '\0' | '%' | ',' | '*' | '?'))
     {
         return Err("Sandboxie 共享内容路径包含不允许的控制字符。".to_string());
     }
@@ -479,7 +513,7 @@ fn list_pids(provider: &SandboxieProvider, box_name: &str) -> Result<Vec<u32>, S
             command_detail(&output.stdout, &output.stderr)
         ));
     }
-    Ok(parse_pid_list(&decode_output(&output.stdout)))
+    parse_pid_list(&decode_output(&output.stdout))
 }
 
 pub fn slot_running_pids(
@@ -487,43 +521,38 @@ pub fn slot_running_pids(
     vault: &Path,
     slot_id: &str,
 ) -> Result<Vec<u32>, String> {
+    validate_uuid(slot_id)?;
     let root = vault.join("instances").join(compact_slot_id(slot_id));
+    for path in [vault, &vault.join("instances"), &root] {
+        reject_reparse_point(path)?;
+    }
     if !root.exists() {
         return Ok(Vec::new());
     }
-    reject_reparse_point(&root)?;
-    let entries = fs::read_dir(root).map_err(|error| format!("无法读取隔离实例目录：{error}"))?;
-    let mut pids = entries
-        .map(|entry| entry.map_err(|error| format!("无法读取隔离实例目录项：{error}")))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .map(|entry| {
-            entry
-                .file_name()
-                .into_string()
-                .map_err(|_| "隔离实例目录名无效。".to_string())
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .map(|instance_id| instance_box_name(slot_id, &instance_id))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .map(|box_name| list_pids(provider, &box_name))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
+    let mut pids = Vec::new();
+    for entry in fs::read_dir(root).map_err(|error| format!("无法读取隔离实例目录：{error}"))?
+    {
+        let entry = entry.map_err(|error| error.to_string())?;
+        reject_reparse_point(&entry.path())?;
+        let marker_path = entry.path().join(INSTANCE_MARKER);
+        reject_reparse_point(&marker_path)?;
+        if !marker_path.is_file() {
+            continue;
+        }
+        let marker: InstanceMarker =
+            serde_json::from_slice(&fs::read(&marker_path).map_err(|error| error.to_string())?)
+                .map_err(|error| format!("隔离实例记录损坏：{error}"))?;
+        if marker.slot_id != slot_id
+            || entry.file_name().to_str() != Some(marker.instance_id.as_str())
+        {
+            return Err("隔离实例记录与账号目录不一致。".to_string());
+        }
+        let box_name = instance_box_name(slot_id, &marker.instance_id)?;
+        pids.extend(list_pids(provider, &box_name)?);
+    }
     pids.sort_unstable();
     pids.dedup();
     Ok(pids)
-}
-
-fn list_slot_pids(
-    provider: &SandboxieProvider,
-    vault: &Path,
-    slot_id: &str,
-) -> Result<Vec<u32>, String> {
-    slot_running_pids(provider, vault, slot_id)
 }
 
 fn run_checked(command: &mut Command, label: &str) -> Result<(), String> {
@@ -576,99 +605,38 @@ fn decode_output(bytes: &[u8]) -> String {
     }
 }
 
-fn parse_pid_list(value: &str) -> Vec<u32> {
-    let mut numbers = value
+fn parse_pid_list(value: &str) -> Result<Vec<u32>, String> {
+    let mut lines = value
+        .trim_start_matches('\u{feff}')
         .lines()
-        .filter_map(|line| line.trim().parse::<u32>().ok())
-        .collect::<Vec<_>>();
-    if numbers
-        .first()
-        .is_some_and(|count| *count as usize == numbers.len().saturating_sub(1))
-    {
-        numbers.remove(0);
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
+    let count = lines
+        .next()
+        .and_then(|line| line.parse::<usize>().ok())
+        .ok_or("Sandboxie 进程列表缺少有效计数。")?;
+    let mut pids = lines
+        .map(|line| {
+            line.parse::<u32>()
+                .ok()
+                .filter(|pid| *pid > 0)
+                .ok_or_else(|| "Sandboxie 进程列表包含无效 PID。".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if pids.len() != count {
+        return Err("Sandboxie 进程列表计数不一致。".to_string());
     }
-    numbers.sort_unstable();
-    numbers.dedup();
-    numbers
-}
-
-fn validate_prepared(root: &Path, slot_id: &str, box_name: &str) -> Result<(), String> {
-    reject_reparse_point(root)?;
-    let marker_path = root.join(CONCURRENT_MARKER_FILE);
-    if !marker_path.is_file() {
-        return Err("隔离副本缺少工具箱标记；不会覆盖该目录。".to_string());
-    }
-    let text = fs::read_to_string(&marker_path)
-        .map_err(|error| format!("无法读取隔离副本标记：{error}"))?;
-    let marker: ConcurrentMarker = serde_json::from_str(&text)
-        .map_err(|error| format!("隔离副本标记不是有效 JSON：{error}"))?;
-    if marker.schema_version != CONCURRENT_SCHEMA_VERSION
-        || marker.slot_id != slot_id
-        || marker.box_name != box_name
-    {
-        return Err("隔离副本标记与槽位不匹配；不会使用该目录。".to_string());
-    }
-    let data = virtual_data_root(root);
-    reject_reparse_point(&data)?;
-    if !data.is_dir() {
-        return Err("隔离副本的数据根不存在。".to_string());
-    }
-    Ok(())
-}
-
-fn write_marker(root: &Path, marker: &ConcurrentMarker) -> Result<(), String> {
-    fs::create_dir_all(root).map_err(|error| format!("无法创建隔离副本目录：{error}"))?;
-    let path = root.join(CONCURRENT_MARKER_FILE);
-    let bytes = serde_json::to_vec_pretty(marker).map_err(|error| error.to_string())?;
-    let mut file = File::create(&path).map_err(|error| format!("无法创建隔离副本标记：{error}"))?;
-    file.write_all(&bytes)
-        .map_err(|error| format!("无法写入隔离副本标记：{error}"))?;
-    file.sync_all()
-        .map_err(|error| format!("无法刷新隔离副本标记：{error}"))
-}
-
-fn copy_slot_tree(source: &Path, destination: &Path) -> Result<(), String> {
-    copy_tree(source, destination, true)
-}
-
-fn copy_tree(source: &Path, destination: &Path, skip_databases: bool) -> Result<(), String> {
-    reject_reparse_point(source)?;
-    let metadata =
-        fs::symlink_metadata(source).map_err(|error| format!("无法读取槽位源数据：{error}"))?;
-    if !metadata.is_dir() {
-        return Err("槽位源数据不是目录。".to_string());
-    }
-    fs::create_dir_all(destination).map_err(|error| format!("无法创建隔离数据目录：{error}"))?;
-    for entry in fs::read_dir(source).map_err(|error| format!("无法枚举槽位源数据：{error}"))?
-    {
-        let entry = entry.map_err(|error| format!("无法读取槽位目录项：{error}"))?;
-        if skip_databases && entry.file_name() == "databases" {
-            continue;
-        }
-        let source_path = entry.path();
-        let destination_path = destination.join(entry.file_name());
-        let metadata = fs::symlink_metadata(&source_path)
-            .map_err(|error| format!("无法检查槽位目录项：{error}"))?;
-        reject_reparse_metadata(&source_path, &metadata)?;
-        if metadata.is_dir() {
-            copy_tree(&source_path, &destination_path, false)?;
-        } else if metadata.is_file() {
-            fs::copy(&source_path, &destination_path)
-                .map_err(|error| format!("无法复制 {}：{error}", source_path.display()))?;
-        } else {
-            return Err(format!("不支持的槽位目录项：{}", source_path.display()));
-        }
-    }
-    Ok(())
+    pids.sort_unstable();
+    pids.dedup();
+    Ok(pids)
 }
 
 fn reject_reparse_point(path: &Path) -> Result<(), String> {
-    if !path.exists() {
-        return Ok(());
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => reject_reparse_metadata(path, &metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("无法检查路径 {}：{error}", path.display())),
     }
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|error| format!("无法检查目录 {}：{error}", path.display()))?;
-    reject_reparse_metadata(path, &metadata)
 }
 
 fn reject_reparse_metadata(path: &Path, metadata: &fs::Metadata) -> Result<(), String> {
@@ -690,23 +658,36 @@ fn reject_reparse_metadata(path: &Path, metadata: &fs::Metadata) -> Result<(), S
     Ok(())
 }
 
-fn cleanup_staging(staging: &Path, slot_root: &Path) {
-    let is_owned_staging = staging.parent() == Some(slot_root)
-        && staging
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with(".staging-"));
-    if is_owned_staging {
-        let _ = fs::remove_dir_all(staging);
-    }
-}
-
 fn slot_data_root(vault: &Path, slot_id: &str) -> PathBuf {
     vault.join("slots").join(slot_id)
 }
 
-fn slot_data_root_for(vault: &Path, slot_id: &str) -> PathBuf {
-    slot_data_root(vault, slot_id)
+fn validate_uuid(value: &str) -> Result<Uuid, String> {
+    let id = Uuid::parse_str(value).map_err(|_| "账号或实例 ID 无效。".to_string())?;
+    if id.get_version_num() != 4 || id.to_string() != value {
+        return Err("账号和实例 ID 必须是标准 UUID v4。".to_string());
+    }
+    Ok(id)
+}
+
+fn validate_slot_root(vault: &Path, slot_id: &str) -> Result<PathBuf, String> {
+    validate_uuid(slot_id)?;
+    if !vault.is_absolute() {
+        return Err("账号保管区必须是绝对路径。".to_string());
+    }
+    let root = slot_data_root(vault, slot_id);
+    let marker = root.join(".synthv-toolbox-slot.json");
+    for path in [vault, &vault.join("slots"), &root, &marker] {
+        reject_reparse_point(path)?;
+    }
+    let value: serde_json::Value = serde_json::from_slice(
+        &fs::read(marker).map_err(|error| format!("无法读取账号槽位标记：{error}"))?,
+    )
+    .map_err(|error| format!("账号槽位标记损坏：{error}"))?;
+    if value.get("slotId").and_then(|value| value.as_str()) != Some(slot_id) {
+        return Err("账号数据目录与槽位标记不一致。".to_string());
+    }
+    Ok(root)
 }
 
 fn instance_box_root(vault: &Path, slot_id: &str, instance_id: &str) -> PathBuf {
@@ -714,20 +695,6 @@ fn instance_box_root(vault: &Path, slot_id: &str, instance_id: &str) -> PathBuf 
         .join("instances")
         .join(compact_slot_id(slot_id))
         .join(instance_id)
-}
-
-fn box_root(vault: &Path, slot_id: &str) -> PathBuf {
-    vault
-        .join("legacy-concurrent")
-        .join(compact_slot_id(slot_id))
-}
-
-fn legacy_box_root(vault: &Path, slot_id: &str) -> PathBuf {
-    vault.join("concurrent").join(slot_id).join("box")
-}
-
-fn box_name(slot_id: &str) -> Result<String, String> {
-    instance_box_name(slot_id, "00000000-0000-4000-8000-000000000000")
 }
 
 fn compact_slot_id(slot_id: &str) -> String {
@@ -747,11 +714,8 @@ fn virtual_data_root(box_root: &Path) -> PathBuf {
 }
 
 fn instance_box_name(slot_id: &str, instance_id: &str) -> Result<String, String> {
-    let id = Uuid::parse_str(slot_id).map_err(|_| "槽位 ID 无效。".to_string())?;
-    if id.get_version_num() != 4 {
-        return Err("槽位 ID 必须是 UUID v4。".to_string());
-    }
-    let instance = Uuid::parse_str(instance_id).map_err(|_| "隔离实例 ID 无效。".to_string())?;
+    let id = validate_uuid(slot_id)?;
+    let instance = validate_uuid(instance_id)?;
     Ok(format!(
         "SV2TB{}{}",
         &id.simple().to_string()[..12],
@@ -855,146 +819,5 @@ fn file_version(path: &Path) -> Result<(u16, u16, u16, u16), String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sandbox_name_is_stable_alphanumeric_and_bounded() {
-        let id = "11111111-1111-4111-8111-111111111111";
-        let name = box_name(id).unwrap();
-        assert_eq!(name, "SV2TB111111111111411181111111");
-        assert!(name.len() <= 32);
-        assert!(name
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric()));
-        assert!(box_name("../../escape").is_err());
-        assert_eq!(sandbox_box_argument(&name), format!("/box:{name}"));
-        assert!(!sandbox_box_argument(&name).contains('#'));
-        assert_eq!(BOX_NAME_TITLE_SETTING, "-");
-        assert_eq!(compact_slot_id(id), "1111111111114111");
-    }
-
-    #[test]
-    fn pid_output_ignores_the_leading_count() {
-        assert_eq!(parse_pid_list("3\r\n42\r\n7\r\n42\r\n"), vec![7, 42]);
-        assert_eq!(parse_pid_list("0\r\n"), Vec::<u32>::new());
-    }
-
-    #[test]
-    fn content_preferences_isolate_settings_and_share_voice_libraries() {
-        let defaults = Sv2ConcurrentDefaults {
-            app_settings: true,
-            voice_libraries: false,
-        };
-        let inherited = Sv2ConcurrentContentPreferences::default().resolve(defaults);
-        assert!(inherited.effective_app_settings);
-        assert!(!inherited.effective_voice_libraries);
-
-        let overridden = Sv2ConcurrentContentPreferences {
-            app_settings: Sv2IsolationPreference::Off,
-            voice_libraries: Sv2IsolationPreference::On,
-        }
-        .resolve(defaults);
-        assert!(overridden.effective_app_settings);
-        assert!(!overridden.effective_voice_libraries);
-    }
-
-    #[test]
-    fn shared_content_rules_are_scoped_to_a_directory() {
-        let rule = sandbox_directory_rule(&std::env::temp_dir().join("sv2-settings")).unwrap();
-        assert!(rule.ends_with(std::path::MAIN_SEPARATOR));
-        assert!(!rule.contains(['\r', '\n', '\0']));
-    }
-
-    #[test]
-    fn opaque_slot_tree_is_copied_into_the_sandbox_overlay() {
-        let root = std::env::temp_dir().join(format!("sv2-concurrent-test-{}", Uuid::new_v4()));
-        let source = root.join("source");
-        let destination = root.join("destination");
-        fs::create_dir_all(source.join("license")).unwrap();
-        fs::create_dir_all(source.join("webview2/Default")).unwrap();
-        fs::write(source.join("license/session"), [0_u8, 1, 2, 255]).unwrap();
-        fs::write(source.join("webview2/Default/Cookies"), b"opaque").unwrap();
-
-        copy_tree(&source, &destination, false).unwrap();
-
-        assert_eq!(
-            fs::read(destination.join("license/session")).unwrap(),
-            [0_u8, 1, 2, 255]
-        );
-        assert_eq!(
-            fs::read(destination.join("webview2/Default/Cookies")).unwrap(),
-            b"opaque"
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn slot_copy_skips_the_shared_voice_database() {
-        let root =
-            std::env::temp_dir().join(format!("sv2-concurrent-copy-test-{}", Uuid::new_v4()));
-        let source = root.join("source");
-        let destination = root.join("destination");
-        fs::create_dir_all(source.join("databases/voice")).unwrap();
-        fs::create_dir_all(source.join("license")).unwrap();
-        fs::write(source.join("databases/voice/model"), b"voice").unwrap();
-        fs::write(source.join("license/session"), b"session").unwrap();
-
-        copy_slot_tree(&source, &destination).unwrap();
-
-        assert!(!destination.join("databases").exists());
-        assert_eq!(
-            fs::read(destination.join("license/session")).unwrap(),
-            b"session"
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn prepared_marker_must_match_the_slot_and_box() {
-        let root = std::env::temp_dir().join(format!("sv2-concurrent-test-{}", Uuid::new_v4()));
-        let id = Uuid::new_v4().to_string();
-        let name = box_name(&id).unwrap();
-        fs::create_dir_all(virtual_data_root(&root)).unwrap();
-        write_marker(
-            &root,
-            &ConcurrentMarker {
-                schema_version: CONCURRENT_SCHEMA_VERSION,
-                slot_id: id.clone(),
-                box_name: name.clone(),
-            },
-        )
-        .unwrap();
-
-        validate_prepared(&root, &id, &name).unwrap();
-        assert!(validate_prepared(&root, &Uuid::new_v4().to_string(), &name).is_err());
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn utf16_command_output_is_decoded() {
-        let text = "C:\\并发\\box\r\n";
-        let bytes = text
-            .encode_utf16()
-            .flat_map(u16::to_le_bytes)
-            .collect::<Vec<_>>();
-        assert_eq!(decode_output(&bytes), text);
-    }
-
-    #[test]
-    fn provider_version_rejects_known_vulnerable_builds() {
-        assert!(!supported_provider_version((1, 17, 2, 0)));
-        assert!(supported_provider_version((1, 17, 6, 0)));
-        assert!(!supported_provider_version((5, 72, 2, 0)));
-        assert!(supported_provider_version((5, 72, 6, 0)));
-    }
-
-    #[test]
-    fn provider_identity_matches_the_sandboxie_version_line() {
-        assert_eq!(provider_name((1, 17, 6, 0)), "Sandboxie Plus");
-        assert_eq!(provider_edition((1, 17, 6, 0)), "Plus");
-        assert_eq!(provider_name((5, 73, 2, 0)), "Sandboxie Classic");
-        assert_eq!(provider_edition((5, 73, 2, 0)), "Classic");
-        assert_eq!(format_version((5, 73, 2, 0)), "5.73.2");
-    }
-}
+#[path = "../../../../test/sv2_concurrent_tests.rs"]
+mod tests;
