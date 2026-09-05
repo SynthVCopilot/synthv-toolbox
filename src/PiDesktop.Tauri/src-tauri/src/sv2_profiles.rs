@@ -331,6 +331,23 @@ impl Sv2ProfileService {
             .map(|snapshot| snapshot.precheck)
     }
 
+    pub fn voice_catalog(&self) -> Result<Vec<crate::sv2_voice_catalog::Sv2CachedVoice>, String> {
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| "SV2 槽位状态锁已损坏。".to_string())?;
+        let paths = self.paths.as_ref().map_err(Clone::clone)?;
+        let _file_lock = acquire_switch_lock(paths)?;
+        validate_managed_roots(paths)?;
+        let manifest = load_manifest(paths)?;
+        let roots = manifest
+            .slots
+            .iter()
+            .map(|slot| slot_data_root(paths, &manifest, &slot.id))
+            .collect::<Vec<_>>();
+        Ok(crate::sv2_voice_catalog::read_catalog(&roots))
+    }
+
     pub fn account_usage_snapshot(&self) -> Result<Sv2AccountUsageSnapshot, String> {
         self.build_account_usage_snapshot(true, None)
     }

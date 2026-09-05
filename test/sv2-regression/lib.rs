@@ -1,5 +1,8 @@
 #![allow(dead_code)]
 
+#[path = "../../src/PiDesktop.Tauri/src-tauri/src/sv2_voice_catalog.rs"]
+mod sv2_voice_catalog;
+
 #[path = "../../src/PiDesktop.Tauri/src-tauri/src/sv2_concurrent.rs"]
 pub mod sv2_concurrent;
 #[path = "../../src/PiDesktop.Tauri/src-tauri/src/sv2_sync.rs"]

@@ -1563,6 +1563,16 @@ pub async fn import_current_sv2_profile(
 }
 
 #[tauri::command]
+pub async fn sv2_voice_catalog(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::sv2_voice_catalog::Sv2CachedVoice>, String> {
+    let profiles = state.sv2_profiles.clone();
+    tauri::async_runtime::spawn_blocking(move || profiles.voice_catalog())
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 pub async fn create_sv2_profile(
     display_name: String,
     state: State<'_, AppState>,

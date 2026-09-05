@@ -666,6 +666,7 @@ dependencies = [
  "chrono",
  "fs2",
  "junction",
+ "libc",
  "serde",
  "serde_json",
  "sha2",

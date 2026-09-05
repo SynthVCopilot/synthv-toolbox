@@ -28,6 +28,7 @@ mod sv2_concurrent;
 mod sv2_profiles;
 mod sv2_session_guard;
 mod sv2_sync;
+mod sv2_voice_catalog;
 mod svp_launch_router;
 mod synthv;
 mod synthv_control;
@@ -170,6 +171,7 @@ pub fn run() {
             commands::check_toolbox_update,
             commands::open_toolbox_releases,
             commands::sv2_profile_state,
+            commands::sv2_voice_catalog,
             commands::sv2_account_precheck,
             commands::sv2_account_usage_snapshot,
             commands::sv2_account_usage_snapshot_for_slot,
