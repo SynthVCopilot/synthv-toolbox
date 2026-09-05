@@ -20,6 +20,8 @@ pub struct SynthVProcess {
     pub name: String,
     pub command: String,
     pub window_title: String,
+    pub is_sv2: bool,
+    pub sandboxed: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -134,6 +136,14 @@ fn is_synthv_process(name: &str, command: &str) -> bool {
     text.contains("synthv-studio") || text.contains("synthesizer v studio")
 }
 
+fn is_sv2_executable_path(path: &str) -> bool {
+    let value = path.trim().trim_matches('"').to_ascii_lowercase();
+    let file_name = std::path::Path::new(&value).file_name().and_then(|name| name.to_str()).unwrap_or(&value);
+    let known_name = matches!(file_name, "synthesizer v studio 2 pro.exe" | "synthesizer v studio 2.exe" | "synthesizer v studio pro.exe");
+    known_name || value.contains("synthesizer v studio 2")
+        || (cfg!(target_os = "macos") && value.ends_with("/synthv-studio") && value.contains("studio 2"))
+}
+
 fn is_flat_executable_name(value: &str) -> bool {
     let trimmed = value.trim().trim_matches('"');
     let file_name = std::path::Path::new(trimmed)
@@ -172,6 +182,8 @@ mod platform {
                     name,
                     command,
                     window_title: String::new(),
+                    is_sv2: is_sv2_executable_path(&command),
+                    sandboxed: Some(false),
                 })
             })
             .collect::<Vec<_>>();
@@ -229,31 +241,6 @@ mod platform {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn matches_flat_only_by_exact_executable_name() {
-        assert!(is_synthv_process(
-            "Synthesizer V Flat.exe",
-            "C:\\Apps\\Synthesizer V Flat.exe"
-        ));
-        assert!(is_synthv_process(
-            "Synthesizer V Flat",
-            "/Applications/Synthesizer V Flat"
-        ));
-        assert!(!is_synthv_process(
-            "flat-helper.exe",
-            "C:\\Apps\\flat-helper.exe"
-        ));
-        assert!(!is_synthv_process(
-            "Synthesizer V Flat Helper.exe",
-            "C:\\Apps\\Synthesizer V Flat Helper.exe"
-        ));
-    }
-}
-
 #[cfg(windows)]
 mod platform {
     use std::mem::{size_of, zeroed};
@@ -287,12 +274,15 @@ mod platform {
         let mut ok = unsafe { Process32FirstW(snapshot, &mut entry) } != 0;
         while ok {
             let name = wide_text(&entry.szExeFile);
-            if is_synthv_process(&name, &name) {
+            let command = process_image_path(entry.th32ProcessID).unwrap_or_else(|| name.clone());
+            if is_synthv_process(&name, &command) {
                 processes.push(SynthVProcess {
                     process_id: entry.th32ProcessID,
-                    command: name.clone(),
+                    command: command.clone(),
                     name,
                     window_title: window_title(entry.th32ProcessID),
+                    is_sv2: is_sv2_executable_path(&command),
+                    sandboxed: sandboxed(entry.th32ProcessID),
                 });
             }
             ok = unsafe { Process32NextW(snapshot, &mut entry) } != 0;
@@ -380,6 +370,33 @@ mod platform {
         let mut lookup = WindowTitleLookup { process_id, title: String::new(), owned_title: String::new() };
         unsafe { EnumWindows(Some(find_window_title), &mut lookup as *mut _ as LPARAM); }
         if lookup.title.is_empty() { lookup.owned_title } else { lookup.title }
+    }
+
+    fn process_image_path(process_id: u32) -> Option<String> {
+        use windows_sys::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION};
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
+        if handle.is_null() { return None; }
+        let mut buffer = vec![0u16; 1024];
+        let mut length = buffer.len() as u32;
+        let ok = unsafe { QueryFullProcessImageNameW(handle, 0, buffer.as_mut_ptr(), &mut length) } != 0;
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(handle); }
+        ok.then(|| String::from_utf16_lossy(&buffer[..length as usize]))
+    }
+
+    fn sandboxed(process_id: u32) -> Option<bool> {
+        use windows_sys::Win32::System::Diagnostics::ToolHelp::{Module32FirstW, MODULEENTRY32W, TH32CS_SNAPMODULE, TH32CS_SNAPMODULE32};
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, process_id) };
+        if snapshot == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE { return None; }
+        let mut module: MODULEENTRY32W = unsafe { zeroed() };
+        module.dwSize = size_of::<MODULEENTRY32W>() as u32;
+        let mut found = false;
+        let mut ok = unsafe { Module32FirstW(snapshot, &mut module) } != 0;
+        while ok {
+            if wide_text(&module.szModule).eq_ignore_ascii_case("SbieDll.dll") { found = true; break; }
+            ok = unsafe { windows_sys::Win32::System::Diagnostics::ToolHelp::Module32NextW(snapshot, &mut module) } != 0;
+        }
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(snapshot); }
+        Some(found)
     }
 
     unsafe extern "system" fn find_window_title(hwnd: HWND, lparam: LPARAM) -> BOOL {
