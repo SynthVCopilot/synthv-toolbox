@@ -857,6 +857,7 @@ mod platform {
     }
 }
 
+#[cfg(windows)]
 fn is_strict_synthv_executable_path(path: &str) -> bool {
     is_sv1_executable_path(path) || is_sv2_executable_path(path) || is_flat_executable_name(path)
 }
