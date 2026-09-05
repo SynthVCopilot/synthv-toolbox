@@ -80,7 +80,7 @@ const MAX_PRODUCT_NAME_CHARS: usize = 160;
 const MAX_TOKEN_CLOCK_SKEW_MILLIS: u64 = 5 * 60 * 1000;
 const TOKEN_URL: &str =
     "https://account.dreamtonics.com/realms/Dreamtonics/protocol/openid-connect/token";
-const TOKEN_CLIENT_ID: &str = "eed46efe-0460-4c63-a0a7-2df0e16dc43d";
+const TOKEN_ISSUER: &str = "https://account.dreamtonics.com/realms/Dreamtonics";
 const LICENSES_URL: &str = "https://authr3.dreamtonics.com/api/v1/client/my_licenses";
 const ENROLL_URL: &str = "https://authr3.dreamtonics.com/api/v1/client/enroll_device";
 const EDITOR_VERSION: u32 = 0x20201;
@@ -1035,7 +1035,46 @@ struct TokenRefreshResponse<'a> {
 #[derive(Clone, Copy)]
 enum RefreshFailure {
     Expired,
+    Unavailable(u16),
     Ambiguous,
+}
+
+#[cfg(windows)]
+#[derive(Deserialize)]
+struct RefreshClientClaims<'a> {
+    #[serde(borrow)]
+    iss: Option<&'a str>,
+    #[serde(borrow)]
+    azp: Option<&'a str>,
+}
+
+#[cfg(windows)]
+fn refresh_client_id(access_token: &str) -> Result<String, ()> {
+    let payload = decode_base64url(access_token.split('.').nth(1).ok_or(())?)?;
+    let claims: RefreshClientClaims<'_> = serde_json::from_slice(&payload).map_err(|_| ())?;
+    let client_id = claims.azp.ok_or(())?;
+    if claims.iss != Some(TOKEN_ISSUER)
+        || client_id.is_empty()
+        || client_id.len() > 160
+        || !client_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "-._".contains(character))
+    {
+        return Err(());
+    }
+    Ok(client_id.to_string())
+}
+
+#[cfg(windows)]
+fn refresh_failure_for_http_response(status: u16, body: &[u8]) -> RefreshFailure {
+    if status == 403 || status == 429 || status >= 500 {
+        return RefreshFailure::Unavailable(status);
+    }
+    if contains_json_string(body, b"invalid_grant") || contains_json_string(body, RELOGIN_ERROR) {
+        RefreshFailure::Expired
+    } else {
+        RefreshFailure::Ambiguous
+    }
 }
 
 #[cfg(windows)]
@@ -1043,10 +1082,11 @@ fn refresh_session_credentials(
     agent: &ureq::Agent,
     current: &SessionCredentials,
 ) -> Result<SessionCredentials, RefreshFailure> {
+    let client_id = refresh_client_id(current.access_token()).map_err(|_| RefreshFailure::Expired)?;
     let mut serializer = url::form_urlencoded::Serializer::new(String::new());
     serializer.append_pair("grant_type", "refresh_token");
     serializer.append_pair("refresh_token", current.refresh_token());
-    serializer.append_pair("client_id", TOKEN_CLIENT_ID);
+    serializer.append_pair("client_id", &client_id);
     let form = Zeroizing::new(serializer.finish());
     let response = agent
         .post(TOKEN_URL)
@@ -1068,13 +1108,7 @@ fn refresh_session_credentials(
         }
     };
     if status != 200 {
-        return if contains_json_string(&body, b"invalid_grant")
-            || contains_json_string(&body, RELOGIN_ERROR)
-        {
-            Err(RefreshFailure::Expired)
-        } else {
-            Err(RefreshFailure::Ambiguous)
-        };
+        return Err(refresh_failure_for_http_response(status, &body));
     }
 
     let refreshed: TokenRefreshResponse<'_> =
@@ -1788,6 +1822,13 @@ fn refresh_failure_view(failure: RefreshFailure) -> Sv2AccountProbeView {
             Vec::new(),
             "已从该账号普通/隔离缓存中选择最新 authority 尝试自动续期，但官方令牌端点明确要求重新登录。",
         ),
+        RefreshFailure::Unavailable(status) => Sv2AccountProbeView::new(
+            Sv2SessionInspectionStatus::Offline,
+            Sv2RemoteUseStatus::Unknown,
+            Sv2AuthorizationStatus::Unknown,
+            Vec::new(),
+            &format!("账号令牌端点暂不可用（HTTP {status}）；未刷新或修改本地会话。"),
+        ),
         RefreshFailure::Ambiguous => Sv2AccountProbeView::sync_failed(
             "refresh 请求可能已被令牌端点接收，但未取得可安全验证的完整响应；服务端可能已经轮换 refresh token，本组等待下一次显式预检修复。",
         ),
@@ -2249,13 +2290,35 @@ fn refresh_windows_batch(requests: &[Sv2AccountProbeRequest<'_>]) -> Vec<Sv2Acco
             continue;
         };
 
+        if sessions[authority].credentials.access_expires_at
+            > Utc::now() + ChronoDuration::seconds(60)
+        {
+            let licenses = query_license_snapshot_with_agent(
+                &agent,
+                sessions[authority].credentials.access_token(),
+            );
+            let verified = matches!(&licenses, RemoteOutcome::Authorized(_));
+            let view = view_from_remote(licenses, EnrollOutcome::Unknown)
+                .with_account_identity(sessions[authority].credentials.access_token());
+            if verified {
+                clear_sync_quarantine(&group_quarantine_key);
+            }
+            cache_group_view(
+                &mut results,
+                &sessions,
+                &members,
+                &view,
+                Some(sessions[authority].credentials.access_expires_at),
+            );
+            continue;
+        }
+
         // Only the newest physical copy for an account may consume a refresh
         // token. Normal and Sandboxie copies therefore cannot race each other
         // or submit two startup-equivalent login events merely because their
         // Keycloak login ids drifted.
-        if sessions[authority].sync_quarantined
-            || sessions[authority].credentials.access_expires_at
-                <= Utc::now() + ChronoDuration::seconds(60)
+        if sessions[authority].credentials.access_expires_at
+            <= Utc::now() + ChronoDuration::seconds(60)
         {
             let refreshed =
                 match refresh_session_credentials(&agent, &sessions[authority].credentials) {
