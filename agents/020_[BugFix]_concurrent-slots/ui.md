@@ -19,3 +19,5 @@
 - TypeScript DTO 与渲染代码已同步。
 - `cargo check` 进入项目 build script，但因本地缺少 `components/synthv-agent-bridge/node_modules` 资源而停止；Rust 修改已按 windows-sys 0.61 的 `HWND`/`BOOL` 签名调整。
 - `test/concurrent-instance-ui.mjs` 覆盖轮询保护、PID 关联、未知进程和共享文案契约。
+- 进程 DTO 现在显式携带 `isSv2` 与三态 `sandboxed`；Windows 使用真实 exe 路径和 `SbieDll.dll` 模块判定，无法读取模块时保持未知。
+- 预览模式维护进程数组和递增 PID，允许同一账号连续启动多个普通/隔离实例。

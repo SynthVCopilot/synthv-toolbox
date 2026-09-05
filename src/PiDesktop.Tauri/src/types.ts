@@ -458,6 +458,8 @@ export interface SynthVProcess {
   name: string;
   command: string;
   windowTitle?: string;
+  isSv2: boolean;
+  sandboxed: boolean | null;
 }
 
 export interface SynthVShortcutProfile {
