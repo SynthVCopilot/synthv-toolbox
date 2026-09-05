@@ -253,13 +253,13 @@ fn parse_macos_processes(output: &str) -> Vec<(u32, String, String)> {
     output
         .lines()
         .filter_map(|line| {
-            let mut fields = line.split_whitespace();
-            let process_id = fields.next()?.parse::<u32>().ok()?;
+            let mut remainder = line.trim_start();
+            let process_id = take_process_field(&mut remainder)?.parse::<u32>().ok()?;
             let started = (0..5)
-                .map(|_| fields.next())
+                .map(|_| take_process_field(&mut remainder))
                 .collect::<Option<Vec<_>>>()?
                 .join(" ");
-            let command = fields.collect::<Vec<_>>().join(" ");
+            let command = remainder.trim_start().to_string();
             (!command.is_empty()).then_some((
                 process_id,
                 format!("macos:{process_id}:{started}"),
@@ -267,6 +267,17 @@ fn parse_macos_processes(output: &str) -> Vec<(u32, String, String)> {
             ))
         })
         .collect()
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn take_process_field<'a>(remainder: &mut &'a str) -> Option<&'a str> {
+    *remainder = remainder.trim_start();
+    let end = remainder
+        .find(char::is_whitespace)
+        .unwrap_or(remainder.len());
+    let field = &remainder[..end];
+    *remainder = &remainder[end..];
+    (!field.is_empty()).then_some(field)
 }
 
 #[cfg(target_os = "macos")]
@@ -297,7 +308,7 @@ mod platform {
 
     pub(super) fn list_processes() -> Result<Vec<SynthVProcess>, String> {
         let output = quiet_command("ps")
-            .args(["-axo", "pid=,lstart=,comm=,args="])
+            .args(["-axo", "pid=,lstart=,comm="])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output()

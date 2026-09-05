@@ -12,3 +12,6 @@
 - `cargo fmt --check` 与 `cargo clippy --all-targets -- -D warnings` 通过。全量桌面 lib test 链接后被火绒删除、执行 OS error 5；不把此轮记为通过。
 - 火绒调查：核验 Microsoft link.exe 签名有效，检测目标已删除。读取已安装与旧 release PE 元数据：产品/版本正确、未签名；dumpbin 验证 ASLR/DEP，高熵 VA；mt 提取确认 asInvoker/uiAccess=false。未发现可合理移除的危险加载能力，没有通过改变哈希尝试规避检测。
 - 待完成：最终提交、main 保护检查与远端 Windows/macOS 全量构建检查。
+- 最终复核修正 macOS `ps` 不再混入 args，保留实际路径的连续空格；补充隔离 harness 的 macOS Command shim。合并子任务 c77b304 后保留主分支平台 cfg，并为新增 helper 添加相同 cfg；9 项实例测试与全量 clippy 再次通过。
+- 预览新启动实例补齐身份/版本；无法识别客户端时显示真实 Unsupported 信息，成功文案仅表示完成检查。前端 build 与全部 contracts 再次通过。
+- 针对用户询问检测名，查阅火绒公开 ShellLoader 分析：该术语用于 ShellCode 加载器，但未检索到 `.gx` 具体规则说明，不能把其他样本行为归因于本项目。未确定本次检测原因。
