@@ -15,3 +15,5 @@
 - [后续误报处理边界] -> 查阅 Microsoft 应用清单、签名与软件开发者 FAQ，以及火绒公开资料 -> 签名用于可验证的发布者身份，不保证无恶意/不误报；争议样本应由检测厂商复核。用户临时关闭防护不是验证条件。未恢复隔离文件、未添加排除、未向第三方上传样本。
 
 参考：https://learn.microsoft.com/en-us/windows/win32/sbscs/application-manifests 、https://learn.microsoft.com/en-us/defender-xdr/developer-faq 、https://learn.microsoft.com/en-us/windows/win32/secbp/understanding-pe-signatures 。
+
+- [远端 macOS lint 失败] -> e5f3df6 的运行 33992629554 已通过 macOS 全量测试与新增控制 harness，但 lint 报 `is_strict_synthv_executable_path` dead_code -> 此 helper 仅供 Windows 句柄内复核使用，应添加 Windows cfg，不能放宽 lint。
