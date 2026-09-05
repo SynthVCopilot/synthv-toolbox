@@ -1,10 +1,20 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import type {
   AiProviderId,
   AgentWorkMode,
   AgentFileApproval,
   AiProviderSummary,
   AppMode,
+  AudioJobSnapshot,
+  AudioArtifactInfo,
+  AudioArtifactSaveResult,
+  AudioPrepareRequest,
+  AudioWritePlan,
+  FfmpegRuntimeStatus,
+  LoudnessNormalizeRequest,
+  LoudnessReport,
+  MediaProbe,
   AudioCaptureCapability,
   AudioCaptureTarget,
   BatchWorkflowResult,
@@ -53,6 +63,7 @@ import type {
 } from "./types";
 
 const preview = import.meta.env.DEV && !isTauri();
+const AUDIO_FILE_EXTENSIONS = ["wav", "flac", "mp3", "m4a", "aac", "ogg", "opus", "aif", "aiff"];
 let previewMode: AppMode = "toolbox";
 let previewAgentWorkMode: AgentWorkMode = "edit";
 let previewOnboarding = false;
@@ -582,6 +593,85 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       { id: "google", name: "Google", modelCount: 15, package: "@ai-sdk/google", models: ["gemini-preview"] },
     ],
   } as T;
+  if (command === "ffmpeg_status") return {
+    available: true,
+    source: "system",
+    ffmpegPath: "ffmpeg",
+    ffprobePath: "ffprobe",
+    version: "ffmpeg version n8.1.2",
+    detail: "预览模式：FFmpeg 可用。",
+  } as T;
+  if (command === "probe_media") return {
+    path: String(args?.path ?? ""),
+    container: "wav",
+    codec: "pcm_s24le",
+    durationSeconds: 183.2,
+    sampleRate: 48000,
+    channels: 2,
+    channelLayout: "stereo",
+    bitDepth: 24,
+    bitRate: 2304000,
+  } as T;
+  if (command === "analyze_loudness") return {
+    path: String(args?.path ?? ""),
+    integratedLufs: -18.4,
+    truePeakDbtp: -2.1,
+    loudnessRange: 8.2,
+    threshold: -28.4,
+    raw: { preview: true },
+  } as T;
+  if (command === "plan_audio_prepare" || command === "plan_loudness_normalize") {
+    const request = (args?.request ?? {}) as Record<string, unknown>;
+    const normalize = command === "plan_loudness_normalize";
+    return {
+      planId: "preview-audio-plan",
+      token: "preview-audio-token",
+      expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      requestDigest: "preview-request-digest",
+      operation: normalize ? "loudness-normalize" : "prepare",
+      inputPath: String(request.inputPath ?? ""),
+      outputPath: `~/.SynthVcopilot/output/ffmpeg/preview-${normalize ? "normalized" : "prepared"}.wav`,
+      parameters: normalize
+        ? ["EBU R128: -16.0 LUFS / -1.5 dBTP / 11.0 LRA"]
+        : ["PCM WAV", `${String(request.sampleFormat ?? "s24")} sample format`],
+      warnings: normalize ? ["预览模式不会写入本机文件。"] : [],
+    } as T;
+  }
+  if (command === "start_audio_prepare" || command === "start_loudness_normalize") return {
+    id: "preview-audio-job",
+    operation: command === "start_loudness_normalize" ? "loudness-normalize" : "prepare",
+    status: "completed",
+    progressPercent: 100,
+    outputPath: "~/.SynthVcopilot/output/ffmpeg/preview-audio.wav",
+    artifactId: "preview-artifact",
+    loudnessReport: command === "start_loudness_normalize" ? {
+      path: "~/.SynthVcopilot/output/ffmpeg/preview-audio.wav",
+      integratedLufs: -16,
+      truePeakDbtp: -1.5,
+      loudnessRange: 11,
+      threshold: -26,
+      raw: { preview: true },
+    } : null,
+    error: null,
+    startedAt: new Date(Date.now() - 500).toISOString(),
+    completedAt: new Date().toISOString(),
+  } as T;
+  if (command === "audio_job_snapshot") return {
+    id: String(args?.id ?? "preview-audio-job"), operation: "prepare", status: "completed", progressPercent: 100,
+    outputPath: "~/.SynthVcopilot/output/ffmpeg/preview-audio.wav", artifactId: "preview-artifact",
+    loudnessReport: null, error: null, startedAt: new Date(Date.now() - 500).toISOString(), completedAt: new Date().toISOString(),
+  } as T;
+  if (command === "cancel_audio_job") return {
+    id: String(args?.id ?? "preview-audio-job"), operation: "prepare", status: "cancelled", progressPercent: 0,
+    outputPath: null, artifactId: null, loudnessReport: null, error: "任务已取消。",
+    startedAt: new Date(Date.now() - 500).toISOString(), completedAt: new Date().toISOString(),
+  } as T;
+  if (command === "audio_artifact_info") return {
+    artifactId: String(args?.artifactId ?? "preview-artifact"), operation: "prepare", fileName: "preview-audio.wav", byteLength: 4096, mimeType: "audio/wav",
+    mediaUrl: "toolbox-audio://localhost/preview-artifact",
+  } as T;
+  if (command === "reveal_audio_artifact") return undefined as T;
+  if (command === "save_audio_artifact") return { saved: true, fileName: "preview-audio.wav" } as T;
   if (command === "bootstrap" || command === "complete_onboarding" || command === "set_mode" || command.endsWith("settings") || command.endsWith("server") || command === "save_scripts_path" || command === "delete_mcp_server") {
     return previewState() as T;
   }
@@ -1301,6 +1391,40 @@ export const api = {
     call<WorkflowResult>("export_project_lyrics", { projectPath, trackIndex, lineGapSeconds, outputName, wordOutputName }),
   reviewWorkflow: (kind: string, data: Record<string, unknown>) =>
     call<string>("review_workflow", { kind, data }),
+  pickAudioFile: async (): Promise<string | undefined> => {
+    if (preview) return undefined;
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: "Audio", extensions: AUDIO_FILE_EXTENSIONS }],
+    });
+    if (Array.isArray(selected)) return selected[0];
+    return typeof selected === "string" ? selected : undefined;
+  },
+  ffmpegStatus: () => call<FfmpegRuntimeStatus>("ffmpeg_status"),
+  probeMedia: (path: string) => call<MediaProbe>("probe_media", { path }),
+  planAudioPrepare: (request: AudioPrepareRequest) =>
+    call<AudioWritePlan>("plan_audio_prepare", { request }),
+  startAudioPrepare: (request: AudioPrepareRequest, token: string) =>
+    call<AudioJobSnapshot>("start_audio_prepare", { request, token }),
+  analyzeLoudness: (path: string) => call<LoudnessReport>("analyze_loudness", { path }),
+  planLoudnessNormalize: (request: LoudnessNormalizeRequest) =>
+    call<AudioWritePlan>("plan_loudness_normalize", { request }),
+  startLoudnessNormalize: (request: LoudnessNormalizeRequest, token: string) =>
+    call<AudioJobSnapshot>("start_loudness_normalize", { request, token }),
+  audioJobSnapshot: (id: string) => call<AudioJobSnapshot>("audio_job_snapshot", { id }),
+  cancelAudioJob: (id: string) => call<AudioJobSnapshot>("cancel_audio_job", { id }),
+  audioArtifactInfo: (artifactId: string) => call<AudioArtifactInfo>("audio_artifact_info", { artifactId }),
+  audioArtifactPreviewUrl: async (artifactId: string) => {
+    const artifact = await call<AudioArtifactInfo>("audio_artifact_info", { artifactId });
+    if (!artifact.mimeType) throw new Error("此音频格式可参与转换，但当前 WebView 不支持安全试听。");
+    return artifact.mediaUrl;
+  },
+  revealAudioArtifact: async (artifactId: string) => {
+    await call<void>("reveal_audio_artifact", { artifactId });
+    return { succeeded: true, summary: "已在文件管理器中定位结果。", detail: "" } as OperationResult;
+  },
+  saveAudioArtifactAs: (artifactId: string) => call<AudioArtifactSaveResult>("save_audio_artifact", { artifactId }),
   listConversations: () => call<ConversationSummary[]>("list_conversations"),
   newConversation: () => call<ConversationSnapshot>("new_conversation"),
   openConversation: (id: string) => call<ConversationSnapshot>("open_conversation", { id }),

@@ -25,8 +25,8 @@ use crate::audio_capture::{
     ToolboxAudioToolContext, ToolboxAudioToolExecutor,
 };
 use crate::audio_prep::{
-    AudioJobSnapshot, AudioPrepareRequest, AudioWritePlan, FfmpegRuntimeStatus,
-    LoudnessNormalizeRequest, LoudnessReport, MediaProbe,
+    AudioArtifactInfo, AudioArtifactSaveResult, AudioJobSnapshot, AudioPrepareRequest,
+    AudioWritePlan, FfmpegRuntimeStatus, LoudnessNormalizeRequest, LoudnessReport, MediaProbe,
 };
 use crate::bridge_workflows;
 use crate::components::{
@@ -2022,6 +2022,34 @@ pub fn cancel_audio_job(
     state: State<'_, AppState>,
 ) -> Result<AudioJobSnapshot, String> {
     state.audio_preparation.cancel_audio_job(&id)
+}
+
+#[tauri::command]
+pub fn audio_artifact_info(
+    artifact_id: String,
+    state: State<'_, AppState>,
+) -> Result<AudioArtifactInfo, String> {
+    state.audio_preparation.audio_artifact_info(&artifact_id)
+}
+
+#[tauri::command]
+pub fn reveal_audio_artifact(
+    artifact_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.audio_preparation.reveal_audio_artifact(&artifact_id)
+}
+
+#[tauri::command]
+pub async fn save_audio_artifact(
+    artifact_id: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<AudioArtifactSaveResult, String> {
+    state
+        .audio_preparation
+        .save_audio_artifact(&artifact_id, app)
+        .await
 }
 
 #[tauri::command]

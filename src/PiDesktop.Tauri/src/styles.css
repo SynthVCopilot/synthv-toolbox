@@ -1160,6 +1160,61 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .dialog-process-list code { flex: 0 0 auto; color: var(--danger); font-size: 11px; }
 .fluent-dialog > p.dialog-choice-note { margin-top: -2px; padding: 9px 11px; border-radius: 5px; background: var(--surface-subtle); font-size: 12px; }
 .dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.audio-preparation { display: grid; gap: 14px; }
+.audio-runtime-card, .audio-input-card, .audio-probe-card, .audio-action-card, .audio-job-card { border: 1px solid var(--line); border-radius: 8px; background: var(--surface-solid); padding: 15px; }
+.audio-runtime-card { display: flex; align-items: center; justify-content: space-between; gap: 14px; border-color: var(--line-strong); }
+.audio-runtime-card.warning { border-color: color-mix(in srgb, var(--warning) 48%, var(--line)); }
+.audio-runtime-card > div { min-width: 0; display: grid; gap: 3px; }
+.audio-runtime-card strong { font-size: 14px; }
+.audio-runtime-card small { color: var(--muted); overflow-wrap: anywhere; }
+.audio-input-card { display: grid; gap: 11px; }
+.audio-input-card .section-heading { margin: 0; }
+.audio-input-card > input { font-family: var(--font-mono, ui-monospace, monospace); color: var(--muted); }
+.audio-drop-zone { min-height: 94px; display: grid; place-content: center; justify-items: center; gap: 6px; border: 1px dashed var(--line-strong); border-radius: 7px; color: var(--muted); background: var(--surface-subtle); cursor: pointer; text-align: center; transition: border-color .14s ease, background .14s ease; }
+.audio-drop-zone:hover, .audio-drop-zone:focus-visible { border-color: var(--primary); outline: none; background: var(--primary-soft); }
+.audio-drop-zone:disabled { cursor: not-allowed; opacity: .62; }
+.audio-drop-zone strong { color: var(--text); font-size: 13px; }
+.audio-drop-zone small { max-width: 460px; font-size: 11px; }
+.audio-probe-card { display: grid; gap: 12px; }
+.audio-probe-heading, .audio-job-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.audio-probe-heading > div, .audio-job-heading > div { display: grid; gap: 2px; }
+.audio-probe-heading strong, .audio-job-heading strong { font-size: 15px; }
+.audio-metadata { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--line); }
+.audio-metadata > div { min-width: 0; padding: 9px 10px; background: var(--surface-solid); }
+.audio-metadata dt { color: var(--muted); font-size: 11px; }
+.audio-metadata dd { margin: 3px 0 0; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.audio-source-preview { display: flex; align-items: center; gap: 10px; }
+.audio-source-preview audio, .audio-artifact-actions audio { width: min(100%, 360px); height: 34px; }
+.audio-empty-probe { padding: 13px; border: 1px dashed var(--line); border-radius: 7px; color: var(--muted); font-size: 12px; }
+.audio-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.audio-action-card { display: grid; align-content: start; gap: 12px; }
+.audio-action-card h3 { margin: 4px 0 3px; font-size: 16px; }
+.audio-action-card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.audio-action-card .workflow-form { gap: 10px; }
+.audio-loudness-readout { display: flex; flex-wrap: wrap; gap: 6px 12px; padding: 10px; border-radius: 6px; background: var(--surface-subtle); color: var(--muted); font-size: 12px; }
+.audio-loudness-readout strong { color: var(--text); }
+.audio-loudness-readout.compact { margin-top: 10px; }
+.audio-inline-notice, .audio-inline-error { padding: 10px 12px; border-radius: 6px; font-size: 12px; line-height: 1.55; }
+.audio-inline-notice { color: var(--primary); background: var(--primary-soft); }
+.audio-inline-error, .audio-job-error { color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); }
+.audio-job-card { display: grid; gap: 10px; }
+.audio-job-card.completed { border-color: color-mix(in srgb, var(--success) 48%, var(--line)); }
+.audio-job-card.failed, .audio-job-card.cancelled { border-color: color-mix(in srgb, var(--danger) 42%, var(--line)); }
+.audio-job-card > small { color: var(--muted); }
+.audio-output-path { display: grid; gap: 3px; min-width: 0; padding: 8px 10px; border-radius: 5px; background: var(--surface-subtle); }
+.audio-output-path span { color: var(--muted); font-size: 11px; }
+.audio-output-path code { overflow-wrap: anywhere; font-size: 11px; }
+.audio-progress { height: 7px; overflow: hidden; border-radius: 99px; background: var(--surface-subtle); }
+.audio-progress span { display: block; height: 100%; border-radius: inherit; background: var(--primary); transition: width .18s ease; }
+.audio-job-error { max-height: 144px; margin: 0; overflow: auto; padding: 9px; border-radius: 5px; font-size: 11px; white-space: pre-wrap; }
+.audio-artifact-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.audio-plan-dialog { width: min(680px, 100%); }
+.audio-plan-details { grid-column: 1 / -1; display: grid; gap: 1px; margin: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--line); }
+.audio-plan-details > div { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 10px; padding: 8px 10px; background: var(--surface-solid); font-size: 12px; }
+.audio-plan-details dt { color: var(--muted); }
+.audio-plan-details dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.audio-plan-warnings { grid-column: 1 / -1; padding: 10px 12px; border-radius: 6px; color: var(--warning); background: color-mix(in srgb, var(--warning) 11%, transparent); font-size: 12px; }
+.audio-plan-warnings ul { margin: 5px 0 0; padding-left: 17px; color: var(--muted); }
 .dialog-icon.route { color: var(--primary); background: var(--primary-soft); }
 .account-indicator-consent { width: min(620px,100%); }
 .svp-route-dialog { width: min(700px,100%); max-height: min(760px,calc(100vh - 48px)); grid-template-rows: auto auto auto auto minmax(0,1fr) auto; overflow: hidden; }
@@ -1295,6 +1350,8 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
   .svp-route-candidate > button, .svp-route-candidate > p, .route-missing { grid-column: 1; grid-row: auto; }
   .route-candidate-heading { grid-template-columns: auto minmax(0,1fr); }
   .route-match { grid-column: 2; }
+  .audio-action-grid { grid-template-columns: 1fr; }
+  .audio-metadata { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .ai-provider-picker-dialog { max-height: calc(100vh - 24px); }
 }
 @media (max-width: 700px) {
@@ -1322,6 +1379,10 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
   .ai-provider-auth-row > button { width: 100%; }
   .ai-provider-account { grid-template-columns: auto minmax(0,1fr); }
   .ai-provider-account > button { grid-column: 2; justify-self: start; }
+  .audio-runtime-card, .audio-probe-heading, .audio-job-heading { align-items: flex-start; flex-direction: column; }
+  .audio-metadata { grid-template-columns: 1fr; }
+  .audio-plan-details > div { grid-template-columns: 1fr; gap: 3px; }
+  .audio-artifact-actions > button, .audio-artifact-actions audio { width: 100%; }
   .chat-header-actions { align-items: center; flex-direction: row; gap: 6px; }
   .chat-model-button { max-width: calc(100vw - 142px); }
   .chat-work-mode button { min-width: 42px; padding-inline: 7px; }
