@@ -151,7 +151,7 @@ jobs:
           {
             echo "## 更新内容"
             echo
-            git log "$range" --pretty=format:'- %s ([`%h`](https://github.com/${{ github.repository }}/commit/%H))'
+            git log "$range" --pretty=format:"- %s ([\`%h\`](https://github.com/${GITHUB_REPOSITORY}/commit/%H))"
             echo
             if [[ -n "$previous_tag" ]]; then
               echo

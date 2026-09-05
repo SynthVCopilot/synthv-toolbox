@@ -10,24 +10,41 @@ license = "Apache-2.0"
 name = "synthv_toolbox_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[test]]
+name = "agent-file-approval"
+path = "../../../test/agent_file_approval.rs"
+
+[[test]]
+name = "credential-balancer"
+path = "../../../test/credential_balancer.rs"
+
+[[test]]
+name = "provider-runtime-adapters"
+path = "../../../test/provider_runtime_adapters.rs"
+
+[[test]]
+name = "models-dev-runtime-catalog"
+path = "../../../test/models_dev_runtime_catalog.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 cc = "1"
 
 [dependencies]
+axum = "0.8"
 tauri = { version = "2.11.5", features = ["tray-icon"] }
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 semver = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "process", "io-util", "sync", "macros", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "process", "io-util", "sync", "macros", "time", "net"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 uuid = { version = "1.26.0", features = ["v4"] }
 sha2 = "0.10"
 base64 = "0.22"
 url = "2"
 keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sync-secret-service"] }
-ureq = { version = "2", features = ["json"] }
+ureq = { version = "2", features = ["cookies", "json"] }
 pinyin = "0.11.0"
 blowfish = { version = "0.9", features = ["zeroize"] }
 zeroize = "1.9"

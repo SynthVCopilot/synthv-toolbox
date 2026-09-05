@@ -39,50 +39,78 @@ const MEDIA_FETCHER_MACOS_SHA256: &str =
     "0f192b7ec147ab6288885d6351d9ab67367640029b4377576ef46dd79cf7b202";
 const MEDIA_FETCHER_WINDOWS_SHA256: &str =
     "66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a";
-static COMPONENT_MUTATING: AtomicBool = AtomicBool::new(false);
-static COMPONENT_USAGE_COUNT: AtomicUsize = AtomicUsize::new(0);
+struct ComponentActivity {
+    mutating: AtomicBool,
+    usage_count: AtomicUsize,
+}
 
-pub(crate) struct ComponentUsageGuard;
+impl ComponentActivity {
+    const fn new() -> Self {
+        Self {
+            mutating: AtomicBool::new(false),
+            usage_count: AtomicUsize::new(0),
+        }
+    }
+}
+
+static COMPONENT_ACTIVITY: ComponentActivity = ComponentActivity::new();
+
+pub(crate) struct ComponentUsageGuard {
+    activity: &'static ComponentActivity,
+}
 
 impl Drop for ComponentUsageGuard {
     fn drop(&mut self) {
-        let previous = COMPONENT_USAGE_COUNT.fetch_sub(1, Ordering::SeqCst);
+        let previous = self.activity.usage_count.fetch_sub(1, Ordering::SeqCst);
         debug_assert!(previous > 0, "component usage counter underflowed");
     }
 }
 
-struct ComponentMutationGuard;
+struct ComponentMutationGuard {
+    activity: &'static ComponentActivity,
+}
 
 impl Drop for ComponentMutationGuard {
     fn drop(&mut self) {
-        COMPONENT_MUTATING.store(false, Ordering::SeqCst);
+        self.activity.mutating.store(false, Ordering::SeqCst);
     }
 }
 
 pub(crate) fn component_usage_guard() -> Result<ComponentUsageGuard, String> {
-    if COMPONENT_MUTATING.load(Ordering::SeqCst) {
+    component_usage_guard_for(&COMPONENT_ACTIVITY)
+}
+
+fn component_usage_guard_for(
+    activity: &'static ComponentActivity,
+) -> Result<ComponentUsageGuard, String> {
+    if activity.mutating.load(Ordering::SeqCst) {
         return Err("组件正在安装或删除；请等待当前组件操作完成后重试。".to_string());
     }
-    COMPONENT_USAGE_COUNT.fetch_add(1, Ordering::SeqCst);
-    if COMPONENT_MUTATING.load(Ordering::SeqCst) {
-        COMPONENT_USAGE_COUNT.fetch_sub(1, Ordering::SeqCst);
+    activity.usage_count.fetch_add(1, Ordering::SeqCst);
+    if activity.mutating.load(Ordering::SeqCst) {
+        activity.usage_count.fetch_sub(1, Ordering::SeqCst);
         Err("组件正在安装或删除；请等待当前组件操作完成后重试。".to_string())
     } else {
-        Ok(ComponentUsageGuard)
+        Ok(ComponentUsageGuard { activity })
     }
 }
 
 fn component_mutation_guard() -> ComponentMutationGuard {
-    while COMPONENT_MUTATING
+    component_mutation_guard_for(&COMPONENT_ACTIVITY)
+}
+
+fn component_mutation_guard_for(activity: &'static ComponentActivity) -> ComponentMutationGuard {
+    while activity
+        .mutating
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
     {
         std::thread::yield_now();
     }
-    while COMPONENT_USAGE_COUNT.load(Ordering::SeqCst) != 0 {
+    while activity.usage_count.load(Ordering::SeqCst) != 0 {
         std::thread::sleep(Duration::from_millis(1));
     }
-    ComponentMutationGuard
+    ComponentMutationGuard { activity }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -202,19 +230,8 @@ where
             &components_dir.join(id),
         ),
         "pi-audio" | "cvrs" => {
-            let source = if std::env::var("SYNTHV_TOOLBOX_COMPONENT_SOURCE")
-                .is_ok_and(|value| value.eq_ignore_ascii_case("bundled"))
-            {
-                progress("downloading", 50, "开发模式：使用应用包内的组件源码。");
-                Ok(components_dir.join(id))
-            } else {
-                download_component_source(id, resource_root, &mut progress)
-            };
-            let source = match source {
-                Ok(source) => source,
-                Err(error) => return failed("组件下载失败。", error),
-            };
-            progress("installing", 68, "源码校验完成，正在创建本地运行环境。");
+            let source = components_dir.join(id);
+            progress("installing", 68, "正在从应用包准备组件运行环境。");
             match id {
                 "pi-audio" => install_python_component(id, "pi_audio.py", "audio", true, &source),
                 "cvrs" => install_python_component(id, "cvrs.py", "cvrs", false, &source),
@@ -870,8 +887,6 @@ where
         );
     }
     let payload = ComponentPayload {
-        name: FFMPEG_ARCHIVE_NAME,
-        relative_url: "",
         sha256: FFMPEG_ARCHIVE_SHA256,
     };
     let archive = cache.join(FFMPEG_ARCHIVE_NAME);
@@ -1307,8 +1322,6 @@ where
         &format!("正在下载 Sandboxie Plus {SANDBOXIE_VERSION} 官方安装包。"),
     );
     let payload = ComponentPayload {
-        name: SANDBOXIE_INSTALLER_NAME,
-        relative_url: "",
         sha256: SANDBOXIE_INSTALLER_SHA256,
     };
     if let Err(error) = download_verified_file(
@@ -1457,32 +1470,9 @@ fn install_python_component(
     )
 }
 
-const PI_AGENT_COMPONENT_REVISION: &str = "f4d56296d17c30077248fe9f73a13af47a329f62";
-
 struct ComponentPayload {
-    name: &'static str,
-    relative_url: &'static str,
     sha256: &'static str,
 }
-
-const PI_AUDIO_PAYLOADS: &[ComponentPayload] = &[
-    ComponentPayload {
-        name: "pi_audio.py",
-        relative_url: "components/pi-audio/pi_audio.py",
-        sha256: "0e00ccd56c928475a69f39981c1f66298fc15d5249e9e7b6efa673b4ca2a4097",
-    },
-    ComponentPayload {
-        name: "requirements.txt",
-        relative_url: "components/pi-audio/requirements.txt",
-        sha256: "4014ba330a2db128da28ec3782339c474df5fb1f4f0ab70842960cf5c650883e",
-    },
-];
-
-const CVRS_PAYLOADS: &[ComponentPayload] = &[ComponentPayload {
-    name: "cvrs.py",
-    relative_url: "components/cvrs/cvrs.py",
-    sha256: "71383517bdfc4394315592cf97ab2243d6fff89f0caa24ceb2ca560671354f1e",
-}];
 
 fn media_fetcher_asset() -> Option<(&'static str, &'static str, &'static str)> {
     if cfg!(target_os = "macos") {
@@ -1560,11 +1550,7 @@ where
     if let Err(error) = fs::create_dir_all(&cache) {
         return failed("无法创建媒体导入器缓存。", error.to_string());
     }
-    let payload = ComponentPayload {
-        name: asset_name,
-        relative_url: "",
-        sha256,
-    };
+    let payload = ComponentPayload { sha256 };
     progress("downloading", 12, "正在下载固定版本的 yt-dlp。");
     if let Err(error) = download_verified_file(
         source,
@@ -1647,51 +1633,6 @@ where
         format!("媒体导入器 {MEDIA_FETCHER_VERSION} 已安装。"),
         format!("安装位置：{}", target.display()),
     )
-}
-
-fn download_component_source<F>(
-    id: &str,
-    _resource_root: &Path,
-    progress: &mut F,
-) -> Result<PathBuf, String>
-where
-    F: FnMut(&str, u8, &str),
-{
-    let payloads = match id {
-        "pi-audio" => PI_AUDIO_PAYLOADS,
-        "cvrs" => CVRS_PAYLOADS,
-        _ => return Err("该组件没有受信任的固定下载清单。".to_string()),
-    };
-    let cache = data_root()
-        .join("downloads")
-        .join(id)
-        .join(PI_AGENT_COMPONENT_REVISION);
-    fs::create_dir_all(&cache).map_err(|error| format!("无法创建组件下载缓存：{error}"))?;
-    for (index, payload) in payloads.iter().enumerate() {
-        let start = 8 + ((index * 48) / payloads.len()) as u8;
-        progress(
-            "downloading",
-            start,
-            &format!("正在下载 {}。", payload.name),
-        );
-        let url = format!(
-            "https://raw.githubusercontent.com/SynthVCopilot/pi-agent/{PI_AGENT_COMPONENT_REVISION}/{}",
-            payload.relative_url
-        );
-        download_verified_file(
-            &url,
-            &cache.join(payload.name),
-            payload.sha256,
-            MAX_COMPONENT_DOWNLOAD_BYTES,
-        )?;
-        let complete = 8 + (((index + 1) * 48) / payloads.len()) as u8;
-        progress(
-            "downloading",
-            complete,
-            &format!("{} 已通过 SHA-256 校验。", payload.name),
-        );
-    }
-    Ok(cache)
 }
 
 fn download_verified_file(
@@ -1896,6 +1837,12 @@ fn find_python() -> Option<PythonCommand> {
     }
     #[cfg(windows)]
     candidates.push(PythonCommand::with_args("py", ["-3.11"]));
+    #[cfg(not(windows))]
+    candidates.extend([
+        PythonCommand::new("/opt/homebrew/bin/python3.11"),
+        PythonCommand::new("/usr/local/bin/python3.11"),
+        PythonCommand::new("python3.11"),
+    ]);
     candidates.extend([PythonCommand::new("python"), PythonCommand::new("python3")]);
     candidates.into_iter().find(PythonCommand::is_python_311)
 }
@@ -2229,24 +2176,25 @@ mod tests {
     fn component_usage_guard_excludes_install_or_remove_writer() {
         fn assert_send<T: Send>() {}
         assert_send::<ComponentUsageGuard>();
-        let usage_guard = component_usage_guard().unwrap();
+        let activity: &'static ComponentActivity = Box::leak(Box::new(ComponentActivity::new()));
+        let usage_guard = component_usage_guard_for(activity).unwrap();
         let started = std::sync::Arc::new(AtomicBool::new(false));
         let acquired = std::sync::Arc::new(AtomicBool::new(false));
         let thread_started = started.clone();
         let thread_acquired = acquired.clone();
         let writer = std::thread::spawn(move || {
             thread_started.store(true, Ordering::SeqCst);
-            let _guard = component_mutation_guard();
+            let _guard = component_mutation_guard_for(activity);
             thread_acquired.store(true, Ordering::SeqCst);
         });
         while !started.load(Ordering::SeqCst) {
             std::thread::yield_now();
         }
-        while !COMPONENT_MUTATING.load(Ordering::SeqCst) {
+        while !activity.mutating.load(Ordering::SeqCst) {
             std::thread::yield_now();
         }
         assert!(!acquired.load(Ordering::SeqCst));
-        assert!(component_usage_guard().is_err());
+        assert!(component_usage_guard_for(activity).is_err());
         drop(usage_guard);
         writer.join().unwrap();
         assert!(acquired.load(Ordering::SeqCst));

@@ -1,7 +1,19 @@
 export type AppMode = "toolbox" | "ai";
 export type AgentWorkMode = "edit" | "solo";
+export interface AgentFileApproval { id: string; path: string; purpose: string; createdAtUtc: string; }
 
-export type AiProviderId = "anthropic" | "openai-codex";
+export type AiProviderId = "anthropic" | "openai-codex" | "workbuddy" | "traecode";
+export type AiAuthMethod = "oauth" | "api-key";
+export type ModelCatalogSource = "models-dev" | "built-in-fallback";
+
+export interface AiApiKeySummary {
+  id: string;
+  label: string;
+  models: string[];
+  healthy: boolean;
+  cooldownUntilUtc: string | null;
+  createdAtUtc: string;
+}
 
 export interface AiProviderAccountSummary {
   id: string;
@@ -21,13 +33,22 @@ export interface AiProviderSummary {
   totalAccounts: number;
   model: string;
   models: string[];
+  oauthModels: string[];
+  apiKeyModels: string[];
   accounts: AiProviderAccountSummary[];
+  apiKeys: AiApiKeySummary[];
+  authMethods: AiAuthMethod[];
+  available: boolean;
+  unavailableReason: string | null;
 }
 
 export interface ModelSummary {
   activeProvider: AiProviderId;
   legacyConfigured: boolean;
   providers: AiProviderSummary[];
+  catalogSource: ModelCatalogSource;
+  catalogGeneratedAt: number;
+  catalogError: string | null;
 }
 
 export interface OpenCodeCatalogProvider {
@@ -35,6 +56,7 @@ export interface OpenCodeCatalogProvider {
   name: string;
   modelCount: number;
   package: string;
+  models: string[];
 }
 
 export interface OpenCodeCatalog {
@@ -48,6 +70,16 @@ export interface McpServerConfig {
   command: string;
   args: string[];
   enabled: boolean;
+}
+
+export interface HttpApiStatus {
+  enabled: boolean;
+  agentEnabled: boolean;
+  running: boolean;
+  port: number;
+  endpoint: string | null;
+  agentEndpoint: string | null;
+  lastError: string | null;
 }
 
 export interface SynthVInstallation {

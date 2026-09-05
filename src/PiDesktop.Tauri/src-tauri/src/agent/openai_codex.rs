@@ -18,6 +18,7 @@ use super::{
 };
 
 const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
+const API_KEY_BASE_URL: &str = "https://api.openai.com";
 const DEFAULT_INSTRUCTIONS: &str = "You are a helpful assistant.";
 const MAX_SSE_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_SSE_EVENT_BYTES: usize = 8 * 1024 * 1024;
@@ -38,8 +39,12 @@ pub struct OpenAiCodexConfig {
     pub base_url: String,
     /// Short-lived OAuth access token. Refreshing it is the caller's job.
     pub access_token: String,
-    /// Account id belonging to the access token.
-    pub account_id: String,
+    /// Account id belonging to the OAuth access token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+    /// OAuth subscription and Platform API keys use distinct endpoints and headers.
+    #[serde(default)]
+    pub auth_mode: OpenAiAuthMode,
     /// Codex model id.
     pub model: String,
     /// Optional instructions prepended to System messages in the conversation.
@@ -57,11 +62,21 @@ impl fmt::Debug for OpenAiCodexConfig {
             .field("base_url", &self.base_url)
             .field("access_token", &"[redacted]")
             .field("account_id", &self.account_id)
+            .field("auth_mode", &self.auth_mode)
             .field("model", &self.model)
             .field("instructions", &self.instructions)
             .field("timeout_secs", &self.timeout_secs)
             .finish()
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OpenAiAuthMode {
+    #[default]
+    #[serde(rename = "oauth")]
+    OAuth,
+    ApiKey,
 }
 
 impl Drop for OpenAiCodexConfig {
@@ -79,7 +94,20 @@ impl OpenAiCodexConfig {
         Self {
             base_url: default_base_url(),
             access_token: access_token.into(),
-            account_id: account_id.into(),
+            account_id: Some(account_id.into()),
+            auth_mode: OpenAiAuthMode::OAuth,
+            model: model.into(),
+            instructions: None,
+            timeout_secs: default_timeout_secs(),
+        }
+    }
+
+    pub fn api_key(api_key: impl Into<String>, model: impl Into<String>) -> Self {
+        Self {
+            base_url: API_KEY_BASE_URL.to_string(),
+            access_token: api_key.into(),
+            account_id: None,
+            auth_mode: OpenAiAuthMode::ApiKey,
             model: model.into(),
             instructions: None,
             timeout_secs: default_timeout_secs(),
@@ -88,12 +116,25 @@ impl OpenAiCodexConfig {
 
     fn responses_url(&self) -> String {
         let base = self.base_url.trim().trim_end_matches('/');
-        if base.ends_with("/codex/responses") {
-            base.to_string()
-        } else if base.ends_with("/codex") {
-            format!("{base}/responses")
-        } else {
-            format!("{base}/codex/responses")
+        match self.auth_mode {
+            OpenAiAuthMode::OAuth => {
+                if base.ends_with("/codex/responses") {
+                    base.to_string()
+                } else if base.ends_with("/codex") {
+                    format!("{base}/responses")
+                } else {
+                    format!("{base}/codex/responses")
+                }
+            }
+            OpenAiAuthMode::ApiKey => {
+                if base.ends_with("/v1/responses") {
+                    base.to_string()
+                } else if base.ends_with("/v1") {
+                    format!("{base}/responses")
+                } else {
+                    format!("{base}/v1/responses")
+                }
+            }
         }
     }
 }
@@ -117,22 +158,30 @@ impl OpenAiCodexProvider {
         if token.is_empty() {
             return Err(AgentError::new("Codex OAuth access token is empty"));
         }
-        let account_id = self.config.account_id.trim();
-        if account_id.is_empty() {
-            return Err(AgentError::new("ChatGPT account id is empty"));
-        }
-        Ok(vec![
+        let mut headers = vec![
             ("Authorization", format!("Bearer {token}")),
-            ("chatgpt-account-id", account_id.to_string()),
-            ("originator", "pi".to_string()),
-            ("OpenAI-Beta", "responses=experimental".to_string()),
             ("accept", "text/event-stream".to_string()),
             ("content-type", "application/json".to_string()),
             (
                 "User-Agent",
                 format!("synthv-toolbox/{}", env!("CARGO_PKG_VERSION")),
             ),
-        ])
+        ];
+        if self.config.auth_mode == OpenAiAuthMode::OAuth {
+            let account_id = self
+                .config
+                .account_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| AgentError::new("ChatGPT account id is empty"))?;
+            headers.extend([
+                ("chatgpt-account-id", account_id.to_string()),
+                ("originator", "pi".to_string()),
+                ("OpenAI-Beta", "responses=experimental".to_string()),
+            ]);
+        }
+        Ok(headers)
     }
 
     fn build_request(
@@ -644,6 +693,26 @@ mod tests {
         assert_eq!(headers["originator"], "pi");
         assert_eq!(headers["accept"], "text/event-stream");
         assert_eq!(headers["OpenAI-Beta"], "responses=experimental");
+    }
+
+    #[test]
+    fn api_key_uses_platform_responses_without_subscription_headers() {
+        let provider =
+            OpenAiCodexProvider::new(OpenAiCodexConfig::api_key("platform-secret", "gpt-5.4"));
+        assert_eq!(
+            provider.config.responses_url(),
+            "https://api.openai.com/v1/responses"
+        );
+        let headers = provider
+            .request_headers()
+            .expect("valid API key")
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(headers["Authorization"], "Bearer platform-secret");
+        assert!(!headers.contains_key("chatgpt-account-id"));
+        assert!(!headers.contains_key("originator"));
+        assert!(!headers.contains_key("OpenAI-Beta"));
+        assert!(!format!("{:?}", provider.config).contains("platform-secret"));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use tokio::runtime::Handle;
@@ -19,6 +20,21 @@ use http_client::McpHttpClient;
 enum ManagedClient {
     Stdio(Box<McpStdioClient>),
     Http(McpHttpClient),
+}
+
+const MCP_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(8);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SynthVConnectionProfile {
+    NativeFlat,
+    LegacyBridge,
+    OfficialBridge,
+}
+
+#[derive(Clone)]
+struct SynthVHostBinding {
+    server_id: String,
+    profile: SynthVConnectionProfile,
 }
 
 impl ManagedClient {
@@ -74,7 +90,8 @@ pub struct McpToolBinding {
 #[derive(Default)]
 pub struct McpManager {
     servers: Mutex<HashMap<String, ConnectedServer>>,
-    synthv_hosts: Mutex<HashMap<String, String>>,
+    synthv_hosts: Mutex<HashMap<String, SynthVHostBinding>>,
+    legacy_connecting_host: Mutex<Option<String>>,
 }
 
 impl McpManager {
@@ -202,13 +219,16 @@ impl McpManager {
         client: ManagedClient,
         agent_visible: bool,
     ) -> Result<Vec<String>, String> {
-        client
-            .initialize("synthv-toolbox", env!("CARGO_PKG_VERSION"))
+        tokio::time::timeout(
+            MCP_HANDSHAKE_TIMEOUT,
+            client.initialize("synthv-toolbox", env!("CARGO_PKG_VERSION")),
+        )
+        .await
+        .map_err(|_| format!("{name} MCP 握手超时。"))?
+        .map_err(|error| format!("{name} MCP 握手失败：{error}"))?;
+        let listed = tokio::time::timeout(MCP_HANDSHAKE_TIMEOUT, client.list_tools())
             .await
-            .map_err(|error| format!("{name} MCP 握手失败：{error}"))?;
-        let listed = client
-            .list_tools()
-            .await
+            .map_err(|_| format!("{name} MCP 工具枚举超时。"))?
             .map_err(|error| format!("{name} 无法列出工具：{error}"))?;
         let tools = parse_tools(&id, &name, &listed);
         if tools.is_empty() {
@@ -234,27 +254,82 @@ impl McpManager {
         self.synthv_hosts
             .lock()
             .await
-            .retain(|_, server_id| server_id != id);
+            .retain(|_, binding| binding.server_id != id);
     }
 
     pub async fn is_connected(&self, id: &str) -> bool {
         self.servers.lock().await.contains_key(id)
     }
 
-    pub async fn bind_synthv_host(&self, host_id: String, server_id: String) {
+    pub async fn bind_synthv_host(
+        &self,
+        host_id: String,
+        server_id: String,
+        profile: SynthVConnectionProfile,
+    ) {
         let mut hosts = self.synthv_hosts.lock().await;
-        hosts.retain(|bound_host, bound_server| {
-            bound_host != &host_id && bound_server != &server_id
-        });
-        hosts.insert(host_id, server_id);
+        hosts
+            .retain(|bound_host, binding| bound_host != &host_id && binding.server_id != server_id);
+        hosts.insert(host_id, SynthVHostBinding { server_id, profile });
     }
 
     pub async fn synthv_server_id(&self, host_id: &str) -> Option<String> {
-        self.synthv_hosts.lock().await.get(host_id).cloned()
+        self.synthv_hosts
+            .lock()
+            .await
+            .get(host_id)
+            .map(|binding| binding.server_id.clone())
+    }
+
+    pub async fn synthv_connection_profile(
+        &self,
+        host_id: &str,
+    ) -> Option<SynthVConnectionProfile> {
+        self.synthv_hosts
+            .lock()
+            .await
+            .get(host_id)
+            .map(|binding| binding.profile)
+    }
+
+    pub async fn reserve_legacy_synthv_host(&self, host_id: &str) -> Result<(), String> {
+        let hosts = self.synthv_hosts.lock().await;
+        if let Some((existing, _)) = hosts
+            .iter()
+            .find(|(_, binding)| binding.profile == SynthVConnectionProfile::LegacyBridge)
+        {
+            return Err(if existing == host_id {
+                "所选 SynthV 宿主连接未完成。".to_string()
+            } else {
+                "另一个 SynthV 宿主正在使用兼容连接，无法同时连接。".to_string()
+            });
+        }
+        let mut connecting = self.legacy_connecting_host.lock().await;
+        if let Some(existing) = connecting.as_deref() {
+            return Err(if existing == host_id {
+                "所选 SynthV 宿主连接未完成。".to_string()
+            } else {
+                "另一个 SynthV 宿主正在使用兼容连接，无法同时连接。".to_string()
+            });
+        }
+        *connecting = Some(host_id.to_string());
+        Ok(())
+    }
+
+    pub async fn release_legacy_synthv_host(&self, host_id: &str) {
+        let mut connecting = self.legacy_connecting_host.lock().await;
+        if connecting.as_deref() == Some(host_id) {
+            *connecting = None;
+        }
     }
 
     pub async fn connected_synthv_hosts(&self) -> HashMap<String, String> {
-        self.synthv_hosts.lock().await.clone()
+        self.synthv_hosts
+            .lock()
+            .await
+            .iter()
+            .map(|(host_id, binding)| (host_id.clone(), binding.server_id.clone()))
+            .collect()
     }
 
     pub async fn call_server_tool(

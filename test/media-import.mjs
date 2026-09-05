@@ -17,6 +17,8 @@ const main = read(join(webRoot, "main.ts"));
 assert.match(media, /bilibili\.com/);
 assert.match(media, /youtube\.com/);
 assert.match(media, /b23\.tv/);
+assert.match(media, /video\/\{source\}\//);
+assert.match(media, /parsed\.path\(\)\.starts_with\("\/video\/BV"\)/);
 assert.match(media, /--ignore-config/);
 assert.match(media, /--no-playlist/);
 assert.match(media, /--no-remote-components/);
