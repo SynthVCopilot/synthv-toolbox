@@ -483,9 +483,7 @@ impl Sv2ProfileService {
                 .map_err(|error| format!("无法将导入数据移入账号槽位：{error}"))?;
             journal.phase = SwitchPhase::CurrentParked;
             save_journal(paths, &journal)?;
-            if let Err(error) = create_canonical_junction(paths, &id) {
-                return Err(error);
-            }
+            create_canonical_junction(paths, &id)?;
             journal.phase = SwitchPhase::TargetActivated;
             save_journal(paths, &journal)?;
             journal.phase = SwitchPhase::Committed;
@@ -669,7 +667,7 @@ impl Sv2ProfileService {
                     if !is_reparse_metadata(&metadata) {
                         return Err("当前账号目录不是工具箱创建的链接；不会删除。".to_string());
                     }
-                    junction::delete(&paths.canonical)
+                    fs::remove_dir(&paths.canonical)
                         .map_err(|error| format!("无法移除当前账号链接：{error}"))?;
                     manifest.active_slot_id = None;
                 }
@@ -782,6 +780,7 @@ impl Sv2ProfileService {
         recover_if_needed(paths)?;
         reject_blockers(paths)?;
         let mut manifest = load_manifest(paths)?;
+        converge_legacy_sandboxes(paths, &manifest)?;
         switch_slot(paths, &mut manifest, &slot_id)?;
         build_state(paths, &manifest, false, String::new())
     }
@@ -874,11 +873,7 @@ impl Sv2ProfileService {
         if !manifest.slots.iter().any(|slot| slot.id == slot_id) {
             return Err("找不到该 SV2 槽位。".to_string());
         }
-        let path = if manifest.active_slot_id.as_deref() == Some(slot_id.as_str()) {
-            paths.canonical.clone()
-        } else {
-            paths.parked(&slot_id)
-        };
+        let path = slot_data_root(paths, &manifest, &slot_id);
         if !path.is_dir() {
             return Err("槽位数据目录不存在。".to_string());
         }
@@ -972,7 +967,9 @@ impl Sv2ProfileService {
         let provider = detect_concurrent_provider()?;
         let data_root = slot_data_root(paths, &manifest, &slot_id);
         verify_marker(&data_root, &slot_id)?;
-        let already_running = !slot_running_pids(&provider, &paths.vault, &slot_id)?.is_empty();
+        let already_running = !slot_running_pids(&provider, &paths.vault, &slot_id)?.is_empty()
+            || (manifest.active_slot_id.as_deref() == Some(slot_id.as_str())
+                && !detect_blockers(paths).is_empty());
         sync_defaults_before_launch(paths, &manifest, &slot_id, already_running)?;
         let session_preparation = if already_running {
             SessionLaunchPreparation::default()
@@ -1050,7 +1047,7 @@ fn resolve_sync_roots(
                 .concurrent_content
                 .resolve(manifest.concurrent_defaults);
             let view = concurrent_slot_view(&paths.vault, &slot.id, Some(&provider), content);
-            if !view.running_pids.is_empty() {
+            if !view.ready || !view.running_pids.is_empty() {
                 return Err(format!(
                     "账号“{}”的隔离实例正在运行；请关闭后再同步资源。",
                     slot.display_name
@@ -1142,98 +1139,60 @@ fn enrich_account_probes(
     refresh_sensitive_probe: bool,
     refresh_slot_id: Option<&str>,
 ) {
-    let normal_environment_blocked = !state.blockers.is_empty();
-    let mut targets = Vec::<(usize, bool, PathBuf, bool, String)>::new();
-    for (index, slot) in state.slots.iter().enumerate() {
-        let normal_root = PathBuf::from(&slot.data_path);
-        let normal_source_in_use = (slot.is_active && normal_environment_blocked)
-            || slot.session_protection.recovery_pending();
-        targets.push((
-            index,
-            false,
-            normal_root,
-            normal_source_in_use,
-            slot.id.clone(),
-        ));
-        if !slot.concurrent.ready {
-            continue;
-        }
-        #[cfg(windows)]
-        if let Ok(root) = concurrent_folder(&_paths.vault, &slot.id) {
-            targets.push((
-                index,
-                true,
-                root,
-                !slot.concurrent.running_pids.is_empty()
-                    || slot.concurrent_session_protection.recovery_pending(),
-                slot.id.clone(),
-            ));
-        }
-    }
-
-    let mut views = targets
+    let roots = state
+        .slots
         .iter()
-        .map(|(_, concurrent, root, source_in_use, slot_id)| {
-            cached_sv2_account_probe_for_account(root, *source_in_use, slot_id, *concurrent)
+        .map(|slot| PathBuf::from(&slot.data_path))
+        .collect::<Vec<_>>();
+    let running = state
+        .slots
+        .iter()
+        .map(|slot| {
+            (slot.is_active && !state.blockers.is_empty())
+                || !slot.concurrent.running_pids.is_empty()
+                || (state.concurrent_provider.available && !slot.concurrent.ready)
+                || slot.session_protection.recovery_pending()
+        })
+        .collect::<Vec<_>>();
+    let mut views = state
+        .slots
+        .iter()
+        .enumerate()
+        .map(|(index, slot)| {
+            cached_sv2_account_probe_for_account(&roots[index], running[index], &slot.id, false)
         })
         .collect::<Vec<_>>();
     if refresh_sensitive_probe {
-        // Use the prepared Sandboxie root as authority so a stale fallback copy cannot fail the account refresh.
-        let mut selected = Vec::new();
-        for slot_index in 0..state.slots.len() {
-            let slot_id = &state.slots[slot_index].id;
-            if refresh_slot_id.is_some_and(|selected_slot_id| selected_slot_id != slot_id) {
-                continue;
-            }
-            let authority = targets
-                .iter()
-                .enumerate()
-                .find(|(_, (index, concurrent, _, _, _))| *index == slot_index && *concurrent)
-                .or_else(|| {
-                    targets
-                        .iter()
-                        .enumerate()
-                        .find(|(_, (index, _, _, _, _))| *index == slot_index)
-                });
-            if let Some(authority) = authority {
-                selected.push(authority);
-            }
-        }
+        let selected = state
+            .slots
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| refresh_slot_id.is_none_or(|id| id == slot.id))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
         let requests = selected
             .iter()
-            .map(
-                |(_, (slot_index, concurrent, root, source_in_use, slot_id))| {
-                    Sv2AccountProbeRequest::for_account(
-                        root,
-                        *source_in_use,
-                        *slot_index,
-                        !*concurrent,
-                        slot_id,
-                        *concurrent,
-                    )
-                },
-            )
+            .map(|&index| {
+                Sv2AccountProbeRequest::for_account(
+                    &roots[index],
+                    running[index],
+                    index,
+                    true,
+                    &state.slots[index].id,
+                    false,
+                )
+            })
             .collect::<Vec<_>>();
-        for ((view_index, (slot_index, _, _, _, _)), refreshed) in selected
+        for (index, view) in selected
             .into_iter()
             .zip(refresh_sv2_account_probes(&requests))
         {
-            views[view_index] = refreshed.clone();
-            // Account status follows the selected launch authority while ordinary startup remains a fallback.
-            for (target_index, (index, _, _, _, _)) in targets.iter().enumerate() {
-                if index == slot_index {
-                    views[target_index] = refreshed.clone();
-                }
-            }
+            views[index] = view;
         }
     }
-
-    for ((slot_index, concurrent, _, _, _), view) in targets.into_iter().zip(views) {
-        if concurrent {
-            state.slots[slot_index].concurrent_account_probe = view;
-        } else {
-            state.slots[slot_index].account_probe = view;
-        }
+    for (slot, view) in state.slots.iter_mut().zip(views) {
+        slot.account_probe = view.clone();
+        slot.concurrent_account_probe = view;
     }
 
     for slot in &mut state.slots {
@@ -1341,10 +1300,6 @@ fn build_account_precheck(state: &Sv2ProfilesState) -> Sv2AccountPrecheck {
     }
 }
 
-/// Ordinary and Sandboxie roots are separate filesystems, but they represent
-/// one account slot.  Account-level summaries must therefore use the strongest
-/// usable result instead of reporting one stale copy as if the whole account
-/// had signed out.  Environment-specific routing still consumes both probes.
 fn preferred_account_probe(slot: &Sv2ProfileSlotView) -> &Sv2AccountProbeView {
     if !slot.concurrent.ready
         || account_probe_rank(&slot.account_probe)
@@ -1498,7 +1453,7 @@ fn switch_slot(
 ) -> Result<(), String> {
     #[cfg(windows)]
     {
-        return switch_slot_windows(paths, manifest, target_slot_id);
+        switch_slot_windows(paths, manifest, target_slot_id)
     }
     #[cfg(target_os = "macos")]
     {
@@ -1608,7 +1563,7 @@ fn switch_slot_windows(
             if resolved != expected {
                 return Err("官方数据目录链接未指向当前账号槽位；不会覆盖。".to_string());
             }
-            junction::delete(&paths.canonical)
+            fs::remove_dir(&paths.canonical)
                 .map_err(|error| format!("无法切换当前账号链接：{error}"))?;
             journal.phase = SwitchPhase::CurrentParked;
             save_journal(paths, &journal)?;
@@ -1647,7 +1602,7 @@ fn switch_slot_windows(
 fn create_canonical_junction(paths: &SlotPaths, slot_id: &str) -> Result<(), String> {
     let target = paths.parked(slot_id);
     verify_marker(&target, slot_id)?;
-    if paths.canonical.exists() {
+    if fs::symlink_metadata(&paths.canonical).is_ok() {
         return Err("官方数据目录已存在；不会覆盖。".to_string());
     }
     let parent = paths
@@ -1741,37 +1696,60 @@ fn recover_if_needed(paths: &SlotPaths) -> Result<(), String> {
         return Err("发现不受支持的槽位切换日志版本。".to_string());
     }
     validate_slot_id(&journal.target_slot_id)?;
-    let target = paths.parked(&journal.target_slot_id);
-    verify_marker(&target, &journal.target_slot_id)?;
-    if journal.phase == SwitchPhase::Prepared {
-        if let Some(current) = journal.current_slot_id.as_deref() {
-            if paths.canonical.exists() {
-                verify_marker(&paths.canonical, current)?;
-                remove_journal(paths)?;
-                return Ok(());
-            }
-        }
+    if let Some(current) = &journal.current_slot_id {
+        validate_slot_id(current)?;
     }
-    if paths.canonical.exists() {
-        let metadata = fs::symlink_metadata(&paths.canonical)
-            .map_err(|error| format!("无法检查官方数据目录：{error}"))?;
-        if !is_reparse_metadata(&metadata) {
-            return Err("切换日志存在，但官方数据目录不是受管链接。".to_string());
-        }
-        let resolved = paths
+    let mut manifest = load_manifest(paths)?;
+    if !manifest
+        .slots
+        .iter()
+        .any(|slot| slot.id == journal.target_slot_id)
+    {
+        return Err("切换日志的目标账号不在清单中。".to_string());
+    }
+    let target = paths.parked(&journal.target_slot_id);
+    reject_reparse_point(&target)?;
+    if !target.exists()
+        && journal.phase == SwitchPhase::Prepared
+        && journal.current_slot_id.is_none()
+    {
+        reject_reparse_point(&paths.canonical)?;
+        verify_marker(&paths.canonical, &journal.target_slot_id)?;
+        reject_blockers(paths)?;
+        fs::create_dir_all(&paths.slots).map_err(|error| error.to_string())?;
+        fs::rename(&paths.canonical, &target)
+            .map_err(|error| format!("无法恢复导入账号目录：{error}"))?;
+    }
+    verify_marker(&target, &journal.target_slot_id)?;
+    if fs::symlink_metadata(&paths.canonical).is_ok() {
+        let actual = paths
             .canonical
             .canonicalize()
-            .map_err(|error| format!("无法解析官方数据目录链接：{error}"))?;
-        let expected = target
-            .canonicalize()
-            .map_err(|error| format!("无法解析目标账号目录：{error}"))?;
-        if resolved != expected {
+            .map_err(|error| format!("无法解析当前账号链接：{error}"))?;
+        let expected = target.canonicalize().map_err(|error| error.to_string())?;
+        if actual != expected {
+            if journal.phase == SwitchPhase::Prepared {
+                if let Some(current) = journal.current_slot_id.as_deref() {
+                    let current_root = paths.parked(current);
+                    verify_marker(&current_root, current)?;
+                    if actual
+                        == current_root
+                            .canonicalize()
+                            .map_err(|error| error.to_string())?
+                    {
+                        remove_journal(paths)?;
+                        return Ok(());
+                    }
+                }
+            }
             return Err("切换日志存在，但官方数据目录链接目标不一致。".to_string());
+        }
+        if !junction::exists(&paths.canonical).map_err(|error| error.to_string())? {
+            return Err("切换日志存在，但官方数据目录不是受管链接。".to_string());
         }
     } else {
         create_canonical_junction(paths, &journal.target_slot_id)?;
     }
-    let mut manifest = load_manifest(paths)?;
     manifest.active_slot_id = Some(journal.target_slot_id.clone());
     if let Some(slot) = manifest
         .slots
@@ -1988,6 +1966,16 @@ fn replace_file(source: &Path, target: &Path) -> std::io::Result<()> {
     use windows_sys::Win32::Storage::FileSystem::{
         MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
     };
+    let source = source.canonicalize()?;
+    let target = target
+        .parent()
+        .ok_or_else(|| std::io::Error::other("Missing parent"))?
+        .canonicalize()?
+        .join(
+            target
+                .file_name()
+                .ok_or_else(|| std::io::Error::other("Missing filename"))?,
+        );
     let source = source
         .as_os_str()
         .encode_wide()
@@ -2061,129 +2049,240 @@ fn acquire_switch_lock(paths: &SlotPaths) -> Result<File, String> {
 
 #[cfg(windows)]
 fn converge_legacy_sandboxes(paths: &SlotPaths, manifest: &SlotManifest) -> Result<(), String> {
-    if !detect_blockers(paths).is_empty() {
-        return Ok(());
-    }
-    if let Some(active) = manifest.active_slot_id.as_deref() {
-        let destination = paths.parked(active);
-        if paths.canonical.exists() {
-            let metadata = fs::symlink_metadata(&paths.canonical)
-                .map_err(|error| format!("无法检查官方数据目录：{error}"))?;
-            if !is_reparse_metadata(&metadata) {
-                verify_marker(&paths.canonical, active)?;
-                if destination.exists() {
-                    return Err(
-                        "当前官方数据目录与固定槽位目录同时存在，无法确认权威数据。".to_string()
-                    );
-                }
-                fs::create_dir_all(&paths.slots)
-                    .map_err(|error| format!("无法创建槽位目录：{error}"))?;
-                fs::rename(&paths.canonical, &destination)
-                    .map_err(|error| format!("无法收敛当前官方数据目录：{error}"))?;
-                if let Err(error) = create_canonical_junction(paths, active) {
-                    let _ = fs::rename(&destination, &paths.canonical);
-                    return Err(error);
+    let pending = slot_convergence_plan(paths, manifest)?;
+    let canonical_needs_move = fs::symlink_metadata(&paths.canonical)
+        .is_ok_and(|metadata| !is_reparse_metadata(&metadata))
+        && manifest.active_slot_id.is_some();
+    let shared_links = manifest
+        .slots
+        .iter()
+        .map(|slot| {
+            let root =
+                if manifest.active_slot_id.as_deref() == Some(&slot.id) && canonical_needs_move {
+                    paths.canonical.clone()
+                } else {
+                    paths.parked(&slot.id)
+                };
+            is_shared_database_link(&root.join("databases"), &paths.shared_databases)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if canonical_needs_move || !pending.is_empty() || shared_links.iter().any(|shared| *shared) {
+        reject_blockers(paths)?;
+        if let Ok(provider) = detect_concurrent_provider() {
+            for slot in &manifest.slots {
+                if !slot_running_pids(&provider, &paths.vault, &slot.id)?.is_empty() {
+                    return Err("请关闭所有 SV2 实例后完成账号数据目录整理。".to_string());
                 }
             }
         }
     }
+    apply_slot_convergence(paths, manifest, pending)
+}
+
+#[cfg(windows)]
+struct SlotConvergence {
+    slot_id: String,
+    legacy_root: PathBuf,
+    source: PathBuf,
+    archive: PathBuf,
+}
+
+#[cfg(windows)]
+fn slot_convergence_plan(
+    paths: &SlotPaths,
+    manifest: &SlotManifest,
+) -> Result<Vec<SlotConvergence>, String> {
+    validate_managed_roots(paths)?;
+    let mut plans = Vec::new();
     for slot in &manifest.slots {
-        let destination = paths.parked(&slot.id);
-        if destination.exists() {
-            detach_shared_database(&destination, &paths.shared_databases)?;
-        }
         let compact = Uuid::parse_str(&slot.id)
-            .map_err(|_| "槽位 ID 无效。".to_string())?
+            .map_err(|_| "槽位 ID 无效。")?
             .simple()
             .to_string();
-        let short = paths.vault.join("c").join(&compact[..16]);
-        let long = paths.vault.join("concurrent").join(&slot.id).join("box");
-        let candidates = [short, long]
-            .into_iter()
-            .filter(|root| root.exists())
-            .map(|root| legacy_sandbox_data(&root, &slot.id, &compact).map(|data| (root, data)))
-            .collect::<Result<Vec<_>, _>>()?;
+        let candidates = [
+            paths.vault.join("c").join(&compact[..16]),
+            paths.vault.join("concurrent").join(&slot.id).join("box"),
+        ]
+        .into_iter()
+        .filter(|root| fs::symlink_metadata(root.join(".synthv-toolbox-concurrent.json")).is_ok())
+        .collect::<Vec<_>>();
         if candidates.len() > 1 {
             return Err(format!(
                 "槽位“{}”发现两个旧隔离副本，无法确认权威数据。",
                 slot.display_name
             ));
         }
-        let Some((legacy_root, source)) = candidates.into_iter().next() else {
+        let destination = paths.parked(&slot.id);
+        reject_reparse_point(&destination)?;
+        let normal = if manifest.active_slot_id.as_deref() == Some(&slot.id)
+            && fs::symlink_metadata(&paths.canonical)
+                .is_ok_and(|metadata| !is_reparse_metadata(&metadata))
+        {
+            if destination.exists() {
+                return Err(
+                    "当前官方数据目录与固定槽位目录同时存在，无法确认权威数据。".to_string()
+                );
+            }
+            paths.canonical.clone()
+        } else {
+            destination.clone()
+        };
+        if normal.exists() {
+            verify_marker(&normal, &slot.id)?;
+        }
+        let Some(legacy_root) = candidates.into_iter().next() else {
             continue;
         };
-        let mut retired = None;
-        if destination.exists() {
-            let normal_database = destination.join("databases");
-            let sandbox_database = source.join("databases");
-            if normal_database.is_dir() && !sandbox_database.exists() {
-                fs::rename(&normal_database, &sandbox_database)
-                    .map_err(|error| format!("无法保留旧账号声库：{error}"))?;
-            }
-            if directory_has_user_data(&destination)? {
-                let archive = paths.vault.join("retired").join(&slot.id);
+        let source = legacy_sandbox_data(paths, &legacy_root, &slot.id, &compact)?;
+        let archive = paths.vault.join("retired").join(&slot.id);
+        reject_managed_descendants(&paths.vault, &archive)?;
+        if source.exists() {
+            validate_slot_tree(&source, &paths.shared_databases)?;
+            if normal.exists() {
+                validate_slot_tree(&normal, &paths.shared_databases)?;
                 if archive.exists() {
                     return Err(format!(
                         "槽位“{}”已有待核对的旧数据归档。",
                         slot.display_name
                     ));
                 }
-                fs::create_dir_all(archive.parent().unwrap())
-                    .map_err(|error| format!("无法创建旧数据归档目录：{error}"))?;
-                fs::rename(&destination, &archive)
-                    .map_err(|error| format!("无法归档冲突的旧账号数据：{error}"))?;
-                retired = Some(archive);
-            } else {
-                remove_owned_directory(&destination, "空旧账号槽位")?;
+            }
+        } else {
+            // A moved source with its marker still present is a completed rename awaiting cleanup.
+            verify_marker(&destination, &slot.id)?;
+        }
+        plans.push(SlotConvergence {
+            slot_id: slot.id.clone(),
+            legacy_root,
+            source,
+            archive,
+        });
+    }
+    Ok(plans)
+}
+
+#[cfg(windows)]
+fn apply_slot_convergence(
+    paths: &SlotPaths,
+    manifest: &SlotManifest,
+    plans: Vec<SlotConvergence>,
+) -> Result<(), String> {
+    if let Some(active) = manifest.active_slot_id.as_deref() {
+        let destination = paths.parked(active);
+        if fs::symlink_metadata(&paths.canonical)
+            .is_ok_and(|metadata| !is_reparse_metadata(&metadata))
+        {
+            verify_marker(&paths.canonical, active)?;
+            fs::create_dir_all(&paths.slots).map_err(|error| error.to_string())?;
+            fs::rename(&paths.canonical, &destination)
+                .map_err(|error| format!("无法收敛当前账号目录：{error}"))?;
+        }
+        if fs::symlink_metadata(&paths.canonical).is_err() && destination.exists() {
+            create_canonical_junction(paths, active)?;
+        }
+    }
+    for plan in plans {
+        let destination = paths.parked(&plan.slot_id);
+        if plan.source.exists() {
+            let had_normal = destination.exists();
+            if had_normal {
+                fs::create_dir_all(plan.archive.parent().unwrap())
+                    .map_err(|error| error.to_string())?;
+                fs::rename(&destination, &plan.archive)
+                    .map_err(|error| format!("无法归档旧账号数据：{error}"))?;
+            }
+            fs::create_dir_all(&paths.slots).map_err(|error| error.to_string())?;
+            if let Err(error) = fs::rename(&plan.source, &destination) {
+                if had_normal {
+                    let _ = fs::rename(&plan.archive, &destination);
+                }
+                return Err(format!("无法收敛旧隔离副本：{error}"));
+            }
+            if plan.archive.is_dir() {
+                let old_database = plan.archive.join("databases");
+                let database = destination.join("databases");
+                if old_database.is_dir()
+                    && !is_shared_database_link(&old_database, &paths.shared_databases)?
+                    && fs::symlink_metadata(&database).is_err()
+                {
+                    fs::rename(&old_database, &database)
+                        .map_err(|error| format!("无法保留账号声库：{error}"))?;
+                }
             }
         }
-        fs::create_dir_all(&paths.slots).map_err(|error| format!("无法创建槽位目录：{error}"))?;
-        if let Err(error) = fs::rename(&source, &destination) {
-            if let Some(archive) = retired {
-                let _ = fs::rename(archive, &destination);
-            }
-            return Err(format!("无法收敛旧隔离副本：{error}"));
-        }
-        fs::remove_file(legacy_root.join(".synthv-toolbox-concurrent.json"))
+        fs::remove_file(plan.legacy_root.join(".synthv-toolbox-concurrent.json"))
             .map_err(|error| format!("无法完成旧隔离副本收敛：{error}"))?;
+    }
+    for slot in &manifest.slots {
+        detach_shared_database(&paths.parked(&slot.id), &paths.shared_databases)?;
     }
     Ok(())
 }
 
 #[cfg(windows)]
-fn legacy_sandbox_data(root: &Path, slot_id: &str, compact: &str) -> Result<PathBuf, String> {
-    reject_reparse_point(root)?;
+fn reject_managed_descendants(root: &Path, path: &Path) -> Result<(), String> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| "目录超出账号保管区。")?;
+    let mut current = root.to_path_buf();
+    reject_reparse_point(&current)?;
+    for part in relative.components() {
+        current.push(part);
+        reject_reparse_point(&current)?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn validate_slot_tree(root: &Path, shared: &Path) -> Result<(), String> {
+    for entry in fs::read_dir(root).map_err(|error| error.to_string())? {
+        let path = entry.map_err(|error| error.to_string())?.path();
+        if path.file_name().is_some_and(|name| name == "databases")
+            && is_shared_database_link(&path, shared)?
+        {
+            continue;
+        }
+        reject_reparse_point(&path)?;
+        if path.is_dir() {
+            validate_slot_tree(&path, shared)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn legacy_sandbox_data(
+    paths: &SlotPaths,
+    root: &Path,
+    slot_id: &str,
+    compact: &str,
+) -> Result<PathBuf, String> {
     let marker = root.join(".synthv-toolbox-concurrent.json");
-    let text =
-        fs::read_to_string(&marker).map_err(|error| format!("无法读取旧隔离副本标记：{error}"))?;
-    let marker: LegacyConcurrentMarker =
-        serde_json::from_str(&text).map_err(|error| format!("旧隔离副本标记无效：{error}"))?;
-    let expected_name = format!("SV2TB{}", &compact[..24]);
-    if marker.schema_version != 1 || marker.slot_id != slot_id || marker.box_name != expected_name {
+    reject_managed_descendants(&paths.vault, &marker)?;
+    let marker: LegacyConcurrentMarker = read_json(&marker, "旧隔离副本标记")?;
+    if marker.schema_version != 1
+        || marker.slot_id != slot_id
+        || marker.box_name != format!("SV2TB{}", &compact[..24])
+    {
         return Err("旧隔离副本标记与账号槽位不匹配。".to_string());
     }
     let data = root.join("user/current/AppData/Roaming/Dreamtonics/Synthesizer V Studio 2");
-    reject_reparse_point(&data)?;
-    if !data.is_dir() {
-        return Err("旧隔离副本缺少 SV2 数据目录。".to_string());
+    reject_managed_descendants(&paths.vault, &data)?;
+    if data.exists() {
+        verify_marker(&data, slot_id)?;
     }
     Ok(data)
 }
 
-#[cfg(windows)]
-fn directory_has_user_data(path: &Path) -> Result<bool, String> {
-    for entry in fs::read_dir(path).map_err(|error| format!("无法读取旧账号槽位：{error}"))?
-    {
-        let entry = entry.map_err(|error| format!("无法读取旧账号槽位：{error}"))?;
-        if entry.file_name() != MARKER_FILE {
-            return Ok(true);
+#[cfg(not(windows))]
+fn converge_legacy_sandboxes(paths: &SlotPaths, manifest: &SlotManifest) -> Result<(), String> {
+    for slot in &manifest.slots {
+        let root = slot_data_root(paths, manifest, &slot.id);
+        if is_shared_database_link(&root.join("databases"), &paths.shared_databases)? {
+            reject_blockers(paths)?;
+            detach_shared_database(&root, &paths.shared_databases)?;
         }
     }
-    Ok(false)
-}
-
-#[cfg(not(windows))]
-fn converge_legacy_sandboxes(_paths: &SlotPaths, _manifest: &SlotManifest) -> Result<(), String> {
     Ok(())
 }
 
@@ -2322,7 +2421,7 @@ fn validate_color(value: &str) -> Result<(), String> {
 
 fn validate_slot_id(value: &str) -> Result<(), String> {
     match Uuid::parse_str(value) {
-        Ok(id) if id.get_version_num() == 4 => Ok(()),
+        Ok(id) if id.get_version_num() == 4 && id.to_string() == value => Ok(()),
         _ => Err("槽位 ID 非法。".to_string()),
     }
 }
@@ -2342,18 +2441,11 @@ fn validate_project_path(value: &str) -> Result<PathBuf, String> {
 }
 
 fn reject_reparse_point(path: &Path) -> Result<(), String> {
-    if !path.exists() {
-        return Ok(());
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => reject_reparse_metadata(path, &metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("无法检查目录 {}：{error}", path.display())),
     }
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|error| format!("无法检查目录 {}：{error}", path.display()))?;
-    if is_reparse_metadata(&metadata) {
-        return Err(format!(
-            "目录 {} 是 reparse point；为避免越界移动，操作已停止。",
-            path.display()
-        ));
-    }
-    Ok(())
 }
 
 fn reject_reparse_metadata(path: &Path, metadata: &fs::Metadata) -> Result<(), String> {
@@ -2385,7 +2477,22 @@ fn schema_version() -> u32 {
 
 #[cfg(windows)]
 fn detect_blockers(paths: &SlotPaths) -> Vec<Sv2ProcessBlocker> {
-    windows_guard::detect(paths)
+    let mut blockers = windows_guard::detect(paths);
+    if let (Ok(manifest), Ok(provider)) = (load_manifest(paths), detect_concurrent_provider()) {
+        let mut managed = std::collections::HashSet::new();
+        for slot in manifest.slots {
+            match slot_running_pids(&provider, &paths.vault, &slot.id) {
+                Ok(pids) => managed.extend(pids),
+                Err(detail) => blockers.push(Sv2ProcessBlocker {
+                    pid: None,
+                    name: slot.display_name,
+                    reason: format!("无法确认隔离实例运行状态：{detail}"),
+                }),
+            }
+        }
+        blockers.retain(|blocker| blocker.pid.is_none_or(|pid| !managed.contains(&pid)));
+    }
+    blockers
 }
 
 #[cfg(target_os = "macos")]

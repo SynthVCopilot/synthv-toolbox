@@ -17,7 +17,7 @@ assert.match(concurrent, /create_overlay_slot_junction/);
 assert.match(concurrent, /OpenFilePath/);
 assert.match(concurrent, /vault\.join\("slots"\)\.join\(slot_id\)/);
 assert.doesNotMatch(profiles, /ensure_shared_voice_databases\(paths, &manifest\)/);
-assert.match(profiles, /Sv2SessionEnvironment::Normal,\s*&data_root/s);
+assert.match(profiles, /fn slot_data_root\(/);
 assert.match(profiles, /switch_slot_windows/);
 assert.match(profiles, /create_canonical_junction/);
 assert.match(sync, /"settings\/settings\.xml"/);
