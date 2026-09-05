@@ -1,6 +1,22 @@
 export type AppMode = "toolbox" | "ai";
+export type AgentWorkMode = "edit" | "solo";
+export interface AgentFileApproval { id: string; path: string; purpose: string; createdAtUtc: string; }
 
-export type AiProviderId = "anthropic" | "openai-codex";
+export type AiProviderId = "anthropic" | "openai-codex" | "workbuddy" | "traecode";
+export type AiAuthMethod = "oauth" | "api-key";
+export type AiLoadStrategy = "round-robin" | "weighted-round-robin" | "failover";
+export type ModelCatalogSource = "models-dev" | "built-in-fallback";
+
+export interface AiApiKeySummary {
+  id: string;
+  label: string;
+  models: string[];
+  healthy: boolean;
+  enabled: boolean;
+  weight: number;
+  cooldownUntilUtc: string | null;
+  createdAtUtc: string;
+}
 
 export interface AiProviderAccountSummary {
   id: string;
@@ -8,6 +24,8 @@ export interface AiProviderAccountSummary {
   expiresAt: number;
   authorized: boolean;
   healthy: boolean;
+  enabled: boolean;
+  weight: number;
 }
 
 export interface AiProviderSummary {
@@ -20,13 +38,24 @@ export interface AiProviderSummary {
   totalAccounts: number;
   model: string;
   models: string[];
+  oauthModels: string[];
+  apiKeyModels: string[];
   accounts: AiProviderAccountSummary[];
+  apiKeys: AiApiKeySummary[];
+  authMethods: AiAuthMethod[];
+  oauthEnabled: boolean;
+  loadStrategy: AiLoadStrategy;
+  available: boolean;
+  unavailableReason: string | null;
 }
 
 export interface ModelSummary {
   activeProvider: AiProviderId;
   legacyConfigured: boolean;
   providers: AiProviderSummary[];
+  catalogSource: ModelCatalogSource;
+  catalogGeneratedAt: number;
+  catalogError: string | null;
 }
 
 export interface OpenCodeCatalogProvider {
@@ -34,6 +63,7 @@ export interface OpenCodeCatalogProvider {
   name: string;
   modelCount: number;
   package: string;
+  models: string[];
 }
 
 export interface OpenCodeCatalog {
@@ -47,6 +77,16 @@ export interface McpServerConfig {
   command: string;
   args: string[];
   enabled: boolean;
+}
+
+export interface HttpApiStatus {
+  enabled: boolean;
+  agentEnabled: boolean;
+  running: boolean;
+  port: number;
+  endpoint: string | null;
+  agentEndpoint: string | null;
+  lastError: string | null;
 }
 
 export interface SynthVInstallation {
@@ -88,7 +128,6 @@ export interface Sv2ConcurrentContent {
 
 export interface Sv2ConcurrentSlot {
   ready: boolean;
-  boxName: string;
   dataPath: string;
   runningPids: number[];
   detail: string;
@@ -241,7 +280,7 @@ export interface ComponentInfo {
   status: string;
 }
 
-export type ComponentDownloadStatus = "queued" | "downloading" | "installing" | "completed" | "failed";
+export type ComponentDownloadStatus = "queued" | "downloading" | "installing" | "completed" | "failed" | "cancelled";
 
 export interface ComponentDownload {
   id: string;
@@ -256,6 +295,7 @@ export interface ComponentDownload {
 export interface BootstrapState {
   onboardingCompleted: boolean;
   mode: AppMode;
+  agentWorkMode: AgentWorkMode;
   platform: string;
   appVersion: string;
   configPath: string;
@@ -411,6 +451,95 @@ export interface AudioArtifactSaveResult {
   fileName?: string;
 }
 
+export interface MediaSourcePreview {
+  sourceUrl: string;
+  canonicalUrl: string;
+  platform: string;
+  mediaId: string;
+  title: string;
+  uploader: string;
+  durationSeconds?: number | null;
+  thumbnailUrl?: string | null;
+}
+
+export interface MediaImportResult {
+  importId: string;
+  source: MediaSourcePreview;
+  audioPath: string;
+  metadataPath: string;
+  manifestPath: string;
+  sha256: string;
+  importedAtUtc: string;
+}
+
+export type MediaTaskStatus = "queued" | "running" | "cancelling" | "completed" | "failed" | "cancelled";
+
+export interface MediaTaskSnapshot {
+  id: string;
+  kind: string;
+  status: MediaTaskStatus;
+  progress: number;
+  detail: string;
+  result?: Record<string, unknown> | null;
+  error?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CoverTaskRequest {
+  source: string;
+  lyrics?: string | null;
+  voiceName: string;
+  processId?: number | null;
+  trackIndex: number;
+  groupName: string;
+  rightsConfirmed: boolean;
+  tolerance: number;
+  advanced: boolean;
+}
+
+export interface SourceStyleFeatures {
+  durationSec: number;
+  medianPitchMidi: number;
+  pitchRangeSemitones: number;
+  vibratoRateHz: number;
+  vibratoDepthCents: number;
+  dynamicRangeDb: number;
+  breathinessProxy: number;
+  brightnessHz: number;
+  voicedRatio: number;
+}
+
+export interface TuningParameters {
+  loudness: number;
+  tension: number;
+  breathiness: number;
+  gender: number;
+  toneShift: number;
+  vibratoStrength: number;
+}
+
+export interface TuningProfile {
+  voiceName: string;
+  normalizedVoiceName: string;
+  sourceSamples: number;
+  outcomeSamples: number;
+  averageFeatures: SourceStyleFeatures;
+  parameters: TuningParameters;
+  updatedAtUtc: string;
+}
+
+export interface SoloTuningRequest {
+  referenceAudioPath: string;
+  voiceName: string;
+  projectPath: string;
+  processId: number;
+  trackIndex: number;
+  groupIndex: number;
+  startSeconds: number;
+  endSeconds: number;
+}
+
 export interface AudioCaptureCapability {
   supported: boolean;
   backend: string;
@@ -421,6 +550,22 @@ export interface AudioCaptureCapability {
 export interface AudioCaptureTarget {
   processId: number;
   name: string;
+}
+
+export interface SynthVProcess {
+  processId: number;
+  name: string;
+  command: string;
+  windowTitle?: string;
+  isSv2: boolean;
+  sandboxed: boolean | null;
+}
+
+export interface SynthVShortcutProfile {
+  bridgeStart: string;
+  bridgeStop: string;
+  projectSave: string;
+  detail: string;
 }
 
 export type RhymeMatchMode = "family" | "exact";
@@ -473,6 +618,26 @@ export interface LyricCandidateSet {
   sectionLabel: string;
   targetRhyme?: string | null;
   candidates: LyricCandidate[];
+}
+
+export interface LyricProject {
+  schemaVersion: number;
+  id: string;
+  title: string;
+  draft: string;
+  rhymeTargets: Record<string, string>;
+  sections: LyricSectionRequest[];
+  revision: number;
+  createdAtUtc: string;
+  updatedAtUtc: string;
+}
+
+export interface LyricProjectSummary {
+  id: string;
+  title: string;
+  revision: number;
+  lineCount: number;
+  updatedAtUtc: string;
 }
 
 export interface WorkflowRecipe {

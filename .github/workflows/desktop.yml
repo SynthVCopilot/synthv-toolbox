@@ -33,7 +33,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          submodules: recursive
           fetch-depth: 0
 
       - uses: actions/setup-node@v6
@@ -42,7 +41,7 @@ jobs:
           cache: npm
           cache-dependency-path: |
             src/PiDesktop.Tauri/package-lock.json
-            external/synthv-agent-bridge/package-lock.json
+            src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/package-lock.json
 
       - uses: actions/setup-python@v6
         with:
@@ -57,10 +56,10 @@ jobs:
         run: node .github/scripts/set-version.mjs "${{ github.ref_name }}"
 
       - name: Check Python component sources
-        run: python -m py_compile src/PiDesktop.Tauri/src-tauri/components/pi-audio/pi_audio.py src/PiDesktop.Tauri/src-tauri/components/cvrs/cvrs.py
+        run: python -m py_compile src/PiDesktop.Tauri/src-tauri/components/pi-audio/pi_audio.py src/PiDesktop.Tauri/src-tauri/components/cvrs/cvrs.py src/PiDesktop.Tauri/src-tauri/components/vocal-separation/separate.py
 
       - name: Build bundled SynthV Bridge
-        working-directory: external/synthv-agent-bridge
+        working-directory: src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge
         run: |
           npm ci --no-audit --no-fund
           npm run build
@@ -152,7 +151,7 @@ jobs:
           {
             echo "## 更新内容"
             echo
-            git log "$range" --pretty=format:'- %s ([`%h`](https://github.com/${{ github.repository }}/commit/%H))'
+            git log "$range" --pretty=format:"- %s ([\`%h\`](https://github.com/${GITHUB_REPOSITORY}/commit/%H))"
             echo
             if [[ -n "$previous_tag" ]]; then
               echo

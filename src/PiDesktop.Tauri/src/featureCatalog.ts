@@ -25,9 +25,13 @@ export interface ToolGroup {
 }
 
 export const featureCatalog: FeatureCatalogItem[] = [
+  { id: "cover", title: "一键 Cover", description: "从 BV 或 YouTube 来源自动下载、分离、提取旋律、映射歌词并导入当前 SynthV 工程。", icon: "sparkles", accent: "violet", homePriority: 1, base: ["来源到双轨", "旋律 MIDI 与歌词", "自动 F13 Bridge 连接"], ai: ["快捷指令编排", "指定声库授权提示", "失败阶段解释与重试"], requirements: ["媒体导入器", "人声伴奏分离", "pi-audio", "SynthV Bridge"], componentIds: ["media-fetcher", "vocal-separation", "pi-audio", "ffmpeg"], requiresConnectedBridge: false },
+  { id: "tuning-learning", title: "分声库调声学习", description: "从参考人声提取演唱特征，为每个声库独立学习并应用有边界的调声参数。", icon: "waveform", accent: "emerald", homePriority: 2, base: ["离线演唱特征", "分声库档案", "A/B 反馈更新"], ai: ["自动参数建议", "Bridge 安全应用", "Solo 迭代基础"], requirements: ["pi-audio", "SynthV Bridge（应用时）"], componentIds: ["pi-audio"] },
+  { id: "media-import", title: "BV / YouTube 音频导入", description: "预览明确提供的 Bilibili 或 YouTube 来源，并在权利确认后下载为受管理 WAV。", icon: "download", accent: "blue", homePriority: 2, base: ["BV / URL 元数据预览", "受管 WAV 与 SHA-256", "来源与权利确认记录"], ai: ["后续自动分离与 Cover 编排", "来源结构说明", "失败原因归类"], requirements: ["media-fetcher", "FFmpeg", "Node.js 22+"], componentIds: ["media-fetcher", "ffmpeg"] },
+  { id: "source-separation", title: "人声 / 伴奏分离", description: "使用受管 Demucs htdemucs 将单个混音源分离为 vocals 与 instrumental WAV。", icon: "audio", accent: "violet", homePriority: 3, base: ["两轨 Demucs 分离", "稳定 vocals / inst 输出", "受管本地目录"], ai: ["自动接入 Cover 工作流", "分离结果复检", "模型运行失败解释"], requirements: ["人声伴奏分离组件", "FFmpeg"], componentIds: ["vocal-separation", "ffmpeg"] },
   { id: "score-to-synthv", title: "曲谱导入 SynthV", description: "把本地 MIDI 或 MusicXML 曲谱安全转换为当前 SynthV 工程中的单声部音符组。", icon: "file", accent: "emerald", homePriority: 1, base: ["MIDI / MusicXML 读取", "单声部音符转换", "导入前文件指纹校验"], ai: ["声部选择建议", "导入结果复核", "后续调声规划"], requirements: ["SynthV Bridge"], requiresConnectedBridge: true },
-  { id: "audio-preparation", title: "音频准备", description: "把本地音频安全准备为 SynthV 可编辑的 PCM WAV，并在需要时按 EBU R128 检查或平衡响度。", icon: "audio", accent: "violet", homePriority: 2, base: ["媒体信息探测", "PCM WAV 转换", "响度检查与标准化"], ai: ["参数建议", "结果复核", "交付风险提示"], requirements: ["FFmpeg"], componentIds: ["ffmpeg"] },
-  { id: "audio-to-project", title: "演唱音频 → MIDI / SynthV", description: "从时间轴一致的演唱版与伴奏版提取单音旋律；可只导出 MIDI，也可继续导入当前 SynthV 工程。", icon: "pipeline", accent: "violet", homePriority: 2, base: ["配对音频差分", "标准 MIDI 导出", "可选 Bridge 导入"], ai: ["候选参数寻优", "低置信音符纠正", "导入结果复核"], requirements: ["FFmpeg", "pi-audio", "Bridge（可选）"], componentIds: ["ffmpeg", "pi-audio"] },
+  { id: "audio-to-project", title: "演唱音频 → MIDI / SynthV", description: "从时间轴一致的演唱版与伴奏版提取单音旋律；可只导出 MIDI，也可继续导入当前 SynthV 工程。", icon: "pipeline", accent: "violet", homePriority: 4, base: ["配对音频差分", "标准 MIDI 导出", "可选 Bridge 导入"], ai: ["候选参数寻优", "低置信音符纠正", "导入结果复核"], requirements: ["FFmpeg", "pi-audio", "Bridge（可选）"], componentIds: ["ffmpeg", "pi-audio"] },
+  { id: "audio-preparation", title: "音频准备", description: "把本地音频安全准备为 SynthV 可编辑的 PCM WAV，并在需要时按 EBU R128 检查或平衡响度。", icon: "audio", accent: "violet", base: ["媒体信息探测", "PCM WAV 转换", "响度检查与标准化"], ai: ["参数建议", "结果复核", "交付风险提示"], requirements: ["FFmpeg"], componentIds: ["ffmpeg"] },
   { id: "audio-insight", title: "音频结构分析", description: "提取速度、拍点、调性、能量和频谱趋势，为编曲、调声与复检建立可追溯依据。", icon: "waveform", accent: "blue", homePriority: 3, base: ["BPM / 拍点 / 调性", "能量与频谱曲线", "结构化分析报告"], ai: ["段落与风格归纳", "异常片段解释", "制作方向建议"], requirements: ["FFmpeg", "pi-audio"], componentIds: ["ffmpeg", "pi-audio"] },
   { id: "project-tools", title: "SV 工程文件", description: "只读探测已保存的 .svp，生成参考轨或无参安全副本，并导出普通 LRC 与逐字 LRC。", icon: "file", accent: "blue", base: ["工程结构探测", "安全副本生成", "LRC / 逐字 LRC"], ai: ["工程风险说明", "变更方案草拟", "批量结果复核"], requirements: ["CVRS"], componentIds: ["cvrs"] },
   { id: "ab-audition", title: "片段 A/B 检查", description: "定位并捕获 SynthV 的短试听片段，自动消除回环延迟后比较修改前后差异，避免重复完整渲染。", icon: "compare", accent: "violet", base: ["进程级音频捕获", "播放头恢复与中断校验", "快速 A/B 对齐比较"], ai: ["局部修改复检", "差异指标解释", "连续候选筛选"], requirements: ["Windows 10 20348+", "SynthV Bridge"], requiresConnectedBridge: true, windowsOnly: true },
@@ -46,7 +50,7 @@ export const toolGroups: ToolGroup[] = [
     description: "把曲谱或演唱音频变成可继续编辑的 MIDI 与 SynthV 音符。",
     icon: "pipeline",
     accent: "violet",
-    featureIds: ["audio-preparation", "audio-to-project", "score-to-synthv"],
+    featureIds: ["cover", "media-import", "source-separation", "audio-to-project", "score-to-synthv", "audio-preparation"],
   },
   {
     id: "quality",
@@ -54,7 +58,7 @@ export const toolGroups: ToolGroup[] = [
     description: "集中完成音频分析、工程诊断、发音检查与交付复检。",
     icon: "doctor",
     accent: "emerald",
-    featureIds: ["audio-insight", "project-doctor", "pronunciation-doctor", "render-review"],
+    featureIds: ["tuning-learning", "audio-insight", "project-doctor", "pronunciation-doctor", "render-review"],
   },
   {
     id: "iteration",

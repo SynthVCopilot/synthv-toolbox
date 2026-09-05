@@ -9,7 +9,10 @@ use std::fmt;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::Command;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex, OnceLock,
+};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
@@ -49,7 +52,6 @@ const CODEX_MODELS_URL: &str = "https://chatgpt.com/backend-api/codex/models";
 const CODEX_CLIENT_ID_B64: &str = "YXBwX0VNb2FtRUVaNzNmMENrWGFYcDdocmFubg==";
 const CODEX_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
 const CODEX_SCOPE: &str = "openid profile email offline_access";
-pub const CODEX_SPARK_MODEL_ID: &str = "gpt-5.3-codex-spark";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -57,6 +59,8 @@ pub enum AiProviderId {
     #[default]
     Anthropic,
     OpenaiCodex,
+    Workbuddy,
+    Traecode,
 }
 
 impl AiProviderId {
@@ -64,13 +68,17 @@ impl AiProviderId {
         match self {
             Self::Anthropic => "anthropic",
             Self::OpenaiCodex => "openai-codex",
+            Self::Workbuddy => "workbuddy",
+            Self::Traecode => "traecode",
         }
     }
 
     pub fn display_name(self) -> &'static str {
         match self {
-            Self::Anthropic => "Claude 官方订阅",
-            Self::OpenaiCodex => "Codex 官方订阅",
+            Self::Anthropic => "Claude / Anthropic",
+            Self::OpenaiCodex => "OpenAI / Codex",
+            Self::Workbuddy => "WorkBuddy",
+            Self::Traecode => "TraeCode",
         }
     }
 
@@ -78,10 +86,12 @@ impl AiProviderId {
         match self {
             Self::Anthropic => "claude-sonnet-4-6",
             Self::OpenaiCodex => "gpt-5.6-terra",
+            Self::Workbuddy => "glm-5.2",
+            Self::Traecode => "trae-account-default",
         }
     }
 
-    pub fn model_options(self) -> &'static [&'static str] {
+    pub fn fallback_model_options(self) -> &'static [&'static str] {
         match self {
             Self::Anthropic => &[
                 "claude-sonnet-4-6",
@@ -99,6 +109,17 @@ impl AiProviderId {
                 "gpt-5.4-mini",
                 "gpt-5.3-codex-spark",
             ],
+            Self::Workbuddy => &[
+                "glm-5.2",
+                "glm-5.1",
+                "glm-5v-turbo",
+                "kimi-k2.7",
+                "minimax-m3-pay",
+                "hy3",
+                "deepseek-v4-pro",
+                "deepseek-v4-flash",
+            ],
+            Self::Traecode => &["trae-account-default"],
         }
     }
 }
@@ -110,6 +131,17 @@ pub struct OAuthAccountMetadata {
     pub provider: AiProviderId,
     pub label: String,
     pub expires_at: i64,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_weight")]
+    pub weight: u8,
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_weight() -> u8 {
+    1
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -255,6 +287,9 @@ impl OAuthConfig {
                 callback_path: "/auth/callback",
                 scope: CODEX_SCOPE,
             },
+            AiProviderId::Workbuddy | AiProviderId::Traecode => {
+                unreachable!("non-OAuth provider passed to the official OAuth flow")
+            }
         }
     }
 
@@ -314,8 +349,17 @@ impl Drop for AuthorizationGuard {
     }
 }
 
-pub fn authorize(provider: AiProviderId) -> Result<AuthorizedAccount, String> {
+pub fn authorize_cancellable(
+    provider: AiProviderId,
+    cancelled: Option<&AtomicBool>,
+) -> Result<AuthorizedAccount, String> {
+    if matches!(provider, AiProviderId::Workbuddy | AiProviderId::Traecode) {
+        return Err(format!("{} 使用专用授权流程。", provider.display_name()));
+    }
     let _guard = AuthorizationGuard::acquire(provider)?;
+    if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+        return Err("浏览器 OAuth 授权已取消。".to_string());
+    }
     let config = OAuthConfig::for_provider(provider);
     let verifier = pkce_verifier();
     let challenge = pkce_challenge(&verifier);
@@ -331,8 +375,11 @@ pub fn authorize(provider: AiProviderId) -> Result<AuthorizedAccount, String> {
         .map_err(|error| format!("无法配置 OAuth 回调：{error}"))?;
 
     let authorize_url = build_authorize_url(provider, config, &challenge, &state)?;
+    if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+        return Err("浏览器 OAuth 授权已取消。".to_string());
+    }
     open_external(&authorize_url)?;
-    let code = wait_for_callback(&listener, config, &state, AUTH_TIMEOUT)?;
+    let code = wait_for_callback(&listener, config, &state, AUTH_TIMEOUT, cancelled)?;
     let credential = exchange_code(provider, config, &code, &verifier, &state)?;
     let provider_account_id = credential
         .account_id
@@ -345,8 +392,12 @@ pub fn authorize(provider: AiProviderId) -> Result<AuthorizedAccount, String> {
         label: match provider {
             AiProviderId::Anthropic => "Claude official account".to_string(),
             AiProviderId::OpenaiCodex => "ChatGPT official account".to_string(),
+            AiProviderId::Workbuddy => "WorkBuddy account".to_string(),
+            AiProviderId::Traecode => "TraeCode account".to_string(),
         },
         expires_at: credential.expires_at,
+        enabled: true,
+        weight: 1,
     };
     Ok(AuthorizedAccount {
         metadata,
@@ -1171,6 +1222,9 @@ fn refresh(provider: AiProviderId, current: &OAuthCredential) -> Result<OAuthCre
                 ("client_id", client_id.as_str()),
                 ("refresh_token", current.refresh.as_str()),
             ]),
+        AiProviderId::Workbuddy | AiProviderId::Traecode => {
+            unreachable!("non-OAuth provider passed to OAuth refresh")
+        }
     }
     .map_err(|error| describe_oauth_request("刷新", error))?;
     parse_token_response(provider, response, Some(current))
@@ -1207,6 +1261,9 @@ fn exchange_code(
                 ("code_verifier", verifier),
                 ("redirect_uri", config.redirect_uri),
             ]),
+        AiProviderId::Workbuddy | AiProviderId::Traecode => {
+            unreachable!("non-OAuth provider passed to OAuth exchange")
+        }
     }
     .map_err(|error| describe_oauth_request("交换", error))?;
     parse_token_response(provider, response, None)
@@ -1314,6 +1371,9 @@ fn build_authorize_url(
                     .append_pair("codex_cli_simplified_flow", "true")
                     .append_pair("originator", "pi");
             }
+            AiProviderId::Workbuddy | AiProviderId::Traecode => {
+                unreachable!("non-OAuth provider passed to OAuth URL builder")
+            }
         }
     }
     Ok(url.into())
@@ -1324,9 +1384,13 @@ fn wait_for_callback(
     config: OAuthConfig,
     expected_state: &str,
     timeout: Duration,
+    cancelled: Option<&AtomicBool>,
 ) -> Result<String, String> {
     let deadline = Instant::now() + timeout;
     loop {
+        if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            return Err("浏览器 OAuth 授权已取消。".to_string());
+        }
         let now = Instant::now();
         if now >= deadline {
             return Err("浏览器 OAuth 授权已超时。".to_string());
@@ -1510,7 +1574,7 @@ fn describe_oauth_request(action: &str, error: ureq::Error) -> String {
     }
 }
 
-fn open_external(url: &str) -> Result<(), String> {
+pub fn open_external(url: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let mut command = Command::new("explorer.exe");
     #[cfg(target_os = "macos")]

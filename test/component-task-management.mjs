@@ -1,0 +1,40 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const rustRoot = join(repositoryRoot, "src", "PiDesktop.Tauri", "src-tauri", "src");
+const webRoot = join(repositoryRoot, "src", "PiDesktop.Tauri", "src");
+const read = (path) => readFileSync(path, "utf8");
+const downloads = read(join(rustRoot, "downloads.rs"));
+const state = read(join(rustRoot, "state.rs"));
+const commands = read(join(rustRoot, "commands.rs"));
+const agent = read(join(rustRoot, "audio_capture.rs"));
+const components = read(join(rustRoot, "components.rs"));
+const api = read(join(webRoot, "api.ts"));
+const main = read(join(webRoot, "main.ts"));
+
+assert.match(downloads, /component-downloads\.json/);
+assert.match(downloads, /schema_version: 1/);
+assert.match(downloads, /pub fn cancel_queued/);
+assert.match(downloads, /pub fn retry/);
+assert.match(downloads, /ComponentDownloadStatus::Cancelled/);
+assert.match(downloads, /应用在任务完成前退出；可安全重试此组件/);
+assert.match(state, /ComponentDownloadManager::persistent\(\)/);
+assert.match(commands, /pub fn cancel_component_install/);
+assert.match(commands, /pub fn retry_component_install/);
+assert.match(api, /cancelComponentInstall/);
+assert.match(api, /retryComponentInstall/);
+assert.match(main, /data-cancel-component-task/);
+assert.match(main, /data-retry-component-task/);
+assert.match(agent, /name: "list_managed_components"/);
+assert.match(agent, /name: "list_component_tasks"/);
+assert.match(agent, /name: "queue_component_install"/);
+assert.match(agent, /name: "cancel_component_task"/);
+assert.match(agent, /name: "retry_component_task"/);
+assert.match(components, /PythonCommand::new\("\/opt\/homebrew\/bin\/python3\.11"\)/);
+assert.match(components, /PythonCommand::new\("\/usr\/local\/bin\/python3\.11"\)/);
+assert.match(components, /PythonCommand::new\("python3\.11"\)/);
+
+console.log("Component task management contracts passed.");

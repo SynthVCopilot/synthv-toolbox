@@ -12,22 +12,6 @@ const MAX_SESSION_BYTES: u64 = 1024 * 1024;
 const MISSING_SESSION_GRACE_SECONDS: i64 = 10;
 const SESSION_RECOVERY_WINDOW_SECONDS: i64 = 10 * 60;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum Sv2SessionEnvironment {
-    Normal,
-    Concurrent,
-}
-
-impl Sv2SessionEnvironment {
-    fn file_stem(self) -> &'static str {
-        match self {
-            Self::Normal => "normal",
-            Self::Concurrent => "concurrent",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum GuardPhase {
@@ -42,7 +26,6 @@ enum GuardPhase {
 struct GuardRecord {
     schema_version: u32,
     slot_id: String,
-    environment: Sv2SessionEnvironment,
     #[serde(default)]
     phase: GuardPhase,
     #[serde(default)]
@@ -56,11 +39,10 @@ struct GuardRecord {
 }
 
 impl GuardRecord {
-    fn new(slot_id: &str, environment: Sv2SessionEnvironment) -> Self {
+    fn new(slot_id: &str) -> Self {
         Self {
             schema_version: GUARD_SCHEMA_VERSION,
             slot_id: slot_id.to_string(),
-            environment,
             phase: GuardPhase::Clean,
             armed_at_utc: None,
             baseline_sha256: None,
@@ -128,12 +110,11 @@ impl Sv2SessionGuardStore {
     pub fn prepare_launch(
         &self,
         slot_id: &str,
-        environment: Sv2SessionEnvironment,
         data_root: &Path,
     ) -> Result<SessionLaunchPreparation, String> {
         validate_slot_id(slot_id)?;
         self.validate_paths(slot_id, data_root)?;
-        let mut record = self.reconcile_record(slot_id, environment, data_root, false)?;
+        let mut record = self.reconcile_record(slot_id, data_root, false)?;
         let restored_before_launch = if record.phase == GuardPhase::RecoveryPending {
             self.restore_pending(&mut record, data_root)?
         } else {
@@ -149,15 +130,14 @@ impl Sv2SessionGuardStore {
     pub fn view(
         &self,
         slot_id: &str,
-        environment: Sv2SessionEnvironment,
         data_root: &Path,
         running: bool,
     ) -> Result<Sv2SessionProtectionView, String> {
         validate_slot_id(slot_id)?;
         self.validate_paths(slot_id, data_root)?;
-        let record = self.reconcile_record(slot_id, environment, data_root, running)?;
+        let record = self.reconcile_record(slot_id, data_root, running)?;
         let session_file_present = session_path(data_root).is_file();
-        let snapshot_available = self.snapshot_path(slot_id, environment).is_file();
+        let snapshot_available = self.snapshot_path(slot_id).is_file();
         let (status, detail) = match record.phase {
             GuardPhase::Monitoring => (
                 Sv2SessionProtectionStatus::Monitoring,
@@ -203,11 +183,10 @@ impl Sv2SessionGuardStore {
     fn reconcile_record(
         &self,
         slot_id: &str,
-        environment: Sv2SessionEnvironment,
         data_root: &Path,
         running: bool,
     ) -> Result<GuardRecord, String> {
-        let mut record = self.load_record(slot_id, environment)?;
+        let mut record = self.load_record(slot_id)?;
         if record.phase == GuardPhase::Clean {
             return Ok(record);
         }
@@ -218,7 +197,7 @@ impl Sv2SessionGuardStore {
                 record.phase = GuardPhase::Clean;
                 record.armed_at_utc = None;
                 record.baseline_sha256 = None;
-                self.remove_snapshot(slot_id, environment)?;
+                self.remove_snapshot(slot_id)?;
                 self.save_record(&record)?;
             }
             return Ok(record);
@@ -234,7 +213,7 @@ impl Sv2SessionGuardStore {
                 record.phase = GuardPhase::Clean;
                 record.armed_at_utc = None;
                 record.baseline_sha256 = None;
-                self.remove_snapshot(slot_id, environment)?;
+                self.remove_snapshot(slot_id)?;
                 self.save_record(&record)?;
                 return Ok(record);
             }
@@ -252,7 +231,7 @@ impl Sv2SessionGuardStore {
             record.phase = GuardPhase::Clean;
             record.armed_at_utc = None;
             record.baseline_sha256 = None;
-            self.remove_snapshot(slot_id, environment)?;
+            self.remove_snapshot(slot_id)?;
             self.save_record(&record)?;
         }
         Ok(record)
@@ -263,12 +242,12 @@ impl Sv2SessionGuardStore {
             record.phase = GuardPhase::Clean;
             record.armed_at_utc = None;
             record.baseline_sha256 = None;
-            self.remove_snapshot(&record.slot_id, record.environment)?;
+            self.remove_snapshot(&record.slot_id)?;
             self.save_record(record)?;
             return Ok(false);
         }
 
-        let snapshot_path = self.snapshot_path(&record.slot_id, record.environment);
+        let snapshot_path = self.snapshot_path(&record.slot_id);
         reject_reparse_point(&snapshot_path)?;
         let snapshot = fs::read(&snapshot_path)
             .map_err(|error| format!("无法读取本地 session 恢复快照：{error}"))?;
@@ -299,7 +278,7 @@ impl Sv2SessionGuardStore {
             return Ok(false);
         };
         let digest = sha256(&session);
-        let snapshot_path = self.snapshot_path(&record.slot_id, record.environment);
+        let snapshot_path = self.snapshot_path(&record.slot_id);
         write_bytes_atomic(&snapshot_path, &session, "本地 session 保护快照")?;
         record.phase = GuardPhase::Monitoring;
         record.armed_at_utc = Some(Utc::now().to_rfc3339());
@@ -308,24 +287,17 @@ impl Sv2SessionGuardStore {
         Ok(true)
     }
 
-    fn load_record(
-        &self,
-        slot_id: &str,
-        environment: Sv2SessionEnvironment,
-    ) -> Result<GuardRecord, String> {
-        let path = self.record_path(slot_id, environment);
+    fn load_record(&self, slot_id: &str) -> Result<GuardRecord, String> {
+        let path = self.record_path(slot_id);
         if !path.is_file() {
-            return Ok(GuardRecord::new(slot_id, environment));
+            return Ok(GuardRecord::new(slot_id));
         }
         reject_reparse_point(&path)?;
         let text = fs::read_to_string(&path)
             .map_err(|error| format!("无法读取本地 session 保护记录：{error}"))?;
         let record: GuardRecord = serde_json::from_str(&text)
             .map_err(|error| format!("本地 session 保护记录不是有效 JSON：{error}"))?;
-        if record.schema_version != GUARD_SCHEMA_VERSION
-            || record.slot_id != slot_id
-            || record.environment != environment
-        {
+        if record.schema_version != GUARD_SCHEMA_VERSION || record.slot_id != slot_id {
             return Err("本地 session 保护记录与账号槽位不匹配。".to_string());
         }
         Ok(record)
@@ -334,18 +306,14 @@ impl Sv2SessionGuardStore {
     fn save_record(&self, record: &GuardRecord) -> Result<(), String> {
         let bytes = serde_json::to_vec_pretty(record).map_err(|error| error.to_string())?;
         write_bytes_atomic(
-            &self.record_path(&record.slot_id, record.environment),
+            &self.record_path(&record.slot_id),
             &bytes,
             "本地 session 保护记录",
         )
     }
 
-    fn remove_snapshot(
-        &self,
-        slot_id: &str,
-        environment: Sv2SessionEnvironment,
-    ) -> Result<(), String> {
-        let path = self.snapshot_path(slot_id, environment);
+    fn remove_snapshot(&self, slot_id: &str) -> Result<(), String> {
+        let path = self.snapshot_path(slot_id);
         if path.is_file() {
             reject_reparse_point(&path)?;
             fs::remove_file(path)
@@ -354,16 +322,12 @@ impl Sv2SessionGuardStore {
         Ok(())
     }
 
-    fn record_path(&self, slot_id: &str, environment: Sv2SessionEnvironment) -> PathBuf {
-        self.root
-            .join(slot_id)
-            .join(format!("{}.json", environment.file_stem()))
+    fn record_path(&self, slot_id: &str) -> PathBuf {
+        self.root.join(slot_id).join("slot.json")
     }
 
-    fn snapshot_path(&self, slot_id: &str, environment: Sv2SessionEnvironment) -> PathBuf {
-        self.root
-            .join(slot_id)
-            .join(format!("{}.session", environment.file_stem()))
+    fn snapshot_path(&self, slot_id: &str) -> PathBuf {
+        self.root.join(slot_id).join("slot.session")
     }
 
     fn validate_paths(&self, slot_id: &str, data_root: &Path) -> Result<(), String> {
@@ -501,101 +465,5 @@ fn reject_reparse_point(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn fixture() -> (PathBuf, PathBuf, String, Sv2SessionGuardStore) {
-        let root = std::env::temp_dir().join(format!("sv2-session-guard-{}", Uuid::new_v4()));
-        let metadata = root.join("metadata");
-        let data = root.join("data");
-        fs::create_dir_all(data.join("license")).unwrap();
-        let slot_id = Uuid::new_v4().to_string();
-        let store = Sv2SessionGuardStore::new(&metadata);
-        (root, data, slot_id, store)
-    }
-
-    #[test]
-    fn missing_session_becomes_recoverable_and_is_restored_before_next_launch() {
-        let (root, data, slot_id, store) = fixture();
-        fs::write(session_path(&data), b"opaque-session").unwrap();
-        let first = store
-            .prepare_launch(&slot_id, Sv2SessionEnvironment::Normal, &data)
-            .unwrap();
-        assert!(first.snapshot_armed);
-        fs::remove_file(session_path(&data)).unwrap();
-
-        let pending = store
-            .view(&slot_id, Sv2SessionEnvironment::Normal, &data, false)
-            .unwrap();
-        assert_eq!(pending.status, Sv2SessionProtectionStatus::RecoveryPending);
-
-        let second = store
-            .prepare_launch(&slot_id, Sv2SessionEnvironment::Normal, &data)
-            .unwrap();
-        assert!(second.restored_before_launch);
-        assert!(second.snapshot_armed);
-        assert_eq!(fs::read(session_path(&data)).unwrap(), b"opaque-session");
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn a_new_session_is_never_overwritten_by_the_snapshot() {
-        let (root, data, slot_id, store) = fixture();
-        fs::write(session_path(&data), b"old-session").unwrap();
-        store
-            .prepare_launch(&slot_id, Sv2SessionEnvironment::Concurrent, &data)
-            .unwrap();
-        fs::remove_file(session_path(&data)).unwrap();
-        store
-            .view(&slot_id, Sv2SessionEnvironment::Concurrent, &data, false)
-            .unwrap();
-        fs::write(session_path(&data), b"new-session").unwrap();
-
-        let next = store
-            .prepare_launch(&slot_id, Sv2SessionEnvironment::Concurrent, &data)
-            .unwrap();
-        assert!(!next.restored_before_launch);
-        assert_eq!(fs::read(session_path(&data)).unwrap(), b"new-session");
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn clean_exit_removes_the_short_lived_snapshot() {
-        let (root, data, slot_id, store) = fixture();
-        fs::write(session_path(&data), b"session").unwrap();
-        store
-            .prepare_launch(&slot_id, Sv2SessionEnvironment::Normal, &data)
-            .unwrap();
-        let clean = store
-            .view(&slot_id, Sv2SessionEnvironment::Normal, &data, false)
-            .unwrap();
-        assert_eq!(clean.status, Sv2SessionProtectionStatus::Ready);
-        assert!(!clean.snapshot_available);
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn a_session_removed_outside_the_window_is_not_attributed_or_restored() {
-        let (root, data, slot_id, store) = fixture();
-        fs::write(session_path(&data), b"session").unwrap();
-        store
-            .prepare_launch(&slot_id, Sv2SessionEnvironment::Normal, &data)
-            .unwrap();
-        let mut record = store
-            .load_record(&slot_id, Sv2SessionEnvironment::Normal)
-            .unwrap();
-        record.armed_at_utc = Some(
-            (Utc::now() - chrono::Duration::seconds(SESSION_RECOVERY_WINDOW_SECONDS + 1))
-                .to_rfc3339(),
-        );
-        store.save_record(&record).unwrap();
-        fs::remove_file(session_path(&data)).unwrap();
-
-        let view = store
-            .view(&slot_id, Sv2SessionEnvironment::Normal, &data, false)
-            .unwrap();
-        assert_eq!(view.status, Sv2SessionProtectionStatus::SessionAbsent);
-        assert!(!view.snapshot_available);
-        fs::remove_dir_all(root).unwrap();
-    }
-}
+#[path = "../../../../test/sv2_session_guard_tests.rs"]
+mod tests;

@@ -1,4 +1,6 @@
 pub mod agent;
+pub mod agent_files;
+mod api_keys;
 mod audio_capture;
 mod audio_prep;
 mod bridge_workflows;
@@ -7,12 +9,19 @@ mod components;
 mod config;
 mod creative_history;
 mod creative_tools;
+pub mod credential_balancer;
 mod downloads;
+mod http_api;
+mod lyric_projects;
 mod lyric_tools;
+mod managed_process;
 mod mcp;
+mod media_import;
+mod media_tasks;
 mod oauth;
-mod opencode_catalog;
+pub mod opencode_catalog;
 mod process_tree;
+mod solo_tuning;
 mod state;
 mod sv2_account_probe;
 mod sv2_concurrent;
@@ -21,7 +30,12 @@ mod sv2_session_guard;
 mod sv2_sync;
 mod svp_launch_router;
 mod synthv;
+mod synthv_control;
+mod synthv_hosts;
+mod synthv_unified;
+mod tuning_profiles;
 mod update_checker;
+mod workbuddy_store;
 mod workflows;
 
 use std::path::PathBuf;
@@ -68,14 +82,6 @@ pub fn run() {
                 .path()
                 .resource_dir()
                 .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
-            let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
-            let bundled_bridge = resource_dir.join("synthv-agent-bridge");
-            let development_bridge = repository.join("external/synthv-agent-bridge");
-            let bridge_dir = if bundled_bridge.join("dist/src/cli.js").is_file() {
-                bundled_bridge
-            } else {
-                development_bridge
-            };
             let bundled_components = resource_dir.join("components");
             let development_components =
                 PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("components");
@@ -84,6 +90,7 @@ pub fn run() {
             } else {
                 development_components
             };
+            let bridge_dir = components_dir.join("synthv-agent-bridge");
             let settings = match crate::config::load_settings() {
                 Ok(settings) => settings,
                 Err(error) => {
@@ -102,6 +109,19 @@ pub fn run() {
                 passthrough_only,
                 settings,
             ));
+            let http_api = app.state::<AppState>().http_api.clone();
+            let mut http_context = crate::http_api::HttpApiContext::from_state(
+                &app.state::<AppState>(),
+                app.handle().clone(),
+            );
+            let http_settings = app.state::<AppState>().settings.clone();
+            tauri::async_runtime::spawn(async move {
+                let settings = http_settings.read().await;
+                http_context.mcp_enabled = settings.http_api_enabled;
+                http_context.agent_enabled = settings.http_agent_enabled;
+                http_context.port = settings.http_api_port;
+                let _ = http_api.start_if_enabled(http_context).await;
+            });
             if let Some(activation) = initial_activation.clone() {
                 match open_original_svp_project(
                     &activation.project_path,
@@ -142,8 +162,15 @@ pub fn run() {
             commands::bootstrap,
             commands::complete_onboarding,
             commands::set_mode,
+            commands::set_agent_work_mode,
             commands::authorize_ai_provider,
+            commands::cancel_ai_authorization,
             commands::select_ai_provider,
+            commands::add_ai_api_key,
+            commands::remove_ai_api_key,
+            commands::update_ai_credential,
+            commands::update_ai_provider,
+            commands::update_ai_provider_strategy,
             commands::ai_provider_state,
             commands::opencode_provider_catalog,
             commands::remove_ai_provider_account,
@@ -183,6 +210,10 @@ pub fn run() {
             commands::install_bridge,
             commands::diagnose_bridge,
             commands::connect_bridge,
+            commands::list_synthv_processes,
+            commands::synthv_shortcut_profile,
+            commands::send_synthv_bridge_shortcut,
+            commands::auto_connect_synthv_bridge,
             commands::audio_capture_capability,
             commands::list_synthv_capture_targets,
             commands::capture_synthv_clip,
@@ -201,6 +232,8 @@ pub fn run() {
             commands::save_audio_artifact,
             commands::component_downloads,
             commands::queue_component_install,
+            commands::cancel_component_install,
+            commands::retry_component_install,
             commands::open_downloaded_component,
             commands::remove_local_component,
             commands::list_workflow_recipes,
@@ -212,6 +245,10 @@ pub fn run() {
             commands::lookup_chinese_rhyme,
             commands::build_lyric_template,
             commands::generate_lyric_candidates,
+            commands::list_lyric_projects,
+            commands::create_lyric_project,
+            commands::save_lyric_project,
+            commands::load_lyric_project,
             commands::run_project_doctor,
             commands::run_pronunciation_diagnostics,
             commands::run_render_review,
@@ -220,6 +257,19 @@ pub fn run() {
             commands::run_retake_workbench,
             commands::run_batch_workflow,
             commands::run_audio_probe,
+            commands::learn_tuning_profile,
+            commands::list_tuning_profiles,
+            commands::get_tuning_profile,
+            commands::record_tuning_outcome,
+            commands::apply_tuning_profile,
+            commands::run_solo_tuning,
+            commands::preview_media_source,
+            commands::media_tasks,
+            commands::queue_media_import,
+            commands::queue_media_separation,
+            commands::queue_cover,
+            commands::cancel_media_task,
+            commands::retry_media_task,
             commands::run_game_to_midi,
             commands::run_project_probe,
             commands::add_project_reference,
@@ -233,6 +283,10 @@ pub fn run() {
             commands::new_conversation,
             commands::open_conversation,
             commands::send_message,
+            commands::agent_file_approvals,
+            commands::decide_agent_file_approval,
+            commands::get_http_api_status,
+            commands::configure_http_api,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run SynthV Toolbox");

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -7,9 +8,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::agent::{TraeCodeConfig, TraeCodeProvider};
+use crate::credential_balancer::{cooldown_until_utc, CredentialBalancer, CredentialRoute};
 use crate::oauth::{self, AiProviderId, OAuthAccountMetadata};
+use crate::opencode_catalog::{RuntimeCatalogSource, RuntimeModelCatalog};
+use crate::workbuddy_store;
 
 const SETTINGS_SCHEMA_VERSION: u32 = 2;
+pub const DEFAULT_HTTP_API_PORT: u16 = 17_831;
 static MODEL_CONFIG_MUTATION_LOCK: Mutex<()> = Mutex::new(());
 static SETTINGS_LOAD_ERROR: OnceLock<String> = OnceLock::new();
 
@@ -25,6 +31,39 @@ pub enum AppMode {
     #[default]
     Toolbox,
     Ai,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentWorkMode {
+    #[default]
+    Edit,
+    Solo,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AiAuthMethod {
+    #[default]
+    #[serde(rename = "oauth")]
+    OAuth,
+    ApiKey,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AiLoadStrategy {
+    #[default]
+    RoundRobin,
+    WeightedRoundRobin,
+    Failover,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AiModelMode {
+    Catalog,
+    AccountDefaultReadonly,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +88,8 @@ pub struct ToolboxSettings {
     #[serde(default)]
     pub mode: AppMode,
     #[serde(default)]
+    pub agent_work_mode: AgentWorkMode,
+    #[serde(default)]
     pub scripts_path: Option<String>,
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
@@ -68,8 +109,52 @@ pub struct ToolboxSettings {
     pub anthropic_model: String,
     #[serde(default = "default_codex_model")]
     pub codex_model: String,
+    #[serde(default = "default_workbuddy_model")]
+    pub workbuddy_model: String,
+    #[serde(default = "default_traecode_model")]
+    pub traecode_model: String,
+    #[serde(default)]
+    pub anthropic_api_keys: Vec<ApiKeyMetadata>,
+    #[serde(default)]
+    pub openai_api_keys: Vec<ApiKeyMetadata>,
     #[serde(default)]
     pub oauth_accounts: Vec<OAuthAccountMetadata>,
+    #[serde(default = "default_true")]
+    pub anthropic_oauth_enabled: bool,
+    #[serde(default = "default_true")]
+    pub openai_codex_oauth_enabled: bool,
+    #[serde(default = "default_true")]
+    pub workbuddy_oauth_enabled: bool,
+    #[serde(default = "default_true")]
+    pub traecode_oauth_enabled: bool,
+    #[serde(default)]
+    pub anthropic_load_strategy: AiLoadStrategy,
+    #[serde(default)]
+    pub openai_codex_load_strategy: AiLoadStrategy,
+    #[serde(default)]
+    pub workbuddy_load_strategy: AiLoadStrategy,
+    #[serde(default)]
+    pub traecode_load_strategy: AiLoadStrategy,
+    #[serde(default)]
+    pub http_api_enabled: bool,
+    #[serde(default)]
+    pub http_agent_enabled: bool,
+    #[serde(default = "default_http_api_port")]
+    pub http_api_port: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiKeyMetadata {
+    pub id: String,
+    pub provider: AiProviderId,
+    pub label: String,
+    pub models: Vec<String>,
+    pub created_at_utc: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_weight")]
+    pub weight: u8,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -80,6 +165,8 @@ pub struct OAuthAccountSummary {
     pub expires_at: i64,
     pub authorized: bool,
     pub healthy: bool,
+    pub enabled: bool,
+    pub weight: u8,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -93,8 +180,30 @@ pub struct AiProviderSummary {
     pub healthy_accounts: usize,
     pub total_accounts: usize,
     pub model: String,
+    pub model_mode: AiModelMode,
     pub models: Vec<String>,
+    pub oauth_models: Vec<String>,
+    pub api_key_models: Vec<String>,
     pub accounts: Vec<OAuthAccountSummary>,
+    pub api_keys: Vec<AiApiKeySummary>,
+    pub auth_methods: Vec<AiAuthMethod>,
+    pub oauth_enabled: bool,
+    pub load_strategy: AiLoadStrategy,
+    pub available: bool,
+    pub unavailable_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiApiKeySummary {
+    pub id: String,
+    pub label: String,
+    pub models: Vec<String>,
+    pub healthy: bool,
+    pub cooldown_until_utc: Option<String>,
+    pub created_at_utc: String,
+    pub enabled: bool,
+    pub weight: u8,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -103,6 +212,9 @@ pub struct ModelSummary {
     pub active_provider: AiProviderId,
     pub providers: Vec<AiProviderSummary>,
     pub legacy_configured: bool,
+    pub catalog_source: RuntimeCatalogSource,
+    pub catalog_generated_at: u64,
+    pub catalog_error: Option<String>,
 }
 
 impl Default for ToolboxSettings {
@@ -111,6 +223,7 @@ impl Default for ToolboxSettings {
             schema_version: SETTINGS_SCHEMA_VERSION,
             onboarding_completed: false,
             mode: AppMode::Toolbox,
+            agent_work_mode: AgentWorkMode::Edit,
             scripts_path: None,
             mcp_servers: Vec::new(),
             concurrent_disclaimer_accepted: false,
@@ -121,13 +234,32 @@ impl Default for ToolboxSettings {
             ai_provider: AiProviderId::Anthropic,
             anthropic_model: default_anthropic_model(),
             codex_model: default_codex_model(),
+            workbuddy_model: default_workbuddy_model(),
+            traecode_model: default_traecode_model(),
+            anthropic_api_keys: Vec::new(),
+            openai_api_keys: Vec::new(),
             oauth_accounts: Vec::new(),
+            anthropic_oauth_enabled: true,
+            openai_codex_oauth_enabled: true,
+            workbuddy_oauth_enabled: true,
+            traecode_oauth_enabled: true,
+            anthropic_load_strategy: AiLoadStrategy::RoundRobin,
+            openai_codex_load_strategy: AiLoadStrategy::RoundRobin,
+            workbuddy_load_strategy: AiLoadStrategy::RoundRobin,
+            traecode_load_strategy: AiLoadStrategy::RoundRobin,
+            http_api_enabled: false,
+            http_agent_enabled: false,
+            http_api_port: DEFAULT_HTTP_API_PORT,
         }
     }
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_weight() -> u8 {
+    1
 }
 
 fn schema_version() -> u32 {
@@ -142,11 +274,25 @@ fn default_codex_model() -> String {
     AiProviderId::OpenaiCodex.default_model().to_string()
 }
 
+fn default_workbuddy_model() -> String {
+    AiProviderId::Workbuddy.default_model().to_string()
+}
+
+fn default_traecode_model() -> String {
+    AiProviderId::Traecode.default_model().to_string()
+}
+
+fn default_http_api_port() -> u16 {
+    DEFAULT_HTTP_API_PORT
+}
+
 impl ToolboxSettings {
     pub fn model_for(&self, provider: AiProviderId) -> &str {
         let value = match provider {
             AiProviderId::Anthropic => &self.anthropic_model,
             AiProviderId::OpenaiCodex => &self.codex_model,
+            AiProviderId::Workbuddy => &self.workbuddy_model,
+            AiProviderId::Traecode => &self.traecode_model,
         };
         if value.trim().is_empty() {
             provider.default_model()
@@ -159,7 +305,103 @@ impl ToolboxSettings {
         match provider {
             AiProviderId::Anthropic => self.anthropic_model = model,
             AiProviderId::OpenaiCodex => self.codex_model = model,
+            AiProviderId::Workbuddy => self.workbuddy_model = model,
+            AiProviderId::Traecode => self.traecode_model = model,
         }
+    }
+
+    pub fn api_keys_for(&self, provider: AiProviderId) -> &[ApiKeyMetadata] {
+        match provider {
+            AiProviderId::Anthropic => &self.anthropic_api_keys,
+            AiProviderId::OpenaiCodex => &self.openai_api_keys,
+            AiProviderId::Workbuddy | AiProviderId::Traecode => &[],
+        }
+    }
+
+    pub fn api_key_models_for(&self, provider: AiProviderId) -> Vec<String> {
+        let mut models = self
+            .api_keys_for(provider)
+            .iter()
+            .flat_map(|key| key.models.iter().cloned())
+            .collect::<Vec<_>>();
+        models.sort();
+        models.dedup();
+        models
+    }
+
+    pub fn set_api_keys_for(&mut self, provider: AiProviderId, keys: Vec<ApiKeyMetadata>) {
+        match provider {
+            AiProviderId::Anthropic => self.anthropic_api_keys = keys,
+            AiProviderId::OpenaiCodex => self.openai_api_keys = keys,
+            AiProviderId::Workbuddy | AiProviderId::Traecode => {}
+        }
+    }
+
+    pub fn oauth_enabled(&self, provider: AiProviderId) -> bool {
+        match provider {
+            AiProviderId::Anthropic => self.anthropic_oauth_enabled,
+            AiProviderId::OpenaiCodex => self.openai_codex_oauth_enabled,
+            AiProviderId::Workbuddy => self.workbuddy_oauth_enabled,
+            AiProviderId::Traecode => self.traecode_oauth_enabled,
+        }
+    }
+
+    pub fn set_oauth_enabled(&mut self, provider: AiProviderId, enabled: bool) {
+        match provider {
+            AiProviderId::Anthropic => self.anthropic_oauth_enabled = enabled,
+            AiProviderId::OpenaiCodex => self.openai_codex_oauth_enabled = enabled,
+            AiProviderId::Workbuddy => self.workbuddy_oauth_enabled = enabled,
+            AiProviderId::Traecode => self.traecode_oauth_enabled = enabled,
+        }
+    }
+
+    pub fn load_strategy(&self, provider: AiProviderId) -> AiLoadStrategy {
+        match provider {
+            AiProviderId::Anthropic => self.anthropic_load_strategy,
+            AiProviderId::OpenaiCodex => self.openai_codex_load_strategy,
+            AiProviderId::Workbuddy => self.workbuddy_load_strategy,
+            AiProviderId::Traecode => self.traecode_load_strategy,
+        }
+    }
+
+    pub fn set_load_strategy(&mut self, provider: AiProviderId, strategy: AiLoadStrategy) {
+        match provider {
+            AiProviderId::Anthropic => self.anthropic_load_strategy = strategy,
+            AiProviderId::OpenaiCodex => self.openai_codex_load_strategy = strategy,
+            AiProviderId::Workbuddy => self.workbuddy_load_strategy = strategy,
+            AiProviderId::Traecode => self.traecode_load_strategy = strategy,
+        }
+    }
+
+    pub fn credential_routes(&self, catalog: &RuntimeModelCatalog) -> Vec<CredentialRoute> {
+        let mut routes = self
+            .oauth_accounts
+            .iter()
+            .filter(|account| account.enabled && self.oauth_enabled(account.provider))
+            .map(|account| CredentialRoute {
+                id: account.id.clone(),
+                provider: account.provider,
+                auth_method: AiAuthMethod::OAuth,
+                models: catalog.models_for(account.provider).to_vec(),
+                weight: account.weight,
+                strategy: self.load_strategy(account.provider),
+            })
+            .collect::<Vec<_>>();
+        routes.extend(
+            self.anthropic_api_keys
+                .iter()
+                .chain(self.openai_api_keys.iter())
+                .filter(|key| key.enabled)
+                .map(|key| CredentialRoute {
+                    id: key.id.clone(),
+                    provider: key.provider,
+                    auth_method: AiAuthMethod::ApiKey,
+                    models: key.models.clone(),
+                    weight: key.weight,
+                    strategy: self.load_strategy(key.provider),
+                }),
+        );
+        routes
     }
 
     pub fn upsert_oauth_account(&mut self, account: OAuthAccountMetadata) {
@@ -447,72 +689,185 @@ fn legacy_model_token_configured() -> bool {
         .is_some_and(|token| !token.trim().is_empty())
 }
 
-pub fn model_summary(settings: &ToolboxSettings) -> ModelSummary {
-    let providers = [AiProviderId::Anthropic, AiProviderId::OpenaiCodex]
-        .into_iter()
-        .map(|provider| {
-            let account_metadata = settings
-                .oauth_accounts
+pub fn model_summary(
+    settings: &ToolboxSettings,
+    balancer: &CredentialBalancer,
+    catalog: &RuntimeModelCatalog,
+) -> ModelSummary {
+    let providers = [
+        AiProviderId::Anthropic,
+        AiProviderId::OpenaiCodex,
+        AiProviderId::Workbuddy,
+        AiProviderId::Traecode,
+    ]
+    .into_iter()
+    .map(|provider| {
+        let api_keys = settings
+            .api_keys_for(provider)
+            .iter()
+            .map(|key| {
+                let health = balancer.health(AiAuthMethod::ApiKey, &key.id);
+                AiApiKeySummary {
+                    id: key.id.clone(),
+                    label: key.label.clone(),
+                    models: key.models.clone(),
+                    healthy: health.healthy,
+                    cooldown_until_utc: cooldown_until_utc(health.cooldown_until_ms),
+                    created_at_utc: key.created_at_utc.clone(),
+                    enabled: key.enabled,
+                    weight: key.weight,
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut account_metadata = settings
+            .oauth_accounts
+            .iter()
+            .filter(|account| account.provider == provider)
+            .cloned()
+            .collect::<Vec<_>>();
+        let discovered_codex_models = (provider == AiProviderId::OpenaiCodex
+            && !account_metadata.is_empty())
+        .then(|| oauth::discover_codex_models(&account_metadata).ok())
+        .flatten();
+        let trae_status = (provider == AiProviderId::Traecode).then(|| {
+            TraeCodeProvider::new(TraeCodeConfig::new(provider.default_model())).cached_login_status()
+        });
+        let trae_available = trae_status.as_ref().and_then(|status| status.as_ref().ok()).is_some_and(|status| status.available);
+        let trae_connected = trae_status.as_ref().and_then(|status| status.as_ref().ok()).is_some_and(|status| status.logged_in);
+        if provider == AiProviderId::Traecode
+            && trae_connected
+            && !account_metadata
                 .iter()
-                .filter(|account| account.provider == provider)
-                .cloned()
-                .collect::<Vec<_>>();
-            let discovered_codex_models = (provider == AiProviderId::OpenaiCodex)
-                .then(|| oauth::discover_codex_models(&account_metadata).ok())
-                .flatten();
-            let accounts = account_metadata
-                .iter()
-                .map(|account| {
-                    let authorized = oauth::credential_available(account);
-                    OAuthAccountSummary {
-                        id: account.id.clone(),
-                        label: account.label.clone(),
-                        expires_at: oauth::credential_expires_at(account).unwrap_or_default(),
-                        authorized,
-                        healthy: authorized && oauth::credential_healthy(account),
-                    }
-                })
-                .collect::<Vec<_>>();
-            let healthy_accounts = accounts.iter().filter(|account| account.healthy).count();
-            AiProviderSummary {
-                id: provider,
-                display_name: provider.display_name().to_string(),
-                description: match provider {
-                    AiProviderId::Anthropic => {
-                        "通过浏览器授权 Claude Pro / Max 官方订阅。".to_string()
-                    }
-                    AiProviderId::OpenaiCodex => {
-                        "通过浏览器授权 ChatGPT Plus / Pro 的 Codex 运行时。".to_string()
-                    }
-                },
-                active: settings.ai_provider == provider,
-                connected: accounts.iter().any(|account| account.authorized),
-                healthy_accounts,
-                total_accounts: accounts.len(),
-                model: settings.model_for(provider).to_string(),
-                models: provider
-                    .model_options()
-                    .iter()
-                    .filter(|model| {
-                        **model != oauth::CODEX_SPARK_MODEL_ID
-                            || discovered_codex_models
-                                .as_ref()
-                                .is_some_and(|models| models.contains(**model))
-                    })
-                    .map(|model| (*model).to_string())
-                    .collect(),
-                accounts,
+                .any(|account| account.id == "oauth:traecode:enterprise")
+        {
+            account_metadata.push(OAuthAccountMetadata {
+                id: "oauth:traecode:enterprise".to_string(),
+                provider,
+                label: "TraeCode account".to_string(),
+                expires_at: 0,
+                enabled: true,
+                weight: 1,
+            });
+        }
+        let accounts = account_metadata
+            .iter()
+            .map(|account| {
+                let authorized = if provider == AiProviderId::Workbuddy {
+                    workbuddy_store::configured(&account.id)
+                } else if provider == AiProviderId::Traecode {
+                    trae_connected
+                } else {
+                    oauth::credential_available(account)
+                };
+                OAuthAccountSummary {
+                    id: account.id.clone(),
+                    label: account.label.clone(),
+                    expires_at: match provider {
+                        AiProviderId::Workbuddy => account.expires_at,
+                        AiProviderId::Traecode => 0,
+                        AiProviderId::Anthropic | AiProviderId::OpenaiCodex => {
+                            oauth::credential_expires_at(account).unwrap_or_default()
+                        }
+                    },
+                    authorized,
+                    healthy: authorized
+                        && (matches!(provider, AiProviderId::Workbuddy | AiProviderId::Traecode)
+                            || oauth::credential_healthy(account)),
+                    enabled: account.enabled,
+                    weight: account.weight,
+                }
+            })
+            .collect::<Vec<_>>();
+        let healthy_accounts = accounts.iter().filter(|account| account.healthy).count();
+        let oauth_models = oauth_models_for(provider, catalog, discovered_codex_models.as_ref());
+        let api_key_models = settings.api_key_models_for(provider);
+        let mut models = if accounts.iter().any(|account| account.authorized) || trae_connected {
+            oauth_models.clone()
+        } else {
+            Vec::new()
+        };
+        models.extend(api_key_models.iter().cloned());
+        models.sort();
+        models.dedup();
+        let active = settings.ai_provider == provider;
+        let auth_methods = match provider {
+            AiProviderId::Anthropic | AiProviderId::OpenaiCodex => {
+                vec![AiAuthMethod::OAuth, AiAuthMethod::ApiKey]
             }
-        })
-        .collect();
+            AiProviderId::Workbuddy | AiProviderId::Traecode => vec![AiAuthMethod::OAuth],
+        };
+        let available = provider != AiProviderId::Traecode || trae_available;
+        let unavailable_reason = trae_status.and_then(|status| match status {
+            Ok(status) if status.available => None,
+            Ok(status) => Some(status.detail),
+            Err(error) => Some(error.to_string()),
+        });
+        AiProviderSummary {
+            id: provider,
+            display_name: provider.display_name().to_string(),
+            description: match provider {
+                AiProviderId::Anthropic => {
+                    "支持 OAuth（Claude Pro / Max）或 Anthropic API Key。".to_string()
+                }
+                AiProviderId::OpenaiCodex => {
+                    "支持 OAuth（ChatGPT Plus / Pro）或 OpenAI API Key。".to_string()
+                }
+                AiProviderId::Workbuddy => "支持 WorkBuddy OAuth。".to_string(),
+                AiProviderId::Traecode => "通过官方 TraeCode CLI 登录；仅使用账号默认模型，不能作为 models.dev 模型元数据。".to_string(),
+            },
+            active,
+            connected: accounts.iter().any(|account| account.authorized) || !api_keys.is_empty(),
+            healthy_accounts,
+            total_accounts: accounts.len(),
+            model: settings.model_for(provider).to_string(),
+            model_mode: if provider == AiProviderId::Traecode {
+                AiModelMode::AccountDefaultReadonly
+            } else {
+                AiModelMode::Catalog
+            },
+            models,
+            oauth_models,
+            api_key_models,
+            accounts,
+            api_keys,
+            auth_methods,
+            oauth_enabled: settings.oauth_enabled(provider),
+            load_strategy: settings.load_strategy(provider),
+            available,
+            unavailable_reason,
+        }
+    })
+    .collect();
     ModelSummary {
         active_provider: settings.ai_provider,
         providers,
         legacy_configured: legacy_model_token_configured(),
+        catalog_source: catalog.source,
+        catalog_generated_at: catalog.generated_at,
+        catalog_error: catalog.error.clone(),
     }
 }
 
-pub fn validate_ai_model(provider: AiProviderId, model: &str) -> Result<String, String> {
+fn oauth_models_for(
+    provider: AiProviderId,
+    catalog: &RuntimeModelCatalog,
+    discovered_codex_models: Option<&HashSet<String>>,
+) -> Vec<String> {
+    let mut models = catalog.models_for(provider).to_vec();
+    if provider == AiProviderId::OpenaiCodex {
+        if let Some(discovered) = discovered_codex_models {
+            models.retain(|model| discovered.contains(model));
+        }
+    }
+    models
+}
+
+pub fn validate_ai_model(
+    settings: &ToolboxSettings,
+    provider: AiProviderId,
+    model: &str,
+    catalog: &RuntimeModelCatalog,
+) -> Result<String, String> {
     let model = model.trim();
     if model.is_empty() || model.len() > 120 {
         return Err("模型 ID 不能为空且不能超过 120 个字符。".to_string());
@@ -522,8 +877,44 @@ pub fn validate_ai_model(provider: AiProviderId, model: &str) -> Result<String, 
     }) {
         return Err("模型 ID 包含不受支持的字符。".to_string());
     }
-    if provider == AiProviderId::OpenaiCodex && !provider.model_options().contains(&model) {
-        return Err("该模型不在当前 Codex 官方订阅目录中。".to_string());
+    if provider == AiProviderId::Traecode {
+        if model != AiProviderId::Traecode.default_model() {
+            return Err("TraeCode 仅支持只读的账号默认模型。".to_string());
+        }
+        let authenticated = TraeCodeProvider::new(TraeCodeConfig::new(model))
+            .cached_login_status()
+            .is_ok_and(|status| status.logged_in);
+        return authenticated
+            .then(|| model.to_string())
+            .ok_or_else(|| "TraeCode CLI 尚未登录。".to_string());
+    }
+    let oauth_connected = match provider {
+        AiProviderId::Workbuddy => settings
+            .oauth_accounts
+            .iter()
+            .filter(|account| account.provider == provider)
+            .any(|account| workbuddy_store::configured(&account.id)),
+        AiProviderId::Traecode => {
+            TraeCodeProvider::new(TraeCodeConfig::new(provider.default_model()))
+                .cached_login_status()
+                .is_ok_and(|status| status.logged_in)
+        }
+        AiProviderId::Anthropic | AiProviderId::OpenaiCodex => settings
+            .oauth_accounts
+            .iter()
+            .any(|account| account.provider == provider),
+    };
+    let oauth_available = oauth_connected
+        && catalog
+            .models_for(provider)
+            .iter()
+            .any(|available| available == model);
+    let api_key_available = settings
+        .api_key_models_for(provider)
+        .iter()
+        .any(|available| available == model);
+    if !oauth_available && !api_key_available {
+        return Err("该模型不在当前供应商的 OAuth 或 API Key 模型目录中。".to_string());
     }
     Ok(model.to_string())
 }
@@ -645,8 +1036,177 @@ mod tests {
 
     #[test]
     fn codex_model_must_come_from_the_subscription_catalog() {
-        assert!(validate_ai_model(AiProviderId::OpenaiCodex, "gpt-5.6-terra").is_ok());
-        assert!(validate_ai_model(AiProviderId::OpenaiCodex, "invented-model").is_err());
+        let mut settings = ToolboxSettings::default();
+        let catalog = RuntimeModelCatalog::fallback(None);
+        assert!(validate_ai_model(
+            &settings,
+            AiProviderId::OpenaiCodex,
+            "gpt-5.6-terra",
+            &catalog
+        )
+        .is_err());
+        settings.oauth_accounts.push(OAuthAccountMetadata {
+            id: "oauth:openai-codex:test".to_string(),
+            provider: AiProviderId::OpenaiCodex,
+            label: "Test account".to_string(),
+            expires_at: 0,
+            enabled: true,
+            weight: 1,
+        });
+        assert!(validate_ai_model(
+            &settings,
+            AiProviderId::OpenaiCodex,
+            "gpt-5.6-terra",
+            &catalog
+        )
+        .is_ok());
+        assert!(validate_ai_model(
+            &settings,
+            AiProviderId::OpenaiCodex,
+            "invented-model",
+            &catalog
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn auth_method_serializes_as_the_stable_frontend_contract() {
+        assert_eq!(
+            serde_json::to_string(&AiAuthMethod::OAuth).unwrap(),
+            "\"oauth\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AiAuthMethod::ApiKey).unwrap(),
+            "\"api-key\""
+        );
+    }
+
+    #[test]
+    fn provider_summary_has_generic_installation_labels() {
+        assert_eq!(AiProviderId::Anthropic.display_name(), "Claude / Anthropic");
+        assert_eq!(AiProviderId::OpenaiCodex.display_name(), "OpenAI / Codex");
+        let balancer = CredentialBalancer::new([]);
+        let catalog = RuntimeModelCatalog::fallback(None);
+        let encoded = serde_json::to_value(model_summary(
+            &ToolboxSettings::default(),
+            &balancer,
+            &catalog,
+        ))
+        .unwrap();
+        let providers = encoded["providers"].as_array().unwrap();
+        assert_eq!(encoded["catalogSource"], "built-in-fallback");
+        assert!(providers[0]["description"]
+            .as_str()
+            .unwrap()
+            .contains("API Key"));
+        assert!(providers[1]["description"]
+            .as_str()
+            .unwrap()
+            .contains("API Key"));
+    }
+
+    #[test]
+    fn provider_auth_method_contract_is_explicit_and_restricted() {
+        let balancer = CredentialBalancer::new([]);
+        let catalog = RuntimeModelCatalog::fallback(None);
+        let value = serde_json::to_value(model_summary(
+            &ToolboxSettings::default(),
+            &balancer,
+            &catalog,
+        ))
+        .unwrap();
+        let providers = value["providers"].as_array().unwrap();
+        let workbuddy = providers
+            .iter()
+            .find(|provider| provider["id"] == "workbuddy")
+            .unwrap();
+        let traecode = providers
+            .iter()
+            .find(|provider| provider["id"] == "traecode")
+            .unwrap();
+        assert_eq!(workbuddy["authMethods"], serde_json::json!(["oauth"]));
+        assert_eq!(traecode["authMethods"], serde_json::json!(["oauth"]));
+        assert_eq!(
+            providers
+                .iter()
+                .find(|provider| provider["id"] == "anthropic")
+                .unwrap()["authMethods"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn provider_summary_exposes_configuration_state_not_secret_material() {
+        let summary = AiProviderSummary {
+            id: AiProviderId::Anthropic,
+            display_name: "Claude API".to_string(),
+            description: "Platform API".to_string(),
+            active: true,
+            connected: true,
+            healthy_accounts: 0,
+            total_accounts: 0,
+            model: "claude-sonnet-4-6".to_string(),
+            model_mode: AiModelMode::Catalog,
+            models: vec![
+                "claude-opus-4-8".to_string(),
+                "claude-sonnet-4-6".to_string(),
+            ],
+            oauth_models: vec!["claude-sonnet-4-6".to_string()],
+            api_key_models: vec!["claude-opus-4-8".to_string()],
+            accounts: Vec::new(),
+            api_keys: Vec::new(),
+            auth_methods: vec![AiAuthMethod::OAuth, AiAuthMethod::ApiKey],
+            oauth_enabled: true,
+            load_strategy: AiLoadStrategy::RoundRobin,
+            available: true,
+            unavailable_reason: None,
+        };
+        let value = serde_json::to_value(summary).unwrap();
+        assert_eq!(value["modelMode"], "catalog");
+        assert_eq!(value["oauthModels"][0], "claude-sonnet-4-6");
+        assert_eq!(value["apiKeyModels"][0], "claude-opus-4-8");
+        assert_eq!(value["models"].as_array().unwrap().len(), 2);
+        assert!(value.get("apiKey").is_none());
+        assert!(!value.to_string().contains("sk-ant-"));
+    }
+
+    #[test]
+    fn oauth_and_api_key_model_directories_never_mix() {
+        let settings = ToolboxSettings {
+            anthropic_api_keys: vec![ApiKeyMetadata {
+                id: "key-1".to_string(),
+                provider: AiProviderId::Anthropic,
+                label: "A".to_string(),
+                models: vec!["claude-api-only".to_string()],
+                created_at_utc: "2026-01-01T00:00:00Z".to_string(),
+                enabled: true,
+                weight: 1,
+            }],
+            openai_api_keys: vec![ApiKeyMetadata {
+                id: "key-2".to_string(),
+                provider: AiProviderId::OpenaiCodex,
+                label: "B".to_string(),
+                models: vec!["gpt-api-only".to_string()],
+                created_at_utc: "2026-01-01T00:00:00Z".to_string(),
+                enabled: true,
+                weight: 1,
+            }],
+            ..ToolboxSettings::default()
+        };
+
+        let catalog = RuntimeModelCatalog::fallback(None);
+        let oauth = oauth_models_for(AiProviderId::Anthropic, &catalog, None);
+        let api_key = settings.api_key_models_for(AiProviderId::Anthropic);
+        assert!(oauth.contains(&"claude-sonnet-4-6".to_string()));
+        assert!(!oauth.contains(&"claude-api-only".to_string()));
+        assert_eq!(api_key, vec!["claude-api-only"]);
+        assert_eq!(
+            settings.api_key_models_for(AiProviderId::OpenaiCodex),
+            vec!["gpt-api-only"]
+        );
     }
 
     #[test]

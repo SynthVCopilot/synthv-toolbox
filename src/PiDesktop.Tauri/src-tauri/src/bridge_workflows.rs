@@ -1,8 +1,11 @@
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use serde_json::{json, Value};
 
 use crate::mcp::{extract_mcp_json, McpManager};
+use crate::synthv::find_node;
+use crate::tuning_profiles::TuningProfile;
 
 const LOCAL_SCORE_EXTENSIONS: &[&str] = &["xml", "musicxml", "mxl", "mid", "midi"];
 
@@ -81,6 +84,164 @@ pub async fn import_monophonic_midi(
         },
     )
     .await
+}
+
+pub async fn current_project_file(manager: &McpManager) -> Result<String, String> {
+    let status = call_json(manager, "sv_status", json!({})).await?;
+    current_project_file_from_standard_reads(&status, &Value::Null)
+}
+
+pub fn current_project_file_from_standard_reads(
+    project: &Value,
+    status: &Value,
+) -> Result<String, String> {
+    [project, status]
+        .into_iter()
+        .find_map(find_standard_project_file)
+        .map(str::to_string)
+        .ok_or_else(|| "当前 SynthV 工程尚未保存为 .svp；无法验证 Cover 工程输出。".to_string())
+}
+
+pub fn parse_cover_midi(bridge_dir: &Path, midi_path: &str) -> Result<Value, String> {
+    let path = Path::new(midi_path);
+    if !path.is_absolute() || !path.is_file() {
+        return Err("Cover MIDI 路径必须是存在的绝对本地文件。".to_string());
+    }
+    let node = find_node().ok_or_else(|| "未找到兼容的本地扩展运行时。".to_string())?;
+    let script = bridge_dir.join("scripts/cover-score-notes.mjs");
+    if !script.is_file() || !bridge_dir.join("dist/src/score-import.js").is_file() {
+        return Err("当前应用包不包含 Cover 曲谱转换器。".to_string());
+    }
+    let output = Command::new(node)
+        .arg(script)
+        .arg(path)
+        .current_dir(bridge_dir)
+        .output()
+        .map_err(|error| format!("无法启动 Cover 曲谱转换器：{error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if detail.is_empty() {
+            "Cover 曲谱转换器失败。".to_string()
+        } else {
+            format!("Cover 曲谱转换器失败：{detail}")
+        });
+    }
+    let parsed: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Cover 曲谱转换器输出无效：{error}"))?;
+    let note_count = parsed
+        .get("notes")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .filter(|count| (1..=512).contains(count))
+        .ok_or_else(|| "Cover 曲谱转换器没有返回 1–512 个可写入音符。".to_string())?;
+    if parsed.get("noteCount").and_then(Value::as_u64) != Some(note_count as u64) {
+        return Err("Cover 曲谱转换器返回的音符计数不一致。".to_string());
+    }
+    Ok(parsed)
+}
+
+pub async fn apply_tuning_profile(
+    manager: &McpManager,
+    profile: &TuningProfile,
+    track_index: u32,
+    group_index: u32,
+) -> Result<Value, String> {
+    if track_index == 0 || group_index == 0 {
+        return Err("轨道和音符组编号必须从 1 开始。".to_string());
+    }
+    let context = call_json(
+        manager,
+        "sv_query",
+        json!({
+            "action": "get_track_notes",
+            "args": { "trackIndex": track_index, "groupIndex": group_index, "offset": 0, "limit": 512 },
+            "contextMode": "writeIntent",
+            "dense": "never",
+            "debug": false
+        }),
+    )
+    .await?;
+    let context_id = find_string(&context, "contextId")
+        .ok_or_else(|| "Bridge 没有返回可安全写入的音符组 Context。".to_string())?;
+    let parameters = &profile.parameters;
+    let note_edits = collect_note_indices(&context)
+        .into_iter()
+        .map(|note_index| {
+            json!({
+                "noteIndex": note_index,
+                "changes": { "attributes": { "dF0VbrMod": parameters.vibrato_strength } }
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut args = json!({
+        "trackIndex": track_index,
+        "groupIndex": group_index,
+        "summary": format!("应用 {} 的本地学习调声档案", profile.voice_name),
+        "requireCurrentEditorGroup": false,
+        "voice": {
+            "parameters": {
+                "loudness": parameters.loudness,
+                "tension": parameters.tension,
+                "breathiness": parameters.breathiness,
+                "gender": parameters.gender,
+                "toneShift": parameters.tone_shift
+            }
+        }
+    });
+    if !note_edits.is_empty() {
+        args["noteEdits"] = Value::Array(note_edits);
+    }
+    let applied = call_json(
+        manager,
+        "sv_command",
+        json!({
+            "action": "apply_group_tuning",
+            "args": args,
+            "contextId": context_id,
+            "expectedEffect": "allowAlreadySatisfied"
+        }),
+    )
+    .await?;
+    Ok(json!({
+        "profile": profile,
+        "context": context,
+        "applied": applied,
+        "vibratoStrength": parameters.vibrato_strength,
+        "vibratoApplied": !collect_note_indices(&context).is_empty(),
+        "vibratoNoteCount": collect_note_indices(&context).len()
+    }))
+}
+
+fn collect_note_indices(value: &Value) -> Vec<u64> {
+    let mut output = Vec::new();
+    collect_note_indices_into(value, &mut output);
+    output.sort_unstable();
+    output.dedup();
+    output.truncate(512);
+    output
+}
+
+fn collect_note_indices_into(value: &Value, output: &mut Vec<u64>) {
+    match value {
+        Value::Object(object) => {
+            if let Some(notes) = object.get("notes").and_then(Value::as_array) {
+                output.extend(
+                    notes
+                        .iter()
+                        .filter_map(|note| note.get("noteIndex")?.as_u64()),
+                );
+            }
+            for child in object.values() {
+                collect_note_indices_into(child, output);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_note_indices_into(item, output);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn validate_score_import(request: ScoreImportRequest) -> Result<ValidatedScoreImport, String> {
@@ -229,6 +390,22 @@ fn find_string<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     }
 }
 
+fn find_standard_project_file(value: &Value) -> Option<&str> {
+    match value {
+        Value::Object(object) => ["projectFile", "fileName", "filePath"]
+            .into_iter()
+            .find_map(|key| {
+                object
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .filter(|path| !path.trim().is_empty())
+            })
+            .or_else(|| object.values().find_map(find_standard_project_file)),
+        Value::Array(items) => items.iter().find_map(find_standard_project_file),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -240,6 +417,16 @@ mod tests {
     fn recursively_finds_bridge_projection_fields() {
         let value = json!({ "result": { "fileFingerprint": "sha256:abc" } });
         assert_eq!(find_string(&value, "fileFingerprint"), Some("sha256:abc"));
+    }
+
+    #[test]
+    fn finds_project_path_from_standard_project_or_status_reads() {
+        let path = current_project_file_from_standard_reads(
+            &json!({ "fileName": "" }),
+            &json!({ "project": { "filePath": "/tmp/cover.svp" } }),
+        )
+        .expect("standard host path");
+        assert_eq!(path, "/tmp/cover.svp");
     }
 
     #[test]

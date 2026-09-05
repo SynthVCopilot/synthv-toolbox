@@ -12,6 +12,9 @@
       残差=人声贡献；经"最高音抢占"单音化后可直接喂
       synthv-agent-bridge 的 import_monophonic_score（≤512 音符时）。
 
+  source-style <audio>
+      离线提取可解释的参考演唱特征（不下载模型），输出纯 JSON。
+
 依赖：librosa / numpy / basic-pitch / pretty-midi；PANNs 判别需
 torch(CPU 即可) + panns-inference。Python ≤3.11（basic-pitch 生态限制）。
 """
@@ -24,6 +27,7 @@ import numpy as np
 sys.stdout.reconfigure(encoding="utf-8")
 
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+SOURCE_STYLE_ANALYSIS_SECONDS = 45
 
 # AudioSet 中的风格/情绪类标签（供相对排序；绝对概率普遍偏低，不可单独当结论）
 GENREISH = {
@@ -254,6 +258,157 @@ def cmd_probe(args) -> dict:
     return result
 
 
+def _finite_bound(value, lower: float, upper: float, default: float = 0.0) -> float:
+    """Return a finite float constrained to the public feature range."""
+    value = float(value)
+    if not np.isfinite(value):
+        return float(default)
+    return float(np.clip(value, lower, upper))
+
+
+def _vibrato_features(f0, voiced, sr: int, hop_length: int):
+    """Estimate the 3–9 Hz component of detrended voiced F0 in cents."""
+    voiced = np.asarray(voiced, dtype=bool)
+    f0 = np.asarray(f0, dtype=float)
+    valid = voiced & np.isfinite(f0) & (f0 > 0.0)
+    if int(valid.sum()) < 8:
+        return 0.0, 0.0
+
+    usable = np.flatnonzero(valid)
+    # Interpolate only across the voiced span; outside it there is no made-up F0.
+    first, last = int(usable[0]), int(usable[-1])
+    span = np.arange(first, last + 1, dtype=float)
+    semitones = 12.0 * np.log2(f0[usable] / 440.0) + 69.0
+    contour = np.interp(span, usable.astype(float), semitones)
+    if contour.size < 8:
+        return 0.0, 0.0
+    x = span - span.mean()
+    if contour.size >= 2:
+        slope, intercept = np.polyfit(x, contour, 1)
+        residual = contour - (slope * x + intercept)
+    else:
+        residual = contour - contour.mean()
+
+    sample_rate = float(sr) / max(1, int(hop_length))
+    frequencies = np.fft.rfftfreq(residual.size, d=1.0 / sample_rate)
+    spectrum = np.fft.rfft(residual - residual.mean())
+    band = (frequencies >= 3.0) & (frequencies <= 9.0)
+    if not np.any(band):
+        return 0.0, 0.0
+    power = np.abs(spectrum[band]) ** 2
+    if not np.any(np.isfinite(power)) or float(np.max(power)) <= 0.0:
+        return 0.0, 0.0
+    band_frequencies = frequencies[band]
+    rate = float(band_frequencies[int(np.argmax(power))])
+    # RMS semitone deviation converted to a peak-to-peak-like cents proxy.
+    depth = float(np.std(residual) * np.sqrt(2.0) * 100.0)
+    return _finite_bound(rate, 0.0, 9.0), _finite_bound(depth, 0.0, 1200.0)
+
+
+def cmd_source_style(args) -> dict:
+    """Extract bounded reference-singing features using local librosa/numpy only."""
+    import librosa
+
+    target_sr = 22050
+    frame_length = 2048
+    hop_length = 256
+    y, sr = librosa.load(args.audio, sr=target_sr, mono=True)
+    y = np.asarray(y, dtype=float)
+    duration = _finite_bound(y.size / float(sr) if sr else 0.0, 0.0, 86400.0)
+    if y.size == 0:
+        return {
+            "tool": "pi-audio/source-style",
+            "audio": args.audio,
+            "durationSec": duration,
+            "medianPitchMidi": 0.0,
+            "pitchRangeSemitones": 0.0,
+            "vibratoRateHz": 0.0,
+            "vibratoDepthCents": 0.0,
+            "dynamicRangeDb": 0.0,
+            "breathinessProxy": 0.0,
+            "breathinessProxyNote": "有声区谱平坦度代理；不是直接的气声测量",
+            "brightnessHz": 0.0,
+            "voicedRatio": 0.0,
+        }
+
+    # Bound synchronous analysis so MCP clients do not time out on full songs.
+    analysis_samples = SOURCE_STYLE_ANALYSIS_SECONDS * sr
+    if y.size > analysis_samples:
+        start = (y.size - analysis_samples) // 2
+        analysis_source = y[start:start + analysis_samples]
+    else:
+        analysis_source = y
+    # pyin needs a meaningful analysis window; padding does not change duration_sec.
+    analysis_y = np.pad(analysis_source, (0, max(0, frame_length - analysis_source.size)))
+    try:
+        f0, voiced_flag, _voiced_prob = librosa.pyin(
+            analysis_y,
+            fmin=librosa.note_to_hz("C2"),
+            fmax=librosa.note_to_hz("C7"),
+            sr=sr,
+            frame_length=frame_length,
+            hop_length=hop_length,
+            fill_na=np.nan,
+        )
+    except Exception:
+        # pyin can reject a pathological very short/empty decoder result.
+        f0 = np.empty(0, dtype=float)
+        voiced_flag = np.empty(0, dtype=bool)
+
+    f0 = np.asarray(f0, dtype=float)
+    voiced_flag = np.asarray(voiced_flag, dtype=bool)
+    valid_f0 = np.isfinite(f0) & (f0 > 0.0) & voiced_flag
+    if valid_f0.any():
+        midi = 69.0 + 12.0 * np.log2(f0[valid_f0] / 440.0)
+        median_pitch = _finite_bound(np.median(midi), 0.0, 127.0)
+        pitch_range = _finite_bound(np.percentile(midi, 95) - np.percentile(midi, 5), 0.0, 127.0)
+    else:
+        median_pitch = 0.0
+        pitch_range = 0.0
+
+    rms = np.asarray(librosa.feature.rms(
+        y=analysis_y, frame_length=frame_length, hop_length=hop_length, center=True
+    )[0], dtype=float)
+    rms = np.maximum(rms, 1e-12)
+    rms_db = 20.0 * np.log10(rms)
+    dynamic_range = _finite_bound(np.percentile(rms_db, 95) - np.percentile(rms_db, 5), 0.0, 120.0)
+
+    centroid = np.asarray(librosa.feature.spectral_centroid(
+        y=analysis_y, sr=sr, n_fft=frame_length, hop_length=hop_length, center=True
+    )[0], dtype=float)
+    flatness = np.asarray(librosa.feature.spectral_flatness(
+        y=analysis_y, n_fft=frame_length, hop_length=hop_length, center=True
+    )[0], dtype=float)
+    frame_count = min(len(valid_f0), len(centroid), len(flatness))
+    if frame_count:
+        valid_frames = valid_f0[:frame_count]
+        voiced_ratio = _finite_bound(np.mean(valid_frames), 0.0, 1.0)
+        if valid_frames.any():
+            breathiness = _finite_bound(np.mean(flatness[:frame_count][valid_frames]), 0.0, 1.0)
+            brightness = _finite_bound(np.mean(centroid[:frame_count][valid_frames]), 0.0, sr / 2.0)
+        else:
+            breathiness = 0.0
+            brightness = 0.0
+    else:
+        voiced_ratio = breathiness = brightness = 0.0
+
+    vibrato_rate, vibrato_depth = _vibrato_features(f0, valid_f0, sr, hop_length)
+    return {
+        "tool": "pi-audio/source-style",
+        "audio": args.audio,
+        "durationSec": round(duration, 6),
+        "medianPitchMidi": round(median_pitch, 4),
+        "pitchRangeSemitones": round(pitch_range, 4),
+        "vibratoRateHz": round(vibrato_rate, 4),
+        "vibratoDepthCents": round(vibrato_depth, 4),
+        "dynamicRangeDb": round(dynamic_range, 4),
+        "breathinessProxy": round(breathiness, 6),
+        "breathinessProxyNote": "有声区谱平坦度代理；不是直接的气声测量",
+        "brightnessHz": round(brightness, 4),
+        "voicedRatio": round(voiced_ratio, 6),
+    }
+
+
 def diff_notes(vnotes, inotes, tol):
     """人声版音符中去除能在 INST 里按 (pitch, start±tol) 匹配到的（一对一消耗）。"""
     import bisect
@@ -301,6 +456,82 @@ def monophony_rate(ns):
     ns = sorted(ns, key=lambda n: n["start"])
     ok = sum(1 for a, b in zip(ns, ns[1:]) if a["end"] <= b["start"] + 0.02)
     return ok / (len(ns) - 1)
+
+
+def _is_cjk(char: str) -> bool:
+    code = ord(char)
+    return (
+        0x3400 <= code <= 0x4DBF
+        or 0x4E00 <= code <= 0x9FFF
+        or 0xF900 <= code <= 0xFAFF
+        or 0x20000 <= code <= 0x2FA1F
+    )
+
+
+def tokenize_lyrics(text: str):
+    """确定性歌词 token 化：CJK 逐字，拉丁/数字连续词，其他字符分隔。"""
+    import unicodedata
+
+    tokens = []
+    word = []
+
+    def flush_word():
+        if word:
+            tokens.append("".join(word))
+            word.clear()
+
+    for char in text:
+        if _is_cjk(char):
+            flush_word()
+            tokens.append(char)
+            continue
+        category = unicodedata.category(char)
+        if category[0] in {"L", "N"} and (
+            category[0] == "N" or "LATIN" in unicodedata.name(char, "")
+        ):
+            word.append(char)
+            continue
+        # 空白、标点以及非拉丁/数字符号都不生成 token，并结束当前词。
+        flush_word()
+    flush_word()
+    return tokens
+
+
+def read_lyrics_file(path: str):
+    """读取受限的 UTF-8 普通文件，拒绝符号链接和过大输入。"""
+    import pathlib
+    import stat
+
+    file_path = pathlib.Path(path)
+    try:
+        info = file_path.lstat()
+    except FileNotFoundError as exc:
+        raise ValueError(f"歌词文件不存在: {path}") from exc
+    if stat.S_ISLNK(info.st_mode):
+        raise ValueError(f"歌词文件不得为符号链接: {path}")
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError(f"歌词路径必须是普通文件: {path}")
+    if info.st_size > 256 * 1024:
+        raise ValueError(f"歌词文件超过 256 KiB 上限: {path}")
+    try:
+        return file_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"歌词文件不是有效 UTF-8: {path}") from exc
+
+
+def map_lyrics_to_notes(lyrics_file: str, notes):
+    """按音符顺序映射歌词；未覆盖音符使用 Synthesizer V 的连字符占位。"""
+    tokens = tokenize_lyrics(read_lyrics_file(lyrics_file))
+    if len(tokens) > len(notes):
+        raise ValueError(
+            f"歌词 token 数量 ({len(tokens)}) 多于可用 mono notes ({len(notes)})"
+        )
+    mapped = tokens + ["-"] * (len(notes) - len(tokens))
+    return mapped, {
+        "lyric_tokens": len(tokens),
+        "lyric_notes": len(notes),
+        "lyric_fill_hyphens": len(notes) - len(tokens),
+    }
 
 
 def automatic_correct(notes):
@@ -427,6 +658,15 @@ def cmd_pair_diff(args) -> dict:
         mono = mono_collapse(in_range)
         selected_tolerance = args.tol
 
+    lyric_texts = None
+    lyric_result = {
+        "lyric_tokens": 0,
+        "lyric_notes": 0,
+        "lyric_fill_hyphens": 0,
+    }
+    if args.lyrics_file:
+        lyric_texts, lyric_result = map_lyrics_to_notes(args.lyrics_file, mono)
+
     result = {
         "tool": "pi-audio/pair-diff",
         "vocal": args.vocal,
@@ -443,6 +683,9 @@ def cmd_pair_diff(args) -> dict:
         "sv_importable_whole": len(mono) <= 512,  # import_monophonic_score 上限
         "note": "残差含和声/混音差异；单音化保留最高声部，低声部和声会被丢弃",
     }
+    result.update(lyric_result)
+    if args.lyrics_file:
+        result["lyrics_file"] = args.lyrics_file
     if advanced is not None:
         result["advanced"] = advanced
     if mono:
@@ -466,6 +709,11 @@ def cmd_pair_diff(args) -> dict:
                 )
             )
         pm.instruments.append(instr)
+        if lyric_texts is not None:
+            pm.lyrics.extend(
+                pretty_midi.Lyric(text, n["start"])
+                for text, n in zip(lyric_texts, mono)
+            )
         pm.write(str(out_path))
         result["midi_out"] = str(out_path)
 
@@ -488,7 +736,15 @@ def main():
     d.add_argument("--midi", help="导出单音化 MIDI 路径")
     d.add_argument("--tol", type=float, default=0.08, help="起始时间匹配容差秒 (默认 0.08)")
     d.add_argument("--advanced", action="store_true", help="多容差寻优、保守自动纠正与置信度检查")
+    d.add_argument(
+        "--lyrics-file",
+        help="UTF-8 歌词文本（普通文件、非符号链接，最大 256 KiB）",
+    )
     d.set_defaults(fn=cmd_pair_diff)
+
+    s = sub.add_parser("source-style", help="离线提取参考演唱特征")
+    s.add_argument("audio", help="现有本地音频路径")
+    s.set_defaults(fn=cmd_source_style)
 
     args = ap.parse_args()
     try:

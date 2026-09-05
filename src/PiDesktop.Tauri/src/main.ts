@@ -1,13 +1,18 @@
 import "./styles.css";
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { registerModelAuthElement } from "@model-auth/vue/custom-element";
 import { api } from "./api";
+import { instanceAccount } from "./sv2Instances";
 import { icon } from "./icons";
 import { featureCatalog, toolGroups, type FeatureCatalogItem, type ToolGroup } from "./featureCatalog";
 import { mountShell, type ShellController } from "./vue/shell";
 import type {
   AiProviderId,
+  AgentWorkMode,
+  AgentFileApproval,
   AiProviderSummary,
+  AiLoadStrategy,
   AppMode,
   AudioCaptureCapability,
   AudioCaptureTarget,
@@ -22,14 +27,18 @@ import type {
   ConversationSummary,
   CreativeHistoryEntry,
   LyricCandidateSet,
+  LyricProject,
+  LyricProjectSummary,
   LyricSectionRequest,
   LoudnessNormalizeRequest,
   LoudnessReport,
   FfmpegRuntimeStatus,
   MediaProbe,
+  MediaSourcePreview,
+  MediaTaskSnapshot,
   McpServerConfig,
+  HttpApiStatus,
   OperationResult,
-  OpenCodeCatalog,
   ProjectCheckpoint,
   RhymeMatchMode,
   Sv2AccountProbe,
@@ -41,10 +50,15 @@ import type {
   SvpLaunchMode,
   SvpRouteCandidate,
   SvpRoutePlan,
+  SynthVProcess,
+  SynthVShortcutProfile,
   ToolboxUpdateCheck,
+  TuningProfile,
   WorkflowRecipe,
   WorkflowResult,
 } from "./types";
+
+registerModelAuthElement();
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 if (!root) throw new Error("Missing #app root");
@@ -55,11 +69,7 @@ type AccountManagerSection = "profile" | "global" | "add";
 interface PendingAccountIndicatorConsent {
   refreshAfterEnable: boolean;
   refreshSlotId?: string;
-  globalSettings?: {
-    concurrentEnabled: boolean;
-    appSettings: boolean;
-    voiceLibraries: boolean;
-  };
+  concurrentEnabled?: boolean;
 }
 
 type Feature = FeatureCatalogItem;
@@ -72,11 +82,29 @@ let notice = "";
 let error = "";
 let conversations: ConversationSummary[] = [];
 let conversation: ConversationSnapshot | undefined;
+let fileApprovals: AgentFileApproval[] = [];
 let profiles: Sv2ProfilesState | undefined;
 let activeWorkflow: Feature["id"] | undefined;
 let workflowResult: WorkflowResult | undefined;
+let mediaSourceInput = "";
+let mediaSourcePreview: MediaSourcePreview | undefined;
+let mediaTasks: MediaTaskSnapshot[] = [];
+let tuningProfiles: TuningProfile[] = [];
 let audioCaptureCapability: AudioCaptureCapability | undefined;
 let audioCaptureTargets: AudioCaptureTarget[] = [];
+let synthvProcesses: SynthVProcess[] = [];
+let instanceRefreshInFlight = false;
+let instanceRefreshGeneration = 0;
+let synthvShortcutProfile: SynthVShortcutProfile | undefined;
+let httpApiStatus: HttpApiStatus = {
+  enabled: false,
+  agentEnabled: false,
+  running: false,
+  port: 17831,
+  endpoint: null,
+  agentEndpoint: null,
+  lastError: null,
+};
 let abProcessId: number | undefined;
 let abStartSeconds = 10;
 let abEndSeconds = 15;
@@ -109,6 +137,10 @@ let lyricCandidateCount = 4;
 let lyricCandidates: LyricCandidateSet | undefined;
 let lyricSectionCounter = 0;
 let lyricSections: LyricSectionRequest[] = createLyricPreset("compact");
+let lyricProjects: LyricProjectSummary[] = [];
+let lyricProjectId: string | undefined;
+let lyricProjectRevision = 0;
+let lyricSavedSnapshot = "";
 let pendingBlockedSwitchSlot: string | undefined;
 let pendingConcurrentLaunchSlot: string | undefined;
 let pendingConcurrentPrepare = false;
@@ -118,17 +150,14 @@ let pendingComponentRemovalId: string | undefined;
 let pendingProfileDeletionId: string | undefined;
 let pendingAccountIndicatorConsent: PendingAccountIndicatorConsent | undefined;
 let removingComponentId: string | undefined;
-let expandedAiProvider: AiProviderId | undefined;
-let authorizingAiProvider: AiProviderId | undefined;
-let pendingAiAccountRemoval: { provider: AiProviderId; accountId: string } | undefined;
-let pendingAiAccountRemovalTimer: number | undefined;
-let openCodeCatalog: OpenCodeCatalog | undefined;
-let openCodeCatalogLoading = false;
-let openCodeCatalogError = "";
+let aiProviderPickerOpen = false;
+let activeModelAuthAuthorization: { operationId: string; controller: AbortController } | undefined;
 let downloadPollTimer: number | undefined;
+let mediaTaskPollTimer: number | undefined;
 let toastDismissTimer: number | undefined;
 let toastSignature = "";
 let accountUsageRefreshInFlight: Promise<void> | undefined;
+let aiCatalogRefreshInFlight: Promise<void> | undefined;
 let lyricPersistTimer: number | undefined;
 let sidebarCollapsed = (() => {
   try { return localStorage.getItem("pi.sidebar.collapsed") === "true"; }
@@ -209,6 +238,8 @@ function createLyricPreset(preset: "compact" | "pop" | "rap" | "blank"): LyricSe
 function persistLyricWorkspace(): void {
   try {
     localStorage.setItem("pi.lyric.workspace.v1", JSON.stringify({
+      projectId: lyricProjectId,
+      projectRevision: lyricProjectRevision,
       title: lyricSongTitle,
       rhymeTargets: lyricRhymeTargets,
       draft: lyricDraft,
@@ -222,6 +253,8 @@ function restoreLyricWorkspace(): void {
     const raw = localStorage.getItem("pi.lyric.workspace.v1");
     if (!raw) return;
     const saved = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof saved.projectId === "string" && /^[0-9a-f-]{36}$/i.test(saved.projectId)) lyricProjectId = saved.projectId;
+    if (typeof saved.projectRevision === "number" && Number.isInteger(saved.projectRevision) && saved.projectRevision > 0) lyricProjectRevision = saved.projectRevision;
     if (typeof saved.title === "string") lyricSongTitle = saved.title.slice(0, 120);
     if (typeof saved.draft === "string") lyricDraft = saved.draft.slice(0, 200_000);
     if (saved.rhymeTargets && typeof saved.rhymeTargets === "object" && !Array.isArray(saved.rhymeTargets)) {
@@ -248,14 +281,57 @@ function restoreLyricWorkspace(): void {
         lyricSectionCounter = Math.max(lyricSectionCounter, restored.length + 100);
       }
     }
+    lyricSavedSnapshot = lyricWorkspaceSnapshot();
   } catch { /* ignore invalid local drafts */ }
 }
 
+function lyricWorkspaceSnapshot(): string {
+  return JSON.stringify({
+    title: lyricSongTitle,
+    draft: lyricDraft,
+    rhymeTargets: lyricRhymeTargets,
+    sections: lyricSections,
+  });
+}
+
+function lyricProjectHasUnsavedChanges(): boolean {
+  return lyricWorkspaceSnapshot() !== lyricSavedSnapshot;
+}
+
+function applyLyricProject(project: LyricProject): void {
+  lyricProjectId = project.id;
+  lyricProjectRevision = project.revision;
+  lyricSongTitle = project.title;
+  lyricDraft = project.draft;
+  lyricRhymeTargets = { A: "", B: "", C: "", D: "", ...project.rhymeTargets };
+  lyricSections = project.sections.map((section) => ({ ...section }));
+  lyricSectionCounter = Math.max(lyricSectionCounter, lyricSections.length + 100);
+  lyricCandidates = undefined;
+  workflowResult = undefined;
+  lyricSavedSnapshot = lyricWorkspaceSnapshot();
+  persistLyricWorkspace();
+}
+
+function startNewLyricProject(): void {
+  lyricProjectId = undefined;
+  lyricProjectRevision = 0;
+  lyricSongTitle = "";
+  lyricDraft = "";
+  lyricRhymeTargets = { A: "ang", B: "ai", C: "", D: "" };
+  lyricSections = createLyricPreset("compact");
+  lyricCandidateSection = lyricSections.find((section) => section.kind === "chorus")?.label ?? lyricSections[0]?.label ?? "";
+  lyricCandidates = undefined;
+  workflowResult = undefined;
+  lyricSavedSnapshot = lyricWorkspaceSnapshot();
+  persistLyricWorkspace();
+}
+
 restoreLyricWorkspace();
+if (!lyricSavedSnapshot) lyricSavedSnapshot = lyricWorkspaceSnapshot();
 
 const pageMeta: Record<Page, { title: string; subtitle: string }> = {
   home: { title: "概览", subtitle: "查看环境状态与常用能力" },
-  accounts: { title: "SV2 账号", subtitle: "普通切换与并发隔离，集中管理账号环境" },
+  accounts: { title: "SV2 账号", subtitle: "管理本机 SV2 槽位；Windows 还支持可选并发隔离" },
   toolbox: { title: "工具箱", subtitle: "直接使用创作工具，或进入自动化工作流" },
   lyrics: { title: "作词", subtitle: "专注写下歌词，需要时再调用结构、韵脚与 AI 辅助" },
   history: { title: "历史与检查点", subtitle: "回看自动保存的工作流记录，并管理工程检查点" },
@@ -469,37 +545,6 @@ function selectAudioPreparationInput(path: string): void {
   render();
 }
 
-function clearPendingAiAccountRemoval(): void {
-  pendingAiAccountRemoval = undefined;
-  if (pendingAiAccountRemovalTimer !== undefined) {
-    window.clearTimeout(pendingAiAccountRemovalTimer);
-    pendingAiAccountRemovalTimer = undefined;
-  }
-}
-
-function focusAiAccountRemovalButton(provider: AiProviderId, accountId: string): void {
-  requestAnimationFrame(() => {
-    Array.from(document.querySelectorAll<HTMLButtonElement>("[data-remove-ai-account]"))
-      .find((button) => button.dataset.aiProvider === provider
-        && button.dataset.removeAiAccount === accountId)
-      ?.focus();
-  });
-}
-
-function armAiAccountRemoval(provider: AiProviderId, accountId: string): void {
-  clearPendingAiAccountRemoval();
-  pendingAiAccountRemoval = { provider, accountId };
-  pendingAiAccountRemovalTimer = window.setTimeout(() => {
-    pendingAiAccountRemovalTimer = undefined;
-    if (pendingAiAccountRemoval?.provider === provider
-      && pendingAiAccountRemoval.accountId === accountId) {
-      pendingAiAccountRemoval = undefined;
-      render();
-      focusAiAccountRemovalButton(provider, accountId);
-    }
-  }, 5_000);
-}
-
 function resetContentScroll(): void {
   requestAnimationFrame(() => {
     const content = document.querySelector<HTMLElement>("#page-content");
@@ -519,6 +564,7 @@ function setFeedback(result: OperationResult): void {
 
 async function run(task: () => Promise<void>): Promise<void> {
   if (busy) return;
+  instanceRefreshGeneration += 1;
   busy = true;
   notice = "";
   error = "";
@@ -535,6 +581,14 @@ async function run(task: () => Promise<void>): Promise<void> {
 
 async function refresh(): Promise<void> {
   app = await api.bootstrap();
+  [lyricProjects, synthvProcesses, synthvShortcutProfile, mediaTasks, tuningProfiles, httpApiStatus] = await Promise.all([
+    api.listLyricProjects(),
+    api.listSynthvProcesses(),
+    api.synthvShortcutProfile(),
+    api.mediaTasks(),
+    api.listTuningProfiles(),
+    api.getHttpApiStatus(),
+  ]);
 }
 
 async function refreshAccountUsage(slotId?: string): Promise<void> {
@@ -558,6 +612,33 @@ async function refreshAccountUsage(slotId?: string): Promise<void> {
   }
 }
 
+async function refreshVisibleSynthvInstances(): Promise<void> {
+  if (busy || document.hidden || instanceRefreshInFlight || (page !== "accounts" && page !== "bridge")) return;
+  const refreshPage = page;
+  const generation = instanceRefreshGeneration;
+  instanceRefreshInFlight = true;
+  try {
+    const [nextProcesses, nextProfiles] = await Promise.all([
+      api.listSynthvProcesses(),
+      page === "accounts" ? api.sv2ProfileState() : Promise.resolve(profiles),
+    ]);
+    if (busy || page !== refreshPage || generation !== instanceRefreshGeneration) return;
+    const previousRows = refreshPage === "accounts" ? renderSv2InstanceRows() : renderBridgeProcessRows();
+    synthvProcesses = nextProcesses;
+    if (nextProfiles) profiles = nextProfiles;
+    const nextRows = refreshPage === "accounts" ? renderSv2InstanceRows() : renderBridgeProcessRows();
+    if (previousRows !== nextRows) {
+      const list = document.querySelector<HTMLElement>(refreshPage === "accounts"
+        ? ".account-instances-panel .synthv-process-list" : ".bridge-instances-panel .synthv-process-list");
+      if (list) list.innerHTML = nextRows;
+    }
+  } catch {
+    // Background discovery must not replace a visible action error.
+  } finally {
+    instanceRefreshInFlight = false;
+  }
+}
+
 function scheduleDownloadPoll(): void {
   if (!app?.downloads.some((item) => ["queued", "downloading", "installing"].includes(item.status)) || downloadPollTimer !== undefined) return;
   downloadPollTimer = window.setTimeout(async () => {
@@ -568,6 +649,20 @@ function scheduleDownloadPoll(): void {
       app.downloads = await api.componentDownloads();
       const isActive = app.downloads.some((item) => ["queued", "downloading", "installing"].includes(item.status));
       if (wasActive && !isActive) await refresh();
+      render();
+    } catch (reason) {
+      error = formatError(reason);
+      render();
+    }
+  }, 700);
+}
+
+function scheduleMediaTaskPoll(): void {
+  if (!mediaTasks.some((item) => ["queued", "running", "cancelling"].includes(item.status)) || mediaTaskPollTimer !== undefined) return;
+  mediaTaskPollTimer = window.setTimeout(async () => {
+    mediaTaskPollTimer = undefined;
+    try {
+      mediaTasks = await api.mediaTasks();
       render();
     } catch (reason) {
       error = formatError(reason);
@@ -598,7 +693,7 @@ function renderSidebar(): string {
     <nav class="nav" aria-label="主导航">
       <span class="nav-label">工作区</span>
       ${navItem("home", "概览", "home")}
-      ${app.platform === "windows" || app.platform === "preview" ? navItem("accounts", "SV2 账号", "users") : ""}
+      ${app.platform === "windows" || app.platform === "macos" || app.platform === "preview" ? navItem("accounts", "SV2 账号", "users") : ""}
       ${navItem("toolbox", "工具箱", "toolbox")}
       ${navItem("lyrics", "作词", "lyrics")}
       ${navItem("history", "历史与检查点", "history")}
@@ -654,7 +749,7 @@ function render(): void {
       }, 4200);
     }
   }
-  const overlayHtml = pendingAudioPlan ? renderAudioPlanDialog() : pendingComponentRemovalId ? renderComponentRemovalDialog() : pendingProfileDeletionId ? renderProfileDeletionDialog() : pendingBlockedSwitchSlot ? renderBlockedSwitchDialog() : pendingConcurrentLaunchSlot ? renderConcurrentDisclaimer() : pendingSvpRoute ? renderSvpRouteDialog() : pendingAccountIndicatorConsent ? renderAccountIndicatorConsent() : accountManagerOpen && page === "accounts" ? renderAccountManager() : "";
+  const overlayHtml = pendingComponentRemovalId ? renderComponentRemovalDialog() : pendingProfileDeletionId ? renderProfileDeletionDialog() : pendingBlockedSwitchSlot ? renderBlockedSwitchDialog() : pendingConcurrentLaunchSlot ? renderConcurrentDisclaimer() : pendingSvpRoute ? renderSvpRouteDialog() : pendingAccountIndicatorConsent ? renderAccountIndicatorConsent() : accountManagerOpen && page === "accounts" ? renderAccountManager() : aiProviderPickerOpen ? renderAiProviderPicker() : pendingAudioPlan ? renderAudioPlanDialog() : "";
   const nextShellState = {
     page,
     sidebarCollapsed,
@@ -673,9 +768,10 @@ function render(): void {
   const wiredMarkup = `${pageHtml}\u0000${overlayHtml}`;
   if (wiredMarkup !== lastWiredMarkup) {
     lastWiredMarkup = wiredMarkup;
-    shellController.afterUpdate(wireForms);
+    shellController.afterUpdate(() => { wireForms(); wireModelAuthDialog(); });
   }
   scheduleDownloadPoll();
+  scheduleMediaTaskPoll();
 }
 
 function renderAudioPlanDialog(): string {
@@ -716,8 +812,8 @@ function renderAccountIndicatorConsent(): string {
       <div><span class="eyebrow">SV2 ACCOUNT LOGIN INDICATOR</span><h2 id="account-indicator-consent-title">开启账号登录指示器？</h2></div>
       <p>此功能不会启动 Synthesizer V，但它不是纯本地、纯只读检查。确认开启会完成本次进入页面的首次预检；以后只会在你重新进入「SV2 账号」页面或手动刷新时执行下列操作：</p>
       <ul>
-        <li>读取并解密普通槽位及已准备隔离副本的本地 <code>license/session</code>；若标准 JWT 含有 <code>name</code>/<code>email</code> 声明，会将姓名和邮箱显示在账号卡片及账号管理页。access/refresh token 原文仅在后端内存中处理，不会在界面展示、复制或写入日志。</li>
-        <li>同一槽位只选择一份账号 session 作为 authority；access JWT 临期或失效时可能自动刷新，并把更新后的加密 session 同步到闲置的普通/隔离副本。</li>
+        <li>每个账号槽位只保存一份本地 <code>license/session</code>；普通与并发实例共用槽位文件。若标准 JWT 含有 <code>name</code>/<code>email</code> 声明，会将姓名和邮箱显示在账号卡片及账号管理页。access/refresh token 原文仅在后端内存中处理，不会在界面展示、复制或写入日志。</li>
+        <li>运行中的普通或并发实例只使用现有 access JWT 读取授权；实例闲置后才会刷新并写回槽位 session。声库按账号独立保存，从不跨账号同步；默认同步仅包含设置、脚本等白名单文件。</li>
         <li>每个账号只执行一轮官方 <code>enroll_device</code> 启动等价检查，以确认实际启动是否会被登录冲突拒绝；所有请求固定使用 <code>kickout_other_sessions=false</code>。</li>
       </ul>
       <p class="dialog-choice-note">这不是 dry-run：官方服务会收到真实登录事件。工具箱只报告冲突，绝不会代你踢出其他会话，也不会启动客户端。你可以随时关闭此功能。</p>
@@ -765,9 +861,20 @@ function renderComponentRemovalDialog(): string {
 function renderBlockedSwitchDialog(): string {
   const slot = profiles?.slots.find((item) => item.id === pendingBlockedSwitchSlot);
   const blockers = profiles?.blockers ?? [];
+  if (!supportsWindowsSv2Extensions()) {
+    return `<div class="dialog-backdrop" role="presentation">
+      <section class="fluent-dialog switch-dialog" role="alertdialog" aria-modal="true" aria-labelledby="blocked-switch-title">
+        <span class="dialog-icon danger">${icon("plug", 24)}</span>
+        <div><span class="eyebrow">检测到运行中的程序</span><h2 id="blocked-switch-title">无法安全切换到“${escapeHtml(slot?.displayName ?? "此槽位")}”</h2></div>
+        <p>请先保存并退出下列程序，然后重新启动目标槽位。macOS v1 不会强制结束进程，也不会启动并发实例。</p>
+        <div class="dialog-process-list">${blockers.map((blocker) => `<div><span><strong>${escapeHtml(blocker.name)}</strong><small>${escapeHtml(blocker.reason)}</small></span><code>${blocker.pid ? `PID ${blocker.pid}` : "无可用 PID"}</code></div>`).join("")}</div>
+        <div class="dialog-actions"><button class="primary" data-cancel-profile-switch>知道了</button></div>
+      </section>
+    </div>`;
+  }
   const provider = profiles?.concurrentProvider;
   const concurrentRunning = Boolean(slot?.concurrent.runningPids.length);
-  const canRunConcurrent = Boolean(provider?.available && !concurrentRunning);
+  const canRunConcurrent = Boolean(provider?.available);
   const concurrentLabel = slot?.concurrent.ready ? "以并发模式运行" : "准备并发副本并运行";
   return `<div class="dialog-backdrop" role="presentation">
     <section class="fluent-dialog switch-dialog" role="alertdialog" aria-modal="true" aria-labelledby="blocked-switch-title">
@@ -775,7 +882,7 @@ function renderBlockedSwitchDialog(): string {
       <div><span class="eyebrow">检测到运行中的程序</span><h2 id="blocked-switch-title">无法安全切换到“${escapeHtml(slot?.displayName ?? "此槽位")}”</h2></div>
       <p>下列程序正在使用当前 SV2 槽位。请先保存工程：强制切换会结束这些 PID 的整个进程树，未保存内容可能丢失；并发模式不会关闭当前程序。</p>
       <div class="dialog-process-list">${blockers.map((blocker) => `<div><span><strong>${escapeHtml(blocker.name)}</strong><small>${escapeHtml(blocker.reason)}</small></span><code>${blocker.pid ? `PID ${blocker.pid}` : "无可用 PID"}</code></div>`).join("")}</div>
-      <p class="dialog-choice-note">${canRunConcurrent ? `${escapeHtml(provider?.name ?? "Sandboxie")} 已就绪；${slot?.concurrent.ready ? "将直接启动隔离实例。" : "会先复制该槽位的不透明数据副本，再启动隔离实例。"}` : concurrentRunning ? "此槽位的并发实例已经在运行。" : `并发模式不可用：${escapeHtml(provider?.detail ?? "未检测到隔离提供方。")}`}</p>
+      <p class="dialog-choice-note">${canRunConcurrent ? `${escapeHtml(provider?.name ?? "Sandboxie")} 已就绪；${slot?.concurrent.ready ? "将直接启动隔离实例。" : "会先准备隔离环境，再启动隔离实例。"}` : concurrentRunning ? "此槽位的并发实例已经在运行。" : `并发模式不可用：${escapeHtml(provider?.detail ?? "未检测到隔离提供方。")}`}</p>
       <div class="dialog-actions"><button class="secondary" data-cancel-profile-switch>取消</button><button class="secondary" data-run-blocked-concurrent ${canRunConcurrent ? "" : "disabled"}>${concurrentLabel}</button><button class="danger-action" data-force-profile-switch>强制切换并启动</button></div>
     </section>
   </div>`;
@@ -862,14 +969,14 @@ const accountProbeIssueRules: Array<[
 ]> = [
   ["syncFailed", {
     cardLabel: "会话同步失败，需要修复",
-    authorizationLabel: "会话同步失败，未读取该副本授权",
-    title: "账号凭据刷新或设备身份写回后未能安全同步；该副本已被隔离，不能当作尚未预检。",
+    authorizationLabel: "会话同步失败，未读取该槽位授权",
+    title: "账号凭据刷新或设备身份写回后未能安全同步；该槽位已被隔离，不能当作尚未预检。",
     attention: true,
   }],
   ["accountMismatch", {
     cardLabel: "账号副本不一致",
-    authorizationLabel: "账号副本不一致，未读取该副本授权",
-    title: "普通与隔离副本的 JWT 账号主体不同；工具箱没有覆盖任一账号缓存。",
+    authorizationLabel: "账号主体不一致，未读取该槽位授权",
+    title: "账号槽位读取到的 JWT 账号主体不一致；工具箱没有覆盖账号缓存。",
     attention: true,
   }],
   ["inUse", {
@@ -935,26 +1042,25 @@ interface AccountProbeEnvironmentState {
 
 function accountProbeEnvironments(slot: Sv2ProfileSlot): AccountProbeEnvironmentState[] {
   const normalRecovery = slot.sessionProtection.status === "recoveryPending";
-  const normalProcessBlocked = Boolean(profiles?.blockers.length);
+  const normalProcessBlocked = !slot.isActive && Boolean(profiles?.blockers.length);
   const environments: AccountProbeEnvironmentState[] = [{
     label: "普通",
     probe: slot.accountProbe,
     launchEnabled: true,
     localBlocked: normalRecovery || normalProcessBlocked,
-    localBlockLabel: normalRecovery ? "登录缓存等待恢复" : normalProcessBlocked ? "普通环境正在本机使用" : "",
+    localBlockLabel: normalRecovery ? "登录缓存等待恢复" : normalProcessBlocked ? "切换账号路径前需要关闭普通实例" : "",
     usable: false,
     busy: false,
   }];
 
   if (slot.concurrent.ready) {
     const concurrentRecovery = slot.concurrentSessionProtection.status === "recoveryPending";
-    const concurrentRunning = Boolean(slot.concurrent.runningPids.length);
     environments.push({
       label: "隔离",
       probe: slot.concurrentAccountProbe,
       launchEnabled: Boolean(app?.sv2ConcurrentEnabled && profiles?.concurrentProvider.available),
-      localBlocked: concurrentRecovery || concurrentRunning,
-      localBlockLabel: concurrentRecovery ? "登录缓存等待恢复" : concurrentRunning ? "隔离环境正在本机使用" : "",
+      localBlocked: concurrentRecovery,
+      localBlockLabel: concurrentRecovery ? "登录缓存等待恢复" : "",
       usable: false,
       busy: false,
     });
@@ -1136,6 +1242,16 @@ async function launchConcurrentSlot(slotId: string, prepare: boolean): Promise<v
   profiles = await api.sv2ProfileState();
 }
 
+async function prepareConcurrentSlotsWhenEnabled(): Promise<number> {
+  if (!app?.sv2ConcurrentEnabled || !profiles?.concurrentProvider.available) return 0;
+  let prepared = 0;
+  for (const slot of profiles.slots.filter((item) => !item.concurrent.ready)) {
+    profiles = await api.prepareSv2ConcurrentProfile(slot.id);
+    prepared += 1;
+  }
+  return prepared;
+}
+
 function renderOnboarding(): void {
   root.innerHTML = `<main class="onboarding">
     <div class="onboarding-glow one"></div><div class="onboarding-glow two"></div>
@@ -1189,43 +1305,77 @@ function renderAccounts(): string {
   if (!profiles.supported) {
     return `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("users", 24)}</span><div><h2>当前平台不支持账号槽位</h2><p>${escapeHtml(profiles.recoveryDetail)}</p></div></section>`;
   }
-  const blockerPanel = profiles.blockers.length ? `<div class="warning-card profile-blockers"><span>${icon("plug", 23)}</span><div><strong>普通槽位暂时不能切换</strong><p>请先关闭下列普通 SV2 / 插件进程；已经准备好的隔离实例仍可单独启动。<br />${profiles.blockers.map((blocker) => `${escapeHtml(blocker.name)}${blocker.pid ? ` (PID ${blocker.pid})` : ""}：${escapeHtml(blocker.reason)}`).join("<br />")}</p></div></div>` : "";
+  const windowsExtensions = supportsWindowsSv2Extensions();
+  const accountIndicatorEnabled = windowsExtensions && Boolean(app?.sv2AccountIndicatorEnabled);
+  const blockerCount = profiles.blockers.length;
+  const blockerPanel = profiles.blockers.length ? `<div class="warning-card profile-blockers"><span>${icon("plug", 23)}</span><div><strong>普通槽位暂时不能切换</strong><p>${windowsExtensions ? "切换普通账号路径前，请先关闭下列进程；当前账号仍可再次普通启动，隔离实例也可继续多开。" : "切换普通账号路径前，请先保存并关闭下列进程；当前账号可以再次启动。"}<br />${profiles.blockers.map((blocker) => `${escapeHtml(blocker.name)}${blocker.pid ? ` (PID ${blocker.pid})` : ""}：${escapeHtml(blocker.reason)}`).join("<br />")}</p></div></div>` : "";
   if (profiles.recoveryRequired) {
     return `${blockerPanel}<div class="warning-card recovery-card"><span>${icon("sync", 23)}</span><div><strong>槽位需要人工恢复</strong><p>${escapeHtml(profiles.recoveryDetail)}</p><p>工具箱没有删除或覆盖任何目录。请先备份下方路径，再检查目录实况。</p></div><button class="secondary" data-profile-refresh>${icon("sync", 16)} 重新检查</button></div>
       <section class="panel"><dl class="detail-list"><div><dt>官方路径</dt><dd><code>${escapeHtml(profiles.canonicalPath)}</code></dd></div><div><dt>保管区</dt><dd><code>${escapeHtml(profiles.vaultPath)}</code></dd></div></dl></section>`;
   }
-  const concurrentProviderAvailable = profiles.concurrentProvider.available;
+  const concurrentProviderAvailable = windowsExtensions && profiles.concurrentProvider.available;
   const providerDetail = profiles.concurrentProvider.detail;
   const cards = profiles.slots.map((slot) => {
     const lastUsed = slot.lastActivatedAtUtc ? new Date(slot.lastActivatedAtUtc).toLocaleString("zh-CN") : "尚未启动";
     const initial = Array.from(slot.displayName)[0] ?? "S";
     const color = /^#[0-9a-f]{6}$/i.test(slot.color) ? slot.color : "#6D5CE7";
-    const officialIdentity = officialAccountIdentity(slot);
+    const officialIdentity = windowsExtensions ? officialAccountIdentity(slot) : {};
     const identity = accountIdentityLabels(slot);
-    const identityFromActiveSession = [slot.accountProbe, slot.concurrentAccountProbe]
+    const identityFromActiveSession = windowsExtensions && [slot.accountProbe, slot.concurrentAccountProbe]
       .some((probe) => probe.sessionStatus === "inUse" && (probe.accountDisplayName || probe.accountEmail));
     const identityTitle = officialIdentity.name || officialIdentity.email
       ? identityFromActiveSession
         ? "账号正在使用；姓名与邮箱来自上次预检，关闭客户端后可手工刷新。"
         : "账号姓名与邮箱优先显示本次预检读取的标准 JWT name/email 声明；其后为本地自定义标签。"
       : "当前仅显示本地自定义账号标签。";
-    const useState = accountUseStateForSlot(slot);
-    const concurrentRunning = slot.concurrent.runningPids.length > 0;
-    const isolatedLabel = concurrentRunning ? "隔离运行中" : slot.concurrent.ready ? "隔离启动" : "准备隔离";
-    const concurrentEnabled = Boolean(app?.sv2ConcurrentEnabled);
-    const isolatedDisabled = concurrentRunning || !concurrentProviderAvailable || !concurrentEnabled;
+    const useState = windowsExtensions
+      ? accountUseStateForSlot(slot)
+      : blockerCount
+        ? { tone: "in-use" as const, label: "当前 SV2 环境正在本机使用" }
+        : { tone: "unknown" as const, label: "仅管理本地数据槽位" };
+    const concurrentRunning = windowsExtensions && slot.concurrent.runningPids.length > 0;
+    const isolatedLabel = concurrentRunning ? "再开一个实例" : slot.concurrent.ready ? "隔离启动" : "准备隔离";
+    const concurrentEnabled = windowsExtensions && Boolean(app?.sv2ConcurrentEnabled);
+    const isolatedDisabled = !concurrentProviderAvailable || !concurrentEnabled;
     const isolatedTitle = concurrentRunning
-      ? "该隔离实例已在运行"
+      ? "已有隔离实例运行中，仍可继续启动同账号实例"
       : !concurrentEnabled
         ? "隔离功能已在全局设置中关闭"
         : providerDetail;
+    const localVoiceFact = slot.voiceInventory.manuallyConfirmedVoices.length
+      ? `<span class="voice-inventory confirmed" title="手工确认记录仅用于工程路由，不替代官方授权。">${icon("audio", 13)} 手工确认 ${slot.voiceInventory.manuallyConfirmedVoices.length} 个声库</span>`
+      : `<span class="voice-inventory unknown" title="macOS v1 不读取或解密登录缓存。">${icon("shield", 13)} 未读取账号授权</span>`;
+    const windowsLaunchActions = concurrentEnabled && slot.concurrent.ready
+      ? `<button class="primary" data-profile-concurrent-launch="${slot.id}" ${isolatedDisabled ? `disabled title="${escapeHtml(isolatedTitle)}"` : ""}>${icon("boxes", 16)} ${isolatedLabel}</button><button class="secondary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button>`
+      : `<button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button><button class="secondary" data-profile-concurrent-prepare="${slot.id}" ${isolatedDisabled ? `disabled title="${escapeHtml(isolatedTitle)}"` : ""}>${icon("download", 16)} ${isolatedLabel}</button>`;
+    const launchActions = windowsExtensions
+      ? windowsLaunchActions
+      : `<button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button>`;
     return `<article class="account-launch-card ${slot.isActive ? "active" : ""}" style="--profile-color:${color}">
-      <div class="account-card-main"><span class="profile-avatar compact">${escapeHtml(initial)}</span><div class="account-card-identity"><div class="profile-title-line"><h2>${escapeHtml(slot.displayName)}</h2>${accountUseDot(useState)}${slot.isActive ? '<span class="profile-active-badge">默认</span>' : ""}</div>${identity.length ? `<span class="profile-identity" title="${escapeHtml(identityTitle)}">${identity.map(escapeHtml).join(" · ")}</span>` : `<span class="profile-identity empty">${app?.sv2AccountIndicatorEnabled ? "尚未读取 JWT 姓名/邮箱" : "未设置账号标签"}</span>`}</div><div class="account-card-actions"><button class="icon-plain" data-profile-refresh-slot="${slot.id}" title="仅刷新此账号" aria-label="仅刷新 ${escapeHtml(slot.displayName)}">${icon("sync", 18)}</button><button class="icon-plain" data-manage-slot="${slot.id}" title="设置" aria-label="设置 ${escapeHtml(slot.displayName)}">${icon("settings", 18)}</button><button class="icon-plain danger" data-delete-profile="${slot.id}" title="删除" aria-label="删除 ${escapeHtml(slot.displayName)}">${icon("trash", 18)}</button><button class="icon-plain" data-profile-activate="${slot.id}" title="切换默认账户" aria-label="将 ${escapeHtml(slot.displayName)} 设为默认账户" ${slot.isActive ? "disabled" : ""}>${icon("check", 18)}</button></div></div>
-      <div class="account-card-facts">${accountProbeBadge(slot)}${voiceInventoryBadge(slot)}<span>${icon("sync", 13)} ${escapeHtml(lastUsed)}</span>${concurrentRunning ? `<span class="running">${icon("plug", 13)} ${slot.concurrent.runningPids.length} 个隔离进程</span>` : ""}</div>
-      <div class="account-launch-actions"><button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button>${slot.concurrent.ready ? `<button class="secondary" data-profile-concurrent-launch="${slot.id}" ${isolatedDisabled ? `disabled title="${escapeHtml(isolatedTitle)}"` : ""}>${icon("boxes", 16)} ${isolatedLabel}</button>` : `<button class="secondary" data-profile-concurrent-prepare="${slot.id}" ${isolatedDisabled ? `disabled title="${escapeHtml(isolatedTitle)}"` : ""}>${icon("download", 16)} ${isolatedLabel}</button>`}</div>
+      <div class="account-card-main"><span class="profile-avatar compact">${escapeHtml(initial)}</span><div class="account-card-identity"><div class="profile-title-line"><h2>${escapeHtml(slot.displayName)}</h2>${accountUseDot(useState)}${slot.isActive ? '<span class="profile-active-badge">默认</span>' : ""}</div>${identity.length ? `<span class="profile-identity" title="${escapeHtml(identityTitle)}">${identity.map(escapeHtml).join(" · ")}</span>` : `<span class="profile-identity empty">${accountIndicatorEnabled ? "尚未读取 JWT 姓名/邮箱" : "未设置账号标签"}</span>`}</div><div class="account-card-actions">${windowsExtensions ? `<button class="icon-plain" data-profile-refresh-slot="${slot.id}" title="刷新此账号状态" aria-label="刷新 ${escapeHtml(slot.displayName)}">${icon("refresh", 18)}</button>` : ""}<button class="icon-plain" data-manage-slot="${slot.id}" title="设置" aria-label="设置 ${escapeHtml(slot.displayName)}">${icon("settings", 18)}</button><button class="icon-plain danger" data-delete-profile="${slot.id}" title="删除" aria-label="删除 ${escapeHtml(slot.displayName)}">${icon("trash", 18)}</button><button class="icon-plain" data-profile-activate="${slot.id}" title="切换默认账户" aria-label="将 ${escapeHtml(slot.displayName)} 设为默认账户" ${slot.isActive ? "disabled" : ""}>${icon("check", 18)}</button></div></div>
+      <div class="account-card-facts">${windowsExtensions ? `${accountProbeBadge(slot)}${voiceInventoryBadge(slot)}` : localVoiceFact}<span>${icon("sync", 13)} ${escapeHtml(lastUsed)}</span>${concurrentRunning ? `<span class="running">${icon("plug", 13)} ${slot.concurrent.runningPids.length} 个隔离进程</span>` : ""}</div>
+      <div class="account-launch-actions">${launchActions}</div>
     </article>`;
   }).join("");
-  return `${blockerPanel}<div class="account-launch-grid">${cards || `<button class="empty-account-card" data-account-manager="add">${icon("plus", 22)}<strong>添加第一个账号</strong><span>导入当前环境或创建空槽位</span></button>`}</div>`;
+  const instanceList = renderSv2InstanceList();
+  return `${blockerPanel}<div class="account-launch-grid">${cards || `<button class="empty-account-card" data-account-manager="add">${icon("plus", 22)}<strong>添加第一个账号</strong><span>导入当前环境或创建空槽位</span></button>`}</div>${instanceList}`;
+}
+
+function renderSv2InstanceList(): string {
+  return `<section class="panel account-instances-panel"><div class="panel-heading"><div><h2>当前打开的 SynthV 实例</h2><p>按窗口标题和 PID 跟踪实例，并显示关联账号。</p></div><button class="secondary compact" data-refresh-synthv-processes>${icon("sync", 16)} 刷新</button></div><div class="synthv-process-list">${renderSv2InstanceRows()}</div></section>`;
+}
+
+function renderSv2InstanceRows(): string {
+  const instances = synthvProcesses.map((process) => {
+    const { slot, mode } = instanceAccount(process, profiles);
+    const title = process.windowTitle?.trim() || process.name;
+    return `<article class="synthv-process-row"><div><strong>${escapeHtml(title)}</strong><small>PID ${process.processId} · ${escapeHtml(mode)} · ${escapeHtml(slot?.displayName ?? "未关联账号")}</small></div><code>${escapeHtml(process.command)}</code></article>`;
+  }).join("");
+  return instances || '<div class="empty-inline compact-empty">当前没有检测到 SynthV 实例。</div>';
+}
+
+function supportsWindowsSv2Extensions(): boolean {
+  return app?.platform === "windows" || app?.platform === "preview";
 }
 
 function renderAccountManager(): string {
@@ -1235,7 +1385,14 @@ function renderAccountManager(): string {
     ?? profiles.slots[0];
   if (managedSlot) managedProfileSlotId = managedSlot.id;
   let body = "";
-  if (accountManagerSection === "profile") {
+  if (accountManagerSection === "profile" && !supportsWindowsSv2Extensions()) {
+    body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(managedSlot.displayName)}</h3><p>macOS v1 只切换本机完整 SV2 数据目录；不会读取、解密或刷新登录缓存，也不会同时运行多个实例。</p></div>${managedSlot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
+      <form class="profile-identity-form compact-form" data-profile-identity-form="${managedSlot.id}"><label>自定义用户名标签<input name="username" value="${escapeHtml(managedSlot.username)}" maxlength="100" placeholder="用于区分槽位" /></label><label>自定义邮箱标签<input name="email" type="email" value="${escapeHtml(managedSlot.email)}" maxlength="254" placeholder="name@example.com" /></label><button class="secondary">保存标签</button><small>这些本地标签仅用于区分槽位，不会修改或推断 Dreamtonics 账号身份。</small></form>
+      <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>槽位显示名称<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" required /></label><button class="secondary">重命名</button></form>
+      <form class="voice-license-form" data-profile-voice-form="${managedSlot.id}"><div class="voice-license-heading"><div><strong>补充手工确认声库</strong><small>每行记录一个完整产品名称；仅用于补充工程路由，不替代官方授权。</small></div></div><textarea name="voices" rows="4" maxlength="16384" placeholder="例如：&#10;Mai 2&#10;SOLARIA">${escapeHtml(managedSlot.voiceInventory.manuallyConfirmedVoices.join("\n"))}</textarea><button class="secondary" type="submit">保存确认记录</button></form>
+      <div class="manager-action-row">${managedSlot.isActive ? "" : `<button class="secondary" data-profile-activate="${managedSlot.id}">${icon("check", 15)} 设为默认账号</button>`}<button class="secondary" data-profile-folder="${managedSlot.id}">${icon("folder", 15)} 打开槽位数据目录</button><button class="secondary component-remove-action" data-delete-profile="${managedSlot.id}">${icon("trash", 15)} 删除账号</button></div>
+      <dl class="profile-storage-list compact"><div><dt>槽位数据</dt><dd><code title="${escapeHtml(managedSlot.dataPath)}">${escapeHtml(managedSlot.dataPath)}</code></dd></div></dl></div>` : '<div class="empty-inline">尚无账号，请先添加一个槽位。</div>';
+  } else if (accountManagerSection === "profile") {
     const authorizationProbe = managedSlot?.accountProbe.authorizationStatus === "verified"
       ? managedSlot.accountProbe
       : managedSlot?.concurrentAccountProbe.authorizationStatus === "verified"
@@ -1287,12 +1444,10 @@ function renderAccountManager(): string {
       <form class="voice-license-form" data-profile-voice-form="${managedSlot.id}"><div class="voice-license-heading"><div><strong>补充手工确认声库</strong><small>每行记录一个完整产品名称；仅用于补充工程路由，不替代官方授权。</small></div></div><textarea name="voices" rows="4" maxlength="16384" placeholder="例如：&#10;Mai 2&#10;SOLARIA">${escapeHtml(managedSlot.voiceInventory.manuallyConfirmedVoices.join("\n"))}</textarea><button class="secondary" type="submit">保存确认记录</button></form>
       <div class="manager-action-row">${managedSlot.isActive ? "" : `<button class="secondary" data-profile-activate="${managedSlot.id}">${icon("check", 15)} 设为默认账号</button>`}<button class="secondary" data-profile-folder="${managedSlot.id}">${icon("folder", 15)} 打开普通数据目录</button>${managedSlot.concurrent.ready ? `<button class="secondary" data-profile-concurrent-folder="${managedSlot.id}">${icon("folder", 15)} 打开隔离目录</button>` : ""}<button class="secondary component-remove-action" data-delete-profile="${managedSlot.id}">${icon("trash", 15)} 删除账号</button></div>
       <dl class="profile-storage-list compact"><div><dt>普通数据</dt><dd><code title="${escapeHtml(managedSlot.dataPath)}">${escapeHtml(managedSlot.dataPath)}</code></dd></div>${managedSlot.concurrent.ready ? `<div><dt>隔离数据</dt><dd><code title="${escapeHtml(managedSlot.concurrent.dataPath)}">${escapeHtml(managedSlot.concurrent.dataPath)}</code></dd></div>` : ""}</dl></div>` : '<div class="empty-inline">尚无账号，请先添加一个槽位。</div>';
+  } else if (accountManagerSection === "global" && !supportsWindowsSv2Extensions()) {
+    body = `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("shield", 24)}</span><div><h3>macOS 槽位范围</h3><p>当前版本只支持顺序切换数据槽位。账号登录预检、授权读取和并发隔离仍仅在 Windows 提供。</p></div></section>`;
   } else if (accountManagerSection === "global") {
-    const defaults = profiles.concurrentDefaults;
-    const isolationDefaults = app?.sv2ConcurrentEnabled
-      ? `<label class="fluent-switch"><input name="appSettings" type="checkbox" ${defaults.appSettings ? "checked" : ""} /><span></span>默认隔离应用设置</label><label class="fluent-switch"><input name="voiceLibraries" type="checkbox" ${defaults.voiceLibraries ? "checked" : ""} /><span></span>默认隔离声库数据</label>`
-      : "";
-    body = `<form id="sv2-global-settings-form" class="isolation-defaults-form manager-defaults"><div><strong>全局设置</strong><small>默认共享应用设置和声库数据；启用隔离后可设置隔离默认值。</small></div><label class="fluent-switch"><input name="accountProbeEnabled" type="checkbox" ${app?.sv2AccountIndicatorEnabled ? "checked" : ""} /><span></span>启用账号登录指示器</label>${isolationDefaults}<label class="fluent-switch"><input name="concurrentEnabled" type="checkbox" ${app?.sv2ConcurrentEnabled ? "checked" : ""} /><span></span>启用隔离功能</label><button class="secondary" type="submit">保存全局设置</button></form>`;
+    body = `<form id="sv2-global-settings-form" class="isolation-defaults-form manager-defaults"><div><strong>全局设置</strong><small>默认只同步设置、脚本等白名单文件；声库按账号独立保存，同账号实例共用槽位数据。</small></div><label class="fluent-switch"><input name="accountProbeEnabled" type="checkbox" ${app?.sv2AccountIndicatorEnabled ? "checked" : ""} /><span></span>启用账号登录指示器</label><label class="fluent-switch"><input name="concurrentEnabled" type="checkbox" ${app?.sv2ConcurrentEnabled ? "checked" : ""} /><span></span>启用隔离功能</label><button class="secondary" type="submit">保存全局设置</button></form>`;
   } else {
     body = `<div class="account-add-grid">${profiles.canImportCurrent ? `<section><span class="feature-icon emerald">${icon("folder", 20)}</span><h3>导入当前环境</h3><p>把现有官方数据目录纳入槽位，不移动账号文件。</p><form id="profile-import-form" class="profile-create-form"><input id="profile-import-name" maxlength="64" required placeholder="例如 主账号" /><button class="primary">导入</button></form></section>` : ""}<section><span class="feature-icon blue">${icon("plus", 20)}</span><h3>创建空槽位</h3><p>首次启动后，在 SV2 官方登录页面完成登录。</p><form id="profile-create-form" class="profile-create-form"><input id="profile-create-name" maxlength="64" required placeholder="例如 制作账号" /><button class="secondary">创建</button></form></section></div><div class="manager-safety">${icon("check", 17)}<span><strong>账号数据保持原样</strong><small>工具箱不会伪造登录或绕过联网验证。</small></span></div>`;
   }
@@ -1531,9 +1686,16 @@ function renderLyricCandidates(): string {
 function renderLyricStudio(ai: boolean): string {
   const sectionOptions = lyricSections.map((section) => `<option value="${escapeHtml(section.label)}" ${section.label === lyricCandidateSection ? "selected" : ""}>${escapeHtml(section.label)}</option>`).join("");
   const lineCount = lyricDraft.trim() ? lyricDraft.trim().split(/\r?\n/).length : 0;
+  const projectOptions = lyricProjects.map((project) => `<option value="${escapeHtml(project.id)}" ${project.id === lyricProjectId ? "selected" : ""}>${escapeHtml(project.title)} · ${project.lineCount} 行 · r${project.revision}</option>`).join("");
+  const projectStatus = lyricProjectId === undefined
+    ? "未保存草稿"
+    : lyricProjectHasUnsavedChanges()
+      ? `本地项目 r${lyricProjectRevision} · 有未保存修改`
+      : `本地项目 r${lyricProjectRevision} · 已保存`;
+  const projectToolbar = `<section class="lyric-project-toolbar panel-inset"><div><span class="eyebrow">LOCAL SONG PROJECT</span><strong>${escapeHtml(projectStatus)}</strong><small>项目保存在本机；输入时的临时草稿仍会自动保存。</small></div><div class="lyric-project-actions"><button type="button" class="secondary compact" data-new-lyric-project>新项目</button><select id="lyric-project-select" ${lyricProjects.length ? "" : "disabled"}><option value="">${lyricProjects.length ? "选择已保存项目" : "尚无已保存项目"}</option>${projectOptions}</select><button type="button" class="secondary compact" data-load-lyric-project ${lyricProjects.length ? "" : "disabled"}>打开</button><button type="button" class="primary compact" data-save-lyric-project>${lyricProjectId === undefined ? "保存为项目" : "保存"}</button></div></section>`;
   const structureRows = lyricSections.map((section, index) => `<article class="lyric-section-row" data-lyric-section-id="${escapeHtml(section.id)}"><span class="section-index">${index + 1}</span><label>段落名称<input data-lyric-section-field="label" maxlength="60" value="${escapeHtml(section.label)}" /></label><label>行数<input data-lyric-section-field="lineCount" type="number" min="1" max="32" value="${section.lineCount}" /></label><label>格式<input data-lyric-section-field="rhymeScheme" maxlength="32" value="${escapeHtml(section.rhymeScheme)}" placeholder="可选，如 ABAB" /></label><input type="hidden" data-lyric-section-field="kind" value="${escapeHtml(section.kind)}" /><div class="lyric-row-actions"><button type="button" class="icon-plain" data-move-lyric-section="up" data-section-id="${escapeHtml(section.id)}" title="上移" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" class="icon-plain" data-move-lyric-section="down" data-section-id="${escapeHtml(section.id)}" title="下移" ${index === lyricSections.length - 1 ? "disabled" : ""}>↓</button><button type="button" class="icon-plain danger" data-remove-lyric-section="${escapeHtml(section.id)}" title="删除">×</button></div></article>`).join("");
   const copilot = ai ? `<section class="lyric-copilot panel-inset"><div class="lyric-subhead"><div><span class="eyebrow">COPILOT</span><h3>${icon("sparkles", 17)} 帮我续写</h3></div><span class="availability ready">只给候选，不会改稿</span></div><form id="lyric-candidate-form" class="lyric-candidate-form"><label class="wide">这一句 / 这一段想表达什么<textarea id="lyric-brief" rows="3" maxlength="2000" placeholder="例如：夜车离开故乡时，想起没说出口的告别">${escapeHtml(lyricCandidateBrief)}</textarea></label><label class="wide">画面或关键词<input id="lyric-imagery" maxlength="1000" value="${escapeHtml(lyricCandidateImagery)}" placeholder="月台、旧信、雨后的路灯、车窗倒影" /></label><label>写到哪一段<select id="lyric-candidate-section">${sectionOptions}</select></label><label>语气<input id="lyric-candidate-tone" maxlength="80" value="${escapeHtml(lyricCandidateTone)}" placeholder="克制、口语化、明亮" /></label><label>句尾提示（可空）<input id="lyric-candidate-rhyme" maxlength="24" value="${escapeHtml(lyricCandidateRhyme)}" placeholder="如：ang / 光" /></label><label>候选数量<select id="lyric-candidate-count">${[2, 3, 4, 5, 6].map((count) => `<option value="${count}" ${lyricCandidateCount === count ? "selected" : ""}>${count} 条</option>`).join("")}</select></label><button class="primary wide">${icon("sparkles", 16)} 给我几个写法</button></form>${renderLyricCandidates()}</section>` : `<section class="lyric-copilot locked panel-inset"><div class="lyric-subhead"><div><span class="eyebrow">COPILOT</span><h3>${icon("sparkles", 17)} 帮我续写</h3></div><span class="availability blocked">AI 模式</span></div><p>这里始终是你的草稿。开启 AI 后，可以为某一段索取原创写法，选择后再手动加入。</p><button type="button" class="secondary" data-enable-ai>开启 Copilot</button></section>`;
-  return `<div class="lyric-mode-banner"><span class="feature-icon ${ai ? "violet" : "emerald"}">${icon(ai ? "sparkles" : "lyrics", 21)}</span><div><strong>把注意力放在歌词上</strong><p>草稿会自动保存在本机；结构、韵脚和 Copilot 都是按需打开的辅助工具。</p></div><span class="lyric-save-state">本机自动保存</span></div><div class="lyric-workbench-grid lyric-writing-layout"><main class="lyric-editor panel-inset"><div class="lyric-editor-head"><label class="lyric-title">歌名<input id="lyric-song-title" maxlength="120" value="${escapeHtml(lyricSongTitle)}" placeholder="未命名歌词" /></label><div class="lyric-editor-actions"><button type="button" class="secondary compact" data-copy-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>复制</button><button type="button" class="secondary compact" data-clear-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>清空</button></div></div><label class="lyric-draft-label">歌词草稿<textarea id="lyric-draft" rows="22" spellcheck="false" placeholder="从这里开始写。\n\n你可以直接写完整歌词，也可以先写几个句子或画面。">${escapeHtml(lyricDraft)}</textarea></label><footer class="lyric-editor-footer"><span>${lineCount} 行 · ${lyricDraft.length.toLocaleString()} 字</span><span>输入时自动保存</span></footer></main><aside class="lyric-helper-stack">${copilot}<details class="lyric-tools panel-inset"><summary><span><span class="eyebrow">OPTIONAL TOOLS</span><strong>${icon("recipe", 16)} 段落结构</strong></span><small>${lyricSections.length} 段 · ${lyricSections.reduce((sum, section) => sum + section.lineCount, 0)} 行</small></summary><form id="lyric-structure-form"><div class="lyric-presets"><span>快速开始</span><button type="button" data-lyric-preset="compact">流行</button><button type="button" data-lyric-preset="pop">完整歌曲</button><button type="button" data-lyric-preset="rap">说唱</button><button type="button" data-lyric-preset="blank">空白</button></div><div class="lyric-section-list">${structureRows}</div><div class="lyric-structure-actions"><button type="button" class="secondary" data-add-lyric-section>${icon("plus", 15)} 添加段落</button><button class="primary">${icon("recipe", 15)} 插入段落骨架</button></div></form></details><details class="lyric-tools panel-inset"><summary><span><span class="eyebrow">OPTIONAL TOOLS</span><strong>${icon("pronunciation", 16)} 韵脚助手</strong></span><small>只在需要时查询</small></summary><form id="rhyme-lookup-form" class="rhyme-search"><input id="rhyme-query" required maxlength="24" value="${escapeHtml(lyricRhymeQuery)}" placeholder="输入一个字或韵母，如 光 / ang" /><select id="rhyme-match-mode"><option value="family" ${lyricRhymeMode === "family" ? "selected" : ""}>同韵部</option><option value="exact" ${lyricRhymeMode === "exact" ? "selected" : ""}>精确韵母</option></select><button class="secondary">查找同韵字</button></form>${renderRhymeLookupResult()}</details></aside></div>`;
+  return `<div class="lyric-mode-banner"><span class="feature-icon ${ai ? "violet" : "emerald"}">${icon(ai ? "sparkles" : "lyrics", 21)}</span><div><strong>把注意力放在歌词上</strong><p>草稿会自动保存在本机；结构、韵脚和 Copilot 都是按需打开的辅助工具。</p></div><span class="lyric-save-state">本机自动保存</span></div>${projectToolbar}<div class="lyric-workbench-grid lyric-writing-layout"><main class="lyric-editor panel-inset"><div class="lyric-editor-head"><label class="lyric-title">歌名<input id="lyric-song-title" maxlength="120" value="${escapeHtml(lyricSongTitle)}" placeholder="未命名歌词" /></label><div class="lyric-editor-actions"><button type="button" class="secondary compact" data-copy-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>复制</button><button type="button" class="secondary compact" data-clear-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>清空</button></div></div><label class="lyric-draft-label">歌词草稿<textarea id="lyric-draft" rows="22" spellcheck="false" placeholder="从这里开始写。\n\n你可以直接写完整歌词，也可以先写几个句子或画面。">${escapeHtml(lyricDraft)}</textarea></label><footer class="lyric-editor-footer"><span>${lineCount} 行 · ${lyricDraft.length.toLocaleString()} 字</span><span>输入时自动保存</span></footer></main><aside class="lyric-helper-stack">${copilot}<details class="lyric-tools panel-inset"><summary><span><span class="eyebrow">OPTIONAL TOOLS</span><strong>${icon("recipe", 16)} 段落结构</strong></span><small>${lyricSections.length} 段 · ${lyricSections.reduce((sum, section) => sum + section.lineCount, 0)} 行</small></summary><form id="lyric-structure-form"><div class="lyric-presets"><span>快速开始</span><button type="button" data-lyric-preset="compact">流行</button><button type="button" data-lyric-preset="pop">完整歌曲</button><button type="button" data-lyric-preset="rap">说唱</button><button type="button" data-lyric-preset="blank">空白</button></div><div class="lyric-section-list">${structureRows}</div><div class="lyric-structure-actions"><button type="button" class="secondary" data-add-lyric-section>${icon("plus", 15)} 添加段落</button><button class="primary">${icon("recipe", 15)} 插入段落骨架</button></div></form></details><details class="lyric-tools panel-inset"><summary><span><span class="eyebrow">OPTIONAL TOOLS</span><strong>${icon("pronunciation", 16)} 韵脚助手</strong></span><small>只在需要时查询</small></summary><form id="rhyme-lookup-form" class="rhyme-search"><input id="rhyme-query" required maxlength="24" value="${escapeHtml(lyricRhymeQuery)}" placeholder="输入一个字或韵母，如 光 / ang" /><select id="rhyme-match-mode"><option value="family" ${lyricRhymeMode === "family" ? "selected" : ""}>同韵部</option><option value="exact" ${lyricRhymeMode === "exact" ? "selected" : ""}>精确韵母</option></select><button class="secondary">查找同韵字</button></form>${renderRhymeLookupResult()}</details></aside></div>`;
 }
 
 function renderLyricsPage(): string {
@@ -1592,13 +1754,67 @@ function renderWorkflowPanel(id: string): string {
       ? `<section class="audio-job-card ${audioJob.status}" aria-live="polite"><div class="audio-job-heading"><div><span class="eyebrow">AUDIO TASK</span><strong>${audioJob.operation === "loudness-normalize" ? "响度标准化" : "PCM WAV 转码"}</strong></div><span class="availability ${audioJob.status === "completed" ? "ready" : audioJob.status === "failed" ? "warning" : ""}">${escapeHtml(audioJob.status)}</span></div>${audioJob.progressPercent !== undefined ? `<div class="audio-progress" role="progressbar" aria-label="音频处理进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(audioJob.progressPercent)}"><span style="width:${Math.max(0, Math.min(100, audioJob.progressPercent))}%"></span></div><small>${formatAudioNumber(audioJob.progressPercent, "%")}</small>` : `<small>${running ? "正在处理；可继续浏览其他页面。" : "任务已结束。"}</small>`}${audioJob.outputPath ? `<div class="audio-output-path"><span>结果路径</span><code>${escapeHtml(audioJob.outputPath)}</code></div>` : ""}${audioJob.error ? `<pre class="audio-job-error">${escapeHtml(audioJob.error)}</pre>` : ""}${audioJob.loudnessReport ? `<div class="audio-loudness-readout compact"><span>复测 ${formatAudioNumber(audioJob.loudnessReport.integratedLufs, " LUFS")}</span><span>峰值 ${formatAudioNumber(audioJob.loudnessReport.truePeakDbtp, " dBTP")}</span><span>LRA ${formatAudioNumber(audioJob.loudnessReport.loudnessRange, " LU")}</span></div>` : ""}${running ? `<div class="button-row"><button class="secondary" data-cancel-audio-job="${escapeHtml(audioJob.id)}" ${audioCancelInFlight ? "disabled" : ""}>${audioCancelInFlight ? "正在取消…" : "取消任务"}</button></div>` : audioJob.status === "completed" && audioJob.artifactId ? `<div class="audio-artifact-actions">${audioPreviewUrl ? `<audio controls preload="metadata" src="${escapeHtml(audioPreviewUrl)}" data-audio-preview-artifact="${escapeHtml(audioJob.artifactId)}" data-audio-preview-kind="result" data-audio-preview-generation="${audioInputGeneration}" aria-label="结果试听"></audio>` : `<button class="secondary" data-preview-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>${icon("play", 16)} 试听结果</button>`}<button class="secondary" data-reveal-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>打开文件位置</button><button class="secondary" data-copy-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>复制路径</button><button class="primary" data-save-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>安全另存为</button></div>` : ""}</section>`
       : "";
     form = `<div class="audio-preparation" aria-label="音频准备">
-      <section class="audio-runtime-card ${runtime?.available ? "ready" : "warning"}"><div><span class="eyebrow">FFMPEG RUNTIME</span><strong>${runtime?.available ? `可用${runtime.version ? ` · ${escapeHtml(runtime.version)}` : ""}` : "正在检查…"}</strong><small>${escapeHtml(runtime?.detail ?? "进入此工具后检查本机 FFmpeg。")}</small></div><span class="availability ${runtime?.available ? "ready" : "warning"}">${escapeHtml(runtime?.source ?? (runtime?.available ? "已就绪" : "检查中"))}</span></section>
+      <section class="audio-runtime-card ${runtime?.available ? "ready" : "warning"}"><div><span class="eyebrow">FFMPEG RUNTIME</span><strong>${runtime === undefined ? "正在检查…" : runtime.available ? `可用${runtime.version ? ` · ${escapeHtml(runtime.version)}` : ""}` : "未找到 FFmpeg"}</strong><small>${escapeHtml(runtime?.detail ?? "进入此工具后检查本机 FFmpeg。")}${runtime !== undefined && !runtime.available ? " 请在组件中心安装或修复 FFmpeg 后重试。" : ""}</small></div><span class="availability ${runtime?.available ? "ready" : "warning"}">${escapeHtml(runtime?.source ?? (runtime === undefined ? "检查中" : runtime.available ? "已就绪" : "需要组件"))}</span></section>
       <section class="audio-input-card"><div class="section-heading"><div><h3>选择单个音频</h3><p>支持点击选择或拖放一个本地文件；不会自动导入 SynthV、运行 CVRS 或批处理。</p></div><button type="button" class="secondary" data-pick-audio-file ${controlsLocked ? "disabled" : ""}>选择文件</button></div><label class="visually-hidden" for="audio-prep-input">音频文件路径</label><input id="audio-prep-input" value="${escapeHtml(audioPrepareForm.inputPath)}" readonly placeholder="尚未选择文件" aria-describedby="audio-drop-help" /><button type="button" class="audio-drop-zone" data-audio-drop-zone aria-label="拖放一个音频文件或选择文件" aria-describedby="audio-drop-help" ${controlsLocked ? "disabled" : ""}><span>${icon("audio", 22)}</span><strong>把一个音频文件拖到这里</strong><small id="audio-drop-help">一次只接受一个文件。拖放后先进行只读媒体探测。</small></button></section>
       ${probeCard}
       <div class="audio-action-grid"><section class="audio-action-card"><div><span class="eyebrow">SYNTHV PCM WAV</span><h3>为 SynthV 准备 PCM WAV</h3><p>默认保持原采样率和声道，输出 24-bit PCM WAV。</p></div><form id="audio-prepare-form" class="workflow-form"><div class="workflow-pair three"><label>采样率（Hz）<input id="audio-prep-rate" type="number" min="8000" max="192000" step="1" value="${audioPrepareForm.sampleRate ?? ""}" placeholder="保持不变" ${controlsLocked ? "disabled" : ""}/></label><label>声道数<select id="audio-prep-channels" ${controlsLocked ? "disabled" : ""}><option value="">保持不变</option><option value="1" ${audioPrepareForm.channels === 1 ? "selected" : ""}>单声道</option><option value="2" ${audioPrepareForm.channels === 2 ? "selected" : ""}>立体声</option></select></label><label>位深<select id="audio-prep-format" ${controlsLocked ? "disabled" : ""}><option value="s16" ${audioPrepareForm.sampleFormat === "s16" ? "selected" : ""}>16-bit PCM</option><option value="s24" ${audioPrepareForm.sampleFormat === "s24" ? "selected" : ""}>24-bit PCM</option><option value="f32" ${audioPrepareForm.sampleFormat === "f32" ? "selected" : ""}>32-bit float</option></select></label></div><div class="workflow-pair"><label>起始位置（秒）<input id="audio-prep-start" type="number" min="0" step="0.01" value="${audioPrepareForm.startSeconds ?? ""}" placeholder="从头开始" ${controlsLocked ? "disabled" : ""}/></label><label>时长（秒）<input id="audio-prep-duration" type="number" min="0.01" step="0.01" value="${audioPrepareForm.durationSeconds ?? ""}" placeholder="直到结尾" ${controlsLocked ? "disabled" : ""}/></label></div><button class="primary" ${!audioPrepareForm.inputPath || !runtime?.available || controlsLocked ? "disabled" : ""}>${icon("audio", 16)} 查看写入计划</button></form></section>
       <section class="audio-action-card"><div><span class="eyebrow">EBU R128</span><h3>检查 / 平衡响度</h3><p>默认目标 −16 LUFS / −1.5 dBTP / 11 LRA，写入后会自动复测。</p></div><div class="button-row"><button class="secondary" data-analyze-audio-loudness ${!audioPrepareForm.inputPath || !runtime?.available || controlsLocked ? "disabled" : ""}>检查响度</button></div>${loudness}<form id="audio-normalize-form" class="workflow-form"><div class="workflow-pair three"><label>LUFS<input id="audio-normalize-lufs" type="number" min="-70" max="-5" step="0.1" required value="${audioNormalizeForm.integratedLufs}" ${controlsLocked ? "disabled" : ""}/></label><label>dBTP<input id="audio-normalize-peak" type="number" min="-9" max="0" step="0.1" required value="${audioNormalizeForm.truePeakDbtp}" ${controlsLocked ? "disabled" : ""}/></label><label>LRA<input id="audio-normalize-lra" type="number" min="1" max="20" step="0.1" required value="${audioNormalizeForm.loudnessRange}" ${controlsLocked ? "disabled" : ""}/></label></div><button class="primary" ${!audioPrepareForm.inputPath || !runtime?.available || controlsLocked ? "disabled" : ""}>${icon("shield", 16)} 查看标准化计划</button></form></section></div>
       ${audioUiNotice ? `<div class="audio-inline-notice" role="status">${escapeHtml(audioUiNotice)}</div>` : ""}${audioUiError ? `<div class="audio-inline-error" role="alert">${escapeHtml(audioUiError)}</div>` : ""}${jobPanel}
     </div>`;
+  } else if (id === "cover") {
+    const processOptions = [`<option value="">自动选择${synthvProcesses.length > 1 ? "（多实例时由 Agent 指定）" : ""}</option>`, ...synthvProcesses.map((process) => `<option value="${process.processId}">PID ${process.processId} · ${escapeHtml(process.name)}</option>`)].join("");
+    const taskCards = mediaTasks.filter((item) => item.kind === "cover").slice(-5).reverse().map((task) => {
+      const result = asObject(task.result) ?? {};
+      const midi = asObject(result.midi) ?? {};
+      const assignment = asObject(result.voiceAssignment) ?? {};
+      const action = ["queued", "running", "cancelling"].includes(task.status)
+        ? `<button class="secondary compact" data-cancel-media-task="${escapeHtml(task.id)}" ${task.status === "cancelling" ? "disabled" : ""}>${task.status === "cancelling" ? "终止中…" : "取消"}</button>`
+        : ["failed", "cancelled"].includes(task.status)
+          ? `<button class="secondary compact" data-retry-media-task="${escapeHtml(task.id)}">重试</button>`
+          : "";
+      const outputPath = typeof midi.outputPath === "string" ? midi.outputPath : "";
+      const voiceBoundary = assignment.requiresHostSelection === true ? `<small>指定声库：${escapeHtml(String(result.requestedVoice ?? ""))} · 宿主 API 不可自动分配身份</small>` : "";
+      const svpPath = typeof result.svpPath === "string" ? result.svpPath : "";
+      const saveState = svpPath ? `<small>SVP：${escapeHtml(svpPath)} · ${result.saveVerified === true ? "已验证落盘" : "保存未验证"}</small>` : "";
+      return `<article class="download-item ${task.status}"><span class="component-status ${task.status === "completed" ? "ready" : ""}">${icon(task.status === "failed" ? "plug" : "sparkles", 17)}</span><div><div class="download-title"><strong>一键 Cover</strong><span>${escapeHtml(task.status)}</span></div><div class="progress-track"><span style="width:${Math.max(2, Math.min(100, task.progress))}%"></span></div><small>${escapeHtml(task.error || task.detail)}</small>${outputPath ? `<small>MIDI：${escapeHtml(outputPath)}</small>` : ""}${saveState}${voiceBoundary}</div>${action}</article>`;
+    }).join("");
+    const taskList = taskCards ? `<section class="download-queue"><div class="section-heading"><div><h3>Cover 任务</h3><p>下载、分离与旋律提取均可取消；Bridge 写入开始后以宿主实际结果为准。</p></div></div><div class="download-list">${taskCards}</div></section>` : "";
+    form = `<div class="mode-limit"><strong>声库边界：</strong>Toolbox 会记录指定声库并自动连接/导入，但 SynthV 官方脚本 API 当前不能分配 singer 身份；不会伪报已切换。</div><form id="cover-form" class="workflow-form workflow-wide"><label>BV 或 YouTube 来源<input id="cover-source" required placeholder="BV1... 或 https://www.youtube.com/watch?v=..." /></label><div class="workflow-pair"><label>目标声库<input id="cover-voice" required maxlength="200" placeholder="例如 Mai 2" /></label><label>SynthV 进程<select id="cover-process">${processOptions}</select></label></div><label>完整歌词（可选；CJK 按字、拉丁词按词映射）<textarea id="cover-lyrics" rows="7" placeholder="留空时使用 MIDI/SynthV 默认歌词；歌词 token 多于音符会明确失败"></textarea></label><div class="workflow-pair"><label>目标轨道编号<input id="cover-track" type="number" min="1" max="10000" value="1" required /></label><label>音符组名称<input id="cover-group" value="Toolbox Cover" maxlength="200" required /></label></div><label class="checkbox workflow-check"><input id="cover-rights" type="checkbox" /> 我拥有来源内容或已取得足够授权，并会遵守来源平台规则</label><button class="primary">${icon("sparkles", 16)} 开始完整 Cover</button></form>${taskList}`;
+  } else if (id === "tuning-learning") {
+    const profiles = tuningProfiles.length ? `<div class="download-list">${tuningProfiles.map((profile) => `<article class="download-item completed"><span class="component-status ready">${icon("waveform", 17)}</span><div><div class="download-title"><strong>${escapeHtml(profile.voiceName)}</strong><span>${profile.sourceSamples} 个参考 · ${profile.outcomeSamples} 个反馈</span></div><small>响度 ${profile.parameters.loudness.toFixed(2)} · 张力 ${profile.parameters.tension.toFixed(3)} · 气声 ${profile.parameters.breathiness.toFixed(3)} · 颤音 ${profile.parameters.vibratoStrength.toFixed(3)}</small></div></article>`).join("")}</div>` : `<div class="mode-limit">尚无调声档案。每个精确声库名称使用独立本地档案，不会互相污染。</div>`;
+    form = `<div class="workflow-split"><form id="tuning-learn-form" class="workflow-form"><h3>从参考人声学习</h3><label>参考人声音频路径<input id="tuning-audio" required /></label><label>精确声库名称<input id="tuning-voice" required maxlength="200" /></label><button class="primary">${icon("waveform", 16)} 分析并更新档案</button></form><form id="tuning-apply-form" class="workflow-form"><h3>应用已学习参数</h3><label>声库档案<select id="tuning-profile" required>${tuningProfiles.map((profile) => `<option value="${escapeHtml(profile.voiceName)}">${escapeHtml(profile.voiceName)}</option>`).join("")}</select></label><div class="workflow-pair"><label>轨道<input id="tuning-track" type="number" min="1" value="1" required /></label><label>音符组<input id="tuning-group" type="number" min="1" value="1" required /></label></div><button class="primary" ${app.bridgeConnected && tuningProfiles.length ? "" : "disabled"}>${icon("sparkles", 16)} ${app.bridgeConnected ? "应用到 SynthV" : "请先连接 Bridge"}</button></form></div>${profiles}`;
+  } else if (id === "media-import") {
+    const sourcePreview = mediaSourcePreview
+      ? `<section class="media-source-preview"><div><span class="availability ready">${escapeHtml(mediaSourcePreview.platform)}</span><h3>${escapeHtml(mediaSourcePreview.title)}</h3><p>${escapeHtml(mediaSourcePreview.uploader)} · ${mediaSourcePreview.durationSeconds ? `${Math.round(mediaSourcePreview.durationSeconds)} 秒` : "时长未知"}</p><code>${escapeHtml(mediaSourcePreview.canonicalUrl)}</code></div></section>`
+      : `<div class="mode-limit">支持裸 BV 号、Bilibili URL、YouTube URL 与 youtu.be 短链接。不会读取浏览器 Cookie、播放列表或付费内容。</div>`;
+    const taskCards = mediaTasks.filter((item) => item.kind === "media-import").slice(-5).reverse().map((task) => {
+      const result = asObject(task.result) ?? {};
+      const audioPath = typeof result.audioPath === "string" ? result.audioPath : "";
+      const action = ["queued", "running", "cancelling"].includes(task.status)
+        ? `<button class="secondary compact" data-cancel-media-task="${escapeHtml(task.id)}" ${task.status === "cancelling" ? "disabled" : ""}>${task.status === "cancelling" ? "终止中…" : "取消"}</button>`
+        : ["failed", "cancelled"].includes(task.status)
+          ? `<button class="secondary compact" data-retry-media-task="${escapeHtml(task.id)}">重试</button>`
+          : "";
+      return `<article class="download-item ${task.status}"><span class="component-status ${task.status === "completed" ? "ready" : ""}">${icon(task.status === "failed" ? "plug" : "download", 17)}</span><div><div class="download-title"><strong>平台音频导入</strong><span>${escapeHtml(task.status)}</span></div><div class="progress-track"><span style="width:${Math.max(2, Math.min(100, task.progress))}%"></span></div><small>${escapeHtml(task.error || task.detail)}</small>${audioPath ? `<small>WAV：${escapeHtml(audioPath)}</small>` : ""}</div>${action}</article>`;
+    }).join("");
+    const taskList = taskCards ? `<section class="download-queue"><div class="section-heading"><div><h3>媒体任务</h3><p>状态会持久化；取消会终止 yt-dlp 及其帮助进程。</p></div></div><div class="download-list">${taskCards}</div></section>` : "";
+    form = `<form id="media-import-form" class="workflow-form workflow-wide"><label>BV 或媒体 URL<input id="media-source" required value="${escapeHtml(mediaSourceInput)}" placeholder="BV1... 或 https://www.youtube.com/watch?v=..." /></label><label class="checkbox workflow-check"><input id="media-rights" type="checkbox" /> 我拥有该内容或已取得足够授权，并会遵守来源平台规则</label><div class="button-row"><button class="secondary" value="preview">${icon("waveform", 16)} 预览来源</button><button class="primary" value="import" ${mediaSourcePreview ? "" : "disabled"}>${icon("download", 16)} 下载受管 WAV</button></div></form>${sourcePreview}${taskList}`;
+  } else if (id === "source-separation") {
+    const taskCards = mediaTasks.filter((item) => item.kind === "source-separation").slice(-5).reverse().map((task) => {
+      const wrapped = asObject(task.result) ?? {};
+      const data = asObject(wrapped.data) ?? {};
+      const vocalPath = typeof data.vocalPath === "string" ? data.vocalPath : "";
+      const instrumentalPath = typeof data.instrumentalPath === "string" ? data.instrumentalPath : "";
+      const action = ["queued", "running", "cancelling"].includes(task.status)
+        ? `<button class="secondary compact" data-cancel-media-task="${escapeHtml(task.id)}" ${task.status === "cancelling" ? "disabled" : ""}>${task.status === "cancelling" ? "终止中…" : "取消"}</button>`
+        : ["failed", "cancelled"].includes(task.status)
+          ? `<button class="secondary compact" data-retry-media-task="${escapeHtml(task.id)}">重试</button>`
+          : "";
+      const outputs = vocalPath && instrumentalPath ? `<small>Vocals：${escapeHtml(vocalPath)}</small><small>Inst：${escapeHtml(instrumentalPath)}</small>` : "";
+      return `<article class="download-item ${task.status}"><span class="component-status ${task.status === "completed" ? "ready" : ""}">${icon(task.status === "failed" ? "plug" : "audio", 17)}</span><div><div class="download-title"><strong>人声伴奏分离</strong><span>${escapeHtml(task.status)}</span></div><div class="progress-track"><span style="width:${Math.max(2, Math.min(100, task.progress))}%"></span></div><small>${escapeHtml(task.error || task.detail)}</small>${outputs}</div>${action}</article>`;
+    }).join("");
+    const taskList = taskCards ? `<section class="download-queue"><div class="section-heading"><div><h3>分离任务</h3><p>状态会持久化；取消会终止 Python、Demucs 及模型帮助进程。</p></div></div><div class="download-list">${taskCards}</div></section>` : "";
+    form = `<div class="mode-limit">首次运行会由 Demucs 获取 htdemucs 模型；输出始终写入 Toolbox 受管目录，不覆盖源音频。</div><form id="source-separation-form" class="workflow-form workflow-wide"><label>混音音频路径<input id="separation-source" required placeholder="选择平台导入的 source.wav 或其他本地音频" /></label><button class="primary">${icon("audio", 16)} 分离 vocals / inst</button></form>${taskList}`;
   } else if (id === "audio-insight") {
     form = `<form id="audio-probe-form" class="workflow-form">
       <label>音频文件路径<input id="audio-path" required placeholder="选择待分析的 WAV、FLAC、MP3、M4A、AAC、OGG 或 OPUS" /></label>
@@ -1695,12 +1911,20 @@ function renderToolboxUpdateResult(): string {
 
 function renderCopilot(): string {
   const messages = conversation?.messages.filter((message) => message.role === "user" || message.role === "assistant") ?? [];
+  const approvals = fileApprovals.length ? `<section class="file-approvals"><strong>需要文件访问批准</strong>${fileApprovals.map((item) => `<article><code>${escapeHtml(item.path)}</code><small>${escapeHtml(item.purpose)}</small><button class="primary compact" data-approve-file="${escapeHtml(item.id)}">通过</button><button class="secondary compact" data-deny-file="${escapeHtml(item.id)}">拒绝</button></article>`).join("")}</section>` : "";
+  const provider = activeAiProvider();
+  const providerName = provider ? aiProviderDisplayName(provider) : "尚未选择提供商";
+  const providerModel = provider?.model || "选择模型";
+  const providerStatus = provider
+    ? `${provider.accounts.filter((account) => account.authorized).length} 个 OAuth · ${provider.apiKeys.length} 个 API Key`
+    : "未配置连接";
   return `<div class="copilot-layout">
-    <aside class="sessions-panel"><button class="primary full" data-new-conversation>${icon("plus", 17)} 新建对话</button><span class="nav-label">历史对话</span><div class="session-list">${conversations.length ? conversations.map((item) => `<button class="session-item ${conversation?.id === item.id ? "active" : ""}" data-conversation="${escapeHtml(item.id)}"><strong>${escapeHtml(item.title)}</strong><small>${item.messageCount} 条消息 · ${escapeHtml(item.updatedAt.slice(0, 10))}</small></button>`).join("") : '<p class="empty-small">还没有历史对话</p>'}</div></aside>
+    <aside class="sessions-panel"><div class="sessions-panel-head"><button class="primary full" data-new-conversation>${icon("plus", 17)} 新建对话</button><span class="nav-label">历史对话</span></div><div class="session-list">${conversations.length ? conversations.map((item) => `<button class="session-item ${conversation?.id === item.id ? "active" : ""}" data-conversation="${escapeHtml(item.id)}"><strong>${escapeHtml(item.title)}</strong><small>${item.messageCount} 条消息 · ${escapeHtml(item.updatedAt.slice(0, 10))}</small></button>`).join("") : '<p class="empty-small">还没有历史对话</p>'}</div></aside>
     <section class="chat-panel">
-      <div class="chat-header"><div><strong>${escapeHtml(conversation?.title ?? "新对话")}</strong><small>Copilot 只会调用已启用的能力</small></div><span class="mode-pill ai">${icon("sparkles", 14)} AI</span></div>
+      <div class="chat-header"><div class="chat-title"><strong>${escapeHtml(conversation?.title ?? "新对话")}</strong><small>Copilot 只会调用已启用的能力</small></div><div class="chat-header-actions" aria-label="对话工具栏"><button type="button" class="chat-model-button" data-open-ai-provider-picker aria-label="选择供应商和模型；当前为 ${escapeHtml(providerName)} ${escapeHtml(providerModel)}"><span class="chat-model-mark">${icon("sparkles", 14)}</span><span><strong>${escapeHtml(providerName)}</strong><small>${escapeHtml(providerModel)} · ${providerStatus}</small></span>${icon("arrow", 14)}</button><div class="chat-work-mode" role="group" aria-label="Agent 工作模式"><button type="button" class="${app?.agentWorkMode === "edit" ? "active" : ""}" data-agent-work-mode="edit" aria-pressed="${app?.agentWorkMode === "edit"}">Edit</button><button type="button" class="${app?.agentWorkMode === "solo" ? "active" : ""}" data-agent-work-mode="solo" aria-pressed="${app?.agentWorkMode === "solo"}">Solo</button></div></div></div>
+      ${approvals}
       <div class="messages">${messages.length ? messages.map(renderMessage).join("") : `<div class="empty-chat"><span class="mode-icon purple">${icon("bot", 30)}</span><h2>今天想完成什么？</h2><p>可以从分析音频、检查工程或连接 SynthV 开始。</p><div class="prompt-chips"><button data-prompt="分析这段音频的 BPM、调性和能量变化">分析音频特征</button><button data-prompt="检查当前 SynthV 工程并总结轨道结构">检查 SynthV 工程</button><button data-prompt="帮我规划从演唱音频到 MIDI 或 SynthV 工程的工作流">规划音频到 SynthV</button></div></div>`}</div>
-      <form id="chat-form" class="composer"><textarea id="chat-input" rows="2" placeholder="向 Copilot 描述任务…（Ctrl/⌘ + Enter 发送）"></textarea><button class="primary icon-button" title="发送">${icon("send", 19)}</button><span>Copilot 可能出错，重要修改请在 SynthV 中复核。</span></form>
+      <form id="chat-form" class="composer"><div class="composer-shell"><textarea id="chat-input" rows="1" placeholder="向 Copilot 描述任务…"></textarea><button class="primary icon-button" type="submit" title="发送" aria-label="发送消息">${icon("send", 19)}</button></div><span>Copilot 可能出错，重要修改请在 SynthV 中复核。按 Ctrl/⌘ + Enter 发送。</span></form>
     </section>
   </div>`;
 }
@@ -1712,13 +1936,14 @@ function renderMessage(message: ChatMessage): string {
 
 function renderComponents(): string {
   if (!app) return "";
-  const statusLabel = { queued: "排队中", downloading: "aria2 下载中", installing: "安装中", completed: "已完成", failed: "失败" } as const;
+  const statusLabel = { queued: "排队中", downloading: "下载中", installing: "安装中", completed: "已完成", failed: "失败", cancelled: "已取消" } as const;
   const activeDownloads = app.downloads.filter((item) => item.status !== "completed");
   const queue = activeDownloads.length ? `<section class="download-queue panel">
-    <div class="section-heading"><div><h2>下载队列</h2><p>队列串行执行；远程组件固定版本并由 aria2 + SHA-256 校验。</p></div><span class="queue-count">${activeDownloads.length}</span></div>
+    <div class="section-heading"><div><h2>下载队列</h2><p>队列串行执行；内置下载器只获取固定版本，并在安装前校验 SHA-256。</p></div><span class="queue-count">${activeDownloads.length}</span></div>
     <div class="download-list">${activeDownloads.map((item) => `<article class="download-item ${item.status}">
       <span class="component-status ${item.status === "completed" ? "ready" : ""}">${item.status === "failed" ? icon("plug", 17) : icon("download", 17)}</span>
       <div><div class="download-title"><strong>${escapeHtml(item.displayName)}</strong><span>${statusLabel[item.status]}</span></div><div class="progress-track"><span style="width:${Math.max(2, Math.min(100, item.progress))}%"></span></div><small>${escapeHtml(item.detail)}</small></div>
+      ${item.status === "queued" ? `<button class="secondary compact" data-cancel-component-task="${escapeHtml(item.id)}">取消</button>` : ["failed", "cancelled"].includes(item.status) ? `<button class="secondary compact" data-retry-component-task="${escapeHtml(item.id)}">重试</button>` : ""}
     </article>`).join("")}</div>
   </section>` : "";
   return `${queue}<div class="section-heading"><div><h2>本地组件</h2><p>下载任务会加入队列；无固定来源与 SHA-256 的组件会拒绝安装。</p></div></div>
@@ -1745,6 +1970,12 @@ function renderComponents(): string {
     }).join("")}</div>`;
 }
 
+function renderBridgeProcessRows(): string {
+  return synthvProcesses.length
+    ? synthvProcesses.map((process) => `<article class="synthv-process-row"><div><strong>${escapeHtml(process.name)}</strong><small>PID ${process.processId} · ${escapeHtml(process.command)}</small></div><div class="button-row"><button class="primary compact" data-auto-connect-synthv="${process.processId}">F13 启动并连接</button><button class="secondary compact" data-send-synthv-stop="${process.processId}">F14 停止</button></div></article>`).join("")
+    : '<div class="empty-inline compact-empty">没有发现正在运行的 SynthV 进程。</div>';
+}
+
 function renderBridge(): string {
   if (!app) return "";
   const applicationLocations = app.installations.filter((item) => item.installPath);
@@ -1755,6 +1986,9 @@ function renderBridge(): string {
   const scriptsList = scriptsLocations.length
     ? scriptsLocations.map((item) => `<button class="installation-item" data-scripts="${escapeHtml(item.scriptsPath ?? "")}" title="选择此 scripts 目录作为 Bridge 安装目标"><span class="status-dot online"></span><span><strong>${escapeHtml(item.displayName)}</strong><small title="${escapeHtml(item.scriptsPath ?? "")}">${escapeHtml(item.scriptsPath ?? "")}</small></span><span class="location-action">选择</span></button>`).join("")
     : '<div class="empty-inline compact-empty">没有发现 scripts 目录，可以在右侧手动填写。</div>';
+  const shortcuts = synthvShortcutProfile ?? { bridgeStart: "F13", bridgeStop: "F14", detail: "正在读取快捷键配置…" };
+  const processList = renderBridgeProcessRows();
+  const processControls = `<section class="panel bridge-instances-panel"><div class="panel-heading"><span class="feature-icon violet">${icon("bridge", 25)}</span><div><h2>运行中的 SynthV</h2><p>${escapeHtml(shortcuts.detail)}</p></div><button class="secondary compact" data-refresh-synthv-processes>${icon("sync", 16)} 刷新</button></div><div class="shortcut-tags"><span>启动 / 重连：${escapeHtml(shortcuts.bridgeStart)}</span><span>停止：${escapeHtml(shortcuts.bridgeStop)}</span></div><div class="synthv-process-list">${processList}</div></section>`;
   return `<div class="bridge-grid"><section class="panel"><div class="panel-heading"><span class="feature-icon orange">${icon("bridge", 25)}</span><div><h2>Synthesizer V 探测</h2><p>Windows 与 macOS 使用各自的标准路径，只进行只读检查。</p></div><button class="secondary compact" data-scan>${icon("sync", 16)} 重新探测</button></div>
     <div class="detection-groups">
       <section class="detection-group"><div class="detection-group-title"><strong>应用安装</strong><span>${applicationLocations.length}</span></div><div class="installation-list">${applicationList}</div></section>
@@ -1763,7 +1997,7 @@ function renderBridge(): string {
     <section class="panel"><div class="panel-heading"><span class="feature-icon blue">${icon("plug", 25)}</span><div><h2>Bridge 管理</h2><p>安装器只写入你指定的 scripts 目录，不开放网络端口。</p></div></div>
       <form id="bridge-form" class="form-stack"><label>Scripts 目录<input id="scripts-path" value="${escapeHtml(app.scriptsPath ?? app.installations.find((item) => item.scriptsPath)?.scriptsPath ?? "")}" placeholder="选择或粘贴 SynthV scripts 目录" /></label><div class="button-row"><button class="primary" value="install">安装 / 更新</button><button class="secondary" value="diagnose">检查安装</button><button class="secondary" value="connect">测试连接</button></div></form>
       <div class="inline-status"><span class="status-dot ${app.bridgeBundled ? "online" : ""}"></span><span>${app.bridgeBundled ? "内置 Bridge 资源已就绪" : "当前构建未包含 Bridge 资源"}</span></div>
-    </section></div>`;
+    </section>${processControls}</div>`;
 }
 
 function renderMcp(): string {
@@ -1776,35 +2010,85 @@ function renderMcp(): string {
 function fallbackAiProviders(): AiProviderSummary[] {
   return [{
     id: "anthropic",
-    displayName: "Claude 官方订阅",
-    description: "通过浏览器授权 Claude 账号，并使用官方订阅提供的模型。",
+    displayName: "Claude / Anthropic",
+    description: "通过 Claude OAuth 或 Anthropic API Key 连接。",
     active: true,
     connected: false,
     healthyAccounts: 0,
     totalAccounts: 0,
     model: "",
-    models: [],
+    oauthModels: [],
+    apiKeyModels: [],
     accounts: [],
+    apiKeys: [],
+    models: [],
+    authMethods: ["oauth", "api-key"],
+    available: true,
+    oauthEnabled: true,
+    loadStrategy: "round-robin",
+    unavailableReason: null,
   }, {
     id: "openai-codex",
-    displayName: "Codex 官方订阅",
-    description: "通过浏览器授权 ChatGPT 账号，并使用账号可用的 Codex 模型。",
+    displayName: "OpenAI / Codex",
+    description: "通过 ChatGPT OAuth 或 OpenAI API Key 连接。",
     active: false,
     connected: false,
     healthyAccounts: 0,
     totalAccounts: 0,
     model: "",
-    models: [],
+    oauthModels: [],
+    apiKeyModels: [],
     accounts: [],
+    apiKeys: [],
+    models: [],
+    authMethods: ["oauth", "api-key"],
+    available: true,
+    oauthEnabled: true,
+    loadStrategy: "round-robin",
+    unavailableReason: null,
+  }, {
+    id: "workbuddy",
+    displayName: "WorkBuddy",
+    description: "通过 WorkBuddy OAuth 连接 WorkBuddy 助理模型。",
+    active: false,
+    connected: false,
+    healthyAccounts: 0,
+    totalAccounts: 0,
+    model: "glm-5.2",
+    models: [],
+    oauthModels: ["glm-5.2"],
+    apiKeyModels: [],
+    accounts: [],
+    apiKeys: [],
+    authMethods: ["oauth"],
+    available: true,
+    oauthEnabled: true,
+    loadStrategy: "round-robin",
+    unavailableReason: null,
+  }, {
+    id: "traecode",
+    displayName: "TraeCode",
+    description: "通过本机 TraeCode CLI 登录并调用只读 Agent。",
+    active: false,
+    connected: false,
+    healthyAccounts: 0,
+    totalAccounts: 0,
+    model: "trae-account-default",
+    models: ["trae-account-default"],
+    oauthModels: ["trae-account-default"],
+    apiKeyModels: [],
+    accounts: [],
+    apiKeys: [],
+    authMethods: ["oauth"],
+    available: false,
+    oauthEnabled: true,
+    loadStrategy: "round-robin",
+    unavailableReason: "未检测到 TraeCode CLI；请先安装并登录 traecli。",
   }];
 }
 
 function aiProviders(): AiProviderSummary[] {
   return app?.model?.providers?.length ? app.model.providers : fallbackAiProviders();
-}
-
-function parseAiProviderId(value: string | undefined): AiProviderId | undefined {
-  return value === "anthropic" || value === "openai-codex" ? value : undefined;
 }
 
 function isActiveAiProvider(provider: AiProviderSummary): boolean {
@@ -1817,95 +2101,102 @@ function activeAiProvider(): AiProviderSummary | undefined {
 
 function aiConnectionSummary(): string {
   const provider = activeAiProvider();
-  if (!provider?.connected) return "等待浏览器授权模型提供商";
-  if (provider.healthyAccounts === 0) return `${provider.displayName} · 已授权，首次使用时验证`;
-  return `${provider.displayName}${provider.model ? ` · ${provider.model}` : ""}`;
+  if (!provider) return "请选择模型提供商";
+  if (!provider.accounts.some((account) => account.authorized) && provider.apiKeys.length === 0) return "等待添加连接";
+  return `${aiProviderDisplayName(provider)} · ${provider.accounts.filter((account) => account.authorized).length} OAuth · ${provider.apiKeys.length} API Key`;
 }
 
-function aiAccountExpiry(expiresAt: number): string {
-  const timestamp = expiresAt > 0 && expiresAt < 10_000_000_000 ? expiresAt * 1000 : expiresAt;
-  const date = new Date(timestamp);
-  return Number.isFinite(date.getTime()) ? date.toLocaleString("zh-CN") : "未知";
+function aiProviderDisplayName(provider: AiProviderSummary): string {
+  return provider.displayName;
 }
 
-function renderAiProviderCard(provider: AiProviderSummary): string {
-  const expanded = expandedAiProvider === provider.id;
-  const active = isActiveAiProvider(provider);
-  const tone = provider.connected ? (provider.healthyAccounts > 0 ? "ready" : "warning") : "off";
-  const stateLabel = provider.connected
-    ? provider.healthyAccounts > 0 ? "已绑定" : "已授权，待验证"
-    : "未绑定";
-  const knownModels = [...new Set([
-    ...provider.models.filter(Boolean),
-    ...(provider.model ? [provider.model] : []),
-  ])];
-  const modelOptions = knownModels.length
-    ? knownModels.map((model) => `<option value="${escapeHtml(model)}" ${model === provider.model ? "selected" : ""}>${escapeHtml(model)}</option>`).join("")
-    : '<option value="">授权后加载可用模型</option>';
-  const isAuthorizing = authorizingAiProvider === provider.id;
-  const accounts = provider.accounts.length
-    ? provider.accounts.map((account) => {
-      const awaitingConfirmation = pendingAiAccountRemoval?.provider === provider.id
-        && pendingAiAccountRemoval.accountId === account.id;
-      const accountState = account.healthy ? "healthy" : account.authorized ? "pending" : "unhealthy";
-      const accountLabel = account.healthy
-        ? `授权可用${account.expiresAt > 0 ? ` · 会话到期：${escapeHtml(aiAccountExpiry(account.expiresAt))}` : ""}`
-        : account.authorized ? "凭据已安全保存，首次使用时验证并续期" : "凭据缺失，需要重新授权";
-      const removalLabel = awaitingConfirmation
-        ? `确认移除 ${account.label}`
-        : `移除账号 ${account.label}`;
-      return `<article class="ai-provider-account ${accountState}">
-        <span class="ai-account-state" aria-label="${account.healthy ? "账号可用" : account.authorized ? "账号待验证" : "账号不可用"}"></span>
-        <div><strong>${escapeHtml(account.label)}</strong><small>${accountLabel}</small></div>
-        <button type="button" class="secondary compact ai-account-remove ${awaitingConfirmation ? "confirm" : ""}" data-remove-ai-account="${escapeHtml(account.id)}" data-ai-provider="${provider.id}" aria-label="${escapeHtml(removalLabel)}" ${busy ? "disabled" : ""}>${awaitingConfirmation ? "确认移除" : "移除账号"}</button>
-        ${awaitingConfirmation ? `<span class="visually-hidden" role="status" aria-live="assertive">再次点击以确认移除 ${escapeHtml(account.label)}；确认将在五秒后取消。</span>` : ""}
-      </article>`;
-    }).join("")
-    : '<div class="ai-provider-empty">尚未授权账号。点击“浏览器授权”，在官方页面完成登录。</div>';
+function aiProviderMark(provider: AiProviderSummary): string {
+  return provider.id === "anthropic" ? "C" : provider.id === "openai-codex" ? "O" : provider.id === "workbuddy" ? "W" : "T";
+}
 
-  return `<article class="ai-provider-card ${active ? "active" : ""} ${expanded ? "expanded" : ""}">
-    <div class="ai-provider-row">
-      <span class="ai-provider-state ${tone}" aria-label="${stateLabel}"></span>
-      <span class="ai-provider-mark ${provider.id === "anthropic" ? "claude" : "codex"}">${provider.id === "anthropic" ? "C" : "O"}</span>
-      <div class="ai-provider-copy"><strong>${escapeHtml(provider.displayName)}</strong><small>${escapeHtml(provider.description)}</small></div>
-      <div class="ai-provider-badges">
-        <span class="ai-provider-badge ${active ? "active" : ""}">${active ? "当前使用" : "可切换"}</span>
-        <span class="ai-provider-badge ${tone}">${escapeHtml(stateLabel)}</span>
-        <span class="ai-provider-badge">${provider.healthyAccounts}/${provider.totalAccounts} 个账号可用</span>
-        <span class="ai-provider-badge mono">${provider.models.length} 个模型</span>
-      </div>
-      <button type="button" class="secondary compact ai-provider-toggle" data-toggle-ai-provider="${provider.id}" aria-expanded="${expanded}">${expanded ? "完成" : "配置"}</button>
-    </div>
-    ${expanded ? `<div class="ai-provider-details">
-      <div class="ai-provider-auth-row"><div><strong>官方浏览器 OAuth</strong><small>将在系统浏览器中打开官方授权页，OAuth token 只由本机后端保管。</small></div><button type="button" class="primary" data-authorize-ai-provider="${provider.id}" ${busy ? "disabled" : ""}>${isAuthorizing ? "等待授权…" : `浏览器授权${provider.id === "anthropic" ? " Claude" : " ChatGPT"}`}</button></div>
-      <div class="ai-provider-account-list">${accounts}</div>
-      <form class="ai-provider-model-form" data-ai-provider-form="${provider.id}">
-        <label>模型<select name="model" ${!provider.connected || !knownModels.length ? "disabled" : ""}>${modelOptions}</select></label>
-        <button class="primary" ${!provider.connected || !knownModels.length || busy ? "disabled" : ""}>${active ? "保存模型" : "使用此提供商"}</button>
-      </form>
-    </div>` : ""}
-  </article>`;
+function renderAiProviderPicker(): string {
+  return "<model-auth-dialog></model-auth-dialog>";
+}
+
+function wireModelAuthDialog(): void {
+  const dialog = document.querySelector<HTMLElement>("model-auth-dialog") as (HTMLElement & Record<string, unknown>) | null;
+  if (!dialog) return;
+  syncModelAuthDialog(dialog);
+  const detail = (event: Event): unknown[] => Array.isArray((event as CustomEvent<unknown>).detail) ? (event as CustomEvent<unknown[]>).detail : [(event as CustomEvent<unknown>).detail];
+  const execute = (event: Event, operation: (operationId?: string) => Promise<void>, authorization = false, closeOnSuccess = false) => {
+    event.stopPropagation();
+    void runModelAuthOperation(dialog, operation, authorization, closeOnSuccess);
+  };
+  dialog.addEventListener("close", () => {
+    const active = activeModelAuthAuthorization;
+    active?.controller.abort();
+    if (active) void api.cancelAiAuthorization(active.operationId);
+    activeModelAuthAuthorization = undefined;
+    aiProviderPickerOpen = false;
+    render();
+  });
+  dialog.addEventListener("authorize-oauth", (event) => execute(event, async (operationId) => { const [provider] = detail(event) as [AiProviderId]; app = await api.authorizeAiProvider(provider, undefined, operationId); notice = "官方账号授权已更新。"; }, true));
+  dialog.addEventListener("reconnect-oauth", (event) => execute(event, async (operationId) => { const [provider, credentialId] = detail(event) as [AiProviderId, string]; app = await api.authorizeAiProvider(provider, credentialId, operationId); notice = "官方账号授权已更新。"; }, true));
+  dialog.addEventListener("add-api-key", (event) => execute(event, async () => { const [payload] = detail(event) as [{ providerId: AiProviderId; label: string; apiKey: string }]; app = await api.addAiApiKey(payload.providerId, payload.label, payload.apiKey); notice = "API Key 已保存并验证。"; }));
+  dialog.addEventListener("remove-oauth", (event) => execute(event, async () => { const [provider, id] = detail(event) as [AiProviderId, string]; app = await api.removeAiProviderAccount(provider, id); }));
+  dialog.addEventListener("remove-api-key", (event) => execute(event, async () => { const [provider, id] = detail(event) as [AiProviderId, string]; app = await api.removeAiApiKey(provider, id); }));
+  dialog.addEventListener("update-credential", (event) => execute(event, async () => { const [payload] = detail(event) as [{ providerId: AiProviderId; credentialId: string; enabled: boolean; weight: number }]; app = await api.updateAiCredential(payload.providerId, payload.credentialId, payload.enabled, payload.weight); }));
+  dialog.addEventListener("update-provider", (event) => execute(event, async () => { const [payload] = detail(event) as [{ providerId: AiProviderId; oauthEnabled: boolean }]; app = await api.updateAiProvider(payload.providerId, payload.oauthEnabled); }));
+  dialog.addEventListener("select-model", (event) => execute(event, async () => { const [payload] = detail(event) as [{ providerId: AiProviderId; model: string }]; app = await api.selectAiProvider(payload.providerId, payload.model); notice = "当前 AI 提供商与模型已更新。"; }, false, true));
+  dialog.addEventListener("update-provider-strategy", (event) => execute(event, async () => { const [payload] = detail(event) as [{ providerId: AiProviderId; strategy: AiLoadStrategy }]; app = await api.updateAiProviderStrategy(payload.providerId, payload.strategy); }));
+  dialog.addEventListener("refresh-catalog", (event) => { event.stopPropagation(); void runModelAuthOperation(dialog, async () => { await refreshAiProviderSummary(true); }); });
+}
+
+function syncModelAuthDialog(dialog: HTMLElement & Record<string, unknown>): void {
+  const catalog = app?.model;
+  dialog.open = true;
+  dialog.theme = "system";
+  dialog.providers = aiProviders().map((provider) => ({
+    id: provider.id, name: provider.displayName, description: provider.description, authMethods: provider.authMethods,
+    available: provider.available, unavailableReason: provider.unavailableReason, oauthEnabled: provider.oauthEnabled,
+    loadStrategy: provider.loadStrategy, mark: aiProviderMark(provider),
+    authorizeLabel: provider.id === "traecode" ? "通过 TraeCode CLI 登录" : "浏览器授权",
+    models: provider.models, oauthModels: provider.oauthModels, apiKeyModels: provider.apiKeyModels,
+    oauthCredentials: provider.accounts.map((account) => ({ id: account.id, label: account.label, account: account.label, healthy: account.healthy, enabled: account.enabled, weight: account.weight, models: provider.oauthModels })),
+    apiKeyCredentials: provider.apiKeys.map((key) => ({ id: key.id, label: key.label, healthy: key.healthy, enabled: key.enabled, weight: key.weight, models: key.models, cooldownUntilUtc: key.cooldownUntilUtc })),
+  }));
+  dialog.model = catalog ? { providerId: catalog.activeProvider, model: aiProviders().find((item) => item.id === catalog.activeProvider)?.model ?? "" } : null;
+  dialog.catalogStatus = { state: catalog?.catalogError ? "error" : "ready", source: catalog?.catalogSource === "models-dev" ? "models.dev" : "fallback", checkedAt: catalog?.catalogGeneratedAt ? new Date(catalog.catalogGeneratedAt).toISOString() : undefined, error: catalog?.catalogError };
+}
+
+async function runModelAuthOperation(dialog: HTMLElement & Record<string, unknown>, operation: (operationId?: string) => Promise<void>, authorization = false, closeOnSuccess = false): Promise<void> {
+  if (dialog.busy) return;
+  dialog.busy = true;
+  dialog.error = null;
+  const controller = new AbortController();
+  const operationId = authorization ? crypto.randomUUID() : undefined;
+  if (operationId) activeModelAuthAuthorization = { operationId, controller };
+  try {
+    await operation(operationId);
+    if (controller.signal.aborted) return;
+    if (closeOnSuccess) {
+      aiProviderPickerOpen = false;
+      render();
+      return;
+    }
+    syncModelAuthDialog(dialog);
+  } catch (reason) {
+    if (!controller.signal.aborted) dialog.error = formatError(reason);
+  } finally {
+    dialog.busy = false;
+    if (operationId && activeModelAuthAuthorization?.operationId === operationId) activeModelAuthAuthorization = undefined;
+  }
 }
 
 function renderAiProviderSettings(): string {
-  if (!openCodeCatalog && !openCodeCatalogLoading && !openCodeCatalogError) {
-    void loadOpenCodeCatalog(false);
-  }
   const legacyWarning = app?.model?.legacyConfigured
     ? `<div class="ai-legacy-warning">${icon("shield", 17)}<span><strong>检测到旧版 API token 配置</strong><small>旧配置不会作为 OAuth 账号展示。请完成浏览器授权；后端迁移完成前仍会保留旧配置。</small></span></div>`
     : "";
   const activeProvider = activeAiProvider();
-  const activeVerified = Boolean(activeProvider?.connected && activeProvider.healthyAccounts > 0);
-  const activeStatus = activeVerified ? "OAuth 已就绪" : activeProvider?.connected ? "已授权，待验证" : "等待授权";
-  const catalogStatus = openCodeCatalog
-    ? `${openCodeCatalog.providers.length} 个提供商`
-    : openCodeCatalogLoading ? "正在获取…" : "获取失败";
-  const catalogOptions = openCodeCatalog?.providers.map((provider) =>
-    `<option value="${escapeHtml(provider.id)}">${escapeHtml(provider.name)} · ${escapeHtml(provider.id)} · ${provider.modelCount} 个模型</option>`
-  ).join("") ?? "";
-  return `<section class="panel ai-provider-panel"><div class="section-heading"><div><h2>模型提供商</h2><p>使用 IRIS 同款官方订阅接入；授权、续期与账号凭据均由 Rust 后端处理。</p></div><span class="availability ${activeVerified ? "ready" : "warning"}">${activeStatus}</span></div>
-    ${legacyWarning}<div class="ai-provider-list">${aiProviders().map(renderAiProviderCard).join("")}</div>
-    <div class="opencode-catalog-row"><div><strong>OpenCode 提供商目录</strong><small>${openCodeCatalogError ? escapeHtml(openCodeCatalogError) : openCodeCatalog ? `已自动获取 ${openCodeCatalog.providers.length} 个提供商。` : "正在从 models.dev 自动获取目录。"}</small></div>${catalogOptions ? `<label><span class="visually-hidden">OpenCode 提供商</span><select aria-label="OpenCode 提供商目录">${catalogOptions}</select></label>` : `<span class="availability ${openCodeCatalogError ? "warning" : ""}">${catalogStatus}</span>`}<button type="button" class="secondary compact" data-refresh-opencode-catalog ${openCodeCatalogLoading || busy ? "disabled" : ""}>${icon("sync", 15)} 刷新</button></div>
+  const activeVerified = Boolean(activeProvider && (activeProvider.accounts.some((account) => account.authorized) || activeProvider.apiKeys.length));
+  const activeStatus = activeProvider ? `${activeProvider.accounts.filter((account) => account.authorized).length} 个 OAuth · ${activeProvider.apiKeys.length} 个 API Key` : "未配置连接";
+  return `<section class="panel ai-provider-panel"><div class="section-heading"><div><h2>模型提供商</h2><p>可使用 OAuth 订阅或多份 API Key 接入；凭据均由本机后端处理。</p></div><span class="availability ${activeVerified ? "ready" : "warning"}">${activeStatus}</span></div>
+    ${legacyWarning}<div class="ai-provider-summary"><div><strong>${escapeHtml(activeProvider ? aiProviderDisplayName(activeProvider) : "尚未选择提供商")}</strong><small>${escapeHtml(activeProvider?.model || "选择认证方式、提供商与模型后即可开始对话。")}</small></div><button type="button" class="primary" data-open-ai-provider-picker ${busy ? "disabled" : ""}>添加或切换连接</button></div>
   </section>`;
 }
 
@@ -1923,6 +2214,7 @@ function renderSettings(): string {
   return `<div class="settings-layout"><section class="panel"><div class="section-heading"><div><h2>运行模式</h2><p>切换后导航与 Rust 后端能力会同时更新。</p></div></div><div class="mode-setting"><button class="setting-choice ${app.mode === "toolbox" ? "active" : ""}" data-set-mode="toolbox"><span class="mode-icon slate">${icon("toolbox", 23)}</span><span><strong>纯工具箱</strong><small>确定性基础流程，不启动 AI</small></span>${app.mode === "toolbox" ? icon("check", 20) : ""}</button><button class="setting-choice ${app.mode === "ai" ? "active" : ""}" data-set-mode="ai"><span class="mode-icon purple">${icon("sparkles", 23)}</span><span><strong>AI 模式</strong><small>Copilot、智能增强与 MCP</small></span>${app.mode === "ai" ? icon("check", 20) : ""}</button></div></section>
     ${app.mode === "ai" ? renderAiProviderSettings() : `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("bot", 24)}</span><div><h2>AI 运行时已关闭</h2><p>当前不会显示 Copilot、模型或 MCP 设置，也不会向模型端点发送请求。</p></div></section>`}
     ${showSvpRouting ? `<section class="panel smart-route-settings"><div class="section-heading"><div><h2>智能 .svp 启动</h2><p>根据工程所需声库，从空闲账号中建议最合适的启动槽位。</p></div><label class="fluent-switch large"><input id="svp-routing-enabled" type="checkbox" ${app.smartSvpLaunchEnabled ? "checked" : ""} ${association.supported ? "" : "disabled"} aria-label="启用智能 .svp 启动" /><span></span>${app.smartSvpLaunchEnabled ? "已开启" : "已关闭"}</label></div><div class="smart-route-state ${association.isDefault ? "ready" : "pending"}"><span class="feature-icon ${association.isDefault ? "emerald" : "blue"}">${icon("file", 20)}</span><div><strong>${escapeHtml(associationLabel)}</strong><p>${escapeHtml(association.detail)}</p></div><button class="secondary compact" data-open-svp-default-apps ${association.supported ? "" : "disabled"}>打开默认应用设置</button></div><div class="smart-route-boundary">${icon("shield", 17)}<span><strong>智能路由只在工具箱已经运行时生效</strong><small>冷启动或关闭此功能时，工具箱会把工程透明转交给原始 .svp 处理程序；不会监控、终止或劫持已经启动的 SV2。路由优先采用账号服务返回的授权摘要，并以你的确认记录作为补充；任何未知结果都必须由你选择账号。</small></span></div></section>` : ""}
+    <section class="panel http-api-settings"><div class="section-heading"><div><h2>本地 HTTP 接口</h2><p>仅监听本机回环地址；MCP 工具与 Agent 对话分别授权，默认全部关闭。</p></div><span class="availability ${httpApiStatus.running ? "ready" : httpApiStatus.enabled || httpApiStatus.agentEnabled ? "warning" : ""}">${httpApiStatus.running ? "运行中" : httpApiStatus.enabled || httpApiStatus.agentEnabled ? "启动失败" : "已关闭"}</span></div><form id="http-api-form" class="http-api-form"><label class="fluent-switch large"><input id="http-api-enabled" name="enabled" type="checkbox" ${httpApiStatus.enabled ? "checked" : ""} aria-label="允许本地 HTTP 连接 MCP 工具" aria-describedby="http-api-help" /><span></span>MCP 工具接口</label><label class="fluent-switch large"><input id="http-agent-enabled" name="agentEnabled" type="checkbox" ${httpApiStatus.agentEnabled ? "checked" : ""} aria-label="允许本地 HTTP 连接 Agent" aria-describedby="http-api-help" /><span></span>Agent 对话接口</label><label class="http-api-port">监听端口<input id="http-api-port" name="port" type="number" min="1" max="65535" step="1" value="${httpApiStatus.port || 17831}" inputmode="numeric" required aria-describedby="http-api-help" /></label><button class="primary" type="submit" ${busy ? "disabled" : ""}>应用并保存</button></form><div id="http-api-help" class="http-api-status"><span><strong>监听</strong>${httpApiStatus.running ? "正在运行" : httpApiStatus.enabled || httpApiStatus.agentEnabled ? "未运行" : "未启用"}</span>${httpApiStatus.endpoint ? `<span><strong>MCP</strong><code>${escapeHtml(httpApiStatus.endpoint)}</code></span>` : ""}${httpApiStatus.agentEndpoint ? `<span><strong>Agent</strong><code>${escapeHtml(httpApiStatus.agentEndpoint)}</code></span>` : ""}${httpApiStatus.lastError ? `<span class="error-text"><strong>错误</strong>${escapeHtml(httpApiStatus.lastError)}</span>` : ""}</div></section>
     <section class="panel app-update-settings"><div class="section-heading"><div><h2>应用更新</h2><p>按需检查官方 GitHub Releases；不会自动下载或安装。</p></div></div><div class="update-check-actions"><div><small>当前版本</small><strong>v${escapeHtml(app.appVersion)}</strong></div><button class="secondary" data-check-toolbox-update>${icon("sync", 16)} ${toolboxUpdate ? "重新检查" : "检查更新"}</button></div>${renderToolboxUpdateResult()}</section>
     <section class="panel"><div class="section-heading"><div><h2>数据与平台</h2><p>配置和历史使用统一的跨平台用户目录。</p></div></div><dl class="detail-list"><div><dt>平台</dt><dd>${escapeHtml(app.platform)}</dd></div><div><dt>配置</dt><dd><code>${escapeHtml(app.configPath)}</code></dd></div><div><dt>应用版本</dt><dd>${escapeHtml(app.appVersion)}</dd></div></dl></section></div>`;
 }
@@ -1960,11 +2252,73 @@ function wireForms(): void {
     };
     requestAudioPlan("normalize");
   });
+  document.querySelector<HTMLFormElement>("#tuning-learn-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void run(async () => {
+      const profile = await api.learnTuningProfile(document.querySelector<HTMLInputElement>("#tuning-audio")?.value.trim() ?? "", document.querySelector<HTMLInputElement>("#tuning-voice")?.value.trim() ?? "");
+      tuningProfiles = [...tuningProfiles.filter((item) => item.normalizedVoiceName !== profile.normalizedVoiceName), profile].sort((left, right) => left.voiceName.localeCompare(right.voiceName));
+      notice = `已更新 ${profile.voiceName} 的调声档案。`;
+    });
+  });
+  document.querySelector<HTMLFormElement>("#tuning-apply-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void run(async () => {
+      workflowResult = await api.applyTuningProfile(document.querySelector<HTMLSelectElement>("#tuning-profile")?.value ?? "", Number(document.querySelector<HTMLInputElement>("#tuning-track")?.value ?? 1), Number(document.querySelector<HTMLInputElement>("#tuning-group")?.value ?? 1));
+      notice = workflowResult.summary;
+    });
+  });
+  document.querySelector<HTMLFormElement>("#cover-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const processText = document.querySelector<HTMLSelectElement>("#cover-process")?.value ?? "";
+    const lyrics = document.querySelector<HTMLTextAreaElement>("#cover-lyrics")?.value ?? "";
+    void run(async () => {
+      const task = await api.queueCover({
+        source: document.querySelector<HTMLInputElement>("#cover-source")?.value.trim() ?? "",
+        lyrics: lyrics.trim() ? lyrics : null,
+        voiceName: document.querySelector<HTMLInputElement>("#cover-voice")?.value.trim() ?? "",
+        processId: processText ? Number(processText) : null,
+        trackIndex: Number(document.querySelector<HTMLInputElement>("#cover-track")?.value ?? 1),
+        groupName: document.querySelector<HTMLInputElement>("#cover-group")?.value.trim() ?? "Toolbox Cover",
+        rightsConfirmed: document.querySelector<HTMLInputElement>("#cover-rights")?.checked ?? false,
+        tolerance: 0.08,
+        advanced: true,
+      });
+      mediaTasks = [...mediaTasks.filter((item) => item.id !== task.id), task];
+      notice = "完整 Cover 已加入可取消任务队列。";
+    });
+  });
+  document.querySelector<HTMLFormElement>("#media-import-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;
+    const action = submitter?.value ?? "preview";
+    const source = document.querySelector<HTMLInputElement>("#media-source")?.value.trim() ?? "";
+    const rightsConfirmed = document.querySelector<HTMLInputElement>("#media-rights")?.checked ?? false;
+    mediaSourceInput = source;
+    void run(async () => {
+      if (action === "import") {
+        const task = await api.queueMediaImport(source, rightsConfirmed);
+        mediaTasks = [...mediaTasks.filter((item) => item.id !== task.id), task];
+        notice = "平台音频导入已加入可取消任务队列。";
+      } else {
+        mediaSourcePreview = await api.previewMediaSource(source);
+        notice = `已读取《${mediaSourcePreview.title}》的来源元数据。`;
+      }
+    });
+  });
   document.querySelector<HTMLFormElement>("#audio-probe-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const audioPath = document.querySelector<HTMLInputElement>("#audio-path")?.value.trim() ?? "";
     const advanced = app?.mode === "ai" && (document.querySelector<HTMLInputElement>("#audio-advanced")?.checked ?? false);
     void run(async () => { workflowResult = await api.runAudioProbe(audioPath, advanced); notice = workflowResult.summary; });
+  });
+  document.querySelector<HTMLFormElement>("#source-separation-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const audioPath = document.querySelector<HTMLInputElement>("#separation-source")?.value.trim() ?? "";
+    void run(async () => {
+      const task = await api.queueMediaSeparation(audioPath);
+      mediaTasks = [...mediaTasks.filter((item) => item.id !== task.id), task];
+      notice = "人声伴奏分离已加入可取消任务队列。";
+    });
   });
   document.querySelector<HTMLFormElement>("#score-to-synthv-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -2176,8 +2530,9 @@ function wireForms(): void {
     if (!displayName) return;
     void run(async () => {
       profiles = await api.importCurrentSv2Profile(displayName);
+      const prepared = await prepareConcurrentSlotsWhenEnabled();
       await refreshAccountUsage();
-      notice = `已导入“${displayName}”。`;
+      notice = `已导入“${displayName}”。${prepared ? "已自动准备隔离数据。" : ""}`;
     });
   });
   document.querySelector<HTMLFormElement>("#profile-create-form")?.addEventListener("submit", (event) => {
@@ -2186,8 +2541,9 @@ function wireForms(): void {
     if (!displayName) return;
     void run(async () => {
       profiles = await api.createSv2Profile(displayName);
+      const prepared = await prepareConcurrentSlotsWhenEnabled();
       await refreshAccountUsage();
-      notice = `已创建“${displayName}”。`;
+      notice = `已创建“${displayName}”。${prepared ? "已自动准备隔离数据。" : ""}`;
     });
   });
   document.querySelectorAll<HTMLFormElement>("[data-profile-rename-form]").forEach((form) => form.addEventListener("submit", (event) => {
@@ -2225,23 +2581,18 @@ function wireForms(): void {
     const form = event.currentTarget as HTMLFormElement;
     const concurrentEnabled = form.querySelector<HTMLInputElement>('[name="concurrentEnabled"]')?.checked ?? false;
     const accountProbeEnabled = form.querySelector<HTMLInputElement>('[name="accountProbeEnabled"]')?.checked ?? false;
-    const appSettings = form.querySelector<HTMLInputElement>('[name="appSettings"]')?.checked ?? false;
-    const voiceLibraries = form.querySelector<HTMLInputElement>('[name="voiceLibraries"]')?.checked ?? false;
     if (accountProbeEnabled && !app?.sv2AccountIndicatorEnabled) {
-      pendingAccountIndicatorConsent = {
-        refreshAfterEnable: true,
-        globalSettings: { concurrentEnabled, appSettings, voiceLibraries },
-      };
+      pendingAccountIndicatorConsent = { refreshAfterEnable: true, concurrentEnabled };
       accountManagerOpen = false;
       render();
       return;
     }
     void run(async () => {
       app = await api.setSv2ConcurrentEnabled(concurrentEnabled);
+      const prepared = await prepareConcurrentSlotsWhenEnabled();
       app = await api.setSv2AccountIndicator(accountProbeEnabled);
-      profiles = await api.updateSv2ConcurrentDefaults(appSettings, voiceLibraries);
       if (!accountProbeEnabled) profiles = await api.sv2ProfileState();
-      notice = "全局设置已保存。";
+      notice = `全局设置已保存。${prepared ? `已自动准备 ${prepared} 个隔离数据目录。` : ""}`;
     });
   });
   document.querySelector<HTMLFormElement>("#chat-form")?.addEventListener("submit", (event) => {
@@ -2250,26 +2601,13 @@ function wireForms(): void {
     if (!input) return;
     void sendPrompt(input);
   });
+  document.querySelectorAll<HTMLButtonElement>("[data-approve-file], [data-deny-file]").forEach((button) => button.addEventListener("click", () => void run(async () => { await api.decideAgentFileApproval(button.dataset.approveFile ?? button.dataset.denyFile ?? "", button.hasAttribute("data-approve-file")); fileApprovals = await api.agentFileApprovals(); notice = button.hasAttribute("data-approve-file") ? "文件访问已批准。" : "文件访问已拒绝。"; })));
   document.querySelector<HTMLTextAreaElement>("#chat-input")?.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
       const input = (event.currentTarget as HTMLTextAreaElement).value.trim();
       if (input) void sendPrompt(input);
     }
-  });
-  document.querySelectorAll<HTMLFormElement>("[data-ai-provider-form]").forEach((form) => {
-    form.addEventListener("submit", (event) => {
-      event.preventDefault();
-      const provider = parseAiProviderId(form.dataset.aiProviderForm);
-      const model = form.querySelector<HTMLSelectElement>("select[name='model']")?.value.trim() ?? "";
-      if (!provider || !model || busy) return;
-      clearPendingAiAccountRemoval();
-      void run(async () => {
-        app = await api.selectAiProvider(provider, model);
-        expandedAiProvider = provider;
-        notice = "当前 AI 提供商与模型已更新。";
-      });
-    });
   });
   document.querySelector<HTMLInputElement>("#svp-routing-enabled")?.addEventListener("change", (event) => {
     const enabled = (event.currentTarget as HTMLInputElement).checked;
@@ -2278,6 +2616,23 @@ function wireForms(): void {
       notice = enabled
         ? "智能 .svp 启动已开启。请确认 Windows 已将 SynthV Toolbox 设为 .svp 默认应用。"
         : "智能 .svp 启动已关闭；工程会透明转交给原始处理程序。";
+    });
+  });
+  document.querySelector<HTMLFormElement>("#http-api-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    const enabled = form.querySelector<HTMLInputElement>('[name="enabled"]')?.checked ?? false;
+    const agentEnabled = form.querySelector<HTMLInputElement>('[name="agentEnabled"]')?.checked ?? false;
+    const port = Number(form.querySelector<HTMLInputElement>('[name="port"]')?.value ?? 0);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      error = "端口必须是 1 到 65535 之间的整数。";
+      notice = "";
+      render();
+      return;
+    }
+    void run(async () => {
+      httpApiStatus = await api.configureHttpApi(enabled, agentEnabled, port);
+      notice = enabled || agentEnabled ? "本地 HTTP 接口设置已保存。" : "本地 HTTP 接口已关闭。";
     });
   });
   document.querySelector<HTMLFormElement>("#mcp-form")?.addEventListener("submit", (event) => {
@@ -2312,26 +2667,26 @@ async function sendPrompt(input: string): Promise<void> {
     const added = await withAiProviderStateRefresh(() => api.sendMessage(input));
     conversation.messages = conversation.messages.filter((message) => message !== optimistic);
     conversation.messages.push(...added);
-    conversations = await api.listConversations();
+    [conversations, fileApprovals] = await Promise.all([
+      api.listConversations(),
+      api.agentFileApprovals(),
+    ]);
   });
 }
 
-async function refreshAiProviderSummary(): Promise<void> {
-  if (app?.mode === "ai") app.model = await api.aiProviderState();
+async function refreshAiProviderSummary(forceCatalog = false): Promise<void> {
+  if (app?.mode === "ai") app.model = await api.aiProviderState(forceCatalog);
 }
 
-async function loadOpenCodeCatalog(force: boolean): Promise<void> {
-  if (openCodeCatalogLoading || app?.mode !== "ai") return;
-  openCodeCatalogLoading = true;
-  openCodeCatalogError = "";
-  try {
-    openCodeCatalog = await api.opencodeProviderCatalog(force);
-  } catch (reason) {
-    openCodeCatalogError = reason instanceof Error ? reason.message : String(reason);
-  } finally {
-    openCodeCatalogLoading = false;
-    render();
-  }
+function refreshAiCatalogLive(): void {
+  if (app?.mode !== "ai" || aiCatalogRefreshInFlight) return;
+  const request = refreshAiProviderSummary(true)
+    .catch(() => {})
+    .finally(() => {
+      if (aiCatalogRefreshInFlight === request) aiCatalogRefreshInFlight = undefined;
+      render();
+    });
+  aiCatalogRefreshInFlight = request;
 }
 
 async function withAiProviderStateRefresh<T>(action: () => Promise<T>): Promise<T> {
@@ -2390,6 +2745,12 @@ document.addEventListener("error", (event) => {
   audioUiError = "当前 WebView 无法分段读取、文件过大或格式不支持；处理不受影响；结果可打开位置/另存为。";
   render();
 }, true);
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !aiProviderPickerOpen) return;
+  event.preventDefault();
+    aiProviderPickerOpen = false;
+  render();
+});
 
 document.addEventListener("click", (event) => {
   const target = (event.target as HTMLElement).closest<HTMLElement>("button, [data-page], [data-onboarding], [data-audio-drop-zone]");
@@ -2537,6 +2898,40 @@ document.addEventListener("click", (event) => {
     });
     return;
   }
+  if (target.hasAttribute("data-new-lyric-project")) {
+    if (lyricProjectHasUnsavedChanges() && !window.confirm("当前项目有未保存修改。新建项目会清空当前工作区，是否继续？")) return;
+    startNewLyricProject();
+    notice = "已建立新的本地歌词草稿；保存后会成为独立歌曲项目。";
+    render();
+    return;
+  }
+  if (target.hasAttribute("data-save-lyric-project")) {
+    void run(async () => {
+      syncLyricDraftFromDom();
+      const project = lyricProjectId
+        ? await api.saveLyricProject(lyricProjectId, lyricSongTitle, lyricDraft, lyricSections, lyricRhymeTargets)
+        : await api.createLyricProject(lyricSongTitle, lyricDraft, lyricSections, lyricRhymeTargets);
+      applyLyricProject(project);
+      lyricProjects = await api.listLyricProjects();
+      notice = `《${project.title}》已保存到本机项目（r${project.revision}）。`;
+    });
+    return;
+  }
+  if (target.hasAttribute("data-load-lyric-project")) {
+    const id = document.querySelector<HTMLSelectElement>("#lyric-project-select")?.value;
+    if (!id) {
+      error = "请选择要打开的歌词项目。";
+      render();
+      return;
+    }
+    if (lyricProjectHasUnsavedChanges() && !window.confirm("当前项目有未保存修改。打开其他项目会丢弃这些修改，是否继续？")) return;
+    void run(async () => {
+      const project = await api.loadLyricProject(id);
+      applyLyricProject(project);
+      notice = `已打开《${project.title}》的本地项目。`;
+    });
+    return;
+  }
   if (target.hasAttribute("data-clear-lyric-draft")) {
     const draft = document.querySelector<HTMLTextAreaElement>("#lyric-draft");
     if (!draft?.value.trim()) return;
@@ -2558,10 +2953,6 @@ document.addEventListener("click", (event) => {
           ? `发现 ${audioCaptureTargets.length} 个 SynthV standalone 实例。`
           : "没有发现运行中的 SynthV standalone 实例。";
     });
-    return;
-  }
-  if (target.hasAttribute("data-refresh-opencode-catalog")) {
-    void loadOpenCodeCatalog(true);
     return;
   }
   const lyricPreset = target.dataset.lyricPreset as "compact" | "pop" | "rap" | "blank" | undefined;
@@ -2656,16 +3047,11 @@ document.addEventListener("click", (event) => {
     if (!consent) return;
     pendingAccountIndicatorConsent = undefined;
     void run(async () => {
-      if (consent.globalSettings) {
-        app = await api.setSv2ConcurrentEnabled(consent.globalSettings.concurrentEnabled);
+      if (consent.concurrentEnabled !== undefined) {
+        app = await api.setSv2ConcurrentEnabled(consent.concurrentEnabled);
+        await prepareConcurrentSlotsWhenEnabled();
       }
       app = await api.setSv2AccountIndicator(true, true);
-      if (consent.globalSettings) {
-        profiles = await api.updateSv2ConcurrentDefaults(
-          consent.globalSettings.appSettings,
-          consent.globalSettings.voiceLibraries,
-        );
-      }
       if (consent.refreshAfterEnable) await refreshAccountUsage(consent.refreshSlotId);
       notice = "账号登录指示器已开启，access JWT 已按需自动续期并完成首次预检。";
     });
@@ -2807,18 +3193,18 @@ document.addEventListener("click", (event) => {
   }
   const targetPage = target.dataset.page as Page | undefined;
   if (targetPage) {
-    clearPendingAiAccountRemoval();
     const enteringAccounts = targetPage === "accounts" && page !== "accounts";
+    instanceRefreshGeneration += 1;
     page = targetPage;
     if (page === "lyrics" && workflowResult?.kind !== "lyric-template") workflowResult = undefined;
     if (page === "toolbox" && workflowResult?.kind === "lyric-template") workflowResult = undefined;
     accountManagerOpen = false;
     notice = "";
     error = "";
-    if (page === "copilot") void run(async () => { conversations = await api.listConversations(); });
+    if (page === "copilot") void run(async () => { [conversations, fileApprovals] = await Promise.all([api.listConversations(), api.agentFileApprovals()]); });
     else if (page === "history") void run(async () => { [creativeHistory, projectCheckpoints] = await Promise.all([api.listCreativeHistory(), api.listProjectCheckpoints()]); });
-    else if (enteringAccounts && (app?.platform === "windows" || app?.platform === "preview")) void run(async () => {
-      if (app?.sv2AccountIndicatorEnabled) await refreshAccountUsage();
+    else if (enteringAccounts && (app?.platform === "windows" || app?.platform === "macos" || app?.platform === "preview")) void run(async () => {
+      if (supportsWindowsSv2Extensions() && app?.sv2AccountIndicatorEnabled) await refreshAccountUsage();
       else profiles = await api.sv2ProfileState();
     });
     else render();
@@ -2829,50 +3215,9 @@ document.addEventListener("click", (event) => {
   if (onboarding) { void run(async () => { app = await api.completeOnboarding(onboarding); page = "home"; }); return; }
   const mode = target.dataset.setMode as AppMode | undefined;
   if (mode) { void run(async () => { app = await api.setMode(mode); notice = `已切换到${mode === "ai" ? " AI 模式" : "纯工具箱模式"}。`; }); return; }
+  const agentWorkMode = target.dataset.agentWorkMode as AgentWorkMode | undefined;
+  if (agentWorkMode) { void run(async () => { app = await api.setAgentWorkMode(agentWorkMode); notice = `Agent 已切换到 ${agentWorkMode === "solo" ? "Solo" : "Edit"} 模式。`; }); return; }
   if (target.hasAttribute("data-enable-ai")) { page = "settings"; render(); return; }
-  const toggledProvider = parseAiProviderId(target.dataset.toggleAiProvider);
-  if (target.dataset.toggleAiProvider !== undefined) {
-    if (!toggledProvider) return;
-    expandedAiProvider = expandedAiProvider === toggledProvider ? undefined : toggledProvider;
-    clearPendingAiAccountRemoval();
-    render();
-    return;
-  }
-  const authorizedProvider = parseAiProviderId(target.dataset.authorizeAiProvider);
-  if (target.dataset.authorizeAiProvider !== undefined) {
-    if (!authorizedProvider || busy || authorizingAiProvider) return;
-    authorizingAiProvider = authorizedProvider;
-    void run(async () => {
-      try {
-        app = await api.authorizeAiProvider(authorizedProvider);
-        expandedAiProvider = authorizedProvider;
-        notice = "官方账号授权已更新。";
-      } finally {
-        authorizingAiProvider = undefined;
-      }
-    });
-    return;
-  }
-  if (target.dataset.removeAiAccount && target.dataset.aiProvider) {
-    const provider = parseAiProviderId(target.dataset.aiProvider);
-    const accountId = target.dataset.removeAiAccount;
-    if (!provider || busy) return;
-    const confirmed = pendingAiAccountRemoval?.provider === provider
-      && pendingAiAccountRemoval.accountId === accountId;
-    if (!confirmed) {
-      armAiAccountRemoval(provider, accountId);
-      render();
-      focusAiAccountRemovalButton(provider, accountId);
-      return;
-    }
-    clearPendingAiAccountRemoval();
-    void run(async () => {
-      app = await api.removeAiProviderAccount(provider, accountId);
-      expandedAiProvider = provider;
-      notice = "账号授权已从本机移除。";
-    });
-    return;
-  }
   if (target.hasAttribute("data-check-toolbox-update")) {
     void run(async () => {
       toolboxUpdate = await api.checkToolboxUpdate();
@@ -2954,6 +3299,33 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (target.hasAttribute("data-scan")) { void run(async () => { if (app) app.installations = await api.scanSynthV(); notice = "探测完成。"; }); return; }
+  if (target.hasAttribute("data-refresh-synthv-processes")) {
+    void run(async () => {
+      [synthvProcesses, synthvShortcutProfile, profiles] = await Promise.all([api.listSynthvProcesses(), api.synthvShortcutProfile(), api.sv2ProfileState()]);
+      notice = synthvProcesses.length ? `发现 ${synthvProcesses.length} 个运行中的 SynthV 进程。` : "没有发现运行中的 SynthV 进程。";
+    });
+    return;
+  }
+  if (target.dataset.autoConnectSynthv) {
+    const processId = Number(target.dataset.autoConnectSynthv);
+    if (Number.isInteger(processId) && processId > 0) {
+      void run(async () => {
+        setFeedback(await api.autoConnectSynthvBridge(processId));
+        await refresh();
+      });
+    }
+    return;
+  }
+  if (target.dataset.sendSynthvStop) {
+    const processId = Number(target.dataset.sendSynthvStop);
+    if (Number.isInteger(processId) && processId > 0) {
+      void run(async () => {
+        setFeedback(await api.sendSynthvBridgeShortcut(processId, "stop"));
+        synthvProcesses = await api.listSynthvProcesses();
+      });
+    }
+    return;
+  }
   if (target.hasAttribute("data-profile-refresh")) {
     if (!app?.sv2AccountIndicatorEnabled) {
       pendingAccountIndicatorConsent = { refreshAfterEnable: true };
@@ -3001,7 +3373,7 @@ document.addEventListener("click", (event) => {
   }
   if (target.dataset.profileActivate) { void run(async () => { profiles = await api.activateSv2Profile(target.dataset.profileActivate ?? ""); notice = "默认账号槽位已切换。"; }); return; }
   if (target.dataset.profileFolder) { void run(async () => { setFeedback(await api.openSv2ProfileFolder(target.dataset.profileFolder ?? "")); }); return; }
-  if (target.dataset.profileConcurrentPrepare) { void run(async () => { profiles = await api.prepareSv2ConcurrentProfile(target.dataset.profileConcurrentPrepare ?? ""); notice = "隔离副本已准备，可以并发启动。"; }); return; }
+  if (target.dataset.profileConcurrentPrepare) { void run(async () => { profiles = await api.prepareSv2ConcurrentProfile(target.dataset.profileConcurrentPrepare ?? ""); notice = "隔离环境已准备，可以并发启动。"; }); return; }
   if (target.dataset.profileConcurrentLaunch) {
     const slotId = target.dataset.profileConcurrentLaunch;
     if (!app?.concurrentDisclaimerAccepted) {
@@ -3058,8 +3430,38 @@ document.addEventListener("click", (event) => {
     });
     return;
   }
-  if (target.hasAttribute("data-new-conversation")) { void run(async () => { conversation = await api.newConversation(); conversations = await api.listConversations(); }); return; }
-  if (target.dataset.conversation) { void run(async () => { conversation = await api.openConversation(target.dataset.conversation ?? ""); }); return; }
+  if (target.dataset.cancelComponentTask) {
+    void run(async () => {
+      if (app) app.downloads = await api.cancelComponentInstall(target.dataset.cancelComponentTask ?? "");
+      notice = "排队中的组件任务已取消。";
+    });
+    return;
+  }
+  if (target.dataset.retryComponentTask) {
+    void run(async () => {
+      if (app) app.downloads = await api.retryComponentInstall(target.dataset.retryComponentTask ?? "");
+      notice = "组件任务已重新加入队列。";
+    });
+    return;
+  }
+  if (target.dataset.cancelMediaTask) {
+    void run(async () => {
+      const task = await api.cancelMediaTask(target.dataset.cancelMediaTask ?? "");
+      mediaTasks = mediaTasks.map((item) => item.id === task.id ? task : item);
+      notice = task.status === "cancelled" ? "媒体任务已取消。" : "正在终止媒体进程树。";
+    });
+    return;
+  }
+  if (target.dataset.retryMediaTask) {
+    void run(async () => {
+      const task = await api.retryMediaTask(target.dataset.retryMediaTask ?? "");
+      mediaTasks = mediaTasks.map((item) => item.id === task.id ? task : item);
+      notice = "媒体任务已重新加入队列。";
+    });
+    return;
+  }
+  if (target.hasAttribute("data-new-conversation")) { void run(async () => { conversation = await api.newConversation(); [conversations, fileApprovals] = await Promise.all([api.listConversations(), api.agentFileApprovals()]); }); return; }
+  if (target.dataset.conversation) { void run(async () => { conversation = await api.openConversation(target.dataset.conversation ?? ""); fileApprovals = await api.agentFileApprovals(); }); return; }
   if (target.dataset.prompt) { void sendPrompt(target.dataset.prompt); return; }
   if (target.dataset.testMcp) { void run(async () => { setFeedback(await api.testMcpServer(target.dataset.testMcp ?? "")); }); return; }
   if (target.dataset.deleteMcp) { void run(async () => { app = await api.deleteMcpServer(target.dataset.deleteMcp ?? ""); notice = "MCP 配置已删除。"; }); }
@@ -3122,7 +3524,9 @@ void (async () => {
     await refresh();
     await listenForSvpRouteRequests();
     await listenForAudioPreparationDrops();
+    window.setInterval(() => { void refreshVisibleSynthvInstances(); }, 2000);
     render();
+    refreshAiCatalogLive();
   } catch (reason) {
     root.innerHTML = `<div class="fatal"><div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.png" alt="SynthV Toolbox" /></div><h1>无法启动 SynthV Toolbox</h1><pre>${escapeHtml(formatError(reason))}</pre><p>请确认应用由 Tauri 运行，而不是直接打开前端页面。</p></div>`;
   }
