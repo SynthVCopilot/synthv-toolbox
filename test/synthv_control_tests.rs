@@ -62,6 +62,43 @@ fn matches_flat_only_by_exact_executable_name() {
 }
 
 #[test]
+fn identifies_only_explicit_sv1_executables() {
+    assert!(is_synthv_process(
+        "synthv-studio.exe",
+        r"C:\Apps\Synthesizer V Studio Pro\synthv-studio.exe"
+    ));
+    assert!(!is_synthv_process(
+        "synthv-studio-setup.exe",
+        r"C:\Downloads\synthv-studio-setup.exe"
+    ));
+}
+
+#[test]
+fn parses_macos_comm_without_splitting_spaces_or_arguments() {
+    let output = "  42 Mon Sep  5 10:20:30 2026 /Applications/SVStudio2 Pro.app/Contents/MacOS/SVStudio2 Pro\n";
+    assert_eq!(
+        parse_macos_processes(output),
+        vec![(
+            42,
+            "macos:42:Mon Sep 5 10:20:30 2026".to_string(),
+            "/Applications/SVStudio2 Pro.app/Contents/MacOS/SVStudio2 Pro".to_string(),
+        ),]
+    );
+}
+
+#[test]
+fn product_name_uses_sv2_install_identity_not_parent_path_text() {
+    assert_eq!(
+        product_name(r"C:\Program Files\SVStudio2\svstudio2.exe", true),
+        "SVStudio2"
+    );
+    assert_eq!(
+        product_name(r"C:\Apps\SVStudio2 Pro\svstudio2-pro.exe", true),
+        "SVStudio2 Pro"
+    );
+}
+
+#[test]
 fn excludes_setup_and_updater_from_process_enumeration() {
     for path in [
         r"C:\Downloads\svstudio2-pro-setup-2.3.0tp1.exe",
