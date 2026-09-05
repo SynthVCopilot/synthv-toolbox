@@ -24,5 +24,14 @@ pub mod mcp {
     }
 }
 
+#[cfg(target_os = "macos")]
+pub mod synthv {
+    use std::process::Command;
+
+    pub fn quiet_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+        Command::new(program)
+    }
+}
+
 #[path = "../../src/PiDesktop.Tauri/src-tauri/src/synthv_control.rs"]
 pub mod synthv_control;

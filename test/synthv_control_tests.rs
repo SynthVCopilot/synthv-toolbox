@@ -111,14 +111,14 @@ fn identifies_only_explicit_sv1_executables() {
 }
 
 #[test]
-fn parses_macos_comm_without_splitting_spaces_or_arguments() {
-    let output = "  42 Mon Sep  5 10:20:30 2026 /Applications/SVStudio2 Pro.app/Contents/MacOS/SVStudio2 Pro\n";
+fn parses_macos_comm_without_arguments_or_normalizing_path_spaces() {
+    let output = "  42 Mon Sep  5 10:20:30 2026 /Applications/SVStudio2  Pro.app/Contents/MacOS/SVStudio2  Pro\n";
     assert_eq!(
         parse_macos_processes(output),
         vec![(
             42,
             "macos:42:Mon Sep 5 10:20:30 2026".to_string(),
-            "/Applications/SVStudio2 Pro.app/Contents/MacOS/SVStudio2 Pro".to_string(),
+            "/Applications/SVStudio2  Pro.app/Contents/MacOS/SVStudio2  Pro".to_string(),
         ),]
     );
 }
