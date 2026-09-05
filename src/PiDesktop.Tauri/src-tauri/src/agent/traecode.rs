@@ -32,6 +32,8 @@ pub struct TraeCodeConfig {
     pub timeout_secs: u64,
     #[serde(default)]
     pub executable: Option<PathBuf>,
+    #[serde(default = "default_home_dir")]
+    pub home_dir: PathBuf,
 }
 
 impl TraeCodeConfig {
@@ -40,8 +42,13 @@ impl TraeCodeConfig {
             model: model.into(),
             timeout_secs: DEFAULT_TIMEOUT_SECS,
             executable: None,
+            home_dir: default_home_dir(),
         }
     }
+}
+
+fn default_home_dir() -> PathBuf {
+    super::data_root().join("traecode").join("default")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -245,6 +252,9 @@ impl TraeCodeProvider {
     ) -> Result<BoundedOutput> {
         let mut command = Command::new(executable);
         command.args(args);
+        fs::create_dir_all(&self.config.home_dir)
+            .map_err(|error| AgentError::new(format!("无法创建 TraeCode 运行目录：{error}")))?;
+        command.env("TRAE_HOME", &self.config.home_dir);
         if let Some(directory) = current_dir {
             command.current_dir(directory);
         }

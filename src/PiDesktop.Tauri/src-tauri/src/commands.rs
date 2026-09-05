@@ -1,6 +1,7 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex, OnceLock};
 
 use chrono::Utc;
 use serde::Serialize;
@@ -72,6 +73,22 @@ use crate::synthv_control::{self, BridgeShortcutAction, SynthVProcess, SynthVSho
 use crate::tuning_profiles::{self, TuningParameters, TuningProfile};
 use crate::workbuddy_store;
 use crate::workflows::{self, WorkflowResult};
+
+static AUTHORIZATIONS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
+
+fn register_authorization(operation_id: &str) -> Result<Arc<AtomicBool>, String> {
+    let flag = Arc::new(AtomicBool::new(false));
+    AUTHORIZATIONS.get_or_init(|| Mutex::new(HashMap::new()))
+        .lock().map_err(|_| "OAuth 取消状态不可用。".to_string())?
+        .insert(operation_id.to_string(), flag.clone());
+    Ok(flag)
+}
+
+fn clear_authorization(operation_id: &str) {
+    if let Some(mut operations) = AUTHORIZATIONS.get().and_then(|all| all.lock().ok()) {
+        operations.remove(operation_id);
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -414,9 +431,6 @@ fn build_ai_provider(
     balancer: std::sync::Arc<std::sync::Mutex<CredentialBalancer>>,
 ) -> Result<ProviderPool, String> {
     let provider_id = settings.ai_provider;
-    if provider_id == AiProviderId::Traecode {
-        return Err("TraeCode 企业 CLI 的 per-app TRAE_HOME 与 JSONL 能力合同尚未验证，已禁用运行时调用。".to_string());
-    }
     let model = settings.model_for(provider_id).to_string();
     let mut accounts = settings
         .oauth_accounts
@@ -434,10 +448,10 @@ fn build_ai_provider(
             accounts.clear();
         } else if !accounts
             .iter()
-            .any(|account| account.id == "oauth:traecode:local")
+            .any(|account| account.id == "oauth:traecode:enterprise")
         {
             accounts.push(OAuthAccountMetadata {
-                id: "oauth:traecode:local".to_string(),
+                id: "oauth:traecode:enterprise".to_string(),
                 provider: provider_id,
                 label: "TraeCode account".to_string(),
                 expires_at: 0,
@@ -470,7 +484,7 @@ fn build_ai_provider(
     if provider_id == AiProviderId::Traecode && !accounts.is_empty() {
         if let Ok(mut balancer) = balancer.lock() {
             balancer.upsert(crate::credential_balancer::CredentialRoute {
-                id: "oauth:traecode:local".to_string(),
+                id: "oauth:traecode:enterprise".to_string(),
                 provider: provider_id,
                 auth_method: AiAuthMethod::OAuth,
                 models: vec![provider_id.default_model().to_string()],
@@ -707,7 +721,7 @@ pub async fn set_agent_work_mode(
     build_bootstrap(&state).await
 }
 
-fn authorize_workbuddy() -> Result<(OAuthAccountMetadata, crate::agent::WorkBuddyCredential), String>
+fn authorize_workbuddy(cancelled: Option<&AtomicBool>) -> Result<(OAuthAccountMetadata, crate::agent::WorkBuddyCredential), String>
 {
     let oauth = WorkBuddyOAuth::new(WorkBuddyOAuthConfig::builtin());
     let auth = oauth
@@ -715,7 +729,7 @@ fn authorize_workbuddy() -> Result<(OAuthAccountMetadata, crate::agent::WorkBudd
         .map_err(|error| error.to_string())?;
     oauth::open_external(&auth.auth_url)?;
     let mut credential = oauth
-        .poll_credential(&auth.state)
+        .poll_credential_cancellable(&auth.state, cancelled)
         .map_err(|error| error.to_string())?;
     let account = oauth.account_info(&auth.state, &credential).ok();
     if let Some(account) = &account {
@@ -759,13 +773,23 @@ fn authorize_workbuddy() -> Result<(OAuthAccountMetadata, crate::agent::WorkBudd
 #[tauri::command]
 pub async fn authorize_ai_provider(
     provider: AiProviderId,
+    credential_id: Option<String>,
+    operation_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<BootstrapState, String> {
     require_ai(&state).await?;
+    let cancellation = operation_id.as_deref().map(register_authorization).transpose()?;
     if provider == AiProviderId::Workbuddy {
-        let (metadata, credential) = tauri::async_runtime::spawn_blocking(authorize_workbuddy)
+        let cancellation_for_worker = cancellation.clone();
+        let (mut metadata, credential) = tauri::async_runtime::spawn_blocking(move || authorize_workbuddy(cancellation_for_worker.as_deref()))
             .await
             .map_err(|error| error.to_string())??;
+        if let Some(operation_id) = operation_id.as_deref() { clear_authorization(operation_id); }
+        if let Some(credential_id) = credential_id {
+            let exists = state.settings.read().await.oauth_accounts.iter().any(|account| account.provider == provider && account.id == credential_id);
+            if !exists { return Err("没有找到要重新授权的 WorkBuddy 账号。".to_string()); }
+            metadata.id = credential_id;
+        }
         let id = metadata.id.clone();
         {
             let mut settings = state.settings.write().await;
@@ -804,11 +828,38 @@ pub async fn authorize_ai_provider(
         return build_bootstrap(&state).await;
     }
     if provider == AiProviderId::Traecode {
-        return Err("TraeCode 企业 CLI 需要已验证的 per-app TRAE_HOME、认证状态与 JSONL 模型能力合同；当前版本不会调用用户全局 CLI 登录。".to_string());
+        let status = tauri::async_runtime::spawn_blocking(|| TraeCodeProvider::new(TraeCodeConfig::new(AiProviderId::Traecode.default_model())).login())
+            .await.map_err(|error| error.to_string())?.map_err(|error| error.to_string())?;
+        if !status.available || !status.logged_in { return Err(status.detail); }
+        let metadata = OAuthAccountMetadata {
+            id: "oauth:traecode:enterprise".to_string(), provider, label: "TraeCode enterprise CLI".to_string(),
+            expires_at: 0, enabled: true, weight: 1,
+        };
+        let mut settings = state.settings.write().await;
+        let mut next = settings.clone();
+        next.ai_provider = provider;
+        next.upsert_oauth_account(metadata.clone());
+        save_settings(&next)?;
+        *settings = next;
+        drop(settings);
+        state.credential_balancer.lock().map_err(|_| "凭据调度器不可用。".to_string())?.upsert(crate::credential_balancer::CredentialRoute {
+            id: metadata.id, provider, auth_method: AiAuthMethod::OAuth, models: vec![provider.default_model().to_string()],
+            weight: 1, strategy: AiLoadStrategy::RoundRobin,
+        });
+        return build_bootstrap(&state).await;
     }
-    let authorized = tauri::async_runtime::spawn_blocking(move || oauth::authorize(provider))
+    let cancellation_for_worker = cancellation.clone();
+    let authorized = tauri::async_runtime::spawn_blocking(move || oauth::authorize_cancellable(provider, cancellation_for_worker.as_deref()))
         .await
-        .map_err(|error| error.to_string())??;
+        .map_err(|error| error.to_string())?;
+    if let Some(operation_id) = operation_id.as_deref() { clear_authorization(operation_id); }
+    let mut authorized = authorized?;
+    if let Some(credential_id) = credential_id {
+        let exists = state.settings.read().await.oauth_accounts.iter()
+            .any(|account| account.provider == provider && account.id == credential_id);
+        if !exists { return Err("没有找到要重新授权的 OAuth 账号。".to_string()); }
+        authorized.metadata.id = credential_id;
+    }
     let route_metadata = authorized.metadata.clone();
     {
         let mut settings = state.settings.write().await;
@@ -895,6 +946,16 @@ pub async fn select_ai_provider(
         *settings = next;
     }
     build_bootstrap(&state).await
+}
+
+#[tauri::command]
+pub fn cancel_ai_authorization(operation_id: String) -> Result<(), String> {
+    let Some(operations) = AUTHORIZATIONS.get() else { return Ok(()); };
+    let operations = operations.lock().map_err(|_| "OAuth 取消状态不可用。".to_string())?;
+    if let Some(flag) = operations.get(&operation_id) {
+        flag.store(true, Ordering::Relaxed);
+    }
+    Ok(())
 }
 
 #[tauri::command]

@@ -9,7 +9,7 @@ use std::fmt;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::Command;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
@@ -342,7 +342,7 @@ impl Drop for AuthorizationGuard {
     }
 }
 
-pub fn authorize(provider: AiProviderId) -> Result<AuthorizedAccount, String> {
+pub fn authorize_cancellable(provider: AiProviderId, cancelled: Option<&AtomicBool>) -> Result<AuthorizedAccount, String> {
     if matches!(provider, AiProviderId::Workbuddy | AiProviderId::Traecode) {
         return Err(format!("{} 使用专用授权流程。", provider.display_name()));
     }
@@ -363,7 +363,7 @@ pub fn authorize(provider: AiProviderId) -> Result<AuthorizedAccount, String> {
 
     let authorize_url = build_authorize_url(provider, config, &challenge, &state)?;
     open_external(&authorize_url)?;
-    let code = wait_for_callback(&listener, config, &state, AUTH_TIMEOUT)?;
+    let code = wait_for_callback(&listener, config, &state, AUTH_TIMEOUT, cancelled)?;
     let credential = exchange_code(provider, config, &code, &verifier, &state)?;
     let provider_account_id = credential
         .account_id
@@ -1368,9 +1368,13 @@ fn wait_for_callback(
     config: OAuthConfig,
     expected_state: &str,
     timeout: Duration,
+    cancelled: Option<&AtomicBool>,
 ) -> Result<String, String> {
     let deadline = Instant::now() + timeout;
     loop {
+        if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            return Err("浏览器 OAuth 授权已取消。".to_string());
+        }
         let now = Instant::now();
         if now >= deadline {
             return Err("浏览器 OAuth 授权已超时。".to_string());

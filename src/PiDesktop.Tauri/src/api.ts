@@ -471,15 +471,21 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     const provider = previewAiProvider(args?.provider);
     if (!provider) throw new Error("未知的 AI 提供商。");
     const accountNumber = previewAiAccountSequence++;
-    provider.accounts.push({
-      id: `preview-${provider.id}-${accountNumber}`,
+    const credentialId = String(args?.credentialId ?? "").trim();
+    const account = {
+      id: credentialId || `preview-${provider.id}-${accountNumber}`,
       label: `${provider.id === "anthropic" ? "Claude" : "ChatGPT"} official account ${accountNumber}`,
       expiresAt: Date.now() + 55 * 60_000,
       authorized: true,
       healthy: true,
       enabled: true,
       weight: 1,
-    });
+    };
+    if (credentialId) {
+      const index = provider.accounts.findIndex((item) => item.id === credentialId);
+      if (index < 0) throw new Error("没有找到要重新授权的账号。");
+      provider.accounts.splice(index, 1, account);
+    } else provider.accounts.push(account);
     if (provider.id === "openai-codex" && !provider.oauthModels.includes("gpt-5.3-codex-spark")) {
       provider.oauthModels.push("gpt-5.3-codex-spark");
     }
@@ -1125,8 +1131,10 @@ export const api = {
   completeOnboarding: (mode: AppMode) => call<BootstrapState>("complete_onboarding", { mode }),
   setMode: (mode: AppMode) => call<BootstrapState>("set_mode", { mode }),
   setAgentWorkMode: (mode: AgentWorkMode) => call<BootstrapState>("set_agent_work_mode", { mode }),
-  authorizeAiProvider: (provider: AiProviderId) =>
-    call<BootstrapState>("authorize_ai_provider", { provider }),
+  authorizeAiProvider: (provider: AiProviderId, credentialId?: string, operationId?: string) =>
+    call<BootstrapState>("authorize_ai_provider", { provider, credentialId, operationId }),
+  cancelAiAuthorization: (operationId: string) =>
+    call<void>("cancel_ai_authorization", { operationId }),
   selectAiProvider: (provider: AiProviderId, model: string) =>
     call<BootstrapState>("select_ai_provider", { provider, model }),
   addAiApiKey: (provider: AiProviderId, label: string, apiKey: string) =>

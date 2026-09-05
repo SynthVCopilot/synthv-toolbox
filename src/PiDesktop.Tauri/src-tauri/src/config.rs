@@ -721,16 +721,19 @@ pub fn model_summary(
             && !account_metadata.is_empty())
         .then(|| oauth::discover_codex_models(&account_metadata).ok())
         .flatten();
-        let trae_available = false;
-        let trae_connected = false;
+        let trae_status = (provider == AiProviderId::Traecode).then(|| {
+            TraeCodeProvider::new(TraeCodeConfig::new(provider.default_model())).cached_login_status()
+        });
+        let trae_available = trae_status.as_ref().and_then(|status| status.as_ref().ok()).is_some_and(|status| status.available);
+        let trae_connected = trae_status.as_ref().and_then(|status| status.as_ref().ok()).is_some_and(|status| status.logged_in);
         if provider == AiProviderId::Traecode
             && trae_connected
             && !account_metadata
                 .iter()
-                .any(|account| account.id == "oauth:traecode:local")
+                .any(|account| account.id == "oauth:traecode:enterprise")
         {
             account_metadata.push(OAuthAccountMetadata {
-                id: "oauth:traecode:local".to_string(),
+                id: "oauth:traecode:enterprise".to_string(),
                 provider,
                 label: "TraeCode account".to_string(),
                 expires_at: 0,
@@ -786,7 +789,11 @@ pub fn model_summary(
             AiProviderId::Workbuddy | AiProviderId::Traecode => vec![AiAuthMethod::OAuth],
         };
         let available = provider != AiProviderId::Traecode || trae_available;
-        let unavailable_reason = (provider == AiProviderId::Traecode).then(|| "TraeCode 企业 CLI 的 per-app TRAE_HOME、认证状态和 JSONL 模型能力合同尚未验证。".to_string());
+        let unavailable_reason = trae_status.and_then(|status| match status {
+            Ok(status) if status.available => None,
+            Ok(status) => Some(status.detail),
+            Err(error) => Some(error.to_string()),
+        });
         AiProviderSummary {
             id: provider,
             display_name: provider.display_name().to_string(),
