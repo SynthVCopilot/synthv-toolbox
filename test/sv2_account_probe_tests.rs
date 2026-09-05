@@ -993,22 +993,62 @@ fn diagnostic_real_session_root_is_read_only() {
         .get("azp")
         .and_then(serde_json::Value::as_str)
         == Some(TOKEN_CLIENT_ID);
+    let access_azp = access_claims
+        .get("azp")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 160
+                && value
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || "-._".contains(character))
+        })
+        .unwrap_or("<invalid>");
     let refresh_expired = refresh_claims
         .get("exp")
         .and_then(serde_json::Value::as_i64)
         .and_then(|timestamp| DateTime::<Utc>::from_timestamp(timestamp, 0))
         .is_some_and(|expiry| expiry <= Utc::now());
+    let read_licenses = std::env::var("SV2_DIAGNOSTIC_READ_LICENSES")
+        .ok()
+        .as_deref()
+        == Some("true");
+    let license_result = if read_licenses && credentials.access_expires_at > Utc::now() {
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(3))
+            .timeout_read(Duration::from_secs(5))
+            .timeout_write(Duration::from_secs(5))
+            .redirects(0)
+            .build();
+        match query_license_snapshot_with_agent(&agent, credentials.access_token()) {
+            RemoteOutcome::Authorized(voices) => format!("authorized:{}", voices.len()),
+            RemoteOutcome::ConcurrentUse => "concurrent".to_string(),
+            RemoteOutcome::Unauthorized => "unauthorized".to_string(),
+            RemoteOutcome::Offline => "offline".to_string(),
+            RemoteOutcome::Unknown => "unknown".to_string(),
+        }
+    } else if read_licenses {
+        "skipped-expired-access".to_string()
+    } else {
+        "disabled".to_string()
+    };
+    let (_, after_license) = read_stable_session(&root)
+        .expect("post-license stable read failed")
+        .expect("session disappeared after read-only diagnostic");
 
     eprintln!(
-        "SV2 diagnostic: stable={}, full_cache={}, device_present={}, user_present={}, access_expired={}, refresh_expired={}, issuer={}, access_azp_matches={}",
+        "SV2 diagnostic: stable={}, stable_after_license={}, full_cache={}, device_present={}, user_present={}, access_expired={}, refresh_expired={}, issuer={}, access_azp={}, access_azp_matches={}, license={}",
         first == second,
+        second == after_license,
         credentials.has_full_cache(),
         credentials.device_id().is_some(),
         credentials.user_id().is_some(),
         credentials.access_expires_at <= Utc::now(),
         refresh_expired,
         issuer,
+        access_azp,
         access_azp_matches,
+        license_result,
     );
 }
 
