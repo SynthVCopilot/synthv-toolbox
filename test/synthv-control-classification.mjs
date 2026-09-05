@@ -7,5 +7,5 @@ assert.match(source, /SbieDll\.dll/);
 assert.match(source, /pub is_sv2: bool/);
 assert.match(source, /pub sandboxed: Option<bool>/);
 assert.match(source, /is_sv2_executable_path/);
-assert.match(source, /Some\(found\)/);
+assert.match(source, /completed\.then_some\(found\)/);
 console.log("synthv process classification contract passed");
