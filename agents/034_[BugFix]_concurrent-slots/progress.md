@@ -17,3 +17,9 @@
 - 前端构建与全部 contracts 通过；浏览器预览实际检查标题、PID、账号列表，发现并修正预览 PID 碰撞及旧隔离偏好数据。
 - 完整桌面测试可编译链接，但本机执行 EXE 被系统拒绝 (os error 5)，没有禁用或绕过安全软件。使用 /test/sv2-regression 直接导入真实账号/存储/路由模块运行测试。
 - Sandboxie Classic 5.73.2 实际子进程 smoke 通过：子进程经官方 AppData 路径核对真实槽位后写入 nonce，同账号两个 PID 并存，其他账号隔离；仅操作随机测试目录，未操作真实 SV2 或登录态。
+
+- 最终实现同账号复用同一已验证 sandbox；真实 smoke 断言一个环境目录内至少两个 PID，另账号 nonce 不受影响，结束后只清理准确匹配 fixture 的 sandbox 配置。
+- 最终本地验证：87 项真实 Rust 域测试通过（默认并行测试也通过），全部桌面 contracts 通过，前端生产构建通过，桌面全目标 Clippy 通过。保留已证实的完整测试 EXE 在本机被拒绝执行这一限制。
+- 按官方 SbieIni 文档核对 FileRootPath 和空 PID，清理此前 15 个仅属于本次随机 smoke fixture 的空闲测试配置；未修改其他 sandbox。
+- 提交自检只保留 package.json 原有 chatgpt-copilot-ui 测试路径引用，它不是提交署名或来源标记；无任务编号或模型署名进入代码/提交。
+- main 未受保护，按用户 Git 交付规则在本地合并并推送，随后核对远端 Windows/macOS 开发构建。

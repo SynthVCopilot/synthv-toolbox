@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn each_launch_has_a_distinct_bounded_box_name() {
+fn instance_identities_have_distinct_bounded_box_names() {
     let slot = Uuid::new_v4().to_string();
     let first = instance_box_name(&slot, &Uuid::new_v4().to_string()).unwrap();
     let second = instance_box_name(&slot, &Uuid::new_v4().to_string()).unwrap();
@@ -111,4 +111,25 @@ fn provider_identity_matches_the_sandboxie_version_line() {
     assert_eq!(provider_name((5, 73, 2, 0)), "Sandboxie Classic");
     assert_eq!(provider_edition((5, 73, 2, 0)), "Classic");
     assert_eq!(format_version((5, 73, 2, 0)), "5.73.2");
+}
+
+#[test]
+fn unfinished_setup_does_not_block_another_launch() {
+    let vault = std::env::temp_dir().join(format!("sv2-unfinished-{}", Uuid::new_v4()));
+    let id = Uuid::new_v4().to_string();
+    let partial = instance_box_root(&vault, &id, &Uuid::new_v4().to_string());
+    fs::create_dir_all(&partial).unwrap();
+    let provider = SandboxieProvider {
+        start: PathBuf::from("unused"),
+        sbie_ini: PathBuf::from("unused"),
+        version: (5, 73, 2, 0),
+    };
+    assert!(
+        reusable_instance(&provider, &vault, &id, &slot_data_root(&vault, &id))
+            .unwrap()
+            .is_none()
+    );
+    fs::write(partial.join(INSTANCE_MARKER), b"invalid").unwrap();
+    assert!(reusable_instance(&provider, &vault, &id, &slot_data_root(&vault, &id)).is_err());
+    fs::remove_dir_all(vault).unwrap();
 }

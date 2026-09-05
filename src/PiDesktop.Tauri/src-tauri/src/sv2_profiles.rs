@@ -2098,6 +2098,24 @@ fn slot_convergence_plan(
     manifest: &SlotManifest,
 ) -> Result<Vec<SlotConvergence>, String> {
     validate_managed_roots(paths)?;
+    if let Some(active) = manifest.active_slot_id.as_deref() {
+        if fs::symlink_metadata(&paths.canonical)
+            .is_ok_and(|metadata| is_reparse_metadata(&metadata))
+        {
+            let actual = junction::get_target(&paths.canonical)
+                .map_err(|error| format!("无法验证主账号目录链接：{error}"))?;
+            let normalize = |path: &Path| {
+                path.to_string_lossy()
+                    .trim_start_matches(r"\\?\")
+                    .trim_start_matches(r"\??\")
+                    .replace('/', "\\")
+                    .to_lowercase()
+            };
+            if normalize(&actual) != normalize(&paths.parked(active)) {
+                return Err("主账号目录链接没有指向清单中的账号槽位。".to_string());
+            }
+        }
+    }
     let mut plans = Vec::new();
     for slot in &manifest.slots {
         let compact = Uuid::parse_str(&slot.id)

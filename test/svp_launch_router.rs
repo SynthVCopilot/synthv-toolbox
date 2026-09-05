@@ -71,7 +71,7 @@ fn route_slot(
         display_name: display_name.to_string(),
         username: String::new(),
         email: String::new(),
-        color: "#000000".to_string(),
+        color: "#ABCDEF".to_string(),
         created_at_utc: "2026-08-30T00:00:00Z".to_string(),
         last_activated_at_utc: None,
         is_active: false,
