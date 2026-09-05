@@ -1808,9 +1808,9 @@ function wireModelAuthDialog(): void {
   if (!dialog) return;
   syncModelAuthDialog(dialog);
   const detail = (event: Event): unknown[] => Array.isArray((event as CustomEvent<unknown>).detail) ? (event as CustomEvent<unknown[]>).detail : [(event as CustomEvent<unknown>).detail];
-  const execute = (event: Event, operation: (operationId?: string) => Promise<void>, authorization = false) => {
+  const execute = (event: Event, operation: (operationId?: string) => Promise<void>, authorization = false, closeOnSuccess = false) => {
     event.stopPropagation();
-    void runModelAuthOperation(dialog, operation, authorization);
+    void runModelAuthOperation(dialog, operation, authorization, closeOnSuccess);
   };
   dialog.addEventListener("close", () => {
     const active = activeModelAuthAuthorization;
@@ -1827,7 +1827,7 @@ function wireModelAuthDialog(): void {
   dialog.addEventListener("remove-api-key", (event) => execute(event, async () => { const [provider, id] = detail(event) as [AiProviderId, string]; app = await api.removeAiApiKey(provider, id); }));
   dialog.addEventListener("update-credential", (event) => execute(event, async () => { const [payload] = detail(event) as [{ providerId: AiProviderId; credentialId: string; enabled: boolean; weight: number }]; app = await api.updateAiCredential(payload.providerId, payload.credentialId, payload.enabled, payload.weight); }));
   dialog.addEventListener("update-provider", (event) => execute(event, async () => { const [payload] = detail(event) as [{ providerId: AiProviderId; oauthEnabled: boolean }]; app = await api.updateAiProvider(payload.providerId, payload.oauthEnabled); }));
-  dialog.addEventListener("select-model", (event) => execute(event, async () => { const [payload] = detail(event) as [{ providerId: AiProviderId; model: string }]; app = await api.selectAiProvider(payload.providerId, payload.model); aiProviderPickerOpen = false; notice = "当前 AI 提供商与模型已更新。"; }));
+  dialog.addEventListener("select-model", (event) => execute(event, async () => { const [payload] = detail(event) as [{ providerId: AiProviderId; model: string }]; app = await api.selectAiProvider(payload.providerId, payload.model); notice = "当前 AI 提供商与模型已更新。"; }, false, true));
   dialog.addEventListener("update-provider-strategy", (event) => execute(event, async () => { const [payload] = detail(event) as [{ providerId: AiProviderId; strategy: AiLoadStrategy }]; app = await api.updateAiProviderStrategy(payload.providerId, payload.strategy); }));
   dialog.addEventListener("refresh-catalog", (event) => { event.stopPropagation(); void runModelAuthOperation(dialog, async () => { await refreshAiProviderSummary(true); }); });
 }
@@ -1849,7 +1849,7 @@ function syncModelAuthDialog(dialog: HTMLElement & Record<string, unknown>): voi
   dialog.catalogStatus = { state: catalog?.catalogError ? "error" : "ready", source: catalog?.catalogSource === "models-dev" ? "models.dev" : "fallback", checkedAt: catalog?.catalogGeneratedAt ? new Date(catalog.catalogGeneratedAt).toISOString() : undefined, error: catalog?.catalogError };
 }
 
-async function runModelAuthOperation(dialog: HTMLElement & Record<string, unknown>, operation: (operationId?: string) => Promise<void>, authorization = false): Promise<void> {
+async function runModelAuthOperation(dialog: HTMLElement & Record<string, unknown>, operation: (operationId?: string) => Promise<void>, authorization = false, closeOnSuccess = false): Promise<void> {
   if (dialog.busy) return;
   dialog.busy = true;
   dialog.error = null;
@@ -1859,6 +1859,11 @@ async function runModelAuthOperation(dialog: HTMLElement & Record<string, unknow
   try {
     await operation(operationId);
     if (controller.signal.aborted) return;
+    if (closeOnSuccess) {
+      aiProviderPickerOpen = false;
+      render();
+      return;
+    }
     syncModelAuthDialog(dialog);
   } catch (reason) {
     if (!controller.signal.aborted) dialog.error = formatError(reason);

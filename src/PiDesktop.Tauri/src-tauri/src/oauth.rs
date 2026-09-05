@@ -347,6 +347,9 @@ pub fn authorize_cancellable(provider: AiProviderId, cancelled: Option<&AtomicBo
         return Err(format!("{} 使用专用授权流程。", provider.display_name()));
     }
     let _guard = AuthorizationGuard::acquire(provider)?;
+    if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+        return Err("浏览器 OAuth 授权已取消。".to_string());
+    }
     let config = OAuthConfig::for_provider(provider);
     let verifier = pkce_verifier();
     let challenge = pkce_challenge(&verifier);
@@ -362,6 +365,9 @@ pub fn authorize_cancellable(provider: AiProviderId, cancelled: Option<&AtomicBo
         .map_err(|error| format!("无法配置 OAuth 回调：{error}"))?;
 
     let authorize_url = build_authorize_url(provider, config, &challenge, &state)?;
+    if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+        return Err("浏览器 OAuth 授权已取消。".to_string());
+    }
     open_external(&authorize_url)?;
     let code = wait_for_callback(&listener, config, &state, AUTH_TIMEOUT, cancelled)?;
     let credential = exchange_code(provider, config, &code, &verifier, &state)?;

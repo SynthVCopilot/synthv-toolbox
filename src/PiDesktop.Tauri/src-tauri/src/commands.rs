@@ -90,6 +90,24 @@ fn clear_authorization(operation_id: &str) {
     }
 }
 
+struct AuthorizationRegistration(Option<String>);
+
+impl Drop for AuthorizationRegistration {
+    fn drop(&mut self) {
+        if let Some(operation_id) = self.0.as_deref() {
+            clear_authorization(operation_id);
+        }
+    }
+}
+
+fn authorization_cancelled(cancellation: Option<&AtomicBool>) -> Result<(), String> {
+    if cancellation.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+        Err("授权已取消。".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchWorkflowItem {
@@ -723,10 +741,12 @@ pub async fn set_agent_work_mode(
 
 fn authorize_workbuddy(cancelled: Option<&AtomicBool>) -> Result<(OAuthAccountMetadata, crate::agent::WorkBuddyCredential), String>
 {
+    authorization_cancelled(cancelled)?;
     let oauth = WorkBuddyOAuth::new(WorkBuddyOAuthConfig::builtin());
     let auth = oauth
         .request_auth_state()
         .map_err(|error| error.to_string())?;
+    authorization_cancelled(cancelled)?;
     oauth::open_external(&auth.auth_url)?;
     let mut credential = oauth
         .poll_credential_cancellable(&auth.state, cancelled)
@@ -779,19 +799,24 @@ pub async fn authorize_ai_provider(
 ) -> Result<BootstrapState, String> {
     require_ai(&state).await?;
     let cancellation = operation_id.as_deref().map(register_authorization).transpose()?;
+    let _authorization_registration = AuthorizationRegistration(operation_id.clone());
     if provider == AiProviderId::Workbuddy {
         let cancellation_for_worker = cancellation.clone();
         let (mut metadata, credential) = tauri::async_runtime::spawn_blocking(move || authorize_workbuddy(cancellation_for_worker.as_deref()))
             .await
             .map_err(|error| error.to_string())??;
-        if let Some(operation_id) = operation_id.as_deref() { clear_authorization(operation_id); }
+        authorization_cancelled(cancellation.as_deref())?;
         if let Some(credential_id) = credential_id {
-            let exists = state.settings.read().await.oauth_accounts.iter().any(|account| account.provider == provider && account.id == credential_id);
-            if !exists { return Err("没有找到要重新授权的 WorkBuddy 账号。".to_string()); }
+            let existing = state.settings.read().await.oauth_accounts.iter().find(|account| account.provider == provider && account.id == credential_id).cloned();
+            let Some(existing) = existing else { return Err("没有找到要重新授权的 WorkBuddy 账号。".to_string()); };
             metadata.id = credential_id;
+            metadata.label = existing.label;
+            metadata.enabled = existing.enabled;
+            metadata.weight = existing.weight;
         }
         let id = metadata.id.clone();
         {
+            authorization_cancelled(cancellation.as_deref())?;
             let mut settings = state.settings.write().await;
             let mut next = settings.clone();
             next.ai_provider = provider;
@@ -828,13 +853,24 @@ pub async fn authorize_ai_provider(
         return build_bootstrap(&state).await;
     }
     if provider == AiProviderId::Traecode {
-        let status = tauri::async_runtime::spawn_blocking(|| TraeCodeProvider::new(TraeCodeConfig::new(AiProviderId::Traecode.default_model())).login())
+        let cancellation_for_worker = cancellation.clone();
+        let status = tauri::async_runtime::spawn_blocking(move || TraeCodeProvider::new(TraeCodeConfig::new(AiProviderId::Traecode.default_model())).login_cancellable(cancellation_for_worker.as_deref()))
             .await.map_err(|error| error.to_string())?.map_err(|error| error.to_string())?;
+        authorization_cancelled(cancellation.as_deref())?;
         if !status.available || !status.logged_in { return Err(status.detail); }
-        let metadata = OAuthAccountMetadata {
+        let mut metadata = OAuthAccountMetadata {
             id: "oauth:traecode:enterprise".to_string(), provider, label: "TraeCode enterprise CLI".to_string(),
             expires_at: 0, enabled: true, weight: 1,
         };
+        if let Some(credential_id) = credential_id {
+            let existing = state.settings.read().await.oauth_accounts.iter().find(|account| account.provider == provider && account.id == credential_id).cloned();
+            let Some(existing) = existing else { return Err("没有找到要重新授权的 TraeCode 账号。".to_string()); };
+            metadata.id = credential_id;
+            metadata.label = existing.label;
+            metadata.enabled = existing.enabled;
+            metadata.weight = existing.weight;
+        }
+        authorization_cancelled(cancellation.as_deref())?;
         let mut settings = state.settings.write().await;
         let mut next = settings.clone();
         next.ai_provider = provider;
@@ -852,16 +888,20 @@ pub async fn authorize_ai_provider(
     let authorized = tauri::async_runtime::spawn_blocking(move || oauth::authorize_cancellable(provider, cancellation_for_worker.as_deref()))
         .await
         .map_err(|error| error.to_string())?;
-    if let Some(operation_id) = operation_id.as_deref() { clear_authorization(operation_id); }
     let mut authorized = authorized?;
+    authorization_cancelled(cancellation.as_deref())?;
     if let Some(credential_id) = credential_id {
-        let exists = state.settings.read().await.oauth_accounts.iter()
-            .any(|account| account.provider == provider && account.id == credential_id);
-        if !exists { return Err("没有找到要重新授权的 OAuth 账号。".to_string()); }
+        let existing = state.settings.read().await.oauth_accounts.iter()
+            .find(|account| account.provider == provider && account.id == credential_id).cloned();
+        let Some(existing) = existing else { return Err("没有找到要重新授权的 OAuth 账号。".to_string()); };
         authorized.metadata.id = credential_id;
+        authorized.metadata.label = existing.label;
+        authorized.metadata.enabled = existing.enabled;
+        authorized.metadata.weight = existing.weight;
     }
     let route_metadata = authorized.metadata.clone();
     {
+        authorization_cancelled(cancellation.as_deref())?;
         let mut settings = state.settings.write().await;
         let mut next = settings.clone();
         next.ai_provider = provider;
