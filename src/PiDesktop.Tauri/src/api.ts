@@ -1221,6 +1221,10 @@ export const api = {
   diagnoseBridge: (scriptsPath: string) => call<OperationResult>("diagnose_bridge", { scriptsPath }),
   connectBridge: () => call<OperationResult>("connect_bridge"),
   listSynthvProcesses: () => call<SynthVProcess[]>("list_synthv_processes"),
+  focusSv2Instance: (processId: number, processIdentity: string) =>
+    call<OperationResult>("focus_sv2_instance", { processId, processIdentity }),
+  terminateSv2Instance: (processId: number, processIdentity: string) =>
+    call<OperationResult>("terminate_sv2_instance", { processId, processIdentity }),
   synthvShortcutProfile: () => call<SynthVShortcutProfile>("synthv_shortcut_profile"),
   sendSynthvBridgeShortcut: (processId: number, action: "start" | "stop") =>
     call<OperationResult>("send_synthv_bridge_shortcut", { processId, action }),
