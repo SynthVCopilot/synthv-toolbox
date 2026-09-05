@@ -121,7 +121,6 @@ export interface Sv2ConcurrentContent {
 
 export interface Sv2ConcurrentSlot {
   ready: boolean;
-  boxName: string;
   dataPath: string;
   runningPids: number[];
   detail: string;

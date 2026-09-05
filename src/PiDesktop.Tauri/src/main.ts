@@ -839,13 +839,13 @@ interface AccountProbeEnvironmentState {
 
 function accountProbeEnvironments(slot: Sv2ProfileSlot): AccountProbeEnvironmentState[] {
   const normalRecovery = slot.sessionProtection.status === "recoveryPending";
-  const normalProcessBlocked = Boolean(profiles?.blockers.length);
+  const normalProcessBlocked = !slot.isActive && Boolean(profiles?.blockers.length);
   const environments: AccountProbeEnvironmentState[] = [{
     label: "普通",
     probe: slot.accountProbe,
     launchEnabled: true,
     localBlocked: normalRecovery || normalProcessBlocked,
-    localBlockLabel: normalRecovery ? "登录缓存等待恢复" : normalProcessBlocked ? "普通环境正在本机使用" : "",
+    localBlockLabel: normalRecovery ? "登录缓存等待恢复" : normalProcessBlocked ? "切换账号路径前需要关闭普通实例" : "",
     usable: false,
     busy: false,
   }];
@@ -1105,7 +1105,7 @@ function renderAccounts(): string {
   const windowsExtensions = supportsWindowsSv2Extensions();
   const accountIndicatorEnabled = windowsExtensions && Boolean(app?.sv2AccountIndicatorEnabled);
   const blockerCount = profiles.blockers.length;
-  const blockerPanel = profiles.blockers.length ? `<div class="warning-card profile-blockers"><span>${icon("plug", 23)}</span><div><strong>普通槽位暂时不能切换</strong><p>${windowsExtensions ? "请先关闭下列普通 SV2 / 插件进程；已经准备好的隔离实例仍可单独启动。" : "请先保存并关闭下列 SV2 / 插件进程；macOS v1 不会强制结束进程或多开 SV2。"}<br />${profiles.blockers.map((blocker) => `${escapeHtml(blocker.name)}${blocker.pid ? ` (PID ${blocker.pid})` : ""}：${escapeHtml(blocker.reason)}`).join("<br />")}</p></div></div>` : "";
+  const blockerPanel = profiles.blockers.length ? `<div class="warning-card profile-blockers"><span>${icon("plug", 23)}</span><div><strong>普通槽位暂时不能切换</strong><p>${windowsExtensions ? "切换普通账号路径前，请先关闭下列进程；当前账号仍可再次普通启动，隔离实例也可继续多开。" : "切换普通账号路径前，请先保存并关闭下列进程；当前账号可以再次启动。"}<br />${profiles.blockers.map((blocker) => `${escapeHtml(blocker.name)}${blocker.pid ? ` (PID ${blocker.pid})` : ""}：${escapeHtml(blocker.reason)}`).join("<br />")}</p></div></div>` : "";
   if (profiles.recoveryRequired) {
     return `${blockerPanel}<div class="warning-card recovery-card"><span>${icon("sync", 23)}</span><div><strong>槽位需要人工恢复</strong><p>${escapeHtml(profiles.recoveryDetail)}</p><p>工具箱没有删除或覆盖任何目录。请先备份下方路径，再检查目录实况。</p></div><button class="secondary" data-profile-refresh>${icon("sync", 16)} 重新检查</button></div>
       <section class="panel"><dl class="detail-list"><div><dt>官方路径</dt><dd><code>${escapeHtml(profiles.canonicalPath)}</code></dd></div><div><dt>保管区</dt><dd><code>${escapeHtml(profiles.vaultPath)}</code></dd></div></dl></section>`;
@@ -1131,7 +1131,7 @@ function renderAccounts(): string {
         ? { tone: "in-use" as const, label: "当前 SV2 环境正在本机使用" }
         : { tone: "unknown" as const, label: "仅管理本地数据槽位" };
     const concurrentRunning = windowsExtensions && slot.concurrent.runningPids.length > 0;
-    const isolatedLabel = concurrentRunning ? "隔离运行中" : slot.concurrent.ready ? "隔离启动" : "准备隔离";
+    const isolatedLabel = concurrentRunning ? "再开一个实例" : slot.concurrent.ready ? "隔离启动" : "准备隔离";
     const concurrentEnabled = windowsExtensions && Boolean(app?.sv2ConcurrentEnabled);
     const isolatedDisabled = !concurrentProviderAvailable || !concurrentEnabled;
     const isolatedTitle = concurrentRunning

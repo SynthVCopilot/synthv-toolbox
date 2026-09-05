@@ -2,6 +2,8 @@ use super::*;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::TimeZone;
 
+static PROBE_TEST_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn make_jwt(exp: Option<i64>, iat: i64) -> String {
     let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256","typ":"JWT"}"#);
     let payload = URL_SAFE_NO_PAD
@@ -185,6 +187,7 @@ fn synthetic_smbios() -> Vec<u8> {
 
 #[test]
 fn juce_hash_and_smbios_machine_key_are_deterministic() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     assert_eq!(juce_hash64("abc"), 999_494);
     let raw = synthetic_smbios();
     let material = collect_juce_machine_material(&raw).unwrap();
@@ -203,6 +206,7 @@ fn juce_hash_and_smbios_machine_key_are_deterministic() {
 
 #[test]
 fn blowfish_codec_uses_juce_word_order_and_strict_pkcs7() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     let key = *b"12345678";
     let plaintext = b"synthetic session fixture";
     let encrypted = encrypt_fixture(plaintext, &key);
@@ -217,6 +221,7 @@ fn blowfish_codec_uses_juce_word_order_and_strict_pkcs7() {
 
 #[test]
 fn session_parser_accepts_device_extensions_and_validates_token_times() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     let issued = DateTime::<Utc>::from_timestamp(Utc::now().timestamp(), 0).unwrap();
     let access_expires = issued + ChronoDuration::hours(1);
     let refresh_expires = issued + ChronoDuration::days(31);
@@ -260,6 +265,7 @@ fn session_parser_accepts_device_extensions_and_validates_token_times() {
 
 #[test]
 fn account_group_uses_subject_not_environment_login_id() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     let issued = 4_070_908_800_i64;
     let first = make_identity_jwt(
         Some(issued + 1800),
@@ -328,6 +334,7 @@ fn account_group_uses_subject_not_environment_login_id() {
 
 #[test]
 fn account_identity_extracts_sanitized_standard_claims_without_echoing_the_jwt() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     let access_token = make_claims_jwt(serde_json::json!({
         "sub": "synthetic-subject",
         "name": "  音制   夏师傅  ",
@@ -353,6 +360,7 @@ fn account_identity_extracts_sanitized_standard_claims_without_echoing_the_jwt()
 
 #[test]
 fn account_identity_rejects_unsafe_claims_and_uses_username_fallback() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     let overlong_name = "x".repeat(161);
     let access_token = make_claims_jwt(serde_json::json!({
         "name": overlong_name,
@@ -374,6 +382,7 @@ fn account_identity_rejects_unsafe_claims_and_uses_username_fallback() {
 #[cfg(windows)]
 #[test]
 fn batch_plan_merges_different_login_ids_only_within_one_slot() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     let same_slot = vec![
         batch_session(0, 7, true, "same-subject", "normal-login", 0),
         batch_session(1, 7, false, "same-subject", "sandbox-login", 20),
@@ -395,6 +404,7 @@ fn batch_plan_merges_different_login_ids_only_within_one_slot() {
 #[cfg(windows)]
 #[test]
 fn batch_plan_quarantines_a_different_account_without_a_second_group() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     let sessions = vec![
         batch_session(0, 7, true, "primary-subject", "normal-login", 0),
         batch_session(1, 7, false, "other-subject", "sandbox-login", 20),
@@ -410,6 +420,7 @@ fn batch_plan_quarantines_a_different_account_without_a_second_group() {
 #[cfg(windows)]
 #[test]
 fn batch_plan_rejects_duplicate_primary_sources() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     let sessions = vec![
         batch_session(0, 7, true, "same-subject", "first-login", 0),
         batch_session(1, 7, true, "same-subject", "second-login", 20),
@@ -424,6 +435,7 @@ fn batch_plan_rejects_duplicate_primary_sources() {
 #[cfg(windows)]
 #[test]
 fn identical_slot_roots_are_one_physical_probe_authority() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     let root = PathBuf::from("C:/synthetic/slot-authority");
     assert!(is_equivalent_session_root(Some(7), &root, Some(7), &root,));
     assert!(!is_equivalent_session_root(Some(7), &root, Some(8), &root,));
@@ -438,6 +450,7 @@ fn identical_slot_roots_are_one_physical_probe_authority() {
 #[cfg(windows)]
 #[test]
 fn sync_quarantine_overrides_changed_fingerprints_until_repaired() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     let unique = uuid::Uuid::new_v4();
     let slot_id = format!("slot-{unique}");
     let root_key = ProbeRootKey::AccountEnvironment {
@@ -498,6 +511,7 @@ fn sync_quarantine_overrides_changed_fingerprints_until_repaired() {
 #[cfg(windows)]
 #[test]
 fn missing_session_does_not_clear_slot_quarantine() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     let slot_id = format!("slot-{}", uuid::Uuid::new_v4());
     let quarantine_key = SyncQuarantineKey::AccountSlot(slot_id.clone());
     let failed = Sv2AccountProbeView::sync_failed("synthetic sync quarantine");
@@ -520,6 +534,7 @@ fn missing_session_does_not_clear_slot_quarantine() {
 #[cfg(windows)]
 #[test]
 fn slot_quarantine_repair_requires_every_requested_copy() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     let root_a = PathBuf::from("synthetic-normal");
     let root_b = PathBuf::from("synthetic-concurrent");
     let requests = vec![
@@ -553,6 +568,7 @@ fn slot_quarantine_repair_requires_every_requested_copy() {
 
 #[test]
 fn authority_selection_prefers_latest_iat_then_access_expiry() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     let older_issued = Utc.with_ymd_and_hms(2099, 1, 2, 3, 0, 0).single().unwrap();
     let newer_issued = older_issued + ChronoDuration::minutes(20);
     let older = parse_session_plaintext(Zeroizing::new(
@@ -597,6 +613,7 @@ fn authority_selection_prefers_latest_iat_then_access_expiry() {
 
 #[test]
 fn token_core_sync_preserves_each_copy_extension_and_full_cache_shape() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     let issued = Utc.with_ymd_and_hms(2099, 1, 2, 3, 0, 0).single().unwrap();
     let authority = parse_session_plaintext(Zeroizing::new(
         make_identity_plaintext(
@@ -658,6 +675,7 @@ fn token_core_sync_preserves_each_copy_extension_and_full_cache_shape() {
 #[cfg(windows)]
 #[test]
 fn refreshed_session_is_atomically_replaced_and_readable() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     let root = std::env::temp_dir().join(format!(
         "sv2-account-session-write-test-{}",
         uuid::Uuid::new_v4()
@@ -692,6 +710,7 @@ fn refreshed_session_is_atomically_replaced_and_readable() {
 
 #[test]
 fn license_filter_is_active_voice_only_deduplicated_and_sorted() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     let body = br#"{
             "status":"success",
             "data":[
@@ -711,6 +730,7 @@ fn license_filter_is_active_voice_only_deduplicated_and_sorted() {
 
 #[test]
 fn concurrent_error_codes_are_detected_without_exposing_body() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     for code in [CONCURRENT_ERROR, KICKOUT_ERROR] {
         let body = Zeroizing::new(
             format!("{{\"error\":\"{}\"}}", std::str::from_utf8(code).unwrap()).into_bytes(),
@@ -725,6 +745,7 @@ fn concurrent_error_codes_are_detected_without_exposing_body() {
 #[cfg(windows)]
 #[test]
 fn enroll_request_is_always_non_kickout_and_matches_both_device_shapes() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     let cold = EnrollRequest {
         payload: EnrollPayload {
             device_id: None,
@@ -757,6 +778,7 @@ fn enroll_request_is_always_non_kickout_and_matches_both_device_shapes() {
 #[cfg(windows)]
 #[test]
 fn enroll_response_only_marks_clear_with_server_identity() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     let clear = interpret_enrollment_response(
         200,
         Zeroizing::new(
@@ -813,6 +835,7 @@ fn enroll_response_only_marks_clear_with_server_identity() {
 
 #[test]
 fn public_views_never_echo_secret_or_response_sentinels() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     const SENTINEL: &str = "DO_NOT_LEAK_THIS_SECRET";
     let malformed = Zeroizing::new(format!("{SENTINEL}\n").into_bytes());
     assert!(parse_session_plaintext(malformed).is_err());
@@ -833,6 +856,7 @@ fn public_views_never_echo_secret_or_response_sentinels() {
 #[cfg(windows)]
 #[test]
 fn active_session_reuses_only_fresh_cached_authorization() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     let cached = Sv2AccountProbeView::new(
         Sv2SessionInspectionStatus::Ready,
         Sv2RemoteUseStatus::Clear,
@@ -862,6 +886,7 @@ fn active_session_reuses_only_fresh_cached_authorization() {
 #[cfg(windows)]
 #[test]
 fn shared_slot_alias_receives_authority_result_without_quarantine() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     clear_sv2_account_probe_cache();
     let root = PathBuf::from("C:/synthetic/slot-authority");
     let fingerprint = SessionCacheKey {
@@ -921,6 +946,7 @@ fn shared_slot_alias_receives_authority_result_without_quarantine() {
 #[cfg(windows)]
 #[test]
 fn active_license_decision_is_network_free_and_preserves_failures() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     let authorized = view_from_active_license(RemoteOutcome::Authorized(vec![
         "Synthetic Voice".to_string()
     ]));
@@ -949,6 +975,7 @@ fn active_license_decision_is_network_free_and_preserves_failures() {
 #[cfg(windows)]
 #[test]
 fn active_license_cache_requires_matching_fingerprint_and_unexpired_access() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
     clear_sv2_account_probe_cache();
     let root = ProbeRootKey::AccountEnvironment {
         slot_id: "slot-cache".to_string(),

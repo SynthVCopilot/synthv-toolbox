@@ -640,14 +640,15 @@ impl Sv2ProfileService {
             .iter()
             .find(|slot| slot.id == slot_id)
             .ok_or_else(|| "找不到该 SV2 槽位。".to_string())?;
+        let provider = detect_concurrent_provider();
         let concurrent = concurrent_slot_view(
             &paths.vault,
             &slot_id,
-            detect_concurrent_provider().as_ref().ok(),
+            provider.as_ref().ok(),
             slot.concurrent_content
                 .resolve(manifest.concurrent_defaults),
         );
-        if !concurrent.ready || !concurrent.running_pids.is_empty() {
+        if (provider.is_ok() && !concurrent.ready) || !concurrent.running_pids.is_empty() {
             return Err("请先关闭该账号的隔离 SV2 实例，再删除账号。".to_string());
         }
 
@@ -821,12 +822,16 @@ impl Sv2ProfileService {
         let paths = self.paths.as_ref().map_err(Clone::clone)?;
         let _file_lock = acquire_switch_lock(paths)?;
         recover_if_needed(paths)?;
-        if force {
-            terminate_blockers(paths)?;
-        } else {
-            reject_blockers(paths)?;
-        }
         let mut manifest = load_manifest(paths)?;
+        let same_environment = manifest.active_slot_id.as_deref() == Some(slot_id.as_str());
+        let normal_running = same_environment && !detect_blockers(paths).is_empty();
+        if !same_environment {
+            if force {
+                terminate_blockers(paths)?;
+            } else {
+                reject_blockers(paths)?;
+            }
+        }
         converge_legacy_sandboxes(paths, &manifest)?;
         let provider = detect_concurrent_provider().ok();
         let concurrent_running = provider.as_ref().is_some_and(|provider| {
@@ -837,7 +842,7 @@ impl Sv2ProfileService {
         sync_defaults_before_launch(paths, &manifest, &slot_id, concurrent_running)?;
         switch_slot(paths, &mut manifest, &slot_id)?;
         let data_root = slot_data_root(paths, &manifest, &slot_id);
-        let session_preparation = if concurrent_running {
+        let session_preparation = if normal_running || concurrent_running {
             SessionLaunchPreparation::default()
         } else {
             Sv2SessionGuardStore::new(&paths.metadata).prepare_launch(&slot_id, &data_root)?
@@ -2650,7 +2655,6 @@ mod windows_guard {
         MODULEENTRY32W, PROCESSENTRY32W, TH32CS_SNAPMODULE, TH32CS_SNAPMODULE32,
         TH32CS_SNAPPROCESS,
     };
-    use windows_sys::Win32::System::Threading::OpenMutexW;
 
     use super::{SlotPaths, Sv2ProcessBlocker};
 
@@ -2659,7 +2663,6 @@ mod windows_guard {
     const CCH_RM_SESSION_KEY: usize = 32;
     const CCH_RM_MAX_APP_NAME: usize = 255;
     const CCH_RM_MAX_SVC_NAME: usize = 63;
-    const SYNCHRONIZE: u32 = 0x0010_0000;
 
     #[repr(C)]
     #[derive(Clone, Copy)]
@@ -2746,17 +2749,6 @@ mod windows_guard {
             }
         }
 
-        if !blockers
-            .iter()
-            .any(|blocker| blocker.reason.contains("standalone"))
-            && global_app_mutex_exists()
-        {
-            blockers.push(Sv2ProcessBlocker {
-                pid: None,
-                name: "Synthesizer V Studio 2 Pro".to_string(),
-                reason: "检测到全局单实例锁 Applock_SVStudio2_Pro".to_string(),
-            });
-        }
         blockers.sort_by(|left, right| left.name.cmp(&right.name).then(left.pid.cmp(&right.pid)));
         blockers
     }
@@ -2806,21 +2798,6 @@ mod windows_guard {
         }
         unsafe { CloseHandle(snapshot) };
         found
-    }
-
-    fn global_app_mutex_exists() -> bool {
-        ["Global\\Applock_SVStudio2_Pro", "Applock_SVStudio2_Pro"]
-            .iter()
-            .any(|name| {
-                let wide = name.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
-                let handle = unsafe { OpenMutexW(SYNCHRONIZE, 0, wide.as_ptr()) };
-                if handle.is_null() {
-                    false
-                } else {
-                    unsafe { CloseHandle(handle) };
-                    true
-                }
-            })
     }
 
     fn restart_manager_blockers(paths: &SlotPaths) -> Vec<Sv2ProcessBlocker> {

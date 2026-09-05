@@ -546,3 +546,27 @@ fn prepared_switch_recovery_keeps_the_current_managed_link() {
     assert!(!paths.journal.exists());
     fs::remove_dir_all(root).unwrap();
 }
+
+#[cfg(windows)]
+#[test]
+fn changing_primary_keeps_existing_instance_on_its_account() {
+    let (root, paths) = fixture();
+    let mut manifest = import_fixture(&paths, "A");
+    let a = manifest.active_slot_id.clone().unwrap();
+    let b = add_parked(&paths, &mut manifest, "B");
+    let instance = root.join("existing-instance");
+    junction::create(paths.parked(&a), &instance).unwrap();
+    switch_slot(&paths, &mut manifest, &b).unwrap();
+    fs::write(instance.join("project-state"), b"still-account-a").unwrap();
+    assert_eq!(
+        fs::read(paths.parked(&a).join("project-state")).unwrap(),
+        b"still-account-a"
+    );
+    assert!(!paths.canonical.join("project-state").exists());
+    assert_eq!(
+        paths.canonical.canonicalize().unwrap(),
+        paths.parked(&b).canonicalize().unwrap()
+    );
+    fs::remove_dir(instance).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}

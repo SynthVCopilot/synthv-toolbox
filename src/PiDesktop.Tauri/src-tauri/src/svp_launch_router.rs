@@ -461,8 +461,7 @@ fn route_mode_candidate(
         score += 5;
     }
     let reason = if session_sync_failed {
-        "该账号会话未能安全更新，已从路由中排除；请在账号页查看错误并重新预检。"
-            .to_string()
+        "该账号会话未能安全更新，已从路由中排除；请在账号页查看错误并重新预检。".to_string()
     } else if account_mismatch {
         "该槽位会话的账号不一致，已从路由中排除；请在 SV2 中确认登录账号。".to_string()
     } else if remote_busy {
