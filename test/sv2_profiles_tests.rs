@@ -302,7 +302,7 @@ fn names_and_slot_ids_are_strictly_validated() {
     assert!(validate_display_name(&"x".repeat(65)).is_err());
     assert!(validate_slot_id("../../escape").is_err());
     assert!(validate_slot_id(&Uuid::new_v4().to_string()).is_ok());
-    assert!(validate_color("#6D5CE7").is_ok());
+    assert!(validate_color("#ABCDEF").is_ok());
     assert!(validate_color("red;display:none").is_err());
     assert_eq!(
         validate_optional_username("  Producer  ").unwrap(),
@@ -568,5 +568,22 @@ fn changing_primary_keeps_existing_instance_on_its_account() {
         paths.parked(&b).canonicalize().unwrap()
     );
     fs::remove_dir(instance).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn a_matching_marker_in_another_directory_is_not_the_primary_slot() {
+    let (root, paths) = fixture();
+    let manifest = import_fixture(&paths, "A");
+    let id = manifest.active_slot_id.as_deref().unwrap();
+    let outside = root.join("other-copy");
+    fs::create_dir(&outside).unwrap();
+    write_marker(&outside, id).unwrap();
+    fs::remove_dir(&paths.canonical).unwrap();
+    junction::create(&outside, &paths.canonical).unwrap();
+    assert!(slot_convergence_plan(&paths, &manifest).is_err());
+    assert!(paths.parked(id).join("license/session").is_file());
+    fs::remove_dir(&paths.canonical).unwrap();
     fs::remove_dir_all(root).unwrap();
 }
