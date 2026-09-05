@@ -529,7 +529,9 @@ fn record_active_refresh_failure(
     view: Sv2AccountProbeView,
 ) -> Sv2AccountProbeView {
     let view = view.with_account_identity(credentials.access_token());
-    set_sync_quarantine(&root.quarantine_key(), &view);
+    if view.session_status == Sv2SessionInspectionStatus::SyncFailed {
+        set_sync_quarantine(&root.quarantine_key(), &view);
+    }
     cache_put(fingerprint.clone(), root, &view, None);
     view
 }
@@ -1697,6 +1699,18 @@ fn cached_view_for_fingerprint(
     fingerprint: &SessionCacheKey,
     root: &ProbeRootKey,
 ) -> Option<Sv2AccountProbeView> {
+    if let Some(view) = cache_get(fingerprint, root) {
+        if matches!(
+            view.session_status,
+            Sv2SessionInspectionStatus::Offline
+                | Sv2SessionInspectionStatus::Expired
+                | Sv2SessionInspectionStatus::Unsupported
+                | Sv2SessionInspectionStatus::Invalid
+                | Sv2SessionInspectionStatus::SyncFailed
+        ) {
+            return Some(view);
+        }
+    }
     if let Some(view) = sync_quarantine_get(&root.quarantine_key()) {
         return Some(view);
     }
@@ -2180,17 +2194,7 @@ fn finish_batch_results(
         else {
             continue;
         };
-        if matches!(
-            results[request_index]
-                .as_ref()
-                .map(|view| view.session_status),
-            Some(
-                Sv2SessionInspectionStatus::Missing
-                    | Sv2SessionInspectionStatus::InUse
-                    | Sv2SessionInspectionStatus::AccountMismatch
-                    | Sv2SessionInspectionStatus::SyncFailed
-            )
-        ) {
+        if results[request_index].is_some() {
             continue;
         }
         if let Some(view) = sync_quarantine_get(&root.quarantine_key()) {
@@ -3413,3 +3417,7 @@ fn persist_refreshed_session(
 #[cfg(test)]
 #[path = "../../../../test/sv2_account_probe_tests.rs"]
 mod tests;
+
+#[cfg(all(test, windows))]
+#[path = "../../../../test/sv2_refresh_failure_tests.rs"]
+mod refresh_failure_tests;
