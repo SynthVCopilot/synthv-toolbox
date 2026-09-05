@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 #[path = "../../src/PiDesktop.Tauri/src-tauri/src/sv2_concurrent.rs"]
-mod sv2_concurrent;
+pub mod sv2_concurrent;
 #[path = "../../src/PiDesktop.Tauri/src-tauri/src/sv2_sync.rs"]
 mod sv2_sync;
 #[path = "../../src/PiDesktop.Tauri/src-tauri/src/sv2_session_guard.rs"]

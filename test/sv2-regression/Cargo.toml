@@ -27,3 +27,11 @@ fs2 = "0.4"
 
 [lib]
 path = "lib.rs"
+
+[[test]]
+name = "sandboxie_smoke"
+path = "sandboxie_smoke.rs"
+
+[[bin]]
+name = "sandboxie_smoke_helper"
+path = "sandboxie_smoke_helper.rs"
