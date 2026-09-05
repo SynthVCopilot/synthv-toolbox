@@ -917,3 +917,73 @@ fn shared_slot_alias_receives_authority_result_without_quarantine() {
     .is_none());
     clear_sv2_account_probe_cache();
 }
+
+#[cfg(windows)]
+#[test]
+fn active_license_decision_is_network_free_and_preserves_failures() {
+    let authorized = view_from_active_license(RemoteOutcome::Authorized(vec![
+        "Synthetic Voice".to_string()
+    ]));
+    assert_eq!(authorized.session_status, Sv2SessionInspectionStatus::InUse);
+    assert_eq!(
+        authorized.authorization_status,
+        Sv2AuthorizationStatus::Verified
+    );
+    assert_eq!(authorized.authorized_voices, vec!["Synthetic Voice"]);
+
+    let offline = view_from_active_license(RemoteOutcome::Offline);
+    assert_eq!(offline.session_status, Sv2SessionInspectionStatus::InUse);
+    assert_eq!(
+        offline.authorization_status,
+        Sv2AuthorizationStatus::Unknown
+    );
+    assert!(offline.detail.contains("不可达"));
+
+    let unauthorized = view_from_active_license(RemoteOutcome::Unauthorized);
+    assert_eq!(
+        unauthorized.session_status,
+        Sv2SessionInspectionStatus::Invalid
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn active_license_cache_requires_matching_fingerprint_and_unexpired_access() {
+    clear_sv2_account_probe_cache();
+    let root = ProbeRootKey::AccountEnvironment {
+        slot_id: "slot-cache".to_string(),
+        concurrent: true,
+    };
+    let fingerprint = SessionCacheKey {
+        canonical_root: PathBuf::from("C:/synthetic/slot-cache"),
+        session_len: 8,
+        last_write_time: 1,
+    };
+    let view = Sv2AccountProbeView::new(
+        Sv2SessionInspectionStatus::InUse,
+        Sv2RemoteUseStatus::Unknown,
+        Sv2AuthorizationStatus::Verified,
+        vec!["Synthetic Voice".to_string()],
+        "cached",
+    );
+    cache_put(
+        fingerprint.clone(),
+        &root,
+        &view,
+        Some(Utc::now() - ChronoDuration::seconds(1)),
+    );
+    assert!(cache_get(&fingerprint, &root).is_none());
+    cache_put(
+        fingerprint.clone(),
+        &root,
+        &view,
+        Some(Utc::now() + ChronoDuration::minutes(1)),
+    );
+    assert!(cache_get(&fingerprint, &root).is_some());
+    let changed = SessionCacheKey {
+        last_write_time: 2,
+        ..fingerprint
+    };
+    assert!(cache_get(&changed, &root).is_none());
+    clear_sv2_account_probe_cache();
+}
