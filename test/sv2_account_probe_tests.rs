@@ -945,6 +945,106 @@ fn shared_slot_alias_receives_authority_result_without_quarantine() {
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires an explicitly supplied local SV2 data root"]
+fn diagnostic_real_session_root_is_read_only() {
+    let root = PathBuf::from(
+        std::env::var("SV2_DIAGNOSTIC_ROOT")
+            .expect("set SV2_DIAGNOSTIC_ROOT to an absolute SV2 data root"),
+    );
+    assert!(root.is_absolute(), "SV2_DIAGNOSTIC_ROOT must be absolute");
+
+    let (ciphertext, first) = read_stable_session(&root)
+        .expect("stable read failed")
+        .expect("session is missing");
+    let key = read_machine_key().expect("machine key unavailable");
+    let credentials = decrypt_session(ciphertext, &key)
+        .and_then(parse_session_plaintext)
+        .expect("session decrypt or parse failed");
+    let (_, second) = read_stable_session(&root)
+        .expect("second stable read failed")
+        .expect("session disappeared");
+    let access_payload = decode_base64url(
+        credentials.access_token().split('.').nth(1).expect("access token payload missing"),
+    )
+    .expect("access token payload is not base64url");
+    let refresh_payload = decode_base64url(
+        credentials.refresh_token().split('.').nth(1).expect("refresh token payload missing"),
+    )
+    .expect("refresh token payload is not base64url");
+    let access_claims: serde_json::Value = serde_json::from_slice(&access_payload)
+        .expect("access token payload is not JSON");
+    let refresh_claims: serde_json::Value = serde_json::from_slice(&refresh_payload)
+        .expect("refresh token payload is not JSON");
+    let issuer = access_claims
+        .get("iss")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| {
+            url::Url::parse(value).is_ok_and(|url| {
+                url.scheme() == "https"
+                    && url.host_str().is_some()
+                    && url.username().is_empty()
+                    && url.password().is_none()
+                    && url.query().is_none()
+                    && url.fragment().is_none()
+            })
+        })
+        .unwrap_or("<invalid>");
+    let access_azp_matches = access_claims
+        .get("azp")
+        .and_then(serde_json::Value::as_str)
+        == Some(TOKEN_CLIENT_ID);
+    let refresh_expired = refresh_claims
+        .get("exp")
+        .and_then(serde_json::Value::as_i64)
+        .and_then(|timestamp| DateTime::<Utc>::from_timestamp(timestamp, 0))
+        .is_some_and(|expiry| expiry <= Utc::now());
+
+    eprintln!(
+        "SV2 diagnostic: stable={}, full_cache={}, device_present={}, user_present={}, access_expired={}, refresh_expired={}, issuer={}, access_azp_matches={}",
+        first == second,
+        credentials.has_full_cache(),
+        credentials.device_id().is_some(),
+        credentials.user_id().is_some(),
+        credentials.access_expires_at <= Utc::now(),
+        refresh_expired,
+        issuer,
+        access_azp_matches,
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn refreshed_session_persists_and_reloads_in_an_isolated_fixture() {
+    let root = std::env::temp_dir().join(format!("sv2-probe-persist-{}", uuid::Uuid::new_v4()));
+    let data_root = root.join("data");
+    let license = data_root.join("license");
+    fs::create_dir_all(&license).unwrap();
+    let key = *b"fixture8";
+    let issued = DateTime::<Utc>::from_timestamp(Utc::now().timestamp() - 60, 0).unwrap();
+    let initial = make_plaintext(
+        issued + ChronoDuration::minutes(2),
+        issued + ChronoDuration::days(31),
+        issued,
+    );
+    let initial_credentials = parse_session_plaintext(Zeroizing::new(initial.clone().into_bytes())).unwrap();
+    let initial_encrypted = encrypt_session(initial_credentials.buffer.as_bytes(), &key).unwrap();
+    fs::write(license.join("session"), &*initial_encrypted).unwrap();
+    let (_, fingerprint) = read_stable_session(&data_root).unwrap().unwrap();
+    let updated = parse_session_plaintext(Zeroizing::new(initial.into_bytes())).unwrap();
+
+    let persisted = persist_refreshed_session(&data_root, &fingerprint, &updated, &key).unwrap();
+    let (ciphertext, reloaded_fingerprint) = read_stable_session(&data_root).unwrap().unwrap();
+    let reloaded = decrypt_session(ciphertext, &key)
+        .and_then(parse_session_plaintext)
+        .unwrap();
+    assert!(persisted == reloaded_fingerprint);
+    assert_eq!(reloaded.token_core(), updated.token_core());
+    assert_eq!(reloaded.device_id(), updated.device_id());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
 fn active_license_decision_is_network_free_and_preserves_failures() {
     let _guard = PROBE_TEST_GATE.lock().unwrap();
     let authorized = view_from_active_license(RemoteOutcome::Authorized(vec![
