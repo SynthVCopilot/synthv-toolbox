@@ -126,18 +126,33 @@ impl CredentialBalancer {
         if eligible.is_empty() {
             return Vec::new();
         }
-        let route_strategy = self.routes.get(&eligible[0].0).map(|route| route.strategy).unwrap_or(AiLoadStrategy::RoundRobin);
+        let route_strategy = self
+            .routes
+            .get(&eligible[0].0)
+            .map(|route| route.strategy)
+            .unwrap_or(AiLoadStrategy::RoundRobin);
         if route_strategy == AiLoadStrategy::Failover {
-            return eligible.into_iter().map(|(_, candidate)| candidate).collect();
+            return eligible
+                .into_iter()
+                .map(|(_, candidate)| candidate)
+                .collect();
         }
         if route_strategy == AiLoadStrategy::WeightedRoundRobin {
-            let mut weighted = eligible.iter().flat_map(|(key, candidate)| {
-                let weight = self.routes.get(key).map(|route| route.weight.clamp(1, 100)).unwrap_or(1);
-                vec![candidate.clone(); usize::from(weight)]
-            }).collect::<Vec<_>>();
+            let mut weighted = eligible
+                .iter()
+                .flat_map(|(key, candidate)| {
+                    let weight = self
+                        .routes
+                        .get(key)
+                        .map(|route| route.weight.clamp(1, 100))
+                        .unwrap_or(1);
+                    vec![candidate.clone(); usize::from(weight)]
+                })
+                .collect::<Vec<_>>();
             let cursor_key = format!("{}\u{0000}{model}", provider.as_str());
             let start = self.cursors.get(&cursor_key).copied().unwrap_or_default() % weighted.len();
-            self.cursors.insert(cursor_key, (start + 1) % weighted.len());
+            self.cursors
+                .insert(cursor_key, (start + 1) % weighted.len());
             weighted.rotate_left(start);
             return weighted;
         }

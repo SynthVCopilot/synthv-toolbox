@@ -269,7 +269,11 @@ impl WorkBuddyOAuth {
         self.poll_credential_cancellable(state, None)
     }
 
-    pub fn poll_credential_cancellable(&self, state: &str, cancelled: Option<&AtomicBool>) -> Result<WorkBuddyCredential> {
+    pub fn poll_credential_cancellable(
+        &self,
+        state: &str,
+        cancelled: Option<&AtomicBool>,
+    ) -> Result<WorkBuddyCredential> {
         if state.trim().is_empty() {
             return Err(AgentError::new("WorkBuddy OAuth state is empty"));
         }

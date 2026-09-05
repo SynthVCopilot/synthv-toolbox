@@ -336,14 +336,24 @@ fn catalog_models(
 
 fn workbuddy_models(catalog: &OpenCodeCatalog) -> Vec<String> {
     const VERIFIED: &[&str] = &[
-        "glm-5.2", "glm-5.1", "glm-5v-turbo", "kimi-k2.7", "minimax-m3-pay", "hy3",
-        "deepseek-v4-pro", "deepseek-v4-flash",
+        "glm-5.2",
+        "glm-5.1",
+        "glm-5v-turbo",
+        "kimi-k2.7",
+        "minimax-m3-pay",
+        "hy3",
+        "deepseek-v4-pro",
+        "deepseek-v4-flash",
     ];
     let catalog_models = ["zhipuai", "deepseek", "tencent-tokenhub"]
         .into_iter()
         .flat_map(|provider| catalog_models(catalog, provider, |_| true))
         .collect::<HashSet<_>>();
-    VERIFIED.iter().filter(|model| catalog_models.contains(**model)).map(|model| (*model).to_string()).collect()
+    VERIFIED
+        .iter()
+        .filter(|model| catalog_models.contains(**model))
+        .map(|model| (*model).to_string())
+        .collect()
 }
 
 fn fallback_models(provider: AiProviderId) -> Vec<String> {

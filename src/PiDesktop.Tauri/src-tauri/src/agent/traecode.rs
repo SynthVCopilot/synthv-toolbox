@@ -4,7 +4,10 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{atomic::{AtomicBool, Ordering}, Mutex, OnceLock};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex, OnceLock,
+};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -124,7 +127,12 @@ impl TraeCodeProvider {
                 })
             }
         };
-        let output = self.run_owned(&executable, &["login".to_string(), "status".to_string()], None, None)?;
+        let output = self.run_owned(
+            &executable,
+            &["login".to_string(), "status".to_string()],
+            None,
+            None,
+        )?;
         let status_text = format!("{}\n{}", output.stdout, output.stderr);
         let value = serde_json::from_str::<Value>(&output.stdout).ok();
         let logged_in = value
@@ -243,13 +251,22 @@ impl TraeCodeProvider {
         self.run_cancellable(executable, args, None)
     }
 
-    fn run_cancellable(&self, executable: &Path, args: &[&str], cancelled: Option<&AtomicBool>) -> Result<BoundedOutput> {
+    fn run_cancellable(
+        &self,
+        executable: &Path,
+        args: &[&str],
+        cancelled: Option<&AtomicBool>,
+    ) -> Result<BoundedOutput> {
         let owned = args
             .iter()
             .map(|value| (*value).to_string())
             .collect::<Vec<_>>();
         let output = self.run_owned(executable, &owned, None, cancelled)?;
-        if output.success { Ok(output) } else { Err(AgentError::new("TraeCode CLI command failed")) }
+        if output.success {
+            Ok(output)
+        } else {
+            Err(AgentError::new("TraeCode CLI command failed"))
+        }
     }
 
     fn run_owned(
@@ -337,7 +354,9 @@ impl AgentProvider for TraeCodeProvider {
         let result = (|| {
             let args = self.build_exec_args(conversation, tools, &schema_path, &output_path)?;
             let output = self.run_owned(&executable, &args, Some(&temporary_directory), None)?;
-            if !output.success { return Err(AgentError::new("TraeCode CLI execution failed")); }
+            if !output.success {
+                return Err(AgentError::new("TraeCode CLI execution failed"));
+            }
             let message = fs::read_to_string(&output_path).map_err(|error| {
                 AgentError::new(format!("TraeCode final message file unavailable: {error}"))
             })?;
