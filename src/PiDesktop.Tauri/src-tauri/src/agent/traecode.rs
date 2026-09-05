@@ -131,13 +131,7 @@ impl TraeCodeProvider {
             .as_ref()
             .and_then(|value| value.get("loggedIn").or_else(|| value.get("logged_in")))
             .and_then(Value::as_bool)
-            .unwrap_or_else(|| {
-                let text = status_text.to_ascii_lowercase();
-                (text.contains("logged in") || text.contains("authenticated"))
-                    && !text.contains("not logged in")
-                    && !text.contains("logged out")
-                    && !text.contains("unauthenticated")
-            });
+            .unwrap_or_else(|| status_reports_authenticated(&status_text));
         Ok(TraeLoginStatus {
             available: true,
             logged_in,
@@ -388,6 +382,14 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
+fn status_reports_authenticated(status: &str) -> bool {
+    let normalized = status.to_ascii_lowercase();
+    (normalized.contains("logged in") || normalized.contains("authenticated"))
+        && !normalized.contains("not logged in")
+        && !normalized.contains("logged out")
+        && !normalized.contains("unauthenticated")
+}
+
 fn trae_message(message: &ChatMessage) -> Result<Value> {
     let role = match message.role {
         Role::System => "system",
@@ -411,4 +413,26 @@ fn normalize_arguments(arguments: &str) -> String {
     serde_json::from_str::<Value>(arguments)
         .map(|value| value.to_string())
         .unwrap_or_else(|_| "{}".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicBool;
+
+    use super::*;
+
+    #[test]
+    fn status_markers_never_treat_unauthenticated_as_logged_in() {
+        assert!(status_reports_authenticated("Status: authenticated"));
+        assert!(!status_reports_authenticated("Status: unauthenticated"));
+        assert!(!status_reports_authenticated("Not logged in"));
+    }
+
+    #[test]
+    fn cancelled_login_stops_before_cli_discovery() {
+        let cancelled = AtomicBool::new(true);
+        let result = TraeCodeProvider::new(TraeCodeConfig::new("trae-account-default"))
+            .login_cancellable(Some(&cancelled));
+        assert!(result.is_err());
+    }
 }

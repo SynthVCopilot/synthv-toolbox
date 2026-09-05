@@ -108,6 +108,21 @@ fn authorization_cancelled(cancellation: Option<&AtomicBool>) -> Result<(), Stri
     }
 }
 
+#[cfg(test)]
+mod authorization_tests {
+    use super::*;
+
+    #[test]
+    fn registration_is_removed_when_guard_drops() {
+        let operation_id = format!("test-{}", Uuid::new_v4());
+        let _flag = register_authorization(&operation_id).unwrap();
+        let guard = AuthorizationRegistration(Some(operation_id.clone()));
+        drop(guard);
+        let operations = AUTHORIZATIONS.get().unwrap().lock().unwrap();
+        assert!(!operations.contains_key(&operation_id));
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchWorkflowItem {
