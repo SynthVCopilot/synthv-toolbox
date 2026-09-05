@@ -1896,6 +1896,48 @@ pub async fn list_synthv_processes() -> Result<Vec<SynthVProcess>, String> {
 }
 
 #[tauri::command]
+pub async fn focus_sv2_instance(
+    process_id: u32,
+    process_identity: String,
+) -> Result<OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        synthv_control::focus_instance(process_id, process_identity)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map(|process| {
+        succeeded(
+            format!(
+                "已切换到 {}（PID {}）。",
+                process.product_name, process.process_id
+            ),
+            process.window_title,
+        )
+    })
+}
+
+#[tauri::command]
+pub async fn terminate_sv2_instance(
+    process_id: u32,
+    process_identity: String,
+) -> Result<OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        synthv_control::terminate_instance(process_id, process_identity)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map(|process| {
+        succeeded(
+            format!(
+                "已终止 {}（PID {}）。",
+                process.product_name, process.process_id
+            ),
+            "仅终止了已校验身份的目标实例。",
+        )
+    })
+}
+
+#[tauri::command]
 pub fn synthv_shortcut_profile() -> SynthVShortcutProfile {
     synthv_control::shortcut_profile()
 }

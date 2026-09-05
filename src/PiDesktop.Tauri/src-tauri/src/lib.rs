@@ -203,6 +203,8 @@ pub fn run() {
             commands::diagnose_bridge,
             commands::connect_bridge,
             commands::list_synthv_processes,
+            commands::focus_sv2_instance,
+            commands::terminate_sv2_instance,
             commands::synthv_shortcut_profile,
             commands::send_synthv_bridge_shortcut,
             commands::auto_connect_synthv_bridge,
