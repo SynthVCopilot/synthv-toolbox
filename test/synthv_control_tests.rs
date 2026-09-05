@@ -42,6 +42,43 @@ fn only_a_current_sv2_identity_can_be_controlled() {
 }
 
 #[test]
+fn accepts_each_strict_synthv_product_but_rejects_a_forged_target() {
+    for (name, command) in [
+        (
+            "synthv-studio.exe",
+            r"C:\Apps\Synthesizer V Studio\synthv-studio.exe",
+        ),
+        ("Synthesizer V Flat.exe", r"C:\Apps\Synthesizer V Flat.exe"),
+    ] {
+        let process = SynthVProcess {
+            process_id: 77,
+            process_identity: "windows:77:123".to_string(),
+            name: name.to_string(),
+            product_name: "SynthV".to_string(),
+            version: String::new(),
+            command: command.to_string(),
+            window_title: String::new(),
+            is_sv2: false,
+            sandboxed: Some(false),
+        };
+        assert!(matches_control_target(&process, "windows:77:123"));
+    }
+
+    let forged = SynthVProcess {
+        process_id: 77,
+        process_identity: "windows:77:123".to_string(),
+        name: "svstudio2-pro.exe".to_string(),
+        product_name: "SVStudio2 Pro".to_string(),
+        version: String::new(),
+        command: r"C:\Downloads\svstudio2-pro-setup-2.3.0tp1.exe".to_string(),
+        window_title: String::new(),
+        is_sv2: true,
+        sandboxed: Some(false),
+    };
+    assert!(!matches_control_target(&forged, "windows:77:123"));
+}
+
+#[test]
 fn matches_flat_only_by_exact_executable_name() {
     assert!(is_synthv_process(
         "Synthesizer V Flat.exe",
