@@ -81,6 +81,8 @@ let tuningProfiles: TuningProfile[] = [];
 let audioCaptureCapability: AudioCaptureCapability | undefined;
 let audioCaptureTargets: AudioCaptureTarget[] = [];
 let synthvProcesses: SynthVProcess[] = [];
+let instanceRefreshInFlight = false;
+let instanceRefreshGeneration = 0;
 let synthvShortcutProfile: SynthVShortcutProfile | undefined;
 let httpApiStatus: HttpApiStatus = {
   enabled: false,
@@ -376,6 +378,7 @@ function setFeedback(result: OperationResult): void {
 
 async function run(task: () => Promise<void>): Promise<void> {
   if (busy) return;
+  instanceRefreshGeneration += 1;
   busy = true;
   notice = "";
   error = "";
@@ -424,17 +427,27 @@ async function refreshAccountUsage(slotId?: string): Promise<void> {
 }
 
 async function refreshVisibleSynthvInstances(): Promise<void> {
-  if (busy || (page !== "accounts" && page !== "bridge")) return;
+  if (busy || instanceRefreshInFlight || (page !== "accounts" && page !== "bridge")) return;
+  const refreshPage = page;
+  const generation = instanceRefreshGeneration;
+  instanceRefreshInFlight = true;
   try {
     const [nextProcesses, nextProfiles] = await Promise.all([
       api.listSynthvProcesses(),
       page === "accounts" ? api.sv2ProfileState() : Promise.resolve(profiles),
     ]);
+    if (page !== refreshPage || generation !== instanceRefreshGeneration) return;
+    const changed = JSON.stringify(synthvProcesses) !== JSON.stringify(nextProcesses);
     synthvProcesses = nextProcesses;
     if (nextProfiles) profiles = nextProfiles;
-    render();
+    if (!changed) return;
+    const list = document.querySelector<HTMLElement>(".account-instances-panel .synthv-process-list");
+    if (list && refreshPage === "accounts") list.innerHTML = renderSv2InstanceRows();
+    else if (refreshPage === "bridge") render();
   } catch {
     // Background discovery must not replace a visible action error.
+  } finally {
+    instanceRefreshInFlight = false;
   }
 }
 
@@ -663,7 +676,7 @@ function renderBlockedSwitchDialog(): string {
       <div><span class="eyebrow">检测到运行中的程序</span><h2 id="blocked-switch-title">无法安全切换到“${escapeHtml(slot?.displayName ?? "此槽位")}”</h2></div>
       <p>下列程序正在使用当前 SV2 槽位。请先保存工程：强制切换会结束这些 PID 的整个进程树，未保存内容可能丢失；并发模式不会关闭当前程序。</p>
       <div class="dialog-process-list">${blockers.map((blocker) => `<div><span><strong>${escapeHtml(blocker.name)}</strong><small>${escapeHtml(blocker.reason)}</small></span><code>${blocker.pid ? `PID ${blocker.pid}` : "无可用 PID"}</code></div>`).join("")}</div>
-      <p class="dialog-choice-note">${canRunConcurrent ? `${escapeHtml(provider?.name ?? "Sandboxie")} 已就绪；${slot?.concurrent.ready ? "将直接启动隔离实例。" : "会先复制该槽位的不透明数据副本，再启动隔离实例。"}` : concurrentRunning ? "此槽位的并发实例已经在运行。" : `并发模式不可用：${escapeHtml(provider?.detail ?? "未检测到隔离提供方。")}`}</p>
+      <p class="dialog-choice-note">${canRunConcurrent ? `${escapeHtml(provider?.name ?? "Sandboxie")} 已就绪；${slot?.concurrent.ready ? "将直接启动隔离实例。" : "会先准备隔离环境，再启动隔离实例。"}` : concurrentRunning ? "此槽位的并发实例已经在运行。" : `并发模式不可用：${escapeHtml(provider?.detail ?? "未检测到隔离提供方。")}`}</p>
       <div class="dialog-actions"><button class="secondary" data-cancel-profile-switch>取消</button><button class="secondary" data-run-blocked-concurrent ${canRunConcurrent ? "" : "disabled"}>${concurrentLabel}</button><button class="danger-action" data-force-profile-switch>强制切换并启动</button></div>
     </section>
   </div>`;
@@ -1143,10 +1156,14 @@ function renderAccounts(): string {
 }
 
 function renderSv2InstanceList(): string {
+  return `<section class="panel account-instances-panel"><div class="panel-heading"><div><h2>当前打开的 SynthV 实例</h2><p>按窗口标题和 PID 跟踪实例，并显示关联账号。</p></div><button class="secondary compact" data-refresh-synthv-processes>${icon("sync", 16)} 刷新</button></div><div class="synthv-process-list">${renderSv2InstanceRows()}</div></section>`;
+}
+
+function renderSv2InstanceRows(): string {
   const slots = profiles?.slots ?? [];
   const instances = synthvProcesses.map((process) => {
     const concurrentSlot = slots.find((slot) => slot.concurrent.runningPids.includes(process.processId));
-    const normalSlot = !concurrentSlot && profiles?.activeSlotId
+    const normalSlot = !concurrentSlot && isSv2NormalProcess(process) && profiles?.activeSlotId
       ? slots.find((slot) => slot.id === profiles?.activeSlotId)
       : undefined;
     const slot = concurrentSlot ?? normalSlot;
@@ -1154,7 +1171,14 @@ function renderSv2InstanceList(): string {
     const title = process.windowTitle?.trim() || process.name;
     return `<article class="synthv-process-row"><div><strong>${escapeHtml(title)}</strong><small>PID ${process.processId} · ${escapeHtml(mode)} · ${escapeHtml(slot?.displayName ?? "未关联账号")}</small></div><code>${escapeHtml(process.command)}</code></article>`;
   }).join("");
-  return `<section class="panel account-instances-panel"><div class="panel-heading"><div><h2>当前打开的 SynthV 实例</h2><p>按窗口标题和 PID 跟踪实例，并显示关联账号。</p></div><button class="secondary compact" data-refresh-synthv-processes>${icon("sync", 16)} 刷新</button></div><div class="synthv-process-list">${instances || '<div class="empty-inline compact-empty">当前没有检测到 SynthV 实例。</div>'}</div></section>`;
+  return instances || '<div class="empty-inline compact-empty">当前没有检测到 SynthV 实例。</div>';
+}
+
+function isSv2NormalProcess(process: SynthVProcess): boolean {
+  const text = `${process.name}\n${process.command}`.toLocaleLowerCase();
+  return (text.includes("synthesizer v studio") || text.includes("synthv-studio"))
+    && !text.includes("sv1")
+    && !text.includes("flat");
 }
 
 function supportsWindowsSv2Extensions(): boolean {
@@ -1230,7 +1254,7 @@ function renderAccountManager(): string {
   } else if (accountManagerSection === "global" && !supportsWindowsSv2Extensions()) {
     body = `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("shield", 24)}</span><div><h3>macOS 槽位范围</h3><p>当前版本只支持顺序切换数据槽位。账号登录预检、授权读取和并发隔离仍仅在 Windows 提供。</p></div></section>`;
   } else if (accountManagerSection === "global") {
-    body = `<form id="sv2-global-settings-form" class="isolation-defaults-form manager-defaults"><div><strong>全局设置</strong><small>默认只同步设置、脚本等白名单文件；声库按账号和隔离实例独立保存。</small></div><label class="fluent-switch"><input name="accountProbeEnabled" type="checkbox" ${app?.sv2AccountIndicatorEnabled ? "checked" : ""} /><span></span>启用账号登录指示器</label><label class="fluent-switch"><input name="concurrentEnabled" type="checkbox" ${app?.sv2ConcurrentEnabled ? "checked" : ""} /><span></span>启用隔离功能</label><button class="secondary" type="submit">保存全局设置</button></form>`;
+    body = `<form id="sv2-global-settings-form" class="isolation-defaults-form manager-defaults"><div><strong>全局设置</strong><small>默认只同步设置、脚本等白名单文件；声库按账号独立保存，同账号实例共用槽位数据。</small></div><label class="fluent-switch"><input name="accountProbeEnabled" type="checkbox" ${app?.sv2AccountIndicatorEnabled ? "checked" : ""} /><span></span>启用账号登录指示器</label><label class="fluent-switch"><input name="concurrentEnabled" type="checkbox" ${app?.sv2ConcurrentEnabled ? "checked" : ""} /><span></span>启用隔离功能</label><button class="secondary" type="submit">保存全局设置</button></form>`;
   } else {
     body = `<div class="account-add-grid">${profiles.canImportCurrent ? `<section><span class="feature-icon emerald">${icon("folder", 20)}</span><h3>导入当前环境</h3><p>把现有官方数据目录纳入槽位，不移动账号文件。</p><form id="profile-import-form" class="profile-create-form"><input id="profile-import-name" maxlength="64" required placeholder="例如 主账号" /><button class="primary">导入</button></form></section>` : ""}<section><span class="feature-icon blue">${icon("plus", 20)}</span><h3>创建空槽位</h3><p>首次启动后，在 SV2 官方登录页面完成登录。</p><form id="profile-create-form" class="profile-create-form"><input id="profile-create-name" maxlength="64" required placeholder="例如 制作账号" /><button class="secondary">创建</button></form></section></div><div class="manager-safety">${icon("check", 17)}<span><strong>账号数据保持原样</strong><small>工具箱不会伪造登录或绕过联网验证。</small></span></div>`;
   }
@@ -3151,7 +3175,7 @@ document.addEventListener("click", (event) => {
   }
   if (target.dataset.profileActivate) { void run(async () => { profiles = await api.activateSv2Profile(target.dataset.profileActivate ?? ""); notice = "默认账号槽位已切换。"; }); return; }
   if (target.dataset.profileFolder) { void run(async () => { setFeedback(await api.openSv2ProfileFolder(target.dataset.profileFolder ?? "")); }); return; }
-  if (target.dataset.profileConcurrentPrepare) { void run(async () => { profiles = await api.prepareSv2ConcurrentProfile(target.dataset.profileConcurrentPrepare ?? ""); notice = "隔离副本已准备，可以并发启动。"; }); return; }
+  if (target.dataset.profileConcurrentPrepare) { void run(async () => { profiles = await api.prepareSv2ConcurrentProfile(target.dataset.profileConcurrentPrepare ?? ""); notice = "隔离环境已准备，可以并发启动。"; }); return; }
   if (target.dataset.profileConcurrentLaunch) {
     const slotId = target.dataset.profileConcurrentLaunch;
     if (!app?.concurrentDisclaimerAccepted) {
