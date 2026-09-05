@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::{DateTime, Utc};
 
 pub use crate::config::AiAuthMethod;
-use crate::config::AiLoadStrategy;
+pub use crate::config::AiLoadStrategy;
 pub use crate::oauth::AiProviderId;
 
 const TRANSIENT_BASE_MS: i64 = 15_000;
@@ -133,7 +133,7 @@ impl CredentialBalancer {
         if route_strategy == AiLoadStrategy::WeightedRoundRobin {
             let mut weighted = eligible.iter().flat_map(|(key, candidate)| {
                 let weight = self.routes.get(key).map(|route| route.weight.clamp(1, 100)).unwrap_or(1);
-                std::iter::repeat(candidate.clone()).take(usize::from(weight))
+                vec![candidate.clone(); usize::from(weight)]
             }).collect::<Vec<_>>();
             let cursor_key = format!("{}\u{0000}{model}", provider.as_str());
             let start = self.cursors.get(&cursor_key).copied().unwrap_or_default() % weighted.len();

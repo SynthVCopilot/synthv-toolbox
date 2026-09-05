@@ -11,7 +11,7 @@ const [packageJson, api, main, types, commands, lib] = await Promise.all([
   readFile(new URL("src/PiDesktop.Tauri/src-tauri/src/lib.rs", root), "utf8"),
 ]);
 
-assert.match(packageJson, /lsy-404\/model-auth\/releases\/download\/v0\.2\.0\/model-auth-vue-0\.2\.0\.tgz/);
+assert.match(packageJson, /lsy-404\/model-auth\/releases\/download\/v0\.2\.1\/model-auth-vue-0\.2\.1\.tgz/);
 assert.match(main, /registerModelAuthElement\(\)/);
 assert.match(main, /<model-auth-dialog>/);
 assert.match(main, /oauthCredentials/);
