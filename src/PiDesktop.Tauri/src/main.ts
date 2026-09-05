@@ -1123,8 +1123,10 @@ function renderSv2InstanceList(): string {
 function renderSv2InstanceRows(): string {
   const instances = synthvProcesses.map((process) => {
     const { slot, mode } = instanceAccount(process, profiles);
-    const title = process.windowTitle?.trim() || process.name;
-    return `<article class="synthv-process-row"><div><strong>${escapeHtml(title)}</strong><small>PID ${process.processId} · ${escapeHtml(mode)} · ${escapeHtml(slot?.displayName ?? "未关联账号")}</small></div><code>${escapeHtml(process.command)}</code></article>`;
+    const title = process.windowTitle?.trim() || "未命名工程";
+    const product = [process.productName || process.name, process.version].filter(Boolean).join(" ");
+    const identity = process.processIdentity || "";
+    return `<article class="synthv-process-row"><div><strong>${escapeHtml(`${product} · ${slot?.displayName ?? "未关联账号"} · ${title}`)}</strong><small>PID ${process.processId} · ${escapeHtml(mode)}</small></div><div class="button-row"><button class="secondary compact" data-focus-sv2="${process.processId}" data-process-identity="${escapeHtml(identity)}">切换到</button><button class="danger compact" data-terminate-sv2="${process.processId}" data-process-identity="${escapeHtml(identity)}">终止</button></div><details><summary>详情</summary><small>PID ${process.processId}</small><code>${escapeHtml(process.command)}</code></details></article>`;
   }).join("");
   return instances || '<div class="empty-inline compact-empty">当前没有检测到 SynthV 实例。</div>';
 }
@@ -2839,6 +2841,20 @@ document.addEventListener("click", (event) => {
       [synthvProcesses, synthvShortcutProfile, profiles] = await Promise.all([api.listSynthvProcesses(), api.synthvShortcutProfile(), api.sv2ProfileState()]);
       notice = synthvProcesses.length ? `发现 ${synthvProcesses.length} 个运行中的 SynthV 进程。` : "没有发现运行中的 SynthV 进程。";
     });
+    return;
+  }
+  if (target.dataset.focusSv2) {
+    const processId = Number(target.dataset.focusSv2);
+    const identity = target.dataset.processIdentity || "";
+    if (Number.isInteger(processId) && identity) void run(async () => setFeedback(await api.focusSv2Instance(processId, identity)));
+    return;
+  }
+  if (target.dataset.terminateSv2) {
+    const processId = Number(target.dataset.terminateSv2);
+    const identity = target.dataset.processIdentity || "";
+    if (Number.isInteger(processId) && identity && confirm("终止前请确认工程已保存。未保存的改动将丢失。是否终止此实例？")) {
+      void run(async () => { setFeedback(await api.terminateSv2Instance(processId, identity)); synthvProcesses = await api.listSynthvProcesses(); });
+    }
     return;
   }
   if (target.dataset.autoConnectSynthv) {

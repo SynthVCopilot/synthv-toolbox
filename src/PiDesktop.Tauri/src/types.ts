@@ -461,6 +461,9 @@ export interface AudioCaptureTarget {
 
 export interface SynthVProcess {
   processId: number;
+  processIdentity?: string;
+  productName?: string;
+  version?: string;
   name: string;
   command: string;
   windowTitle?: string;
