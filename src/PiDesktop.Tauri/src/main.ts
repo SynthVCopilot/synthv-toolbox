@@ -574,13 +574,12 @@ function renderAccountIndicatorConsent(): string {
     <section class="fluent-dialog account-indicator-consent" role="alertdialog" aria-modal="true" aria-labelledby="account-indicator-consent-title">
       <span class="dialog-icon route">${icon("shield", 24)}</span>
       <div><span class="eyebrow">SV2 ACCOUNT LOGIN INDICATOR</span><h2 id="account-indicator-consent-title">开启账号登录指示器？</h2></div>
-      <p>此功能不会启动 Synthesizer V，但它不是纯本地、纯只读检查。确认开启会完成本次进入页面的首次预检；以后只会在你重新进入「SV2 账号」页面或手动刷新时执行下列操作：</p>
+      <p>开启后可在你进入「SV2 账号」页面或手动刷新时查询账号授权状态。</p>
       <ul>
-        <li>每个账号槽位只保存一份本地 <code>license/session</code>；普通与并发实例共用槽位文件。账号设置只读显示官方姓名和邮箱，并可保存本地备注。</li>
-        <li>运行中的普通或并发实例只使用现有 access JWT 读取授权；实例闲置后才会刷新并写回槽位 session。声库按账号独立保存，从不跨账号同步；默认同步仅包含设置、脚本等白名单文件。</li>
-        <li>每个账号只执行一轮官方 <code>enroll_device</code> 启动等价检查，以确认实际启动是否会被登录冲突拒绝；所有请求固定使用 <code>kickout_other_sessions=false</code>。</li>
+        <li>查询会读取官方授权；如果会话过期，工具箱会续期并保存更新后的会话。</li>
+        <li>账号设置只读显示官方姓名和邮箱，并可保存本地备注。声库按账号独立保存，不跨账号同步。</li>
       </ul>
-      <p class="dialog-choice-note">这不是 dry-run：官方服务会收到真实登录事件。工具箱只报告冲突，绝不会代你踢出其他会话，也不会启动客户端。你可以随时关闭此功能。</p>
+      <p class="dialog-choice-note">工具箱不会启动客户端、修改 SV2 或替你处理其他会话。你可以随时关闭此功能。</p>
       <div class="dialog-actions"><button class="secondary" data-cancel-account-indicator>取消</button><button class="primary" data-confirm-account-indicator>${icon("check", 16)} 同意并开启</button></div>
     </section>
   </div>`;
@@ -686,7 +685,7 @@ function renderSvpRouteCandidate(candidate: SvpRouteCandidate, plan: SvpRoutePla
   const sessionLabel = candidate.remoteUse === "detected"
     ? "账号服务报告正在使用"
     : candidate.remoteUse === "clear" && candidate.sessionStatus === "ready"
-      ? "官方服务已接受无踢出登录事件"
+      ? "账号服务未报告远端占用"
       : candidate.sessionStatus === "inUse"
         ? "缓存会话正由本机使用"
         : `${accountProbeSessionLabel(candidate.sessionStatus)} · 占用未知`;
@@ -746,7 +745,7 @@ const accountProbeIssueRules: Array<[
   ["accountMismatch", {
     cardLabel: "账号副本不一致",
     authorizationLabel: "账号主体不一致，未读取该槽位授权",
-    title: "账号槽位读取到的 JWT 账号主体不一致；工具箱没有覆盖账号缓存。",
+    title: "账号槽位读取到的账号主体不一致；工具箱没有覆盖账号缓存。",
     attention: true,
   }],
   ["inUse", {
@@ -1156,12 +1155,12 @@ function renderAuthorizedVoice(voice: string): string {
   return `<span class="authorized-voice">${cover}<span>${escapeHtml(voice)}${vendor}</span></span>`;
 }
 
-function loadSv2VoiceCatalog(): void {
-  if (sv2VoiceCatalog || sv2VoiceCatalogLoading) return;
+function loadSv2VoiceCatalog(force = false): void {
+  if (sv2VoiceCatalogLoading || (!force && sv2VoiceCatalog)) return;
   sv2VoiceCatalogLoading = true;
   void api.sv2VoiceCatalog()
     .then((catalog) => { sv2VoiceCatalog = catalog; })
-    .catch(() => { sv2VoiceCatalog = []; })
+    .catch(() => undefined)
     .finally(() => { sv2VoiceCatalogLoading = false; render(); });
 }
 
@@ -1208,7 +1207,7 @@ function renderAccountManager(): string {
   } else if (accountManagerSection === "global") {
     body = `<form id="sv2-global-settings-form" class="isolation-defaults-form manager-defaults"><div><strong>全局设置</strong><small>默认只同步设置、脚本等白名单文件；声库按账号独立保存，同账号实例共用槽位数据。</small></div><label class="fluent-switch"><input name="accountProbeEnabled" type="checkbox" ${app?.sv2AccountIndicatorEnabled ? "checked" : ""} /><span></span>启用账号登录指示器</label><label class="fluent-switch"><input name="concurrentEnabled" type="checkbox" ${app?.sv2ConcurrentEnabled ? "checked" : ""} /><span></span>启用隔离功能</label><button class="secondary" type="submit">保存全局设置</button></form>`;
   } else {
-    body = `<div class="account-add-grid">${profiles.canImportCurrent ? `<section><span class="feature-icon emerald">${icon("folder", 20)}</span><h3>导入当前环境</h3><p>把现有官方数据目录纳入槽位，不移动账号文件。</p><form id="profile-import-form" class="profile-create-form"><input id="profile-import-name" maxlength="64" required placeholder="备注（可留空）" /><button class="primary">导入</button></form></section>` : ""}<section><span class="feature-icon blue">${icon("plus", 20)}</span><h3>创建空槽位</h3><p>首次启动后，在 SV2 官方登录页面完成登录。</p><form id="profile-create-form" class="profile-create-form"><input id="profile-create-name" maxlength="64" required placeholder="备注（可留空）" /><button class="secondary">创建</button></form></section></div><div class="manager-safety">${icon("check", 17)}<span><strong>账号数据保持原样</strong><small>工具箱不会伪造登录或绕过联网验证。</small></span></div>`;
+    body = `<div class="account-add-grid">${profiles.canImportCurrent ? `<section><span class="feature-icon emerald">${icon("folder", 20)}</span><h3>导入当前环境</h3><p>把现有官方数据目录纳入槽位，不移动账号文件。</p><form id="profile-import-form" class="profile-create-form"><input id="profile-import-name" maxlength="64" placeholder="备注（可留空）" /><button class="primary">导入</button></form></section>` : ""}<section><span class="feature-icon blue">${icon("plus", 20)}</span><h3>创建空槽位</h3><p>首次启动后，在 SV2 官方登录页面完成登录。</p><form id="profile-create-form" class="profile-create-form"><input id="profile-create-name" maxlength="64" placeholder="备注（可留空）" /><button class="secondary">创建</button></form></section></div><div class="manager-safety">${icon("check", 17)}<span><strong>账号数据保持原样</strong><small>工具箱不会伪造登录或绕过联网验证。</small></span></div>`;
   }
   const tabs = "";
   return `<div class="dialog-backdrop account-manager-backdrop" role="presentation"><section class="account-manager-dialog" role="dialog" aria-modal="true" aria-labelledby="account-manager-title"><header><div><span class="eyebrow">SV2 ACCOUNT MANAGER</span><h2 id="account-manager-title">${accountManagerSection === "profile" ? "账号设置" : "账号管理"}</h2></div><button class="icon-plain" data-close-account-manager title="关闭" aria-label="关闭账号管理">×</button></header>${tabs}<div class="account-manager-body">${body}</div></section></div>`;
@@ -2236,7 +2235,7 @@ function wireForms(): void {
       profiles = await api.importCurrentSv2Profile(displayName);
       const prepared = await prepareConcurrentSlotsWhenEnabled();
       await refreshAccountUsage();
-      notice = `已导入“${displayName}”。${prepared ? "已自动准备隔离数据。" : ""}`;
+      notice = `已导入账号槽位。${prepared ? "已自动准备隔离数据。" : ""}`;
     });
   });
   document.querySelector<HTMLFormElement>("#profile-create-form")?.addEventListener("submit", (event) => {
@@ -2246,15 +2245,15 @@ function wireForms(): void {
       profiles = await api.createSv2Profile(displayName);
       const prepared = await prepareConcurrentSlotsWhenEnabled();
       await refreshAccountUsage();
-      notice = `已创建“${displayName}”。${prepared ? "已自动准备隔离数据。" : ""}`;
+      notice = `已创建账号槽位。${prepared ? "已自动准备隔离数据。" : ""}`;
     });
   });
   document.querySelectorAll<HTMLFormElement>("[data-profile-rename-form]").forEach((form) => form.addEventListener("submit", (event) => {
     event.preventDefault();
     const slotId = form.dataset.profileRenameForm ?? "";
     const displayName = form.querySelector<HTMLInputElement>("input")?.value.trim() ?? "";
-    if (!slotId || !displayName) return;
-    void run(async () => { profiles = await api.renameSv2Profile(slotId, displayName); notice = "备注已保存。"; });
+    if (!slotId) return;
+    void run(async () => { profiles = await api.renameSv2Profile(slotId, displayName); notice = displayName ? "备注已保存。" : "备注已清除。"; });
   }));
   document.querySelectorAll<HTMLFormElement>("[data-profile-voice-form]").forEach((form) => form.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -2597,7 +2596,7 @@ document.addEventListener("click", (event) => {
       }
       app = await api.setSv2AccountIndicator(true, true);
       if (consent.refreshAfterEnable) await refreshAccountUsage(consent.refreshSlotId);
-      notice = "账号登录指示器已开启，access JWT 已按需自动续期并完成首次预检。";
+      notice = "账号登录指示器已开启，并已完成首次授权查询。";
     });
     return;
   }
@@ -2654,7 +2653,7 @@ document.addEventListener("click", (event) => {
     managedProfileSlotId = target.dataset.manageSlot;
     accountManagerSection = "profile";
     accountManagerOpen = true;
-    loadSv2VoiceCatalog();
+    loadSv2VoiceCatalog(true);
     render();
     return;
   }
@@ -2899,6 +2898,7 @@ document.addEventListener("click", (event) => {
     } else {
       void run(async () => {
         await refreshAccountUsage();
+        loadSv2VoiceCatalog(true);
         notice = "账号槽位与授权状态已刷新。";
       });
     }
@@ -2912,6 +2912,7 @@ document.addEventListener("click", (event) => {
     } else {
       void run(async () => {
         await refreshAccountUsage(slotId);
+        loadSv2VoiceCatalog(true);
         const slot = profiles?.slots.find((item) => item.id === slotId);
         const probe = slot?.accountProbe;
         if (probe && ["syncFailed", "offline", "expired", "invalid", "unsupported", "accountMismatch"].includes(probe.sessionStatus)) {
