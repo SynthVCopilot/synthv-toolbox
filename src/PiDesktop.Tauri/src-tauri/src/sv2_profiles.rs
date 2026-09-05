@@ -33,6 +33,7 @@ use crate::svp_launch_router::{
 use crate::synthv::{find_sv2_executable, succeeded, OperationResult};
 
 const SCHEMA_VERSION: u32 = 1;
+const DEFAULTS_SYNC_FILE: &str = ".synthv-toolbox-defaults-synced";
 const MARKER_FILE: &str = ".synthv-toolbox-slot.json";
 const MANIFEST_FILE: &str = "manifest.json";
 const JOURNAL_FILE: &str = "switch.journal.json";
@@ -195,6 +196,15 @@ struct SlotPaths {
     lock: PathBuf,
 }
 
+#[cfg(windows)]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyConcurrentMarker {
+    schema_version: u32,
+    slot_id: String,
+    box_name: String,
+}
+
 impl SlotPaths {
     fn from_environment() -> Result<Self, String> {
         #[cfg(windows)]
@@ -306,7 +316,10 @@ impl Sv2ProfileService {
         let recovery = recover_if_needed(paths);
         let (manifest, recovery_required, recovery_detail) = match recovery {
             Ok(()) => match load_manifest(paths) {
-                Ok(manifest) => (manifest, false, String::new()),
+                Ok(manifest) => match converge_legacy_sandboxes(paths, &manifest) {
+                    Ok(()) => (manifest, false, String::new()),
+                    Err(detail) => (manifest, true, detail),
+                },
                 Err(detail) => (SlotManifest::default(), true, detail),
             },
             Err(detail) => (load_manifest(paths).unwrap_or_default(), true, detail),
@@ -350,6 +363,7 @@ impl Sv2ProfileService {
         let _file_lock = acquire_switch_lock(paths)?;
         recover_if_needed(paths)?;
         let manifest = load_manifest(paths)?;
+        converge_legacy_sandboxes(paths, &manifest)?;
         if refresh_slot_id
             .is_some_and(|slot_id| !manifest.slots.iter().any(|slot| slot.id == slot_id))
         {
@@ -815,10 +829,21 @@ impl Sv2ProfileService {
             reject_blockers(paths)?;
         }
         let mut manifest = load_manifest(paths)?;
+        converge_legacy_sandboxes(paths, &manifest)?;
+        let provider = detect_concurrent_provider().ok();
+        let concurrent_running = provider.as_ref().is_some_and(|provider| {
+            slot_running_pids(provider, &paths.vault, &slot_id)
+                .map(|pids| !pids.is_empty())
+                .unwrap_or(true)
+        });
+        sync_defaults_before_launch(paths, &manifest, &slot_id, concurrent_running)?;
         switch_slot(paths, &mut manifest, &slot_id)?;
         let data_root = slot_data_root(paths, &manifest, &slot_id);
-        let session_preparation =
-            Sv2SessionGuardStore::new(&paths.metadata).prepare_launch(&slot_id, &data_root)?;
+        let session_preparation = if concurrent_running {
+            SessionLaunchPreparation::default()
+        } else {
+            Sv2SessionGuardStore::new(&paths.metadata).prepare_launch(&slot_id, &data_root)?
+        };
 
         // Keep both locks until the child process inherits the selected data root.
         let mut command = Command::new(&executable);
@@ -893,6 +918,7 @@ impl Sv2ProfileService {
         let _file_lock = acquire_switch_lock(paths)?;
         recover_if_needed(paths)?;
         let manifest = load_manifest(paths)?;
+        converge_legacy_sandboxes(paths, &manifest)?;
         let slot = manifest
             .slots
             .iter()
@@ -935,6 +961,7 @@ impl Sv2ProfileService {
         let _file_lock = acquire_switch_lock(paths)?;
         recover_if_needed(paths)?;
         let manifest = load_manifest(paths)?;
+        converge_legacy_sandboxes(paths, &manifest)?;
         let slot = manifest
             .slots
             .iter()
@@ -947,6 +974,7 @@ impl Sv2ProfileService {
         let data_root = slot_data_root(paths, &manifest, &slot_id);
         verify_marker(&data_root, &slot_id)?;
         let already_running = !slot_running_pids(&provider, &paths.vault, &slot_id)?.is_empty();
+        sync_defaults_before_launch(paths, &manifest, &slot_id, already_running)?;
         let session_preparation = if already_running {
             SessionLaunchPreparation::default()
         } else {
@@ -1037,6 +1065,28 @@ fn resolve_sync_roots(
     verify_marker(&source, source_slot_id)?;
     verify_marker(&target, target_slot_id)?;
     Ok((source, target))
+}
+
+fn sync_defaults_before_launch(
+    paths: &SlotPaths,
+    manifest: &SlotManifest,
+    target_slot_id: &str,
+    target_running: bool,
+) -> Result<(), String> {
+    if target_running || manifest.active_slot_id.as_deref() == Some(target_slot_id) {
+        return Ok(());
+    }
+    let Some(primary) = manifest.active_slot_id.as_deref() else {
+        return Ok(());
+    };
+    let target = slot_data_root(paths, manifest, target_slot_id);
+    if target.join(DEFAULTS_SYNC_FILE).exists() {
+        return Ok(());
+    }
+    let source = slot_data_root(paths, manifest, primary);
+    sv2_sync::sync_defaults(&source, &target)?;
+    fs::write(target.join(DEFAULTS_SYNC_FILE), b"1")
+        .map_err(|error| format!("无法记录默认设置同步：{error}"))
 }
 
 fn slot_data_root(paths: &SlotPaths, manifest: &SlotManifest, slot_id: &str) -> PathBuf {
@@ -2004,6 +2054,109 @@ fn acquire_switch_lock(paths: &SlotPaths) -> Result<File, String> {
         .write(true)
         .open(&paths.lock)
         .map_err(|error| format!("无法获取 SV2 槽位锁：{error}"))
+}
+
+#[cfg(windows)]
+fn converge_legacy_sandboxes(paths: &SlotPaths, manifest: &SlotManifest) -> Result<(), String> {
+    if !detect_blockers(paths).is_empty() {
+        return Ok(());
+    }
+    for slot in &manifest.slots {
+        let destination = paths.parked(&slot.id);
+        if destination.exists() {
+            detach_shared_database(&destination, &paths.shared_databases)?;
+        }
+        let compact = Uuid::parse_str(&slot.id)
+            .map_err(|_| "槽位 ID 无效。".to_string())?
+            .simple()
+            .to_string();
+        let short = paths.vault.join("c").join(&compact[..16]);
+        let long = paths.vault.join("concurrent").join(&slot.id).join("box");
+        let candidates = [short, long]
+            .into_iter()
+            .filter(|root| root.exists())
+            .map(|root| legacy_sandbox_data(&root, &slot.id, &compact))
+            .collect::<Result<Vec<_>, _>>()?;
+        if candidates.len() > 1 {
+            return Err(format!(
+                "槽位“{}”发现两个旧隔离副本，无法确认权威数据。",
+                slot.display_name
+            ));
+        }
+        let Some(source) = candidates.into_iter().next() else {
+            continue;
+        };
+        let mut retired = None;
+        if destination.exists() {
+            let normal_database = destination.join("databases");
+            let sandbox_database = source.join("databases");
+            if normal_database.is_dir() && !sandbox_database.exists() {
+                fs::rename(&normal_database, &sandbox_database)
+                    .map_err(|error| format!("无法保留旧账号声库：{error}"))?;
+            }
+            if directory_has_user_data(&destination)? {
+                let archive = paths.vault.join("retired").join(&slot.id);
+                if archive.exists() {
+                    return Err(format!(
+                        "槽位“{}”已有待核对的旧数据归档。",
+                        slot.display_name
+                    ));
+                }
+                fs::create_dir_all(archive.parent().unwrap())
+                    .map_err(|error| format!("无法创建旧数据归档目录：{error}"))?;
+                fs::rename(&destination, &archive)
+                    .map_err(|error| format!("无法归档冲突的旧账号数据：{error}"))?;
+                retired = Some(archive);
+            } else {
+                remove_owned_directory(&destination, "空旧账号槽位")?;
+            }
+        }
+        fs::create_dir_all(&paths.slots).map_err(|error| format!("无法创建槽位目录：{error}"))?;
+        if let Err(error) = fs::rename(&source, &destination) {
+            if let Some(archive) = retired {
+                let _ = fs::rename(archive, &destination);
+            }
+            return Err(format!("无法收敛旧隔离副本：{error}"));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn legacy_sandbox_data(root: &Path, slot_id: &str, compact: &str) -> Result<PathBuf, String> {
+    reject_reparse_point(root)?;
+    let marker = root.join(".synthv-toolbox-concurrent.json");
+    let text =
+        fs::read_to_string(&marker).map_err(|error| format!("无法读取旧隔离副本标记：{error}"))?;
+    let marker: LegacyConcurrentMarker =
+        serde_json::from_str(&text).map_err(|error| format!("旧隔离副本标记无效：{error}"))?;
+    let expected_name = format!("SV2TB{}", &compact[..24]);
+    if marker.schema_version != 1 || marker.slot_id != slot_id || marker.box_name != expected_name {
+        return Err("旧隔离副本标记与账号槽位不匹配。".to_string());
+    }
+    let data = root.join("user/current/AppData/Roaming/Dreamtonics/Synthesizer V Studio 2");
+    reject_reparse_point(&data)?;
+    if !data.is_dir() {
+        return Err("旧隔离副本缺少 SV2 数据目录。".to_string());
+    }
+    Ok(data)
+}
+
+#[cfg(windows)]
+fn directory_has_user_data(path: &Path) -> Result<bool, String> {
+    for entry in fs::read_dir(path).map_err(|error| format!("无法读取旧账号槽位：{error}"))?
+    {
+        let entry = entry.map_err(|error| format!("无法读取旧账号槽位：{error}"))?;
+        if entry.file_name() != MARKER_FILE {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(not(windows))]
+fn converge_legacy_sandboxes(_paths: &SlotPaths, _manifest: &SlotManifest) -> Result<(), String> {
+    Ok(())
 }
 
 fn validate_managed_roots(paths: &SlotPaths) -> Result<(), String> {
