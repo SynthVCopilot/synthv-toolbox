@@ -41,6 +41,30 @@ fn report(slot: &Path, nonce: &str) -> Report {
     panic!("helper did not produce a fixture report");
 }
 
+fn cleanup_box(sbie_ini: &Path, root: &Path, slot: &str) {
+    let marker: serde_json::Value = serde_json::from_slice(&fs::read(root.join(".synthv-toolbox-instance.json")).unwrap()).unwrap();
+    let instance = marker["instanceId"].as_str().unwrap();
+    let slot_compact = Uuid::parse_str(slot).unwrap().simple().to_string();
+    let instance_compact = Uuid::parse_str(instance).unwrap().simple().to_string();
+    let name = format!("SV2TB{}{}", &slot_compact[..12], &instance_compact[..12]);
+    let expected = root.canonicalize().unwrap();
+    let output = std::process::Command::new(sbie_ini).args(["queryex", &name, "FileRootPath"]).output().unwrap();
+    assert!(output.status.success());
+    let output_text = String::from_utf8_lossy(&output.stdout);
+    let actual = output_text.lines().last().unwrap_or_default().trim().trim_start_matches("FileRootPath=").trim_start_matches(r"\??\");
+    assert_eq!(PathBuf::from(actual).canonicalize().unwrap(), expected);
+    let status = std::process::Command::new(sbie_ini).args(["set", &name, "*", ""]).status().unwrap();
+    assert!(status.success());
+}
+
+fn sbie_ini() -> PathBuf {
+    for name in ["Sandboxie", "Sandboxie-Plus"] {
+        let path = PathBuf::from(std::env::var_os("ProgramFiles").unwrap()).join(name).join("SbieIni.exe");
+        if path.is_file() { return path; }
+    }
+    panic!("Sandboxie SbieIni.exe was not found")
+}
+
 #[test]
 #[ignore = "requires a local Sandboxie installation; run explicitly"]
 fn sandboxie_routes_each_helper_to_its_own_slot() {
@@ -72,8 +96,8 @@ fn sandboxie_routes_each_helper_to_its_own_slot() {
     assert!(first_pids.iter().all(|pid| !second_pids.contains(pid)));
     let first_overlay = vault.join("instances").join(Uuid::parse_str(&first).unwrap().simple().to_string()[..16].to_string());
     let second_overlay = vault.join("instances").join(Uuid::parse_str(&second).unwrap().simple().to_string()[..16].to_string());
-    let first_instance = fs::read_dir(first_overlay).unwrap().next().unwrap().unwrap().path();
-    let second_instance = fs::read_dir(second_overlay).unwrap().next().unwrap().unwrap().path();
+    let first_instance = fs::read_dir(&first_overlay).unwrap().next().unwrap().unwrap().path();
+    let second_instance = fs::read_dir(&second_overlay).unwrap().next().unwrap().unwrap().path();
     assert_eq!(overlay(&first_instance).canonicalize().unwrap(), slot_root(&vault, &first).canonicalize().unwrap());
     assert_eq!(overlay(&second_instance).canonicalize().unwrap(), slot_root(&vault, &second).canonicalize().unwrap());
     for nonce in ["first-a", "first-b", "second"] {
@@ -95,5 +119,11 @@ fn sandboxie_routes_each_helper_to_its_own_slot() {
     }
     assert!(slot_running_pids(&provider, &vault, &first).unwrap().is_empty());
     assert!(slot_running_pids(&provider, &vault, &second).unwrap().is_empty());
+    let sbie_ini = sbie_ini();
+    for entry in fs::read_dir(&first_overlay).unwrap().chain(fs::read_dir(&second_overlay).unwrap()) {
+        let instance = entry.unwrap().path();
+        let slot = if instance.starts_with(&first_overlay) { &first } else { &second };
+        cleanup_box(&sbie_ini, &instance, slot);
+    }
     let _ = fs::remove_dir_all(root);
 }
