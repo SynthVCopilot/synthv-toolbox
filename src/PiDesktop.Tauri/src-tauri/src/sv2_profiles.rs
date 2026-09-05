@@ -33,7 +33,6 @@ use crate::svp_launch_router::{
 use crate::synthv::{find_sv2_executable, succeeded, OperationResult};
 
 const SCHEMA_VERSION: u32 = 1;
-const DEFAULTS_SYNC_FILE: &str = ".synthv-toolbox-defaults-synced";
 const MARKER_FILE: &str = ".synthv-toolbox-slot.json";
 const MANIFEST_FILE: &str = "manifest.json";
 const JOURNAL_FILE: &str = "switch.journal.json";
@@ -650,7 +649,7 @@ impl Sv2ProfileService {
             slot.concurrent_content
                 .resolve(manifest.concurrent_defaults),
         );
-        if !concurrent.running_pids.is_empty() {
+        if !concurrent.ready || !concurrent.running_pids.is_empty() {
             return Err("请先关闭该账号的隔离 SV2 实例，再删除账号。".to_string());
         }
 
@@ -1080,13 +1079,8 @@ fn sync_defaults_before_launch(
         return Ok(());
     };
     let target = slot_data_root(paths, manifest, target_slot_id);
-    if target.join(DEFAULTS_SYNC_FILE).exists() {
-        return Ok(());
-    }
     let source = slot_data_root(paths, manifest, primary);
-    sv2_sync::sync_defaults(&source, &target)?;
-    fs::write(target.join(DEFAULTS_SYNC_FILE), b"1")
-        .map_err(|error| format!("无法记录默认设置同步：{error}"))
+    sv2_sync::sync_defaults(&source, &target).map(|_| ())
 }
 
 fn slot_data_root(paths: &SlotPaths, manifest: &SlotManifest, slot_id: &str) -> PathBuf {
@@ -1749,6 +1743,15 @@ fn recover_if_needed(paths: &SlotPaths) -> Result<(), String> {
     validate_slot_id(&journal.target_slot_id)?;
     let target = paths.parked(&journal.target_slot_id);
     verify_marker(&target, &journal.target_slot_id)?;
+    if journal.phase == SwitchPhase::Prepared {
+        if let Some(current) = journal.current_slot_id.as_deref() {
+            if paths.canonical.exists() {
+                verify_marker(&paths.canonical, current)?;
+                remove_journal(paths)?;
+                return Ok(());
+            }
+        }
+    }
     if paths.canonical.exists() {
         let metadata = fs::symlink_metadata(&paths.canonical)
             .map_err(|error| format!("无法检查官方数据目录：{error}"))?;
@@ -2061,6 +2064,29 @@ fn converge_legacy_sandboxes(paths: &SlotPaths, manifest: &SlotManifest) -> Resu
     if !detect_blockers(paths).is_empty() {
         return Ok(());
     }
+    if let Some(active) = manifest.active_slot_id.as_deref() {
+        let destination = paths.parked(active);
+        if paths.canonical.exists() {
+            let metadata = fs::symlink_metadata(&paths.canonical)
+                .map_err(|error| format!("无法检查官方数据目录：{error}"))?;
+            if !is_reparse_metadata(&metadata) {
+                verify_marker(&paths.canonical, active)?;
+                if destination.exists() {
+                    return Err(
+                        "当前官方数据目录与固定槽位目录同时存在，无法确认权威数据。".to_string()
+                    );
+                }
+                fs::create_dir_all(&paths.slots)
+                    .map_err(|error| format!("无法创建槽位目录：{error}"))?;
+                fs::rename(&paths.canonical, &destination)
+                    .map_err(|error| format!("无法收敛当前官方数据目录：{error}"))?;
+                if let Err(error) = create_canonical_junction(paths, active) {
+                    let _ = fs::rename(&destination, &paths.canonical);
+                    return Err(error);
+                }
+            }
+        }
+    }
     for slot in &manifest.slots {
         let destination = paths.parked(&slot.id);
         if destination.exists() {
@@ -2075,7 +2101,7 @@ fn converge_legacy_sandboxes(paths: &SlotPaths, manifest: &SlotManifest) -> Resu
         let candidates = [short, long]
             .into_iter()
             .filter(|root| root.exists())
-            .map(|root| legacy_sandbox_data(&root, &slot.id, &compact))
+            .map(|root| legacy_sandbox_data(&root, &slot.id, &compact).map(|data| (root, data)))
             .collect::<Result<Vec<_>, _>>()?;
         if candidates.len() > 1 {
             return Err(format!(
@@ -2083,7 +2109,7 @@ fn converge_legacy_sandboxes(paths: &SlotPaths, manifest: &SlotManifest) -> Resu
                 slot.display_name
             ));
         }
-        let Some(source) = candidates.into_iter().next() else {
+        let Some((legacy_root, source)) = candidates.into_iter().next() else {
             continue;
         };
         let mut retired = None;
@@ -2118,6 +2144,8 @@ fn converge_legacy_sandboxes(paths: &SlotPaths, manifest: &SlotManifest) -> Resu
             }
             return Err(format!("无法收敛旧隔离副本：{error}"));
         }
+        fs::remove_file(legacy_root.join(".synthv-toolbox-concurrent.json"))
+            .map_err(|error| format!("无法完成旧隔离副本收敛：{error}"))?;
     }
     Ok(())
 }
