@@ -35,3 +35,7 @@ path = "sandboxie_smoke.rs"
 [[bin]]
 name = "sandboxie_smoke_helper"
 path = "sandboxie_smoke_helper.rs"
+
+[[bin]]
+name = "sv2-http-transport-diagnostic"
+path = "../sv2-http-transport/main.rs"
