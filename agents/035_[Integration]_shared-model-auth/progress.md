@@ -12,3 +12,5 @@
 - 已让 OAuth 回调轮询与 WorkBuddy 轮询接受 operation ID 取消；TRAE CLI 的登录、状态、退出和执行子进程现在设置应用拥有的 `TRAE_HOME`。
 - 已补充 Rust 回归测试：authorization registration 的 Drop 清理、TRAE 状态文本不会把 unauthenticated 误判为已登录、取消登录会在 CLI 发现前退出。
 - 已将 TRAE 的账号默认模型输出标为 `account-default-readonly`，使其不被表述为 models.dev 目录元数据；后端仅接受该唯一默认模型。
+- 已升级正式发布的 v0.2.1，合并远端并发更新并重新运行前端、Rust 全 targets 测试与严格 Clippy。
+- 首次跨平台构建仅在 Rust 格式检查失败；运行格式化并通过本地格式检查后提交 `22bc1a6`。后续 Dev Build `33959264673` 的 Windows x64 与 macOS Universal 均成功，已确认两个未过期的开发产物。
