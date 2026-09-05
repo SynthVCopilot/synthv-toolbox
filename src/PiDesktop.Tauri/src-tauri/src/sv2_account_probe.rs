@@ -486,22 +486,52 @@ fn refresh_active_session_license(
     let refreshed = match refresh_session_credentials(agent, credentials) {
         Ok(value) if account_group_key(value.access_token()) == original_account => value,
         Ok(_) => {
-            return Sv2AccountProbeView::sync_failed(
-                "刷新后的账号主体与当前会话不一致；未写入本地 session。",
+            return record_active_refresh_failure(
+                root,
+                fingerprint,
+                credentials,
+                Sv2AccountProbeView::sync_failed(
+                    "刷新后的账号主体与当前会话不一致；未写入本地 session。",
+                ),
             )
         }
-        Err(failure) => return refresh_failure_view(failure),
+        Err(failure) => {
+            return record_active_refresh_failure(
+                root,
+                fingerprint,
+                credentials,
+                refresh_failure_view(failure),
+            )
+        }
     };
     let fingerprint = match persist_refreshed_session(data_root, fingerprint, &refreshed, key) {
         Ok(value) => value,
         Err(()) => {
-            return Sv2AccountProbeView::sync_failed("刷新凭据无法安全写回；未继续读取授权。")
+            return record_active_refresh_failure(
+                root,
+                fingerprint,
+                credentials,
+                Sv2AccountProbeView::sync_failed("刷新凭据无法安全写回；未继续读取授权。"),
+            )
         }
     };
     read_only_authorization(data_root, root, &fingerprint, &refreshed, true, |access| {
         query_license_snapshot_with_agent(agent, access)
     })
     .unwrap_or_else(Sv2AccountProbeView::in_use)
+}
+
+#[cfg(windows)]
+fn record_active_refresh_failure(
+    root: &ProbeRootKey,
+    fingerprint: &SessionCacheKey,
+    credentials: &SessionCredentials,
+    view: Sv2AccountProbeView,
+) -> Sv2AccountProbeView {
+    let view = view.with_account_identity(credentials.access_token());
+    set_sync_quarantine(&root.quarantine_key(), &view);
+    cache_put(fingerprint.clone(), root, &view, None);
+    view
 }
 
 #[cfg(windows)]
@@ -2158,6 +2188,7 @@ fn finish_batch_results(
                 Sv2SessionInspectionStatus::Missing
                     | Sv2SessionInspectionStatus::InUse
                     | Sv2SessionInspectionStatus::AccountMismatch
+                    | Sv2SessionInspectionStatus::SyncFailed
             )
         ) {
             continue;
