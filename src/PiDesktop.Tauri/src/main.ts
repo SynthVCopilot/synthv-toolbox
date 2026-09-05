@@ -2,6 +2,7 @@ import "./styles.css";
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./api";
+import { instanceAccount } from "./sv2Instances";
 import { icon } from "./icons";
 import { featureCatalog, toolGroups, type FeatureCatalogItem, type ToolGroup } from "./featureCatalog";
 import { mountShell, type ShellController } from "./vue/shell";
@@ -427,7 +428,7 @@ async function refreshAccountUsage(slotId?: string): Promise<void> {
 }
 
 async function refreshVisibleSynthvInstances(): Promise<void> {
-  if (busy || instanceRefreshInFlight || (page !== "accounts" && page !== "bridge")) return;
+  if (busy || document.hidden || instanceRefreshInFlight || (page !== "accounts" && page !== "bridge")) return;
   const refreshPage = page;
   const generation = instanceRefreshGeneration;
   instanceRefreshInFlight = true;
@@ -436,14 +437,16 @@ async function refreshVisibleSynthvInstances(): Promise<void> {
       api.listSynthvProcesses(),
       page === "accounts" ? api.sv2ProfileState() : Promise.resolve(profiles),
     ]);
-    if (page !== refreshPage || generation !== instanceRefreshGeneration) return;
-    const changed = JSON.stringify(synthvProcesses) !== JSON.stringify(nextProcesses);
+    if (busy || page !== refreshPage || generation !== instanceRefreshGeneration) return;
+    const previousRows = refreshPage === "accounts" ? renderSv2InstanceRows() : renderBridgeProcessRows();
     synthvProcesses = nextProcesses;
     if (nextProfiles) profiles = nextProfiles;
-    if (!changed) return;
-    const list = document.querySelector<HTMLElement>(".account-instances-panel .synthv-process-list");
-    if (list && refreshPage === "accounts") list.innerHTML = renderSv2InstanceRows();
-    else if (refreshPage === "bridge") render();
+    const nextRows = refreshPage === "accounts" ? renderSv2InstanceRows() : renderBridgeProcessRows();
+    if (previousRows !== nextRows) {
+      const list = document.querySelector<HTMLElement>(refreshPage === "accounts"
+        ? ".account-instances-panel .synthv-process-list" : ".bridge-instances-panel .synthv-process-list");
+      if (list) list.innerHTML = nextRows;
+    }
   } catch {
     // Background discovery must not replace a visible action error.
   } finally {
@@ -1160,25 +1163,12 @@ function renderSv2InstanceList(): string {
 }
 
 function renderSv2InstanceRows(): string {
-  const slots = profiles?.slots ?? [];
   const instances = synthvProcesses.map((process) => {
-    const concurrentSlot = slots.find((slot) => slot.concurrent.runningPids.includes(process.processId));
-    const normalSlot = !concurrentSlot && isSv2NormalProcess(process) && profiles?.activeSlotId
-      ? slots.find((slot) => slot.id === profiles?.activeSlotId)
-      : undefined;
-    const slot = concurrentSlot ?? normalSlot;
-    const mode = concurrentSlot ? "隔离并发" : normalSlot ? "普通主槽" : "未知环境";
+    const { slot, mode } = instanceAccount(process, profiles);
     const title = process.windowTitle?.trim() || process.name;
     return `<article class="synthv-process-row"><div><strong>${escapeHtml(title)}</strong><small>PID ${process.processId} · ${escapeHtml(mode)} · ${escapeHtml(slot?.displayName ?? "未关联账号")}</small></div><code>${escapeHtml(process.command)}</code></article>`;
   }).join("");
   return instances || '<div class="empty-inline compact-empty">当前没有检测到 SynthV 实例。</div>';
-}
-
-function isSv2NormalProcess(process: SynthVProcess): boolean {
-  const text = `${process.name}\n${process.command}`.toLocaleLowerCase();
-  return (text.includes("synthesizer v studio") || text.includes("synthv-studio"))
-    && !text.includes("sv1")
-    && !text.includes("flat");
 }
 
 function supportsWindowsSv2Extensions(): boolean {
@@ -1755,6 +1745,12 @@ function renderComponents(): string {
     }).join("")}</div>`;
 }
 
+function renderBridgeProcessRows(): string {
+  return synthvProcesses.length
+    ? synthvProcesses.map((process) => `<article class="synthv-process-row"><div><strong>${escapeHtml(process.name)}</strong><small>PID ${process.processId} · ${escapeHtml(process.command)}</small></div><div class="button-row"><button class="primary compact" data-auto-connect-synthv="${process.processId}">F13 启动并连接</button><button class="secondary compact" data-send-synthv-stop="${process.processId}">F14 停止</button></div></article>`).join("")
+    : '<div class="empty-inline compact-empty">没有发现正在运行的 SynthV 进程。</div>';
+}
+
 function renderBridge(): string {
   if (!app) return "";
   const applicationLocations = app.installations.filter((item) => item.installPath);
@@ -1766,10 +1762,8 @@ function renderBridge(): string {
     ? scriptsLocations.map((item) => `<button class="installation-item" data-scripts="${escapeHtml(item.scriptsPath ?? "")}" title="选择此 scripts 目录作为 Bridge 安装目标"><span class="status-dot online"></span><span><strong>${escapeHtml(item.displayName)}</strong><small title="${escapeHtml(item.scriptsPath ?? "")}">${escapeHtml(item.scriptsPath ?? "")}</small></span><span class="location-action">选择</span></button>`).join("")
     : '<div class="empty-inline compact-empty">没有发现 scripts 目录，可以在右侧手动填写。</div>';
   const shortcuts = synthvShortcutProfile ?? { bridgeStart: "F13", bridgeStop: "F14", detail: "正在读取快捷键配置…" };
-  const processList = synthvProcesses.length
-    ? synthvProcesses.map((process) => `<article class="synthv-process-row"><div><strong>${escapeHtml(process.name)}</strong><small>PID ${process.processId} · ${escapeHtml(process.command)}</small></div><div class="button-row"><button class="primary compact" data-auto-connect-synthv="${process.processId}">F13 启动并连接</button><button class="secondary compact" data-send-synthv-stop="${process.processId}">F14 停止</button></div></article>`).join("")
-    : '<div class="empty-inline compact-empty">没有发现正在运行的 SynthV 进程。</div>';
-  const processControls = `<section class="panel"><div class="panel-heading"><span class="feature-icon violet">${icon("bridge", 25)}</span><div><h2>运行中的 SynthV</h2><p>${escapeHtml(shortcuts.detail)}</p></div><button class="secondary compact" data-refresh-synthv-processes>${icon("sync", 16)} 刷新</button></div><div class="shortcut-tags"><span>启动 / 重连：${escapeHtml(shortcuts.bridgeStart)}</span><span>停止：${escapeHtml(shortcuts.bridgeStop)}</span></div><div class="synthv-process-list">${processList}</div></section>`;
+  const processList = renderBridgeProcessRows();
+  const processControls = `<section class="panel bridge-instances-panel"><div class="panel-heading"><span class="feature-icon violet">${icon("bridge", 25)}</span><div><h2>运行中的 SynthV</h2><p>${escapeHtml(shortcuts.detail)}</p></div><button class="secondary compact" data-refresh-synthv-processes>${icon("sync", 16)} 刷新</button></div><div class="shortcut-tags"><span>启动 / 重连：${escapeHtml(shortcuts.bridgeStart)}</span><span>停止：${escapeHtml(shortcuts.bridgeStop)}</span></div><div class="synthv-process-list">${processList}</div></section>`;
   return `<div class="bridge-grid"><section class="panel"><div class="panel-heading"><span class="feature-icon orange">${icon("bridge", 25)}</span><div><h2>Synthesizer V 探测</h2><p>Windows 与 macOS 使用各自的标准路径，只进行只读检查。</p></div><button class="secondary compact" data-scan>${icon("sync", 16)} 重新探测</button></div>
     <div class="detection-groups">
       <section class="detection-group"><div class="detection-group-title"><strong>应用安装</strong><span>${applicationLocations.length}</span></div><div class="installation-list">${applicationList}</div></section>
@@ -2861,6 +2855,7 @@ document.addEventListener("click", (event) => {
   if (targetPage) {
     clearPendingAiAccountRemoval();
     const enteringAccounts = targetPage === "accounts" && page !== "accounts";
+    instanceRefreshGeneration += 1;
     page = targetPage;
     if (page === "lyrics" && workflowResult?.kind !== "lyric-template") workflowResult = undefined;
     if (page === "toolbox" && workflowResult?.kind === "lyric-template") workflowResult = undefined;
@@ -3103,7 +3098,7 @@ document.addEventListener("click", (event) => {
   if (target.hasAttribute("data-scan")) { void run(async () => { if (app) app.installations = await api.scanSynthV(); notice = "探测完成。"; }); return; }
   if (target.hasAttribute("data-refresh-synthv-processes")) {
     void run(async () => {
-      [synthvProcesses, synthvShortcutProfile] = await Promise.all([api.listSynthvProcesses(), api.synthvShortcutProfile()]);
+      [synthvProcesses, synthvShortcutProfile, profiles] = await Promise.all([api.listSynthvProcesses(), api.synthvShortcutProfile(), api.sv2ProfileState()]);
       notice = synthvProcesses.length ? `发现 ${synthvProcesses.length} 个运行中的 SynthV 进程。` : "没有发现运行中的 SynthV 进程。";
     });
     return;
