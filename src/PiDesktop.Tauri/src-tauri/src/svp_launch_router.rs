@@ -370,7 +370,9 @@ fn route_mode_candidate(
 ) -> ModeRouteCandidate {
     let locally_available = match mode {
         SvpLaunchMode::Normal => {
-            state.blockers.is_empty() && !slot.session_protection.recovery_pending()
+            let same_active_slot = state.active_slot_id.as_deref() == Some(slot.id.as_str());
+            (same_active_slot || state.blockers.is_empty())
+                && !slot.session_protection.recovery_pending()
         }
         SvpLaunchMode::Concurrent => {
             state.concurrent_provider.available
