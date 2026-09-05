@@ -103,6 +103,13 @@ fn import_fixture(paths: &SlotPaths, name: &str) -> SlotManifest {
         concurrent_defaults: Sv2ConcurrentDefaults::default(),
     };
     save_manifest(paths, &manifest).unwrap();
+    #[cfg(windows)]
+    {
+        let id = manifest.active_slot_id.as_deref().unwrap();
+        fs::create_dir_all(&paths.slots).unwrap();
+        fs::rename(&paths.canonical, paths.parked(id)).unwrap();
+        create_canonical_junction(paths, id).unwrap();
+    }
     manifest
 }
 
@@ -213,7 +220,10 @@ fn recovery_finishes_after_current_slot_was_parked() {
         phase: SwitchPhase::Prepared,
     };
     save_journal(&paths, &journal).unwrap();
+    #[cfg(not(windows))]
     fs::rename(&paths.canonical, paths.parked(&a)).unwrap();
+    #[cfg(windows)]
+    fs::remove_dir(&paths.canonical).unwrap();
 
     recover_if_needed(&paths).unwrap();
 
@@ -240,8 +250,14 @@ fn recovery_commits_when_target_is_already_canonical() {
         },
     )
     .unwrap();
+    #[cfg(not(windows))]
     fs::rename(&paths.canonical, paths.parked(&a)).unwrap();
+    #[cfg(windows)]
+    fs::remove_dir(&paths.canonical).unwrap();
+    #[cfg(not(windows))]
     fs::rename(paths.parked(&b), &paths.canonical).unwrap();
+    #[cfg(windows)]
+    junction::create(paths.parked(&b), &paths.canonical).unwrap();
 
     recover_if_needed(&paths).unwrap();
 
@@ -264,7 +280,10 @@ fn recovery_does_not_overwrite_an_unknown_canonical_directory() {
         phase: SwitchPhase::CurrentParked,
     };
     save_journal(&paths, &journal).unwrap();
+    #[cfg(not(windows))]
     fs::rename(&paths.canonical, paths.parked(&a)).unwrap();
+    #[cfg(windows)]
+    fs::remove_dir(&paths.canonical).unwrap();
     fs::create_dir_all(&paths.canonical).unwrap();
     fs::write(paths.canonical.join("external.txt"), b"keep").unwrap();
 
@@ -314,8 +333,10 @@ fn precheck_reports_a_protected_session_loss_as_remote_conflict_evidence() {
     let manifest = import_fixture(&paths, "A");
     let slot_id = manifest.active_slot_id.clone().unwrap();
     let store = Sv2SessionGuardStore::new(&paths.metadata);
-    store.prepare_launch(&slot_id, &paths.canonical).unwrap();
-    fs::remove_file(paths.canonical.join("license/session")).unwrap();
+    let data_root = slot_data_root(&paths, &manifest, &slot_id);
+    store.prepare_launch(&slot_id, &data_root).unwrap();
+    fs::remove_file(data_root.join("license/session")).unwrap();
+    store.view(&slot_id, &data_root, false).unwrap();
 
     let service = Sv2ProfileService {
         paths: Ok(paths),
@@ -324,7 +345,7 @@ fn precheck_reports_a_protected_session_loss_as_remote_conflict_evidence() {
     let snapshot = service.account_usage_snapshot().unwrap();
     let precheck = snapshot.precheck;
 
-    assert!(precheck.recovery_pending);
+    assert!(precheck.recovery_pending, "{:?}", snapshot.profiles);
     assert_eq!(precheck.remote_use, Sv2RemoteUseStatus::Detected);
     assert_eq!(precheck.slot_id.as_deref(), Some(slot_id.as_str()));
     fs::remove_dir_all(root).unwrap();
@@ -361,5 +382,167 @@ fn usage_snapshot_keeps_profile_and_precheck_evidence_consistent() {
         snapshot.precheck.concurrent_pids,
         active_slot.concurrent.running_pids
     );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(windows)]
+fn legacy_fixture(paths: &SlotPaths, slot_id: &str, long: bool) -> (PathBuf, PathBuf) {
+    let compact = Uuid::parse_str(slot_id).unwrap().simple().to_string();
+    let root = if long {
+        paths.vault.join("concurrent").join(slot_id).join("box")
+    } else {
+        paths.vault.join("c").join(&compact[..16])
+    };
+    let data = root.join("user/current/AppData/Roaming/Dreamtonics/Synthesizer V Studio 2");
+    fs::create_dir_all(data.join("license")).unwrap();
+    write_marker(&data, slot_id).unwrap();
+    fs::write(data.join("license/session"), b"sandbox-session").unwrap();
+    fs::write(
+        root.join(".synthv-toolbox-concurrent.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 1, "slotId": slot_id, "boxName": format!("SV2TB{}", &compact[..24])
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    (root, data)
+}
+
+#[cfg(windows)]
+#[test]
+fn convergence_is_repeatable_and_retains_account_voice_files() {
+    let (root, paths) = fixture();
+    let manifest = import_fixture(&paths, "A");
+    let id = manifest.active_slot_id.as_deref().unwrap();
+    fs::create_dir_all(paths.parked(id).join("databases/voice")).unwrap();
+    fs::write(
+        paths.parked(id).join("databases/voice/model"),
+        b"account-a-watermark",
+    )
+    .unwrap();
+    let (_, source) = legacy_fixture(&paths, id, false);
+    let plan = slot_convergence_plan(&paths, &manifest).unwrap();
+    apply_slot_convergence(&paths, &manifest, plan).unwrap();
+    assert!(!source.exists());
+    assert_eq!(
+        fs::read(paths.canonical.join("license/session")).unwrap(),
+        b"sandbox-session"
+    );
+    assert_eq!(
+        fs::read(paths.parked(id).join("databases/voice/model")).unwrap(),
+        b"account-a-watermark"
+    );
+    assert_eq!(
+        fs::read(paths.vault.join("retired").join(id).join("license/session")).unwrap(),
+        b"session"
+    );
+    let second = slot_convergence_plan(&paths, &manifest).unwrap();
+    assert!(second.is_empty());
+    apply_slot_convergence(&paths, &manifest, second).unwrap();
+    assert_eq!(
+        paths.canonical.canonicalize().unwrap(),
+        paths.parked(id).canonicalize().unwrap()
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn convergence_conflicts_never_move_existing_voice_files() {
+    let (root, paths) = fixture();
+    let manifest = import_fixture(&paths, "A");
+    let id = manifest.active_slot_id.as_deref().unwrap();
+    let (_, source) = legacy_fixture(&paths, id, false);
+    fs::create_dir_all(paths.parked(id).join("databases")).unwrap();
+    fs::write(paths.parked(id).join("databases/model"), b"keep").unwrap();
+    fs::create_dir_all(paths.vault.join("retired").join(id)).unwrap();
+    assert!(slot_convergence_plan(&paths, &manifest).is_err());
+    assert_eq!(
+        fs::read(paths.parked(id).join("databases/model")).unwrap(),
+        b"keep"
+    );
+    assert!(!source.join("databases").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn convergence_rejects_two_legacy_sources_and_redirected_parents() {
+    let (root, paths) = fixture();
+    let manifest = import_fixture(&paths, "A");
+    let id = manifest.active_slot_id.as_deref().unwrap();
+    let (_, source) = legacy_fixture(&paths, id, false);
+    legacy_fixture(&paths, id, true);
+    assert!(slot_convergence_plan(&paths, &manifest).is_err());
+    assert!(source.exists());
+    fs::remove_dir_all(root).unwrap();
+
+    let (root, paths) = fixture();
+    let manifest = import_fixture(&paths, "A");
+    let id = manifest.active_slot_id.as_deref().unwrap();
+    let (legacy, _) = legacy_fixture(&paths, id, false);
+    let outside = root.join("outside");
+    fs::rename(legacy.join("user"), &outside).unwrap();
+    junction::create(&outside, legacy.join("user")).unwrap();
+    assert!(slot_convergence_plan(&paths, &manifest).is_err());
+    fs::remove_dir(legacy.join("user")).unwrap();
+    assert!(outside.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn launch_defaults_follow_latest_primary_settings_and_skip_running_targets() {
+    let (root, paths) = fixture();
+    let mut manifest = import_fixture(&paths, "A");
+    let b = add_parked(&paths, &mut manifest, "B");
+    fs::create_dir_all(paths.canonical.join("settings")).unwrap();
+    fs::write(paths.canonical.join("settings/settings.xml"), b"first").unwrap();
+    sync_defaults_before_launch(&paths, &manifest, &b, false).unwrap();
+    assert_eq!(
+        fs::read(paths.parked(&b).join("settings/settings.xml")).unwrap(),
+        b"first"
+    );
+    fs::write(paths.canonical.join("settings/settings.xml"), b"second").unwrap();
+    sync_defaults_before_launch(&paths, &manifest, &b, true).unwrap();
+    assert_eq!(
+        fs::read(paths.parked(&b).join("settings/settings.xml")).unwrap(),
+        b"first"
+    );
+    sync_defaults_before_launch(&paths, &manifest, &b, false).unwrap();
+    assert_eq!(
+        fs::read(paths.parked(&b).join("settings/settings.xml")).unwrap(),
+        b"second"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn prepared_switch_recovery_keeps_the_current_managed_link() {
+    let (root, paths) = fixture();
+    let mut manifest = import_fixture(&paths, "A");
+    let a = manifest.active_slot_id.clone().unwrap();
+    let b = add_parked(&paths, &mut manifest, "B");
+    save_journal(
+        &paths,
+        &SwitchJournal {
+            schema_version: SCHEMA_VERSION,
+            transaction_id: Uuid::new_v4().to_string(),
+            current_slot_id: Some(a.clone()),
+            target_slot_id: b,
+            phase: SwitchPhase::Prepared,
+        },
+    )
+    .unwrap();
+    recover_if_needed(&paths).unwrap();
+    assert_eq!(
+        load_manifest(&paths).unwrap().active_slot_id,
+        Some(a.clone())
+    );
+    assert_eq!(
+        paths.canonical.canonicalize().unwrap(),
+        paths.parked(&a).canonicalize().unwrap()
+    );
+    assert!(!paths.journal.exists());
     fs::remove_dir_all(root).unwrap();
 }

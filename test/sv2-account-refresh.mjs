@@ -38,7 +38,7 @@ assert.match(main, /data-profile-refresh-slot/);
 assert.match(main, /refreshAccountUsage\(slotId\)/);
 assert.match(main, /prepareConcurrentSlotsWhenEnabled/);
 assert.match(main, /icon\("refresh", 18\)/);
-assert.match(main, /声库数据库由所有槽位和隔离实例共享/);
+assert.match(main, /声库按账号独立保存，同账号实例共用槽位数据/);
 assert.doesNotMatch(main, /默认隔离应用设置/);
 assert.match(main, /profiles = await api\.importCurrentSv2Profile\(displayName\);\s*const prepared = await prepareConcurrentSlotsWhenEnabled\(\);\s*await refreshAccountUsage\(\);/);
 assert.match(main, /profiles = await api\.createSv2Profile\(displayName\);\s*const prepared = await prepareConcurrentSlotsWhenEnabled\(\);\s*await refreshAccountUsage\(\);/);
