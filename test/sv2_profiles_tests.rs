@@ -301,7 +301,7 @@ fn recovery_does_not_overwrite_an_unknown_canonical_directory() {
 
 #[test]
 fn names_and_slot_ids_are_strictly_validated() {
-    assert!(validate_display_name(" ").is_err());
+    assert_eq!(validate_display_name(" ").unwrap(), "");
     assert!(validate_display_name(&"x".repeat(65)).is_err());
     assert!(validate_slot_id("../../escape").is_err());
     assert!(validate_slot_id(&Uuid::new_v4().to_string()).is_ok());
@@ -339,6 +339,26 @@ fn legacy_manual_identity_fields_are_ignored_and_not_reserialized() {
 }
 
 #[test]
+fn account_remark_can_be_cleared_without_changing_the_slot() {
+    let (root, paths) = fixture();
+    let manifest = import_fixture(&paths, "Remark");
+    let id = manifest.slots[0].id.clone();
+    let service = Sv2ProfileService {
+        paths: Ok(paths),
+        gate: Mutex::new(()),
+    };
+    let state = service.rename_slot(id.clone(), String::new()).unwrap();
+    assert_eq!(state.slots[0].id, id);
+    assert!(state.slots[0].display_name.is_empty());
+    assert!(load_manifest(service.paths.as_ref().unwrap())
+        .unwrap()
+        .slots[0]
+        .display_name
+        .is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn verified_in_use_account_remains_usable_when_remote_use_is_unknown() {
     let (root, paths) = fixture();
     let manifest = import_fixture(&paths, "A");
@@ -355,8 +375,8 @@ fn verified_in_use_account_remains_usable_when_remote_use_is_unknown() {
     let precheck = build_account_precheck(&state);
     assert!(precheck.local_use);
     assert_eq!(precheck.remote_use, Sv2RemoteUseStatus::Unknown);
-    assert_eq!(precheck.summary, "已读取该账号的官方授权。");
-    assert!(precheck.detail.contains("未执行设备注册"));
+    assert_eq!(precheck.summary, "账号可用。");
+    assert!(precheck.detail.contains("可以继续启动"));
     fs::remove_dir_all(root).unwrap();
 }
 

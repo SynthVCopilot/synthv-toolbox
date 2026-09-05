@@ -170,3 +170,7 @@ fn bounded_png(bytes: &[u8]) -> bool {
 #[cfg(test)]
 #[path = "../../../../test/sv2_voice_catalog_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../test/sv2_catalog_diagnostic.rs"]
+mod diagnostic;

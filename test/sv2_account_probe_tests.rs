@@ -890,8 +890,7 @@ fn read_only_authorization_does_not_claim_a_device_check_failed() {
 
     assert_eq!(view.authorization_status, Sv2AuthorizationStatus::Verified);
     assert_eq!(view.remote_use, Sv2RemoteUseStatus::Unknown);
-    assert!(view.detail.contains("只读声库授权查询"));
-    assert!(view.detail.contains("未执行设备注册"));
+    assert_eq!(view.detail, "账号授权有效，可用于启动。");
 }
 
 #[cfg(windows)]

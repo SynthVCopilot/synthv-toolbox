@@ -1248,17 +1248,12 @@ fn build_account_precheck(state: &Sv2ProfilesState) -> Sv2AccountPrecheck {
     ) && account_probe.authorization_status == Sv2AuthorizationStatus::Verified
     {
         (
-            "已读取该账号的官方授权。".to_string(),
+            "账号可用。".to_string(),
             format!(
-                "账号服务已只读返回 {} 个声库授权，未执行设备注册；{}{}",
+                "已确认 {} 个声库授权。{}",
                 account_probe.authorized_voice_count,
-                match remote_use {
-                    Sv2RemoteUseStatus::Clear => "远端未报告占用。",
-                    Sv2RemoteUseStatus::Unknown => "远端占用仍为未知。",
-                    Sv2RemoteUseStatus::Detected => unreachable!(),
-                },
                 if local_use {
-                    "本机已有该账号的运行实例。"
+                    "本机已有该账号的实例，可以继续启动。"
                 } else {
                     ""
                 }
@@ -2389,8 +2384,8 @@ fn remove_owned_directory(path: &Path, label: &str) -> Result<(), String> {
 
 fn validate_display_name(value: &str) -> Result<String, String> {
     let value = value.trim();
-    if value.is_empty() || value.chars().count() > 64 || value.chars().any(char::is_control) {
-        return Err("槽位名称必须为 1–64 个可见字符。".to_string());
+    if value.chars().count() > 64 || value.chars().any(char::is_control) {
+        return Err("备注不能超过 64 个可见字符。".to_string());
     }
     Ok(value.to_string())
 }
