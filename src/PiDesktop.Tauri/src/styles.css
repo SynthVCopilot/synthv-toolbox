@@ -513,7 +513,7 @@ button.full { width: 100%; }
 .account-card-actions { display: flex; align-items: center; gap: 2px; }
 .authorization-panel { display: block; }
 .authorization-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-.authorization-list span { display: inline-flex; align-items: center; gap: 5px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-solid); font-size: 10px; }
+.authorization-list > span { display: inline-flex; align-items: center; gap: 5px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-solid); font-size: 10px; }
 .authorization-list .authorized-voice { gap: 7px; padding: 4px 7px 4px 4px; }
 .authorized-voice > span:last-child { display: grid; gap: 1px; }
 .authorized-voice small { color: var(--subtle); font-size: 9px; }
@@ -526,7 +526,7 @@ button.full { width: 100%; }
 .voice-license-heading strong { font-size: 12px; font-weight: 600; }
 .voice-license-heading small { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .inventory-status { flex: 0 0 auto; padding: 3px 7px; border-radius: 999px; color: var(--warning); background: color-mix(in srgb,var(--warning) 10%,transparent); font-size: 9px; font-weight: 600; }
-.inventory-status.manual { color: var(--success); background: color-mix(in srgb,var(--success) 10%,transparent); }
+.inventory-status.manual, .inventory-status.verified { color: var(--success); background: color-mix(in srgb,var(--success) 10%,transparent); }
 .voice-license-form textarea { width: 100%; min-height: 78px; padding: 8px 10px; border: 1px solid var(--line-strong); border-bottom-color: rgba(0,0,0,.32); border-radius: 4px; color: inherit; background: var(--control); font: inherit; font-size: 11px; line-height: 1.5; resize: vertical; }
 .voice-evidence-note { display: flex; align-items: flex-start; gap: 8px; padding: 8px 9px; border-radius: 5px; color: var(--warning); background: color-mix(in srgb,var(--warning) 7%,transparent); }
 .voice-evidence-note > span { min-width: 0; }

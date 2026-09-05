@@ -895,7 +895,7 @@ function accountProbeBadge(slot: Sv2ProfileSlot): string {
   let emphasis = "";
   let iconName: "refresh" | "check" | "plug" = "refresh";
   if (hasUsableEnvironment) {
-    label = hasBusyEnvironment ? "账号可用（本机使用中）" : "账号可用";
+    label = probes.some((probe) => probe.sessionStatus === "inUse") ? "账号可用（本机使用中）" : "账号可用";
     iconName = "check";
   } else if (reportedIssue) {
     label = reportedIssue.cardLabel;
@@ -982,7 +982,7 @@ function accountUseStateForSlot(slot: Sv2ProfileSlot): { tone: AccountUseTone; l
       : undefined);
   const hasBusyEnvironment = environments.some((environment) => environment.busy);
   if (environments.some((environment) => environment.usable)) {
-    return { tone: "clear", label: hasBusyEnvironment ? "账号可用（本机使用中）" : "账号可用" };
+    return { tone: "clear", label: probes.some((probe) => probe.sessionStatus === "inUse") ? "账号可用（本机使用中）" : "账号可用" };
   }
 
   if (reportedIssue) {
@@ -1084,7 +1084,7 @@ function renderAccounts(): string {
   const cards = profiles.slots.map((slot) => {
     const lastUsed = slot.lastActivatedAtUtc ? new Date(slot.lastActivatedAtUtc).toLocaleString("zh-CN") : "尚未启动";
     const officialIdentity = windowsExtensions ? officialAccountIdentity(slot) : {};
-    const accountTitle = officialIdentity.name ?? "未登录";
+    const accountTitle = officialIdentity.name ?? (slot.sessionCached ? "账号信息待刷新" : "未登录");
     const initial = Array.from(officialIdentity.name ?? "?")[0] ?? "?";
     const color = /^#[0-9a-f]{6}$/i.test(slot.color) ? slot.color : "#6D5CE7";
     const accountEmail = officialIdentity.email
@@ -1152,7 +1152,7 @@ function renderAuthorizedVoice(voice: string): string {
     ? `<img class="voice-cover" src="${escapeHtml(catalogEntry.imageDataUrl)}" alt="" />`
     : `<span class="voice-cover placeholder">${icon("audio", 14)}</span>`;
   const vendor = catalogEntry?.vendor ? `<small>${escapeHtml(catalogEntry.vendor)}</small>` : "";
-  return `<span class="authorized-voice">${cover}<span>${escapeHtml(voice)}${vendor}</span></span>`;
+  return `<span class="authorized-voice" data-authorized-voice="${escapeHtml(voice)}">${cover}<span>${escapeHtml(voice)}${vendor}</span></span>`;
 }
 
 function loadSv2VoiceCatalog(force = false): void {
@@ -1161,7 +1161,12 @@ function loadSv2VoiceCatalog(force = false): void {
   void api.sv2VoiceCatalog()
     .then((catalog) => { sv2VoiceCatalog = catalog; })
     .catch(() => undefined)
-    .finally(() => { sv2VoiceCatalogLoading = false; render(); });
+    .finally(() => {
+      sv2VoiceCatalogLoading = false;
+      document.querySelectorAll<HTMLElement>("[data-authorized-voice]").forEach((entry) => {
+        entry.outerHTML = renderAuthorizedVoice(entry.dataset.authorizedVoice ?? "");
+      });
+    });
 }
 
 function renderAccountManager(): string {
@@ -1172,7 +1177,7 @@ function renderAccountManager(): string {
   if (managedSlot) managedProfileSlotId = managedSlot.id;
   let body = "";
   if (accountManagerSection === "profile" && !supportsWindowsSv2Extensions()) {
-    body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>未登录</h3><p>账号信息待刷新</p></div>${managedSlot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
+    body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${managedSlot.sessionCached ? "账号信息待刷新" : "未登录"}</h3></div>${managedSlot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
       <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>备注<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" placeholder="例如：制作账号" /></label><button class="secondary">保存备注</button></form>
       <form class="voice-license-form" data-profile-voice-form="${managedSlot.id}"><div class="voice-license-heading"><div><strong>补充手工确认声库</strong><small>每行记录一个完整产品名称；仅用于补充工程路由，不替代官方授权。</small></div></div><textarea name="voices" rows="4" maxlength="16384" placeholder="例如：&#10;Mai 2&#10;SOLARIA">${escapeHtml(managedSlot.voiceInventory.manuallyConfirmedVoices.join("\n"))}</textarea><button class="secondary" type="submit">保存确认记录</button></form>
       <div class="manager-action-row">${managedSlot.isActive ? "" : `<button class="secondary" data-profile-activate="${managedSlot.id}">${icon("check", 15)} 设为默认账号</button>`}<button class="secondary" data-profile-folder="${managedSlot.id}">${icon("folder", 15)} 打开槽位数据目录</button><button class="secondary component-remove-action" data-delete-profile="${managedSlot.id}">${icon("trash", 15)} 删除账号</button></div>
@@ -1196,7 +1201,7 @@ function renderAccountManager(): string {
         ? `<div class="authorization-list">${authorizations.map(renderAuthorizedVoice).join("")}</div>`
         : '<div class="empty-inline">当前账号没有可用声库授权。</div>'
       : `<div class="empty-inline">${escapeHtml(authorizationUnavailable)}。</div>`;
-    body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(officialIdentity.name ?? "未登录")}</h3><p>${escapeHtml(officialIdentity.email ?? "账号信息待刷新")}</p><p>${accountUseDot(managedUseState)} ${escapeHtml(managedUseState.label)}</p></div>${managedSlot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
+    body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(officialIdentity.name ?? (managedSlot.sessionCached ? "账号信息待刷新" : "未登录"))}</h3><p>${escapeHtml(officialIdentity.email ?? "账号信息待刷新")}</p><p>${accountUseDot(managedUseState)} ${escapeHtml(managedUseState.label)}</p></div>${managedSlot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
       <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>备注<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" placeholder="例如：制作账号" /></label><button class="secondary">保存备注</button></form>
       <section class="voice-license-form authorization-panel"><div class="voice-license-heading"><div><strong>可用授权</strong><small>${escapeHtml(authorizationSummary)}</small></div><span class="inventory-status ${authorizationStatus ? "verified" : "unknown"}">${authorizationStatus ? `${authorizations.length} 个授权` : "未读取"}</span></div>${authorizationList}</section>
       <form class="voice-license-form" data-profile-voice-form="${managedSlot.id}"><div class="voice-license-heading"><div><strong>补充手工确认声库</strong><small>每行记录一个完整产品名称；仅用于补充工程路由，不替代官方授权。</small></div></div><textarea name="voices" rows="4" maxlength="16384" placeholder="例如：&#10;Mai 2&#10;SOLARIA">${escapeHtml(managedSlot.voiceInventory.manuallyConfirmedVoices.join("\n"))}</textarea><button class="secondary" type="submit">保存确认记录</button></form>
@@ -2231,7 +2236,7 @@ function wireForms(): void {
   document.querySelector<HTMLFormElement>("#profile-import-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const displayName = document.querySelector<HTMLInputElement>("#profile-import-name")?.value.trim() ?? "";
-  void run(async () => {
+    void run(async () => {
       profiles = await api.importCurrentSv2Profile(displayName);
       const prepared = await prepareConcurrentSlotsWhenEnabled();
       await refreshAccountUsage();
@@ -2241,7 +2246,7 @@ function wireForms(): void {
   document.querySelector<HTMLFormElement>("#profile-create-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const displayName = document.querySelector<HTMLInputElement>("#profile-create-name")?.value.trim() ?? "";
-  void run(async () => {
+    void run(async () => {
       profiles = await api.createSv2Profile(displayName);
       const prepared = await prepareConcurrentSlotsWhenEnabled();
       await refreshAccountUsage();
