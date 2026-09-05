@@ -436,28 +436,45 @@ fn inspect_active_session_license(
         .timeout_write(Duration::from_secs(5))
         .redirects(0)
         .build();
-    let licenses = query_license_snapshot_with_agent(&agent, credentials.access_token());
-    if inspect_session_fingerprint(data_root)
-        .ok()
-        .flatten()
-        .as_ref()
-        != Some(&fingerprint)
-    {
-        return Sv2AccountProbeView::in_use();
+    let Some(root) = root.as_ref() else { return Sv2AccountProbeView::in_use(); };
+    read_only_authorization(data_root, root, &fingerprint, &credentials, true, |access| {
+        query_license_snapshot_with_agent(&agent, access)
+    })
+    .unwrap_or_else(Sv2AccountProbeView::in_use)
+}
+
+#[cfg(windows)]
+fn read_only_authorization<F>(
+    data_root: &Path,
+    root: &ProbeRootKey,
+    fingerprint: &SessionCacheKey,
+    credentials: &SessionCredentials,
+    active: bool,
+    fetch: F,
+) -> Option<Sv2AccountProbeView>
+where
+    F: FnOnce(&str) -> RemoteOutcome,
+{
+    let licenses = fetch(credentials.access_token());
+    if inspect_session_fingerprint(data_root).ok().flatten().as_ref() != Some(fingerprint) {
+        return None;
     }
-    let view = view_from_active_license(licenses).with_account_identity(credentials.access_token());
-    if let Some(root) = root.as_ref() {
-        if view.authorization_status == Sv2AuthorizationStatus::Verified {
-            clear_sync_quarantine(&root.quarantine_key());
-        }
-        cache_put(
-            fingerprint,
-            root,
-            &view,
-            Some(credentials.access_expires_at),
-        );
+    let view = if active {
+        view_from_active_license(licenses)
+    } else {
+        view_from_remote(licenses, EnrollOutcome::Unknown)
     }
-    view
+    .with_account_identity(credentials.access_token());
+    if view.authorization_status == Sv2AuthorizationStatus::Verified {
+        clear_sync_quarantine(&root.quarantine_key());
+    }
+    cache_put(
+        fingerprint.clone(),
+        root,
+        &view,
+        Some(credentials.access_expires_at),
+    );
+    Some(view)
 }
 
 #[derive(Clone)]
@@ -2294,20 +2311,6 @@ fn refresh_windows_batch(requests: &[Sv2AccountProbeRequest<'_>]) -> Vec<Sv2Acco
         if sessions[authority].credentials.access_expires_at
             > Utc::now() + ChronoDuration::seconds(60)
         {
-            let licenses = query_license_snapshot_with_agent(
-                &agent,
-                sessions[authority].credentials.access_token(),
-            );
-            if inspect_session_fingerprint(&sessions[authority].data_root)
-                .ok()
-                .flatten()
-                .as_ref()
-                != Some(&sessions[authority].fingerprint)
-            {
-                let view = Sv2AccountProbeView::in_use();
-                results[sessions[authority].request_index] = Some(view);
-                continue;
-            }
             let one_physical_session = members.iter().all(|member| {
                 sessions[*member].fingerprint.canonical_root
                     == sessions[authority].fingerprint.canonical_root
@@ -2320,12 +2323,17 @@ fn refresh_windows_batch(requests: &[Sv2AccountProbeRequest<'_>]) -> Vec<Sv2Acco
                 quarantine_group_view(&mut results, &mut sessions, &members, &view);
                 continue;
             }
-            let verified = matches!(&licenses, RemoteOutcome::Authorized(_));
-            let view = view_from_remote(licenses, EnrollOutcome::Unknown)
-                .with_account_identity(sessions[authority].credentials.access_token());
-            if verified {
-                clear_sync_quarantine(&group_quarantine_key);
-            }
+            let Some(view) = read_only_authorization(
+                &sessions[authority].data_root,
+                &sessions[authority].root_key,
+                &sessions[authority].fingerprint,
+                &sessions[authority].credentials,
+                false,
+                |access| query_license_snapshot_with_agent(&agent, access),
+            ) else {
+                results[sessions[authority].request_index] = Some(Sv2AccountProbeView::in_use());
+                continue;
+            };
             cache_group_view(
                 &mut results,
                 &sessions,
