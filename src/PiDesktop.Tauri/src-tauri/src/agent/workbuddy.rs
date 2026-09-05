@@ -5,6 +5,7 @@
 //! state while this adapter performs bounded token polling and refresh.
 
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -265,11 +266,18 @@ impl WorkBuddyOAuth {
     }
 
     pub fn poll_credential(&self, state: &str) -> Result<WorkBuddyCredential> {
+        self.poll_credential_cancellable(state, None)
+    }
+
+    pub fn poll_credential_cancellable(&self, state: &str, cancelled: Option<&AtomicBool>) -> Result<WorkBuddyCredential> {
         if state.trim().is_empty() {
             return Err(AgentError::new("WorkBuddy OAuth state is empty"));
         }
         let attempts = self.config.max_poll_attempts.clamp(1, 400);
         for attempt in 0..attempts {
+            if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                return Err(AgentError::new("WorkBuddy OAuth 已取消"));
+            }
             match self.poll_once(state)? {
                 (WorkBuddyPollState::Authorized, Some(credential)) => return Ok(credential),
                 (WorkBuddyPollState::Pending, _) if attempt + 1 < attempts => {

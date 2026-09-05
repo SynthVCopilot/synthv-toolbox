@@ -57,8 +57,8 @@ impl RuntimeModelCatalog {
             error,
             anthropic: fallback_models(AiProviderId::Anthropic),
             openai_codex: fallback_models(AiProviderId::OpenaiCodex),
-            workbuddy: fallback_models(AiProviderId::Workbuddy),
-            traecode: fallback_models(AiProviderId::Traecode),
+            workbuddy: Vec::new(),
+            traecode: vec!["trae-account-default".to_string()],
         }
     }
 
@@ -82,8 +82,8 @@ impl RuntimeModelCatalog {
             error: None,
             anthropic,
             openai_codex,
-            workbuddy: fallback_models(AiProviderId::Workbuddy),
-            traecode: fallback_models(AiProviderId::Traecode),
+            workbuddy: workbuddy_models(catalog),
+            traecode: vec!["trae-account-default".to_string()],
         }
     }
 }
@@ -332,6 +332,18 @@ fn catalog_models(
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn workbuddy_models(catalog: &OpenCodeCatalog) -> Vec<String> {
+    const VERIFIED: &[&str] = &[
+        "glm-5.2", "glm-5.1", "glm-5v-turbo", "kimi-k2.7", "minimax-m3-pay", "hy3",
+        "deepseek-v4-pro", "deepseek-v4-flash",
+    ];
+    let catalog_models = ["zhipuai", "deepseek", "tencent-tokenhub"]
+        .into_iter()
+        .flat_map(|provider| catalog_models(catalog, provider, |_| true))
+        .collect::<HashSet<_>>();
+    VERIFIED.iter().filter(|model| catalog_models.contains(**model)).map(|model| (*model).to_string()).collect()
 }
 
 fn fallback_models(provider: AiProviderId) -> Vec<String> {

@@ -156,6 +156,7 @@ pub fn run() {
             commands::set_mode,
             commands::set_agent_work_mode,
             commands::authorize_ai_provider,
+            commands::cancel_ai_authorization,
             commands::select_ai_provider,
             commands::add_ai_api_key,
             commands::remove_ai_api_key,
