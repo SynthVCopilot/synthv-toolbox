@@ -400,6 +400,21 @@ async function refreshAccountUsage(slotId?: string): Promise<void> {
   }
 }
 
+async function refreshVisibleSynthvInstances(): Promise<void> {
+  if (busy || (page !== "accounts" && page !== "bridge")) return;
+  try {
+    const [nextProcesses, nextProfiles] = await Promise.all([
+      api.listSynthvProcesses(),
+      page === "accounts" ? api.sv2ProfileState() : Promise.resolve(profiles),
+    ]);
+    synthvProcesses = nextProcesses;
+    if (nextProfiles) profiles = nextProfiles;
+    render();
+  } catch {
+    // Background discovery must not replace a visible action error.
+  }
+}
+
 function scheduleDownloadPoll(): void {
   if (!app?.downloads.some((item) => ["queued", "downloading", "installing"].includes(item.status)) || downloadPollTimer !== undefined) return;
   downloadPollTimer = window.setTimeout(async () => {
@@ -617,7 +632,7 @@ function renderBlockedSwitchDialog(): string {
   }
   const provider = profiles?.concurrentProvider;
   const concurrentRunning = Boolean(slot?.concurrent.runningPids.length);
-  const canRunConcurrent = Boolean(provider?.available && !concurrentRunning);
+  const canRunConcurrent = Boolean(provider?.available);
   const concurrentLabel = slot?.concurrent.ready ? "以并发模式运行" : "准备并发副本并运行";
   return `<div class="dialog-backdrop" role="presentation">
     <section class="fluent-dialog switch-dialog" role="alertdialog" aria-modal="true" aria-labelledby="blocked-switch-title">
@@ -798,13 +813,12 @@ function accountProbeEnvironments(slot: Sv2ProfileSlot): AccountProbeEnvironment
 
   if (slot.concurrent.ready) {
     const concurrentRecovery = slot.concurrentSessionProtection.status === "recoveryPending";
-    const concurrentRunning = Boolean(slot.concurrent.runningPids.length);
     environments.push({
       label: "隔离",
       probe: slot.concurrentAccountProbe,
       launchEnabled: Boolean(app?.sv2ConcurrentEnabled && profiles?.concurrentProvider.available),
-      localBlocked: concurrentRecovery || concurrentRunning,
-      localBlockLabel: concurrentRecovery ? "登录缓存等待恢复" : concurrentRunning ? "隔离环境正在本机使用" : "",
+      localBlocked: concurrentRecovery,
+      localBlockLabel: concurrentRecovery ? "登录缓存等待恢复" : "",
       usable: false,
       busy: false,
     });
@@ -1080,9 +1094,9 @@ function renderAccounts(): string {
     const concurrentRunning = windowsExtensions && slot.concurrent.runningPids.length > 0;
     const isolatedLabel = concurrentRunning ? "隔离运行中" : slot.concurrent.ready ? "隔离启动" : "准备隔离";
     const concurrentEnabled = windowsExtensions && Boolean(app?.sv2ConcurrentEnabled);
-    const isolatedDisabled = concurrentRunning || !concurrentProviderAvailable || !concurrentEnabled;
+    const isolatedDisabled = !concurrentProviderAvailable || !concurrentEnabled;
     const isolatedTitle = concurrentRunning
-      ? "该隔离实例已在运行"
+      ? "已有隔离实例运行中，仍可继续启动同账号实例"
       : !concurrentEnabled
         ? "隔离功能已在全局设置中关闭"
         : providerDetail;
@@ -1101,7 +1115,23 @@ function renderAccounts(): string {
       <div class="account-launch-actions">${launchActions}</div>
     </article>`;
   }).join("");
-  return `${blockerPanel}<div class="account-launch-grid">${cards || `<button class="empty-account-card" data-account-manager="add">${icon("plus", 22)}<strong>添加第一个账号</strong><span>导入当前环境或创建空槽位</span></button>`}</div>`;
+  const instanceList = renderSv2InstanceList();
+  return `${blockerPanel}<div class="account-launch-grid">${cards || `<button class="empty-account-card" data-account-manager="add">${icon("plus", 22)}<strong>添加第一个账号</strong><span>导入当前环境或创建空槽位</span></button>`}</div>${instanceList}`;
+}
+
+function renderSv2InstanceList(): string {
+  const slots = profiles?.slots ?? [];
+  const instances = synthvProcesses.map((process) => {
+    const concurrentSlot = slots.find((slot) => slot.concurrent.runningPids.includes(process.processId));
+    const normalSlot = !concurrentSlot && profiles?.activeSlotId
+      ? slots.find((slot) => slot.id === profiles?.activeSlotId)
+      : undefined;
+    const slot = concurrentSlot ?? normalSlot;
+    const mode = concurrentSlot ? "隔离并发" : normalSlot ? "普通主槽" : "未知环境";
+    const title = process.windowTitle?.trim() || process.name;
+    return `<article class="synthv-process-row"><div><strong>${escapeHtml(title)}</strong><small>PID ${process.processId} · ${escapeHtml(mode)} · ${escapeHtml(slot?.displayName ?? "未关联账号")}</small></div><code>${escapeHtml(process.command)}</code></article>`;
+  }).join("");
+  return `<section class="panel account-instances-panel"><div class="panel-heading"><div><h2>当前打开的 SynthV 实例</h2><p>按窗口标题和 PID 跟踪实例，并显示关联账号。</p></div><button class="secondary compact" data-refresh-synthv-processes>${icon("sync", 16)} 刷新</button></div><div class="synthv-process-list">${instances || '<div class="empty-inline compact-empty">当前没有检测到 SynthV 实例。</div>'}</div></section>`;
 }
 
 function supportsWindowsSv2Extensions(): boolean {
@@ -1177,7 +1207,7 @@ function renderAccountManager(): string {
   } else if (accountManagerSection === "global" && !supportsWindowsSv2Extensions()) {
     body = `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("shield", 24)}</span><div><h3>macOS 槽位范围</h3><p>当前版本只支持顺序切换数据槽位。账号登录预检、授权读取和并发隔离仍仅在 Windows 提供。</p></div></section>`;
   } else if (accountManagerSection === "global") {
-    body = `<form id="sv2-global-settings-form" class="isolation-defaults-form manager-defaults"><div><strong>全局设置</strong><small>声库数据库由所有槽位和隔离实例共享；登录态、WebView 与应用设置仍分别隔离。</small></div><label class="fluent-switch"><input name="accountProbeEnabled" type="checkbox" ${app?.sv2AccountIndicatorEnabled ? "checked" : ""} /><span></span>启用账号登录指示器</label><label class="fluent-switch"><input name="concurrentEnabled" type="checkbox" ${app?.sv2ConcurrentEnabled ? "checked" : ""} /><span></span>启用隔离功能</label><button class="secondary" type="submit">保存全局设置</button></form>`;
+    body = `<form id="sv2-global-settings-form" class="isolation-defaults-form manager-defaults"><div><strong>全局设置</strong><small>默认只同步设置、脚本等白名单文件；声库按账号和隔离实例独立保存。</small></div><label class="fluent-switch"><input name="accountProbeEnabled" type="checkbox" ${app?.sv2AccountIndicatorEnabled ? "checked" : ""} /><span></span>启用账号登录指示器</label><label class="fluent-switch"><input name="concurrentEnabled" type="checkbox" ${app?.sv2ConcurrentEnabled ? "checked" : ""} /><span></span>启用隔离功能</label><button class="secondary" type="submit">保存全局设置</button></form>`;
   } else {
     body = `<div class="account-add-grid">${profiles.canImportCurrent ? `<section><span class="feature-icon emerald">${icon("folder", 20)}</span><h3>导入当前环境</h3><p>把现有官方数据目录纳入槽位，不移动账号文件。</p><form id="profile-import-form" class="profile-create-form"><input id="profile-import-name" maxlength="64" required placeholder="例如 主账号" /><button class="primary">导入</button></form></section>` : ""}<section><span class="feature-icon blue">${icon("plus", 20)}</span><h3>创建空槽位</h3><p>首次启动后，在 SV2 官方登录页面完成登录。</p><form id="profile-create-form" class="profile-create-form"><input id="profile-create-name" maxlength="64" required placeholder="例如 制作账号" /><button class="secondary">创建</button></form></section></div><div class="manager-safety">${icon("check", 17)}<span><strong>账号数据保持原样</strong><small>工具箱不会伪造登录或绕过联网验证。</small></span></div>`;
   }
@@ -2979,6 +3009,7 @@ void (async () => {
   try {
     await refresh();
     await listenForSvpRouteRequests();
+    window.setInterval(() => { void refreshVisibleSynthvInstances(); }, 2000);
     render();
   } catch (reason) {
     root.innerHTML = `<div class="fatal"><div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.png" alt="SynthV Toolbox" /></div><h1>无法启动 SynthV Toolbox</h1><pre>${escapeHtml(formatError(reason))}</pre><p>请确认应用由 Tauri 运行，而不是直接打开前端页面。</p></div>`;
