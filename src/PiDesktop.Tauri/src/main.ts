@@ -3,6 +3,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { registerModelAuthElement } from "@model-auth/vue/custom-element";
 import { api } from "./api";
+import { evaluateAccountEnvironment } from "./accountStatus";
 import { instanceAccount, instanceProjectTitle } from "./sv2Instances";
 import { icon } from "./icons";
 import { featureCatalog, toolGroups, type FeatureCatalogItem, type ToolGroup } from "./featureCatalog";
@@ -34,6 +35,7 @@ import type {
   ProjectCheckpoint,
   RhymeMatchMode,
   Sv2AccountProbe,
+  Sv2CachedVoice,
   Sv2ProfileSlot,
   Sv2ProfilesState,
   Sv2SyncCategory,
@@ -159,6 +161,8 @@ let sidebarCollapsed = (() => {
 let accountManagerOpen = false;
 let accountManagerSection: AccountManagerSection = "global";
 let managedProfileSlotId: string | undefined;
+let sv2VoiceCatalog: Sv2CachedVoice[] | undefined;
+let sv2VoiceCatalogLoading = false;
 let shellController: ShellController | undefined;
 let lastWiredMarkup = "";
 
@@ -572,7 +576,7 @@ function renderAccountIndicatorConsent(): string {
       <div><span class="eyebrow">SV2 ACCOUNT LOGIN INDICATOR</span><h2 id="account-indicator-consent-title">开启账号登录指示器？</h2></div>
       <p>此功能不会启动 Synthesizer V，但它不是纯本地、纯只读检查。确认开启会完成本次进入页面的首次预检；以后只会在你重新进入「SV2 账号」页面或手动刷新时执行下列操作：</p>
       <ul>
-        <li>每个账号槽位只保存一份本地 <code>license/session</code>；普通与并发实例共用槽位文件。若标准 JWT 含有 <code>name</code>/<code>email</code> 声明，会将姓名和邮箱显示在账号卡片及账号管理页。access/refresh token 原文仅在后端内存中处理，不会在界面展示、复制或写入日志。</li>
+        <li>每个账号槽位只保存一份本地 <code>license/session</code>；普通与并发实例共用槽位文件。账号设置只读显示官方姓名和邮箱，并可保存本地备注。</li>
         <li>运行中的普通或并发实例只使用现有 access JWT 读取授权；实例闲置后才会刷新并写回槽位 session。声库按账号独立保存，从不跨账号同步；默认同步仅包含设置、脚本等白名单文件。</li>
         <li>每个账号只执行一轮官方 <code>enroll_device</code> 启动等价检查，以确认实际启动是否会被登录冲突拒绝；所有请求固定使用 <code>kickout_other_sessions=false</code>。</li>
       </ul>
@@ -833,14 +837,15 @@ function accountProbeEnvironments(slot: Sv2ProfileSlot): AccountProbeEnvironment
   }
 
   for (const environment of environments) {
-    const remoteBusy = environment.probe.remoteUse === "detected";
-    const probeInUse = environment.probe.sessionStatus === "inUse";
-    environment.usable = environment.launchEnabled
-      && !environment.localBlocked
-      && environment.probe.sessionStatus === "ready"
-      && environment.probe.remoteUse === "clear";
-    environment.busy = environment.launchEnabled
-      && (environment.localBlocked || remoteBusy || probeInUse);
+    const availability = evaluateAccountEnvironment({
+      launchEnabled: environment.launchEnabled,
+      localBlocked: environment.localBlocked,
+      sessionStatus: environment.probe.sessionStatus,
+      remoteUse: environment.probe.remoteUse,
+      authorizationStatus: environment.probe.authorizationStatus,
+    });
+    environment.usable = availability.available;
+    environment.busy = availability.busy;
   }
   return environments;
 }
@@ -853,18 +858,22 @@ function accountProbeEnvironmentSummary(environment: AccountProbeEnvironmentStat
     ? "远端占用"
     : probe.sessionStatus === "inUse"
       ? "本机使用中"
-      : probe.sessionStatus === "ready" && probe.remoteUse === "clear"
-        ? "启动预检通过"
+    : probe.sessionStatus === "ready" && probe.authorizationStatus === "verified"
+        ? "可启动"
         : probe.sessionStatus === "ready" && probe.remoteUse === "unknown"
-          ? "尚未完成占用预检"
+          ? "账号信息待刷新"
           : accountProbeSessionLabel(probe.sessionStatus);
   const authorization = probe.authorizationStatus === "verified" ? "官方授权已确认" : "官方授权未知";
   return `${session}；${authorization}`;
 }
 
 function environmentDefinitelyUnavailable(environment: AccountProbeEnvironmentState): boolean {
-  return environment.busy
-    || ["expired", "loginRequired", "invalid", "syncFailed", "accountMismatch", "missing", "unsupported", "offline"].includes(environment.probe.sessionStatus);
+  return !environment.usable && (
+    environment.localBlocked
+    || environment.probe.remoteUse === "detected"
+    || environment.probe.authorizationStatus !== "verified"
+    || ["expired", "loginRequired", "invalid", "syncFailed", "accountMismatch", "missing", "unsupported", "offline"].includes(environment.probe.sessionStatus)
+  );
 }
 
 function accountProbeBadge(slot: Sv2ProfileSlot): string {
@@ -886,12 +895,12 @@ function accountProbeBadge(slot: Sv2ProfileSlot): string {
   let label = "账号状态尚未确认";
   let emphasis = "";
   let iconName: "refresh" | "check" | "plug" = "refresh";
-  if (reportedIssue) {
+  if (hasUsableEnvironment) {
+    label = hasBusyEnvironment ? "账号可用（本机使用中）" : "账号可用";
+    iconName = "check";
+  } else if (reportedIssue) {
     label = reportedIssue.cardLabel;
     emphasis = reportedIssue.attention ? " attention" : "";
-  } else if (hasUsableEnvironment) {
-    label = "至少一个启动环境可用";
-    iconName = "check";
   } else if (hasBusyEnvironment && allUnavailable) {
     label = "账号当前无空闲启动环境";
     emphasis = " attention";
@@ -956,14 +965,6 @@ function officialAccountIdentity(slot: Sv2ProfileSlot): { name?: string; email?:
   };
 }
 
-function accountIdentityLabels(slot: Sv2ProfileSlot): string[] {
-  const official = officialAccountIdentity(slot);
-  const values = [official.name, official.email, slot.username.trim(), slot.email.trim()]
-    .filter((value): value is string => Boolean(value));
-  return values.filter((value, index) =>
-    values.findIndex((candidate) => candidate.toLocaleLowerCase() === value.toLocaleLowerCase()) === index);
-}
-
 type AccountUseTone = "clear" | "unknown" | "in-use";
 
 function accountUseStateForSlot(slot: Sv2ProfileSlot): { tone: AccountUseTone; label: string } {
@@ -980,17 +981,18 @@ function accountUseStateForSlot(slot: Sv2ProfileSlot): { tone: AccountUseTone; l
     ?? (probes.length > 0 && probes.every((probe) => probe.sessionStatus === "missing")
       ? accountProbeIssue(probes)
       : undefined);
+  const hasBusyEnvironment = environments.some((environment) => environment.busy);
+  if (environments.some((environment) => environment.usable)) {
+    return { tone: "clear", label: hasBusyEnvironment ? "账号可用（本机使用中）" : "账号可用" };
+  }
+
   if (reportedIssue) {
     return {
       tone: reportedIssue.attention ? "in-use" : "unknown",
       label: reportedIssue.cardLabel,
     };
   }
-  if (environments.some((environment) => environment.usable)) {
-    return { tone: "clear", label: "至少一个启动环境可用" };
-  }
 
-  const hasBusyEnvironment = environments.some((environment) => environment.busy);
   const allUnavailable = environments.length > 0 && environments.every(environmentDefinitelyUnavailable);
   if (hasBusyEnvironment && allUnavailable) {
     return { tone: "in-use", label: "所有可启动环境当前均不可用" };
@@ -1072,7 +1074,6 @@ function renderAccounts(): string {
     return `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("users", 24)}</span><div><h2>当前平台不支持账号槽位</h2><p>${escapeHtml(profiles.recoveryDetail)}</p></div></section>`;
   }
   const windowsExtensions = supportsWindowsSv2Extensions();
-  const accountIndicatorEnabled = windowsExtensions && Boolean(app?.sv2AccountIndicatorEnabled);
   const blockerCount = profiles.blockers.length;
   const blockerPanel = profiles.blockers.length ? `<div class="warning-card profile-blockers"><span>${icon("plug", 23)}</span><div><strong>普通槽位暂时不能切换</strong><p>${windowsExtensions ? "切换普通账号路径前，请先关闭下列进程；当前账号仍可再次普通启动，隔离实例也可继续多开。" : "切换普通账号路径前，请先保存并关闭下列进程；当前账号可以再次启动。"}<br />${profiles.blockers.map((blocker) => `${escapeHtml(blocker.name)}${blocker.pid ? ` (PID ${blocker.pid})` : ""}：${escapeHtml(blocker.reason)}`).join("<br />")}</p></div></div>` : "";
   if (profiles.recoveryRequired) {
@@ -1083,17 +1084,16 @@ function renderAccounts(): string {
   const providerDetail = profiles.concurrentProvider.detail;
   const cards = profiles.slots.map((slot) => {
     const lastUsed = slot.lastActivatedAtUtc ? new Date(slot.lastActivatedAtUtc).toLocaleString("zh-CN") : "尚未启动";
-    const initial = Array.from(slot.displayName)[0] ?? "S";
-    const color = /^#[0-9a-f]{6}$/i.test(slot.color) ? slot.color : "#6D5CE7";
     const officialIdentity = windowsExtensions ? officialAccountIdentity(slot) : {};
-    const identity = accountIdentityLabels(slot);
-    const identityFromActiveSession = windowsExtensions && [slot.accountProbe, slot.concurrentAccountProbe]
-      .some((probe) => probe.sessionStatus === "inUse" && (probe.accountDisplayName || probe.accountEmail));
-    const identityTitle = officialIdentity.name || officialIdentity.email
-      ? identityFromActiveSession
-        ? "账号正在使用；姓名与邮箱来自上次预检，关闭客户端后可手工刷新。"
-        : "账号姓名与邮箱优先显示本次预检读取的标准 JWT name/email 声明；其后为本地自定义标签。"
-      : "当前仅显示本地自定义账号标签。";
+    const accountTitle = officialIdentity.name ?? "未登录";
+    const initial = Array.from(officialIdentity.name ?? "?")[0] ?? "?";
+    const color = /^#[0-9a-f]{6}$/i.test(slot.color) ? slot.color : "#6D5CE7";
+    const accountEmail = officialIdentity.email
+      ? `<span class="profile-identity">${escapeHtml(officialIdentity.email)}</span>`
+      : `<span class="profile-identity empty">账号信息待刷新</span>`;
+    const note = slot.displayName.trim()
+      ? `<span class="profile-note">备注：${escapeHtml(slot.displayName)}</span>`
+      : `<span class="profile-note empty">未设置备注</span>`;
     const useState = windowsExtensions
       ? accountUseStateForSlot(slot)
       : blockerCount
@@ -1118,7 +1118,7 @@ function renderAccounts(): string {
       ? windowsLaunchActions
       : `<button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button>`;
     return `<article class="account-launch-card ${slot.isActive ? "active" : ""}" style="--profile-color:${color}">
-      <div class="account-card-main"><span class="profile-avatar compact">${escapeHtml(initial)}</span><div class="account-card-identity"><div class="profile-title-line"><h2>${escapeHtml(slot.displayName)}</h2>${accountUseDot(useState)}${slot.isActive ? '<span class="profile-active-badge">默认</span>' : ""}</div>${identity.length ? `<span class="profile-identity" title="${escapeHtml(identityTitle)}">${identity.map(escapeHtml).join(" · ")}</span>` : `<span class="profile-identity empty">${accountIndicatorEnabled ? "尚未读取 JWT 姓名/邮箱" : "未设置账号标签"}</span>`}</div><div class="account-card-actions">${windowsExtensions ? `<button class="icon-plain" data-profile-refresh-slot="${slot.id}" title="刷新此账号状态" aria-label="刷新 ${escapeHtml(slot.displayName)}">${icon("refresh", 18)}</button>` : ""}<button class="icon-plain" data-manage-slot="${slot.id}" title="设置" aria-label="设置 ${escapeHtml(slot.displayName)}">${icon("settings", 18)}</button><button class="icon-plain danger" data-delete-profile="${slot.id}" title="删除" aria-label="删除 ${escapeHtml(slot.displayName)}">${icon("trash", 18)}</button><button class="icon-plain" data-profile-activate="${slot.id}" title="切换默认账户" aria-label="将 ${escapeHtml(slot.displayName)} 设为默认账户" ${slot.isActive ? "disabled" : ""}>${icon("check", 18)}</button></div></div>
+      <div class="account-card-main"><span class="profile-avatar compact">${escapeHtml(initial)}</span><div class="account-card-identity"><div class="profile-title-line"><h2>${escapeHtml(accountTitle)}</h2>${accountUseDot(useState)}${slot.isActive ? '<span class="profile-active-badge">默认</span>' : ""}</div>${accountEmail}${note}</div><div class="account-card-actions">${windowsExtensions ? `<button class="icon-plain" data-profile-refresh-slot="${slot.id}" title="刷新此账号状态" aria-label="刷新 ${escapeHtml(accountTitle)}">${icon("refresh", 18)}</button>` : ""}<button class="icon-plain" data-manage-slot="${slot.id}" title="设置" aria-label="设置 ${escapeHtml(accountTitle)}">${icon("settings", 18)}</button><button class="icon-plain danger" data-delete-profile="${slot.id}" title="删除" aria-label="删除 ${escapeHtml(accountTitle)}">${icon("trash", 18)}</button><button class="icon-plain" data-profile-activate="${slot.id}" title="切换默认账户" aria-label="将 ${escapeHtml(accountTitle)} 设为默认账户" ${slot.isActive ? "disabled" : ""}>${icon("check", 18)}</button></div></div>
       <div class="account-card-facts">${windowsExtensions ? `${accountProbeBadge(slot)}${voiceInventoryBadge(slot)}` : localVoiceFact}<span>${icon("sync", 13)} ${escapeHtml(lastUsed)}</span>${concurrentRunning ? `<span class="running">${icon("plug", 13)} ${slot.concurrent.runningPids.length} 个隔离进程</span>` : ""}</div>
       <div class="account-launch-actions">${launchActions}</div>
     </article>`;
@@ -1147,6 +1147,24 @@ function supportsWindowsSv2Extensions(): boolean {
   return app?.platform === "windows" || app?.platform === "preview";
 }
 
+function renderAuthorizedVoice(voice: string): string {
+  const catalogEntry = sv2VoiceCatalog?.find((item) => item.name === voice);
+  const cover = catalogEntry?.imageDataUrl
+    ? `<img class="voice-cover" src="${escapeHtml(catalogEntry.imageDataUrl)}" alt="" />`
+    : `<span class="voice-cover placeholder">${icon("audio", 14)}</span>`;
+  const vendor = catalogEntry?.vendor ? `<small>${escapeHtml(catalogEntry.vendor)}</small>` : "";
+  return `<span class="authorized-voice">${cover}<span>${escapeHtml(voice)}${vendor}</span></span>`;
+}
+
+function loadSv2VoiceCatalog(): void {
+  if (sv2VoiceCatalog || sv2VoiceCatalogLoading) return;
+  sv2VoiceCatalogLoading = true;
+  void api.sv2VoiceCatalog()
+    .then((catalog) => { sv2VoiceCatalog = catalog; })
+    .catch(() => { sv2VoiceCatalog = []; })
+    .finally(() => { sv2VoiceCatalogLoading = false; render(); });
+}
+
 function renderAccountManager(): string {
   if (!profiles) return "";
   const managedSlot = profiles.slots.find((slot) => slot.id === managedProfileSlotId)
@@ -1155,9 +1173,8 @@ function renderAccountManager(): string {
   if (managedSlot) managedProfileSlotId = managedSlot.id;
   let body = "";
   if (accountManagerSection === "profile" && !supportsWindowsSv2Extensions()) {
-    body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(managedSlot.displayName)}</h3><p>macOS v1 只切换本机完整 SV2 数据目录；不会读取、解密或刷新登录缓存，也不会同时运行多个实例。</p></div>${managedSlot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
-      <form class="profile-identity-form compact-form" data-profile-identity-form="${managedSlot.id}"><label>自定义用户名标签<input name="username" value="${escapeHtml(managedSlot.username)}" maxlength="100" placeholder="用于区分槽位" /></label><label>自定义邮箱标签<input name="email" type="email" value="${escapeHtml(managedSlot.email)}" maxlength="254" placeholder="name@example.com" /></label><button class="secondary">保存标签</button><small>这些本地标签仅用于区分槽位，不会修改或推断 Dreamtonics 账号身份。</small></form>
-      <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>槽位显示名称<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" required /></label><button class="secondary">重命名</button></form>
+    body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>未登录</h3><p>账号信息待刷新</p></div>${managedSlot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
+      <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>备注<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" placeholder="例如：制作账号" /></label><button class="secondary">保存备注</button></form>
       <form class="voice-license-form" data-profile-voice-form="${managedSlot.id}"><div class="voice-license-heading"><div><strong>补充手工确认声库</strong><small>每行记录一个完整产品名称；仅用于补充工程路由，不替代官方授权。</small></div></div><textarea name="voices" rows="4" maxlength="16384" placeholder="例如：&#10;Mai 2&#10;SOLARIA">${escapeHtml(managedSlot.voiceInventory.manuallyConfirmedVoices.join("\n"))}</textarea><button class="secondary" type="submit">保存确认记录</button></form>
       <div class="manager-action-row">${managedSlot.isActive ? "" : `<button class="secondary" data-profile-activate="${managedSlot.id}">${icon("check", 15)} 设为默认账号</button>`}<button class="secondary" data-profile-folder="${managedSlot.id}">${icon("folder", 15)} 打开槽位数据目录</button><button class="secondary component-remove-action" data-delete-profile="${managedSlot.id}">${icon("trash", 15)} 删除账号</button></div>
       <dl class="profile-storage-list compact"><div><dt>槽位数据</dt><dd><code title="${escapeHtml(managedSlot.dataPath)}">${escapeHtml(managedSlot.dataPath)}</code></dd></div></dl></div>` : '<div class="empty-inline">尚无账号，请先添加一个槽位。</div>';
@@ -1169,46 +1186,19 @@ function renderAccountManager(): string {
         : undefined;
     const authorizations = authorizationProbe?.authorizedVoices ?? [];
     const authorizationStatus = authorizationProbe?.authorizationStatus === "verified";
-    const managedProbes = managedSlot
-      ? [managedSlot.accountProbe, ...(managedSlot.concurrent.ready ? [managedSlot.concurrentAccountProbe] : [])]
-      : [];
-    const managedIssue = accountProbeIssue(managedProbes.filter((probe) => probe.sessionStatus !== "missing"))
-      ?? (managedProbes.length > 0 && managedProbes.every((probe) => probe.sessionStatus === "missing")
-        ? accountProbeIssue(managedProbes)
-        : undefined);
-    const authorizationUnavailable = managedIssue?.authorizationLabel ?? "授权尚未预检或结果未知";
     const officialIdentity = managedSlot ? officialAccountIdentity(managedSlot) : {};
-    const officialIdentitySummary = [
-      officialIdentity.name ? `姓名：${officialIdentity.name}` : undefined,
-      officialIdentity.email ? `邮箱：${officialIdentity.email}` : undefined,
-    ]
-      .filter((value): value is string => Boolean(value))
-      .join(" · ");
-    const managedProbeSummary = managedSlot
-      ? accountProbeEnvironments(managedSlot)
-        .map((environment) => {
-          const identity = accountProbeIdentity(environment.probe);
-          const identitySummary = [
-            identity.name ? `JWT 姓名：${identity.name}` : undefined,
-            identity.email ? `JWT 邮箱：${identity.email}` : undefined,
-          ].filter(Boolean).join("、");
-          return `${environment.label}：${accountProbeEnvironmentSummary(environment)}${identitySummary ? `；${identitySummary}` : ""}`;
-        })
-        .join("；")
-      : "";
+    const managedUseState = managedSlot ? accountUseStateForSlot(managedSlot) : { tone: "unknown" as const, label: "账号信息待刷新" };
+    const authorizationUnavailable = "授权尚未预检或结果未知";
     const authorizationSummary = authorizationStatus
-      ? managedIssue
-        ? `账号服务已确认 ${authorizations.length} 个声库授权；${managedIssue.authorizationLabel}。`
-        : `账号服务已确认 ${authorizations.length} 个声库授权。`
+      ? `账号服务已确认 ${authorizations.length} 个声库授权。`
       : authorizationUnavailable;
     const authorizationList = authorizationStatus
       ? authorizations.length
-        ? `<div class="authorization-list">${authorizations.map((voice) => `<span>${icon("audio", 14)} ${escapeHtml(voice)}</span>`).join("")}</div>`
+        ? `<div class="authorization-list">${authorizations.map(renderAuthorizedVoice).join("")}</div>`
         : '<div class="empty-inline">当前账号没有可用声库授权。</div>'
       : `<div class="empty-inline">${escapeHtml(authorizationUnavailable)}。</div>`;
-    body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(managedSlot.displayName)}</h3><p>${officialIdentitySummary ? `标准 JWT 身份：${escapeHtml(officialIdentitySummary)}` : "标准 JWT name/email 尚未读取；下方仅显示本地自定义标签。"}</p><p title="${escapeHtml(managedIssue?.title ?? managedProbeSummary)}">预检状态：${escapeHtml(managedProbeSummary)}</p></div>${managedSlot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
-      <form class="profile-identity-form compact-form" data-profile-identity-form="${managedSlot.id}"><label>自定义用户名标签<input name="username" value="${escapeHtml(managedSlot.username)}" maxlength="100" placeholder="${escapeHtml(officialIdentity.name ?? "用于区分账号")}" /></label><label>自定义邮箱标签<input name="email" type="email" value="${escapeHtml(managedSlot.email)}" maxlength="254" placeholder="${escapeHtml(officialIdentity.email ?? "name@example.com")}" /></label><button class="secondary">保存标签</button><small>标准 JWT 的 name/email 只读显示在上方；这些本地标签不会修改或冒充 Dreamtonics 账号身份。</small></form>
-      <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>槽位显示名称<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" required /></label><button class="secondary">重命名</button></form>
+    body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(officialIdentity.name ?? "未登录")}</h3><p>${escapeHtml(officialIdentity.email ?? "账号信息待刷新")}</p><p>${accountUseDot(managedUseState)} ${escapeHtml(managedUseState.label)}</p></div>${managedSlot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
+      <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>备注<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" placeholder="例如：制作账号" /></label><button class="secondary">保存备注</button></form>
       <section class="voice-license-form authorization-panel"><div class="voice-license-heading"><div><strong>可用授权</strong><small>${escapeHtml(authorizationSummary)}</small></div><span class="inventory-status ${authorizationStatus ? "verified" : "unknown"}">${authorizationStatus ? `${authorizations.length} 个授权` : "未读取"}</span></div>${authorizationList}</section>
       <form class="voice-license-form" data-profile-voice-form="${managedSlot.id}"><div class="voice-license-heading"><div><strong>补充手工确认声库</strong><small>每行记录一个完整产品名称；仅用于补充工程路由，不替代官方授权。</small></div></div><textarea name="voices" rows="4" maxlength="16384" placeholder="例如：&#10;Mai 2&#10;SOLARIA">${escapeHtml(managedSlot.voiceInventory.manuallyConfirmedVoices.join("\n"))}</textarea><button class="secondary" type="submit">保存确认记录</button></form>
       <div class="manager-action-row">${managedSlot.isActive ? "" : `<button class="secondary" data-profile-activate="${managedSlot.id}">${icon("check", 15)} 设为默认账号</button>`}<button class="secondary" data-profile-folder="${managedSlot.id}">${icon("folder", 15)} 打开普通数据目录</button>${managedSlot.concurrent.ready ? `<button class="secondary" data-profile-concurrent-folder="${managedSlot.id}">${icon("folder", 15)} 打开隔离目录</button>` : ""}<button class="secondary component-remove-action" data-delete-profile="${managedSlot.id}">${icon("trash", 15)} 删除账号</button></div>
@@ -1218,7 +1208,7 @@ function renderAccountManager(): string {
   } else if (accountManagerSection === "global") {
     body = `<form id="sv2-global-settings-form" class="isolation-defaults-form manager-defaults"><div><strong>全局设置</strong><small>默认只同步设置、脚本等白名单文件；声库按账号独立保存，同账号实例共用槽位数据。</small></div><label class="fluent-switch"><input name="accountProbeEnabled" type="checkbox" ${app?.sv2AccountIndicatorEnabled ? "checked" : ""} /><span></span>启用账号登录指示器</label><label class="fluent-switch"><input name="concurrentEnabled" type="checkbox" ${app?.sv2ConcurrentEnabled ? "checked" : ""} /><span></span>启用隔离功能</label><button class="secondary" type="submit">保存全局设置</button></form>`;
   } else {
-    body = `<div class="account-add-grid">${profiles.canImportCurrent ? `<section><span class="feature-icon emerald">${icon("folder", 20)}</span><h3>导入当前环境</h3><p>把现有官方数据目录纳入槽位，不移动账号文件。</p><form id="profile-import-form" class="profile-create-form"><input id="profile-import-name" maxlength="64" required placeholder="例如 主账号" /><button class="primary">导入</button></form></section>` : ""}<section><span class="feature-icon blue">${icon("plus", 20)}</span><h3>创建空槽位</h3><p>首次启动后，在 SV2 官方登录页面完成登录。</p><form id="profile-create-form" class="profile-create-form"><input id="profile-create-name" maxlength="64" required placeholder="例如 制作账号" /><button class="secondary">创建</button></form></section></div><div class="manager-safety">${icon("check", 17)}<span><strong>账号数据保持原样</strong><small>工具箱不会伪造登录或绕过联网验证。</small></span></div>`;
+    body = `<div class="account-add-grid">${profiles.canImportCurrent ? `<section><span class="feature-icon emerald">${icon("folder", 20)}</span><h3>导入当前环境</h3><p>把现有官方数据目录纳入槽位，不移动账号文件。</p><form id="profile-import-form" class="profile-create-form"><input id="profile-import-name" maxlength="64" required placeholder="备注（可留空）" /><button class="primary">导入</button></form></section>` : ""}<section><span class="feature-icon blue">${icon("plus", 20)}</span><h3>创建空槽位</h3><p>首次启动后，在 SV2 官方登录页面完成登录。</p><form id="profile-create-form" class="profile-create-form"><input id="profile-create-name" maxlength="64" required placeholder="备注（可留空）" /><button class="secondary">创建</button></form></section></div><div class="manager-safety">${icon("check", 17)}<span><strong>账号数据保持原样</strong><small>工具箱不会伪造登录或绕过联网验证。</small></span></div>`;
   }
   const tabs = "";
   return `<div class="dialog-backdrop account-manager-backdrop" role="presentation"><section class="account-manager-dialog" role="dialog" aria-modal="true" aria-labelledby="account-manager-title"><header><div><span class="eyebrow">SV2 ACCOUNT MANAGER</span><h2 id="account-manager-title">${accountManagerSection === "profile" ? "账号设置" : "账号管理"}</h2></div><button class="icon-plain" data-close-account-manager title="关闭" aria-label="关闭账号管理">×</button></header>${tabs}<div class="account-manager-body">${body}</div></section></div>`;
@@ -2242,8 +2232,7 @@ function wireForms(): void {
   document.querySelector<HTMLFormElement>("#profile-import-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const displayName = document.querySelector<HTMLInputElement>("#profile-import-name")?.value.trim() ?? "";
-    if (!displayName) return;
-    void run(async () => {
+  void run(async () => {
       profiles = await api.importCurrentSv2Profile(displayName);
       const prepared = await prepareConcurrentSlotsWhenEnabled();
       await refreshAccountUsage();
@@ -2253,8 +2242,7 @@ function wireForms(): void {
   document.querySelector<HTMLFormElement>("#profile-create-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const displayName = document.querySelector<HTMLInputElement>("#profile-create-name")?.value.trim() ?? "";
-    if (!displayName) return;
-    void run(async () => {
+  void run(async () => {
       profiles = await api.createSv2Profile(displayName);
       const prepared = await prepareConcurrentSlotsWhenEnabled();
       await refreshAccountUsage();
@@ -2266,15 +2254,7 @@ function wireForms(): void {
     const slotId = form.dataset.profileRenameForm ?? "";
     const displayName = form.querySelector<HTMLInputElement>("input")?.value.trim() ?? "";
     if (!slotId || !displayName) return;
-    void run(async () => { profiles = await api.renameSv2Profile(slotId, displayName); notice = "槽位名称已保存。"; });
-  }));
-  document.querySelectorAll<HTMLFormElement>("[data-profile-identity-form]").forEach((form) => form.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const slotId = form.dataset.profileIdentityForm ?? "";
-    const username = form.querySelector<HTMLInputElement>('[name="username"]')?.value.trim() ?? "";
-    const email = form.querySelector<HTMLInputElement>('[name="email"]')?.value.trim() ?? "";
-    if (!slotId) return;
-    void run(async () => { profiles = await api.updateSv2ProfileIdentity(slotId, username, email); notice = "账号用户名和邮箱标签已保存。"; });
+    void run(async () => { profiles = await api.renameSv2Profile(slotId, displayName); notice = "备注已保存。"; });
   }));
   document.querySelectorAll<HTMLFormElement>("[data-profile-voice-form]").forEach((form) => form.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -2674,6 +2654,7 @@ document.addEventListener("click", (event) => {
     managedProfileSlotId = target.dataset.manageSlot;
     accountManagerSection = "profile";
     accountManagerOpen = true;
+    loadSv2VoiceCatalog();
     render();
     return;
   }

@@ -171,8 +171,6 @@ export interface Sv2VoiceInventory {
 export interface Sv2ProfileSlot {
   id: string;
   displayName: string;
-  username: string;
-  email: string;
   color: string;
   createdAtUtc: string;
   lastActivatedAtUtc?: string;
@@ -203,6 +201,13 @@ export interface Sv2ProfilesState {
 }
 
 export type Sv2RemoteUseStatus = "clear" | "detected" | "unknown";
+
+export interface Sv2CachedVoice {
+  id: string;
+  name: string;
+  vendor?: string;
+  imageDataUrl?: string;
+}
 
 export interface Sv2AccountPrecheck {
   supported: boolean;

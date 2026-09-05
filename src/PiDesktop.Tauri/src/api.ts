@@ -257,8 +257,6 @@ let previewProfiles: Sv2ProfilesState = {
   slots: [{
     id: "11111111-1111-4111-8111-111111111111",
     displayName: "主账号",
-    username: "Producer",
-    email: "producer@example.com",
     color: "#6D5CE7",
     createdAtUtc: new Date().toISOString(),
     lastActivatedAtUtc: new Date().toISOString(),
@@ -304,8 +302,6 @@ let previewProfiles: Sv2ProfilesState = {
   }, {
     id: "22222222-2222-4222-8222-222222222222",
     displayName: "备用账号",
-    username: "Vocal Editor",
-    email: "editor@example.com",
     color: "#3478C9",
     createdAtUtc: new Date().toISOString(),
     isActive: false,
@@ -359,6 +355,11 @@ let previewProfiles: Sv2ProfilesState = {
     },
   }],
 };
+
+const previewSv2VoiceCatalog = [
+  { id: "preview-mai-2", name: "Mai 2", vendor: "Dreamtonics", imageDataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E%3Crect width='48' height='48' fill='%236d5ce7'/%3E%3C/svg%3E" },
+  { id: "preview-solaria", name: "SOLARIA", vendor: "Eclipsed Sounds" },
+];
 
 const previewState = (): BootstrapState => ({
   onboardingCompleted: previewOnboarding,
@@ -661,6 +662,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     detail: "预览模式不会启动外部浏览器。",
   } as T;
   if (command === "sv2_profile_state") return previewProfiles as T;
+  if (command === "sv2_voice_catalog") return previewSv2VoiceCatalog as T;
   if (command === "sv2_account_usage_snapshot" || command === "sv2_account_usage_snapshot_for_slot") {
     if (!previewSv2AccountIndicatorEnabled) {
       throw new Error("账号登录指示器尚未开启；确认其敏感操作说明后才能执行登录预检。");
@@ -679,8 +681,6 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     previewProfiles.slots.push({
       id,
       displayName: String(args?.displayName ?? "新账号"),
-      username: "",
-      email: "",
       color: "#3478C9",
       createdAtUtc: new Date().toISOString(),
       isActive: false,
@@ -732,14 +732,6 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     if (wasActive) {
       previewProfiles.activeSlotId = previewProfiles.slots[0]?.id;
       previewProfiles.slots.forEach((slot) => { slot.isActive = slot.id === previewProfiles.activeSlotId; });
-    }
-    return previewProfiles as T;
-  }
-  if (command === "update_sv2_profile_identity") {
-    const slot = previewProfiles.slots.find((item) => item.id === args?.slotId);
-    if (slot) {
-      slot.username = String(args?.username ?? "");
-      slot.email = String(args?.email ?? "");
     }
     return previewProfiles as T;
   }
@@ -1173,6 +1165,7 @@ export const api = {
   checkToolboxUpdate: () => call<ToolboxUpdateCheck>("check_toolbox_update"),
   openToolboxReleases: () => call<OperationResult>("open_toolbox_releases"),
   sv2ProfileState: () => call<Sv2ProfilesState>("sv2_profile_state"),
+  sv2VoiceCatalog: () => call<import("./types").Sv2CachedVoice[]>("sv2_voice_catalog"),
   sv2AccountPrecheck: () => call<Sv2AccountPrecheck>("sv2_account_precheck"),
   sv2AccountUsageSnapshot: () => call<Sv2AccountUsageSnapshot>("sv2_account_usage_snapshot"),
   sv2AccountUsageSnapshotForSlot: (slotId: string) =>
@@ -1190,8 +1183,6 @@ export const api = {
     call<Sv2ProfilesState>("create_sv2_profile", { displayName }),
   renameSv2Profile: (slotId: string, displayName: string) =>
     call<Sv2ProfilesState>("rename_sv2_profile", { slotId, displayName }),
-  updateSv2ProfileIdentity: (slotId: string, username: string, email: string) =>
-    call<Sv2ProfilesState>("update_sv2_profile_identity", { slotId, username, email }),
   updateSv2ProfileVoiceLicenses: (slotId: string, voices: string[]) =>
     call<Sv2ProfilesState>("update_sv2_profile_voice_licenses", { slotId, voices }),
   deleteSv2Profile: (slotId: string) =>
