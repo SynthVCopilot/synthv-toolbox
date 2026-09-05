@@ -881,6 +881,11 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .synthv-process-row strong, .synthv-process-row small { display: block; }
 .synthv-process-row small { max-width: 420px; margin-top: 4px; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .synthv-process-row .button-row { margin: 0; flex: 0 0 auto; }
+.account-instance-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+.account-instance-row .instance-heading { min-width: 0; overflow-wrap: anywhere; }
+.account-instance-row details { grid-column: 1 / -1; min-width: 0; color: var(--muted); font-size: 12px; }
+.account-instance-row summary { width: fit-content; cursor: pointer; }
+.account-instance-row details code { display: block; margin-top: 6px; overflow-wrap: anywhere; white-space: normal; }
 .progress-track { height: 3px; overflow: hidden; margin-top: 8px; border-radius: 999px; background: var(--line); }
 .progress-track span { display: block; height: 100%; border-radius: inherit; background: var(--primary); transition: width 180ms ease; }
 .bridge-grid, .mcp-layout, .settings-layout { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); align-items: start; gap: 12px; }

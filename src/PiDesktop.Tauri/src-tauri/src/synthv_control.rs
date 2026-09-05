@@ -248,6 +248,7 @@ fn product_name(path: &str, is_sv2: bool) -> String {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn parse_macos_processes(output: &str) -> Vec<(u32, String, String)> {
     output
         .lines()
@@ -268,6 +269,7 @@ fn parse_macos_processes(output: &str) -> Vec<(u32, String, String)> {
         .collect()
 }
 
+#[cfg(target_os = "macos")]
 fn executable_name(command: &str) -> String {
     command
         .replace('\\', "/")

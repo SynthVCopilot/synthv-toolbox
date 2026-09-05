@@ -74,7 +74,7 @@ let previewSynthvPid = 4203;
 let previewSynthvProcesses: SynthVProcess[] = [
   { processId: 4201, processIdentity: "preview-4201", productName: "SVStudio2 Pro", version: "2.3.0", name: "Synthesizer V Studio 2 Pro", command: "/Applications/Synthesizer V Studio 2 Pro.app/Contents/MacOS/synthv-studio", windowTitle: "Project A.svp - Synthesizer V Studio 2 Pro", isSv2: true, sandboxed: false },
   { processId: 4202, processIdentity: "preview-4202", productName: "SVStudio2 Pro", version: "2.3.0", name: "Synthesizer V Studio 2 Pro", command: "C:\\Sandbox\\Synthesizer V Studio 2 Pro.exe", windowTitle: "Project B.svp - Synthesizer V Studio 2 Pro", isSv2: true, sandboxed: true },
-  { processId: 4203, name: "Synthesizer V Flat", command: "C:\\Apps\\Synthesizer V Flat.exe", windowTitle: "Synthesizer V Flat", isSv2: false, sandboxed: null },
+  { processId: 4203, processIdentity: "preview-4203", productName: "Synthesizer V Flat", version: "1.4.3", name: "Synthesizer V Flat", command: "C:\\Apps\\Synthesizer V Flat.exe", windowTitle: "", isSv2: false, sandboxed: false },
 ];
 let previewDownloads: ComponentDownload[] = [];
 let previewMediaTasks: MediaTaskSnapshot[] = [];
@@ -444,10 +444,14 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     return previewState() as T;
   }
   if (command === "get_http_api_status") return { ...previewHttpApiStatus } as T;
-  if (command === "focus_sv2_instance") return { succeeded: true, summary: "已切换到 SynthV 实例。", detail: "" } as T;
-  if (command === "terminate_sv2_instance") {
-    previewSynthvProcesses = previewSynthvProcesses.filter((item) => item.processId !== Number(args?.processId));
-    return { succeeded: true, summary: "已终止 SynthV 实例。", detail: "" } as T;
+  if (command === "focus_sv2_instance" || command === "terminate_sv2_instance") {
+    const instance = previewSynthvProcesses.find((item) => item.processId === Number(args?.processId));
+    if (!instance?.processIdentity || instance.processIdentity !== args?.processIdentity) throw new Error("目标实例已变化，请刷新后重试。");
+    if (command === "terminate_sv2_instance") {
+      previewSynthvProcesses = previewSynthvProcesses.filter((item) => item !== instance);
+      for (const slot of previewProfiles.slots) slot.concurrent.runningPids = slot.concurrent.runningPids.filter((pid) => pid !== instance.processId);
+    }
+    return { succeeded: true, summary: command === "terminate_sv2_instance" ? "已终止 SynthV 实例。" : "已切换到 SynthV 实例。", detail: "" } as T;
   }
   if (command === "configure_http_api") {
     const enabled = Boolean(args?.enabled);
@@ -784,7 +788,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "launch_sv2_profile" || command === "force_launch_sv2_profile") {
     previewProfiles.activeSlotId = String(args?.slotId ?? "");
     previewProfiles.slots.forEach((slot) => { slot.isActive = slot.id === previewProfiles.activeSlotId; });
-    previewSynthvProcesses.push({ processId: ++previewSynthvPid, name: "Synthesizer V Studio 2 Pro", command: "C:\\Program Files\\Dreamtonics\\Synthesizer V Studio 2 Pro.exe", windowTitle: "Synthesizer V Studio 2 Pro", isSv2: true, sandboxed: false });
+    const processId = ++previewSynthvPid;
+    previewSynthvProcesses.push({ processId, processIdentity: `preview-${processId}`, productName: "SVStudio2 Pro", version: "2.3.0", name: "Synthesizer V Studio 2 Pro", command: "C:\\Program Files\\Dreamtonics\\Synthesizer V Studio 2 Pro.exe", windowTitle: "", isSv2: true, sandboxed: false });
     if (command === "force_launch_sv2_profile") previewProfiles.blockers = [];
     return {
       succeeded: true,
@@ -798,7 +803,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       slot.concurrent.ready = true;
       const processId = ++previewSynthvPid;
       slot.concurrent.runningPids = [...slot.concurrent.runningPids, processId];
-      previewSynthvProcesses.push({ processId, name: "Synthesizer V Studio 2 Pro", command: "C:\\Sandbox\\Synthesizer V Studio 2 Pro.exe", windowTitle: `Synthesizer V Studio 2 Pro · ${slot.displayName}`, isSv2: true, sandboxed: true });
+      previewSynthvProcesses.push({ processId, processIdentity: `preview-${processId}`, productName: "SVStudio2 Pro", version: "2.3.0", name: "Synthesizer V Studio 2 Pro", command: "C:\\Sandbox\\Synthesizer V Studio 2 Pro.exe", windowTitle: "", isSv2: true, sandboxed: true });
     }
     return { succeeded: true, summary: "已启动隔离 SV2 实例。", detail: "预览模式" } as T;
   }

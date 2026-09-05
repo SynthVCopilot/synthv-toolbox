@@ -140,6 +140,7 @@ let pendingConcurrentRoute: { slotId: string; projectPath: string; mode: SvpLaun
 let pendingSvpRoute: SvpRoutePlan | undefined;
 let pendingComponentRemovalId: string | undefined;
 let pendingProfileDeletionId: string | undefined;
+let pendingInstanceTermination: SynthVProcess | undefined;
 let pendingAccountIndicatorConsent: PendingAccountIndicatorConsent | undefined;
 let removingComponentId: string | undefined;
 let aiProviderPickerOpen = false;
@@ -526,7 +527,7 @@ function render(): void {
       }, 4200);
     }
   }
-  const overlayHtml = pendingComponentRemovalId ? renderComponentRemovalDialog() : pendingProfileDeletionId ? renderProfileDeletionDialog() : pendingBlockedSwitchSlot ? renderBlockedSwitchDialog() : pendingConcurrentLaunchSlot ? renderConcurrentDisclaimer() : pendingSvpRoute ? renderSvpRouteDialog() : pendingAccountIndicatorConsent ? renderAccountIndicatorConsent() : accountManagerOpen && page === "accounts" ? renderAccountManager() : aiProviderPickerOpen ? renderAiProviderPicker() : "";
+  const overlayHtml = pendingInstanceTermination ? renderInstanceTerminationDialog() : pendingComponentRemovalId ? renderComponentRemovalDialog() : pendingProfileDeletionId ? renderProfileDeletionDialog() : pendingBlockedSwitchSlot ? renderBlockedSwitchDialog() : pendingConcurrentLaunchSlot ? renderConcurrentDisclaimer() : pendingSvpRoute ? renderSvpRouteDialog() : pendingAccountIndicatorConsent ? renderAccountIndicatorConsent() : accountManagerOpen && page === "accounts" ? renderAccountManager() : aiProviderPickerOpen ? renderAiProviderPicker() : "";
   const nextShellState = {
     page,
     sidebarCollapsed,
@@ -579,6 +580,12 @@ function renderAccountIndicatorConsent(): string {
       <div class="dialog-actions"><button class="secondary" data-cancel-account-indicator>取消</button><button class="primary" data-confirm-account-indicator>${icon("check", 16)} 同意并开启</button></div>
     </section>
   </div>`;
+}
+
+function renderInstanceTerminationDialog(): string {
+  const process = pendingInstanceTermination;
+  if (!process) return "";
+  return `<div class="dialog-backdrop" role="presentation"><section class="fluent-dialog" role="alertdialog" aria-modal="true" aria-labelledby="terminate-instance-title"><h2 id="terminate-instance-title">终止这个实例？</h2><p>${escapeHtml(instanceProjectTitle(process.windowTitle))} · PID ${process.processId}</p><p>未保存的工程修改会丢失。请确认已保存；其他实例会继续运行。</p><div class="dialog-actions"><button class="secondary" data-cancel-instance-termination>取消</button><button class="danger-action" data-confirm-instance-termination>终止实例</button></div></section></div>`;
 }
 
 function renderProfileDeletionDialog(): string {
@@ -889,16 +896,17 @@ function accountProbeBadge(slot: Sv2ProfileSlot): string {
     label = "账号当前无空闲启动环境";
     emphasis = " attention";
     iconName = "plug";
+  } else if (probes.some((probe) => probe.authorizationStatus === "verified")) {
+    label = "授权已确认";
+    iconName = "check";
   } else if (notYetChecked) {
     label = "账号状态尚未预检";
   }
 
-  const tooltip = environments
-    .map((environment) => {
-      const detail = environment.probe.detail.trim();
-      return `${environment.label}：${accountProbeEnvironmentSummary(environment)}${detail ? `。${detail}` : ""}`;
-    })
-    .join("；");
+  const tooltip = [
+    ...environments.map((environment) => `${environment.label}：${accountProbeEnvironmentSummary(environment)}`),
+    slot.accountProbe.detail.trim(),
+  ].filter(Boolean).join("；");
   return `<span class="session-protection${emphasis}" title="${escapeHtml(tooltip)}">${icon(iconName, 14)} ${escapeHtml(label)}</span>`;
 }
 
@@ -909,8 +917,7 @@ function voiceInventoryBadge(slot: Sv2ProfileSlot): string {
   const verifiedCounts = probes
     .filter((probe) => probe.authorizationStatus === "verified")
     .map((probe) => probe.authorizedVoiceCount);
-  const reportedIssue = accountProbeIssue(probes.filter((probe) => probe.sessionStatus !== "missing"))
-    ?? (verifiedCounts.length ? undefined : accountProbeIssue(probes));
+  const reportedIssue = verifiedCounts.length ? undefined : accountProbeIssue(probes);
   const unresolvedOfficial = reportedIssue
     ? { label: reportedIssue.authorizationLabel, title: reportedIssue.title }
     : { label: "官方授权尚未预检/未知", title: "尚无账号服务返回的授权结果。" };
@@ -1131,7 +1138,7 @@ function renderSv2InstanceRows(): string {
     const product = [process.productName || process.name, process.version].filter(Boolean).join(" ");
     const identity = process.processIdentity || "";
     const disabled = !identity || busy ? " disabled" : "";
-    return `<article class="synthv-process-row" data-process-id="${process.processId}"><div><strong>${escapeHtml(`${product} · ${slot?.displayName ?? "未关联账号"} · ${title}`)}</strong><small>${escapeHtml(mode)}</small></div><div class="button-row"><button class="secondary compact" data-focus-sv2="${process.processId}" data-process-identity="${escapeHtml(identity)}"${disabled}>切换到</button><button class="danger compact" data-terminate-sv2="${process.processId}" data-process-identity="${escapeHtml(identity)}"${disabled}>终止</button></div><details><summary>详情</summary><small>PID ${process.processId}</small><code>${escapeHtml(process.command)}</code></details></article>`;
+    return `<article class="synthv-process-row account-instance-row" data-process-id="${process.processId}"><div class="instance-heading"><strong>${escapeHtml(`${product} · ${slot?.displayName ?? "未关联账号"} · ${title}`)}</strong></div><div class="button-row"><button class="secondary compact" data-focus-sv2="${process.processId}" data-process-identity="${escapeHtml(identity)}"${disabled}>切换到</button><button class="danger compact" data-terminate-sv2="${process.processId}" data-process-identity="${escapeHtml(identity)}"${disabled}>终止</button></div><details><summary>详情</summary><small>PID ${process.processId} · ${escapeHtml(mode)}</small><code>${escapeHtml(process.command)}</code></details></article>`;
   }).join("");
   return instances || '<div class="empty-inline compact-empty">当前没有检测到 SynthV 实例。</div>';
 }
@@ -2421,6 +2428,12 @@ document.addEventListener("input", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && pendingInstanceTermination) {
+    event.preventDefault();
+    pendingInstanceTermination = undefined;
+    render();
+    return;
+  }
   if (event.key !== "Escape" || !aiProviderPickerOpen) return;
   event.preventDefault();
     aiProviderPickerOpen = false;
@@ -2857,9 +2870,25 @@ document.addEventListener("click", (event) => {
   if (target.dataset.terminateSv2) {
     const processId = Number(target.dataset.terminateSv2);
     const identity = target.dataset.processIdentity || "";
-    if (Number.isInteger(processId) && identity && confirm("终止前请确认工程已保存。未保存的改动将丢失。是否终止此实例？")) {
-      void run(async () => { setFeedback(await api.terminateSv2Instance(processId, identity)); synthvProcesses = await api.listSynthvProcesses(); });
+    if (Number.isInteger(processId) && identity) {
+      pendingInstanceTermination = synthvProcesses.find((process) => process.processId === processId && process.processIdentity === identity);
+      render();
     }
+    return;
+  }
+  if (target.hasAttribute("data-cancel-instance-termination")) {
+    pendingInstanceTermination = undefined;
+    render();
+    return;
+  }
+  if (target.hasAttribute("data-confirm-instance-termination")) {
+    const process = pendingInstanceTermination;
+    pendingInstanceTermination = undefined;
+    const identity = process?.processIdentity;
+    if (process && identity) void run(async () => {
+      setFeedback(await api.terminateSv2Instance(process.processId, identity));
+      [synthvProcesses, profiles] = await Promise.all([api.listSynthvProcesses(), api.sv2ProfileState()]);
+    });
     return;
   }
   if (target.dataset.autoConnectSynthv) {
@@ -2889,7 +2918,7 @@ document.addEventListener("click", (event) => {
     } else {
       void run(async () => {
         await refreshAccountUsage();
-        notice = "账号槽位、JWT 续期与登录冲突状态已刷新。";
+        notice = "账号槽位与授权状态已刷新。";
       });
     }
     return;
@@ -2903,14 +2932,11 @@ document.addEventListener("click", (event) => {
       void run(async () => {
         await refreshAccountUsage(slotId);
         const slot = profiles?.slots.find((item) => item.id === slotId);
-        const failed = slot
-          ? [slot.accountProbe, ...(slot.concurrent.ready ? [slot.concurrentAccountProbe] : [])]
-            .filter((probe) => probe.sessionStatus === "syncFailed")
-          : [];
-        if (failed.length) {
-          error = `此账号刷新后仍未同步：${failed.map((probe) => probe.detail).filter(Boolean).join("；")}`;
+        const probe = slot?.accountProbe;
+        if (probe && ["syncFailed", "offline", "expired", "invalid", "unsupported", "accountMismatch"].includes(probe.sessionStatus)) {
+          error = probe.detail || "当前无法确认该账号的授权状态。";
         } else {
-          notice = "此账号的 JWT、授权与登录冲突状态已刷新。";
+          notice = "此账号的会话与授权状态已检查。";
         }
       });
     }

@@ -436,10 +436,17 @@ fn inspect_active_session_license(
         .timeout_write(Duration::from_secs(5))
         .redirects(0)
         .build();
-    let Some(root) = root.as_ref() else { return Sv2AccountProbeView::in_use(); };
-    read_only_authorization(data_root, root, &fingerprint, &credentials, true, |access| {
-        query_license_snapshot_with_agent(&agent, access)
-    })
+    let Some(root) = root.as_ref() else {
+        return Sv2AccountProbeView::in_use();
+    };
+    read_only_authorization(
+        data_root,
+        root,
+        &fingerprint,
+        &credentials,
+        true,
+        |access| query_license_snapshot_with_agent(&agent, access),
+    )
     .unwrap_or_else(Sv2AccountProbeView::in_use)
 }
 
@@ -456,7 +463,12 @@ where
     F: FnOnce(&str) -> RemoteOutcome,
 {
     let licenses = fetch(credentials.access_token());
-    if inspect_session_fingerprint(data_root).ok().flatten().as_ref() != Some(fingerprint) {
+    if inspect_session_fingerprint(data_root)
+        .ok()
+        .flatten()
+        .as_ref()
+        != Some(fingerprint)
+    {
         return None;
     }
     let view = if active {
@@ -1043,6 +1055,7 @@ struct TokenRefreshResponse<'a> {
 #[derive(Clone, Copy)]
 enum RefreshFailure {
     Expired,
+    UnsupportedClient,
     Unavailable(u16),
     Rejected(u16),
     Ambiguous,
@@ -1093,7 +1106,8 @@ fn refresh_session_credentials(
     agent: &ureq::Agent,
     current: &SessionCredentials,
 ) -> Result<SessionCredentials, RefreshFailure> {
-    let client_id = refresh_client_id(current.access_token()).map_err(|_| RefreshFailure::Expired)?;
+    let client_id =
+        refresh_client_id(current.access_token()).map_err(|_| RefreshFailure::UnsupportedClient)?;
     let mut serializer = url::form_urlencoded::Serializer::new(String::new());
     serializer.append_pair("grant_type", "refresh_token");
     serializer.append_pair("refresh_token", current.refresh_token());
@@ -1826,6 +1840,13 @@ fn plan_batch_sessions(sessions: &[BatchSession]) -> BatchPlan {
 #[cfg(windows)]
 fn refresh_failure_view(failure: RefreshFailure) -> Sv2AccountProbeView {
     match failure {
+        RefreshFailure::UnsupportedClient => Sv2AccountProbeView::new(
+            Sv2SessionInspectionStatus::Unsupported,
+            Sv2RemoteUseStatus::Unknown,
+            Sv2AuthorizationStatus::Unknown,
+            Vec::new(),
+            "会话未提供可识别的官方客户端标识；未发送续期请求或修改本地文件。",
+        ),
         RefreshFailure::Expired => Sv2AccountProbeView::new(
             Sv2SessionInspectionStatus::Expired,
             Sv2RemoteUseStatus::Unknown,
