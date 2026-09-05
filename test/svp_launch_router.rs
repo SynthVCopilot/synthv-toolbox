@@ -366,6 +366,55 @@ fn normal_blocker_does_not_exclude_clear_concurrent() {
 }
 
 #[test]
+fn active_slot_can_route_normal_second_process_while_blocked() {
+    let (root, path) = voice_project("Mai 2");
+    let mut slot = route_slot(
+        "active-slot",
+        "Active account",
+        Sv2RemoteUseStatus::Clear,
+        Sv2AuthorizationStatus::Verified,
+        &["Mai 2"],
+        &[],
+    );
+    slot.is_active = true;
+    let mut state = route_state(vec![slot]);
+    state.active_slot_id = Some("active-slot".to_string());
+    state.blockers.push(crate::sv2_profiles::Sv2ProcessBlocker {
+        pid: Some(4242),
+        name: "synthv-studio.exe".to_string(),
+        reason: "another normal SV2 process".to_string(),
+    });
+    let plan = build_route_plan(path.to_str().unwrap(), &state).unwrap();
+    assert_eq!(plan.selected_slot_id.as_deref(), Some("active-slot"));
+    assert_eq!(plan.selected_launch_mode, Some(SvpLaunchMode::Normal));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn non_active_slot_remains_blocked_for_normal_switch() {
+    let (root, path) = voice_project("Mai 2");
+    let slot = route_slot(
+        "other-slot",
+        "Other account",
+        Sv2RemoteUseStatus::Clear,
+        Sv2AuthorizationStatus::Verified,
+        &["Mai 2"],
+        &[],
+    );
+    let mut state = route_state(vec![slot]);
+    state.active_slot_id = Some("active-slot".to_string());
+    state.blockers.push(crate::sv2_profiles::Sv2ProcessBlocker {
+        pid: Some(4242),
+        name: "synthv-studio.exe".to_string(),
+        reason: "active normal SV2 process".to_string(),
+    });
+    let plan = build_route_plan(path.to_str().unwrap(), &state).unwrap();
+    assert_eq!(plan.selected_slot_id, None);
+    assert_eq!(plan.candidates[0].launch_mode, None);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn running_account_can_route_another_concurrent_instance() {
     let (root, path) = voice_project("Mai 2");
     let mut slot = route_slot(
