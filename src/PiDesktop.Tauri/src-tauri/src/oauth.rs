@@ -9,7 +9,10 @@ use std::fmt;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::Command;
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex, OnceLock};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex, OnceLock,
+};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD};
@@ -134,8 +137,12 @@ pub struct OAuthAccountMetadata {
     pub weight: u8,
 }
 
-fn default_true() -> bool { true }
-fn default_weight() -> u8 { 1 }
+fn default_true() -> bool {
+    true
+}
+fn default_weight() -> u8 {
+    1
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -342,7 +349,10 @@ impl Drop for AuthorizationGuard {
     }
 }
 
-pub fn authorize_cancellable(provider: AiProviderId, cancelled: Option<&AtomicBool>) -> Result<AuthorizedAccount, String> {
+pub fn authorize_cancellable(
+    provider: AiProviderId,
+    cancelled: Option<&AtomicBool>,
+) -> Result<AuthorizedAccount, String> {
     if matches!(provider, AiProviderId::Workbuddy | AiProviderId::Traecode) {
         return Err(format!("{} 使用专用授权流程。", provider.display_name()));
     }

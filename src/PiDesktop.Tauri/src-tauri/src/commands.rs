@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex, OnceLock};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex, OnceLock,
+};
 
 use chrono::Utc;
 use serde::Serialize;
@@ -32,8 +35,8 @@ use crate::components::{
 };
 use crate::config::{
     model_summary, save_settings, settings_path, validate_ai_model, validate_mcp_server,
-    AgentWorkMode, AiAuthMethod, AiLoadStrategy, ApiKeyMetadata, AppMode, McpServerConfig, ModelSummary,
-    ToolboxSettings,
+    AgentWorkMode, AiAuthMethod, AiLoadStrategy, ApiKeyMetadata, AppMode, McpServerConfig,
+    ModelSummary, ToolboxSettings,
 };
 use crate::creative_history::{
     self, CreativeHistoryEntry, ProjectCheckpoint, WorkflowRecipe, WorkflowReportFormat,
@@ -78,8 +81,10 @@ static AUTHORIZATIONS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceL
 
 fn register_authorization(operation_id: &str) -> Result<Arc<AtomicBool>, String> {
     let flag = Arc::new(AtomicBool::new(false));
-    AUTHORIZATIONS.get_or_init(|| Mutex::new(HashMap::new()))
-        .lock().map_err(|_| "OAuth 取消状态不可用。".to_string())?
+    AUTHORIZATIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|_| "OAuth 取消状态不可用。".to_string())?
         .insert(operation_id.to_string(), flag.clone());
     Ok(flag)
 }
@@ -754,8 +759,9 @@ pub async fn set_agent_work_mode(
     build_bootstrap(&state).await
 }
 
-fn authorize_workbuddy(cancelled: Option<&AtomicBool>) -> Result<(OAuthAccountMetadata, crate::agent::WorkBuddyCredential), String>
-{
+fn authorize_workbuddy(
+    cancelled: Option<&AtomicBool>,
+) -> Result<(OAuthAccountMetadata, crate::agent::WorkBuddyCredential), String> {
     authorization_cancelled(cancelled)?;
     let oauth = WorkBuddyOAuth::new(WorkBuddyOAuthConfig::builtin());
     let auth = oauth
@@ -813,17 +819,31 @@ pub async fn authorize_ai_provider(
     state: State<'_, AppState>,
 ) -> Result<BootstrapState, String> {
     require_ai(&state).await?;
-    let cancellation = operation_id.as_deref().map(register_authorization).transpose()?;
+    let cancellation = operation_id
+        .as_deref()
+        .map(register_authorization)
+        .transpose()?;
     let _authorization_registration = AuthorizationRegistration(operation_id.clone());
     if provider == AiProviderId::Workbuddy {
         let cancellation_for_worker = cancellation.clone();
-        let (mut metadata, credential) = tauri::async_runtime::spawn_blocking(move || authorize_workbuddy(cancellation_for_worker.as_deref()))
-            .await
-            .map_err(|error| error.to_string())??;
+        let (mut metadata, credential) = tauri::async_runtime::spawn_blocking(move || {
+            authorize_workbuddy(cancellation_for_worker.as_deref())
+        })
+        .await
+        .map_err(|error| error.to_string())??;
         authorization_cancelled(cancellation.as_deref())?;
         if let Some(credential_id) = credential_id {
-            let existing = state.settings.read().await.oauth_accounts.iter().find(|account| account.provider == provider && account.id == credential_id).cloned();
-            let Some(existing) = existing else { return Err("没有找到要重新授权的 WorkBuddy 账号。".to_string()); };
+            let existing = state
+                .settings
+                .read()
+                .await
+                .oauth_accounts
+                .iter()
+                .find(|account| account.provider == provider && account.id == credential_id)
+                .cloned();
+            let Some(existing) = existing else {
+                return Err("没有找到要重新授权的 WorkBuddy 账号。".to_string());
+            };
             metadata.id = credential_id;
             metadata.label = existing.label;
             metadata.enabled = existing.enabled;
@@ -869,17 +889,37 @@ pub async fn authorize_ai_provider(
     }
     if provider == AiProviderId::Traecode {
         let cancellation_for_worker = cancellation.clone();
-        let status = tauri::async_runtime::spawn_blocking(move || TraeCodeProvider::new(TraeCodeConfig::new(AiProviderId::Traecode.default_model())).login_cancellable(cancellation_for_worker.as_deref()))
-            .await.map_err(|error| error.to_string())?.map_err(|error| error.to_string())?;
+        let status = tauri::async_runtime::spawn_blocking(move || {
+            TraeCodeProvider::new(TraeCodeConfig::new(AiProviderId::Traecode.default_model()))
+                .login_cancellable(cancellation_for_worker.as_deref())
+        })
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
         authorization_cancelled(cancellation.as_deref())?;
-        if !status.available || !status.logged_in { return Err(status.detail); }
+        if !status.available || !status.logged_in {
+            return Err(status.detail);
+        }
         let mut metadata = OAuthAccountMetadata {
-            id: "oauth:traecode:enterprise".to_string(), provider, label: "TraeCode enterprise CLI".to_string(),
-            expires_at: 0, enabled: true, weight: 1,
+            id: "oauth:traecode:enterprise".to_string(),
+            provider,
+            label: "TraeCode enterprise CLI".to_string(),
+            expires_at: 0,
+            enabled: true,
+            weight: 1,
         };
         if let Some(credential_id) = credential_id {
-            let existing = state.settings.read().await.oauth_accounts.iter().find(|account| account.provider == provider && account.id == credential_id).cloned();
-            let Some(existing) = existing else { return Err("没有找到要重新授权的 TraeCode 账号。".to_string()); };
+            let existing = state
+                .settings
+                .read()
+                .await
+                .oauth_accounts
+                .iter()
+                .find(|account| account.provider == provider && account.id == credential_id)
+                .cloned();
+            let Some(existing) = existing else {
+                return Err("没有找到要重新授权的 TraeCode 账号。".to_string());
+            };
             metadata.id = credential_id;
             metadata.label = existing.label;
             metadata.enabled = existing.enabled;
@@ -893,22 +933,40 @@ pub async fn authorize_ai_provider(
         save_settings(&next)?;
         *settings = next;
         drop(settings);
-        state.credential_balancer.lock().map_err(|_| "凭据调度器不可用。".to_string())?.upsert(crate::credential_balancer::CredentialRoute {
-            id: metadata.id, provider, auth_method: AiAuthMethod::OAuth, models: vec![provider.default_model().to_string()],
-            weight: 1, strategy: AiLoadStrategy::RoundRobin,
-        });
+        state
+            .credential_balancer
+            .lock()
+            .map_err(|_| "凭据调度器不可用。".to_string())?
+            .upsert(crate::credential_balancer::CredentialRoute {
+                id: metadata.id,
+                provider,
+                auth_method: AiAuthMethod::OAuth,
+                models: vec![provider.default_model().to_string()],
+                weight: 1,
+                strategy: AiLoadStrategy::RoundRobin,
+            });
         return build_bootstrap(&state).await;
     }
     let cancellation_for_worker = cancellation.clone();
-    let authorized = tauri::async_runtime::spawn_blocking(move || oauth::authorize_cancellable(provider, cancellation_for_worker.as_deref()))
-        .await
-        .map_err(|error| error.to_string())?;
+    let authorized = tauri::async_runtime::spawn_blocking(move || {
+        oauth::authorize_cancellable(provider, cancellation_for_worker.as_deref())
+    })
+    .await
+    .map_err(|error| error.to_string())?;
     let mut authorized = authorized?;
     authorization_cancelled(cancellation.as_deref())?;
     if let Some(credential_id) = credential_id {
-        let existing = state.settings.read().await.oauth_accounts.iter()
-            .find(|account| account.provider == provider && account.id == credential_id).cloned();
-        let Some(existing) = existing else { return Err("没有找到要重新授权的 OAuth 账号。".to_string()); };
+        let existing = state
+            .settings
+            .read()
+            .await
+            .oauth_accounts
+            .iter()
+            .find(|account| account.provider == provider && account.id == credential_id)
+            .cloned();
+        let Some(existing) = existing else {
+            return Err("没有找到要重新授权的 OAuth 账号。".to_string());
+        };
         authorized.metadata.id = credential_id;
         authorized.metadata.label = existing.label;
         authorized.metadata.enabled = existing.enabled;
@@ -1005,8 +1063,12 @@ pub async fn select_ai_provider(
 
 #[tauri::command]
 pub fn cancel_ai_authorization(operation_id: String) -> Result<(), String> {
-    let Some(operations) = AUTHORIZATIONS.get() else { return Ok(()); };
-    let operations = operations.lock().map_err(|_| "OAuth 取消状态不可用。".to_string())?;
+    let Some(operations) = AUTHORIZATIONS.get() else {
+        return Ok(());
+    };
+    let operations = operations
+        .lock()
+        .map_err(|_| "OAuth 取消状态不可用。".to_string())?;
     if let Some(flag) = operations.get(&operation_id) {
         flag.store(true, Ordering::Relaxed);
     }
@@ -1164,7 +1226,9 @@ pub async fn update_ai_credential(
     state: State<'_, AppState>,
 ) -> Result<BootstrapState, String> {
     require_ai(&state).await?;
-    if !(1..=100).contains(&weight) { return Err("凭据权重必须在 1 到 100 之间。".to_string()); }
+    if !(1..=100).contains(&weight) {
+        return Err("凭据权重必须在 1 到 100 之间。".to_string());
+    }
     let mut settings = state.settings.write().await;
     let mut next = settings.clone();
     let mut found = false;
@@ -1183,7 +1247,9 @@ pub async fn update_ai_credential(
             found = true;
         }
     }
-    if !found { return Err("没有找到该提供商的凭据。".to_string()); }
+    if !found {
+        return Err("没有找到该提供商的凭据。".to_string());
+    }
     next.set_api_keys_for(provider, keys);
     save_settings(&next)?;
     *settings = next;

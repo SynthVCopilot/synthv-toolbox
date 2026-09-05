@@ -1,6 +1,6 @@
 use synthv_toolbox_lib::credential_balancer::{
-    AiAuthMethod, AiLoadStrategy, AiProviderId, CredentialBalancer, CredentialCandidate, CredentialRoute,
-    FailureKind,
+    AiAuthMethod, AiLoadStrategy, AiProviderId, CredentialBalancer, CredentialCandidate,
+    CredentialRoute, FailureKind,
 };
 
 fn route(id: &str, auth_method: AiAuthMethod, models: &[&str]) -> CredentialRoute {

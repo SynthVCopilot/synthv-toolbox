@@ -884,7 +884,9 @@ pub fn validate_ai_model(
         let authenticated = TraeCodeProvider::new(TraeCodeConfig::new(model))
             .cached_login_status()
             .is_ok_and(|status| status.logged_in);
-        return authenticated.then(|| model.to_string()).ok_or_else(|| "TraeCode CLI 尚未登录。".to_string());
+        return authenticated
+            .then(|| model.to_string())
+            .ok_or_else(|| "TraeCode CLI 尚未登录。".to_string());
     }
     let oauth_connected = match provider {
         AiProviderId::Workbuddy => settings
