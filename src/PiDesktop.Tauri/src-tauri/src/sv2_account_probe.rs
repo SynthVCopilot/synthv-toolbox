@@ -666,10 +666,10 @@ fn view_from_remote(licenses: RemoteOutcome, enroll: EnrollOutcome) -> Sv2Accoun
             "官方服务拒绝了无踢出登录事件，检测到其他会话占用。"
         }
         (_, Sv2AuthorizationStatus::Verified, true) => {
-            "声库授权已读取，但设备登录检查暂时不可达；远端占用保持未知。"
+            "已完成只读声库授权查询，但授权服务的其他状态暂时不可达；未执行设备注册，远端占用保持未知。"
         }
         (_, Sv2AuthorizationStatus::Verified, false) => {
-            "声库授权已读取，但设备登录检查没有返回可判定结果；远端占用保持未知。"
+            "已完成只读声库授权查询；未执行设备注册，远端占用保持未知。"
         }
         (_, _, true) => "本地登录缓存有效，但官方服务暂时不可达；远端占用与授权保持未知。",
         _ => "官方服务没有返回可判定的登录或授权结果；状态保持未知。",

@@ -3,11 +3,12 @@ use super::*;
 fn account_probe(
     session_status: Sv2SessionInspectionStatus,
     remote_use: Sv2RemoteUseStatus,
+    authorization_status: Sv2AuthorizationStatus,
 ) -> Sv2AccountProbeView {
     Sv2AccountProbeView {
         session_status,
         remote_use,
-        authorization_status: Sv2AuthorizationStatus::Unknown,
+        authorization_status,
         authorized_voice_count: 0,
         authorized_voices: Vec::new(),
         account_display_name: None,
@@ -67,14 +68,20 @@ fn macos_standalone_detector_matches_only_the_sv2_executable() {
 
 #[test]
 fn account_summary_prefers_a_usable_environment_over_a_stale_copy() {
-    let available = account_probe(Sv2SessionInspectionStatus::Ready, Sv2RemoteUseStatus::Clear);
+    let available = account_probe(
+        Sv2SessionInspectionStatus::InUse,
+        Sv2RemoteUseStatus::Unknown,
+        Sv2AuthorizationStatus::Verified,
+    );
     let stale = account_probe(
         Sv2SessionInspectionStatus::Expired,
         Sv2RemoteUseStatus::Unknown,
+        Sv2AuthorizationStatus::Unknown,
     );
     let busy = account_probe(
         Sv2SessionInspectionStatus::Ready,
         Sv2RemoteUseStatus::Detected,
+        Sv2AuthorizationStatus::Verified,
     );
 
     assert!(account_probe_rank(&available) > account_probe_rank(&stale));
@@ -92,8 +99,6 @@ fn import_fixture(paths: &SlotPaths, name: &str) -> SlotManifest {
         slots: vec![SlotRecord {
             id,
             display_name: name.to_string(),
-            username: String::new(),
-            email: String::new(),
             manually_confirmed_voices: Vec::new(),
             color: SLOT_COLORS[0].to_string(),
             created_at_utc: Utc::now().to_rfc3339(),
@@ -122,8 +127,6 @@ fn add_parked(paths: &SlotPaths, manifest: &mut SlotManifest, name: &str) -> Str
     manifest.slots.push(SlotRecord {
         id: id.clone(),
         display_name: name.to_string(),
-        username: String::new(),
-        email: String::new(),
         manually_confirmed_voices: Vec::new(),
         color: SLOT_COLORS[1].to_string(),
         created_at_utc: Utc::now().to_rfc3339(),
@@ -304,16 +307,57 @@ fn names_and_slot_ids_are_strictly_validated() {
     assert!(validate_slot_id(&Uuid::new_v4().to_string()).is_ok());
     assert!(validate_color("#ABCDEF").is_ok());
     assert!(validate_color("red;display:none").is_err());
-    assert_eq!(
-        validate_optional_username("  Producer  ").unwrap(),
-        "Producer"
+}
+
+#[test]
+fn legacy_manual_identity_fields_are_ignored_and_not_reserialized() {
+    let (root, paths) = fixture();
+    let manifest_path = &paths.manifest;
+    fs::write(
+        manifest_path,
+        serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": SCHEMA_VERSION,
+            "slots": [{
+                "id": Uuid::new_v4().to_string(),
+                "displayName": "备注",
+                "username": "obsolete-name",
+                "email": "obsolete@example.test",
+                "color": "#ABCDEF",
+                "createdAtUtc": Utc::now().to_rfc3339()
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let manifest = load_manifest(&paths).unwrap();
+    assert_eq!(manifest.slots[0].display_name, "备注");
+    let serialized = serde_json::to_value(manifest).unwrap();
+    assert!(serialized["slots"][0].get("username").is_none());
+    assert!(serialized["slots"][0].get("email").is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn verified_in_use_account_remains_usable_when_remote_use_is_unknown() {
+    let (root, paths) = fixture();
+    let manifest = import_fixture(&paths, "A");
+    let mut state = build_state(&paths, &manifest, false, String::new()).unwrap();
+    let active = state.slots.iter_mut().find(|slot| slot.is_active).unwrap();
+    active.concurrent.running_pids = vec![1234];
+    active.account_probe = account_probe(
+        Sv2SessionInspectionStatus::InUse,
+        Sv2RemoteUseStatus::Unknown,
+        Sv2AuthorizationStatus::Verified,
     );
-    assert!(validate_optional_username(&"x".repeat(101)).is_err());
-    assert_eq!(
-        validate_optional_email(" name@example.com ").unwrap(),
-        "name@example.com"
-    );
-    assert!(validate_optional_email("not-an-email").is_err());
+    active.account_probe.authorized_voice_count = 2;
+
+    let precheck = build_account_precheck(&state);
+    assert!(precheck.local_use);
+    assert_eq!(precheck.remote_use, Sv2RemoteUseStatus::Unknown);
+    assert_eq!(precheck.summary, "已读取该账号的官方授权。");
+    assert!(precheck.detail.contains("未执行设备注册"));
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

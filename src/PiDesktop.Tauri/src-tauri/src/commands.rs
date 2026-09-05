@@ -1596,19 +1596,6 @@ pub async fn rename_sv2_profile(
 }
 
 #[tauri::command]
-pub async fn update_sv2_profile_identity(
-    slot_id: String,
-    username: String,
-    email: String,
-    state: State<'_, AppState>,
-) -> Result<Sv2ProfilesState, String> {
-    let profiles = state.sv2_profiles.clone();
-    tauri::async_runtime::spawn_blocking(move || profiles.update_identity(slot_id, username, email))
-        .await
-        .map_err(|error| error.to_string())?
-}
-
-#[tauri::command]
 pub async fn update_sv2_profile_voice_licenses(
     slot_id: String,
     voices: Vec<String>,

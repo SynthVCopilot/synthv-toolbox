@@ -183,7 +183,6 @@ pub fn run() {
             commands::import_current_sv2_profile,
             commands::create_sv2_profile,
             commands::rename_sv2_profile,
-            commands::update_sv2_profile_identity,
             commands::update_sv2_profile_voice_licenses,
             commands::delete_sv2_profile,
             commands::preview_svp_route,

@@ -47,10 +47,6 @@ struct SlotRecord {
     id: String,
     display_name: String,
     #[serde(default)]
-    username: String,
-    #[serde(default)]
-    email: String,
-    #[serde(default)]
     manually_confirmed_voices: Vec<String>,
     color: String,
     created_at_utc: String,
@@ -115,8 +111,6 @@ struct SwitchJournal {
 pub struct Sv2ProfileSlotView {
     pub id: String,
     pub display_name: String,
-    pub username: String,
-    pub email: String,
     pub color: String,
     pub created_at_utc: String,
     pub last_activated_at_utc: Option<String>,
@@ -470,8 +464,6 @@ impl Sv2ProfileService {
         manifest.slots.push(SlotRecord {
             id: id.clone(),
             display_name,
-            username: String::new(),
-            email: String::new(),
             manually_confirmed_voices: Vec::new(),
             color: SLOT_COLORS[0].to_string(),
             created_at_utc: now.clone(),
@@ -546,8 +538,6 @@ impl Sv2ProfileService {
         let record = SlotRecord {
             id: id.clone(),
             display_name,
-            username: String::new(),
-            email: String::new(),
             manually_confirmed_voices: Vec::new(),
             color: SLOT_COLORS[manifest.slots.len() % SLOT_COLORS.len()].to_string(),
             created_at_utc: Utc::now().to_rfc3339(),
@@ -584,34 +574,6 @@ impl Sv2ProfileService {
             .find(|slot| slot.id == slot_id)
             .ok_or_else(|| "找不到该 SV2 槽位。".to_string())?;
         slot.display_name = display_name;
-        save_manifest(paths, &manifest)?;
-        build_state(paths, &manifest, false, String::new())
-    }
-
-    pub fn update_identity(
-        &self,
-        slot_id: String,
-        username: String,
-        email: String,
-    ) -> Result<Sv2ProfilesState, String> {
-        validate_slot_id(&slot_id)?;
-        let username = validate_optional_username(&username)?;
-        let email = validate_optional_email(&email)?;
-        let _gate = self
-            .gate
-            .lock()
-            .map_err(|_| "SV2 槽位状态锁已损坏。".to_string())?;
-        let paths = self.paths.as_ref().map_err(Clone::clone)?;
-        let _file_lock = acquire_switch_lock(paths)?;
-        recover_if_needed(paths)?;
-        let mut manifest = load_manifest(paths)?;
-        let slot = manifest
-            .slots
-            .iter_mut()
-            .find(|slot| slot.id == slot_id)
-            .ok_or_else(|| "找不到该 SV2 槽位。".to_string())?;
-        slot.username = username;
-        slot.email = email;
         save_manifest(paths, &manifest)?;
         build_state(paths, &manifest, false, String::new())
     }
@@ -1275,25 +1237,37 @@ fn build_account_precheck(state: &Sv2ProfilesState) -> Sv2AccountPrecheck {
             "检测到其他设备占用留下的会话失效迹象。".to_string(),
             "受保护启动后 license/session 消失；若没有新会话，工具箱会在下次启动该槽位前恢复原快照。".to_string(),
         )
-    } else if local_use {
-        (
-            "当前账号正在本机使用。".to_string(),
-            "已发现普通 SV2、插件、WebView2 或该账号的 Sandboxie 隔离进程。".to_string(),
-        )
     } else if remote_use == Sv2RemoteUseStatus::Detected {
         (
             "账号服务返回了并发占用冲突。".to_string(),
             account_probe.detail.clone(),
         )
-    } else if account_probe.session_status == Sv2SessionInspectionStatus::Ready
-        && account_probe.authorization_status == Sv2AuthorizationStatus::Verified
+    } else if matches!(
+        account_probe.session_status,
+        Sv2SessionInspectionStatus::Ready | Sv2SessionInspectionStatus::InUse
+    ) && account_probe.authorization_status == Sv2AuthorizationStatus::Verified
     {
         (
             "已读取该账号的官方授权。".to_string(),
             format!(
-                "账号服务返回 {} 个声库授权。授权读取结果不代表已确认其他设备的占用状态。",
-                account_probe.authorized_voice_count
+                "账号服务已只读返回 {} 个声库授权，未执行设备注册；{}{}",
+                account_probe.authorized_voice_count,
+                match remote_use {
+                    Sv2RemoteUseStatus::Clear => "远端未报告占用。",
+                    Sv2RemoteUseStatus::Unknown => "远端占用仍为未知。",
+                    Sv2RemoteUseStatus::Detected => unreachable!(),
+                },
+                if local_use {
+                    "本机已有该账号的运行实例。"
+                } else {
+                    ""
+                }
             ),
+        )
+    } else if local_use {
+        (
+            "当前账号正在本机使用。".to_string(),
+            "已发现普通 SV2、插件、WebView2 或该账号的 Sandboxie 隔离进程。".to_string(),
         )
     } else {
         (
@@ -1334,18 +1308,27 @@ fn preferred_account_probe(slot: &Sv2ProfileSlotView) -> &Sv2AccountProbeView {
 }
 
 fn account_probe_rank(probe: &Sv2AccountProbeView) -> u8 {
-    match (probe.session_status, probe.remote_use) {
-        (Sv2SessionInspectionStatus::Ready, Sv2RemoteUseStatus::Clear) => 8,
-        (Sv2SessionInspectionStatus::Ready, Sv2RemoteUseStatus::Detected) => 7,
-        (Sv2SessionInspectionStatus::Ready, Sv2RemoteUseStatus::Unknown) => 6,
-        (Sv2SessionInspectionStatus::Offline, _) => 5,
-        (Sv2SessionInspectionStatus::InUse, _) => 4,
-        (Sv2SessionInspectionStatus::Unsupported, _) => 3,
-        (Sv2SessionInspectionStatus::Invalid, _) => 2,
-        (Sv2SessionInspectionStatus::Expired, _) => 1,
-        (Sv2SessionInspectionStatus::SyncFailed, _) => 0,
-        (Sv2SessionInspectionStatus::AccountMismatch, _) => 0,
-        (Sv2SessionInspectionStatus::Missing, _) => 0,
+    match (
+        probe.session_status,
+        probe.remote_use,
+        probe.authorization_status,
+    ) {
+        (_, Sv2RemoteUseStatus::Detected, _) => 0,
+        (
+            Sv2SessionInspectionStatus::Ready | Sv2SessionInspectionStatus::InUse,
+            Sv2RemoteUseStatus::Clear | Sv2RemoteUseStatus::Unknown,
+            Sv2AuthorizationStatus::Verified,
+        ) => 8,
+        (Sv2SessionInspectionStatus::Ready, Sv2RemoteUseStatus::Clear, _) => 7,
+        (Sv2SessionInspectionStatus::Ready, Sv2RemoteUseStatus::Unknown, _) => 6,
+        (Sv2SessionInspectionStatus::InUse, _, _) => 5,
+        (Sv2SessionInspectionStatus::Offline, _, _) => 4,
+        (Sv2SessionInspectionStatus::Unsupported, _, _) => 3,
+        (Sv2SessionInspectionStatus::Invalid, _, _) => 2,
+        (Sv2SessionInspectionStatus::Expired, _, _) => 1,
+        (Sv2SessionInspectionStatus::SyncFailed, _, _)
+        | (Sv2SessionInspectionStatus::AccountMismatch, _, _)
+        | (Sv2SessionInspectionStatus::Missing, _, _) => 0,
     }
 }
 
@@ -1425,8 +1408,6 @@ fn build_state(
             Sv2ProfileSlotView {
                 id: slot.id.clone(),
                 display_name: slot.display_name.clone(),
-                username: slot.username.clone(),
-                email: slot.email.clone(),
                 color: slot.color.clone(),
                 created_at_utc: slot.created_at_utc.clone(),
                 last_activated_at_utc: slot.last_activated_at_utc.clone(),
@@ -1875,8 +1856,6 @@ fn load_manifest(paths: &SlotPaths) -> Result<SlotManifest, String> {
     for slot in &manifest.slots {
         validate_slot_id(&slot.id)?;
         validate_display_name(&slot.display_name)?;
-        validate_optional_username(&slot.username)?;
-        validate_optional_email(&slot.email)?;
         validate_color(&slot.color)?;
         if !ids.insert(slot.id.as_str()) {
             return Err("槽位清单包含重复 ID。".to_string());
@@ -2412,36 +2391,6 @@ fn validate_display_name(value: &str) -> Result<String, String> {
     let value = value.trim();
     if value.is_empty() || value.chars().count() > 64 || value.chars().any(char::is_control) {
         return Err("槽位名称必须为 1–64 个可见字符。".to_string());
-    }
-    Ok(value.to_string())
-}
-
-fn validate_optional_username(value: &str) -> Result<String, String> {
-    let value = value.trim();
-    if value.chars().count() > 100 || value.chars().any(char::is_control) {
-        return Err("账号用户名不能超过 100 个可见字符。".to_string());
-    }
-    Ok(value.to_string())
-}
-
-fn validate_optional_email(value: &str) -> Result<String, String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return Ok(String::new());
-    }
-    let mut parts = value.split('@');
-    let local = parts.next().unwrap_or_default();
-    let domain = parts.next().unwrap_or_default();
-    if parts.next().is_some()
-        || local.is_empty()
-        || domain.is_empty()
-        || !domain.contains('.')
-        || value.len() > 254
-        || value
-            .chars()
-            .any(|character| character.is_control() || character.is_whitespace())
-    {
-        return Err("邮箱格式无效。".to_string());
     }
     Ok(value.to_string())
 }

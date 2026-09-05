@@ -881,6 +881,19 @@ fn public_views_never_echo_secret_or_response_sentinels() {
     assert_eq!(view.remote_use, Sv2RemoteUseStatus::Unknown);
 }
 
+#[test]
+fn read_only_authorization_does_not_claim_a_device_check_failed() {
+    let view = view_from_remote(
+        RemoteOutcome::Authorized(vec!["Synthetic Voice".to_string()]),
+        EnrollOutcome::Unknown,
+    );
+
+    assert_eq!(view.authorization_status, Sv2AuthorizationStatus::Verified);
+    assert_eq!(view.remote_use, Sv2RemoteUseStatus::Unknown);
+    assert!(view.detail.contains("只读声库授权查询"));
+    assert!(view.detail.contains("未执行设备注册"));
+}
+
 #[cfg(windows)]
 #[test]
 fn active_session_reuses_only_fresh_cached_authorization() {
