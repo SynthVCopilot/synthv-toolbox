@@ -96,6 +96,7 @@ fn sandboxie_routes_each_helper_to_its_own_slot() {
     assert!(first_pids.iter().all(|pid| !second_pids.contains(pid)));
     let first_overlay = vault.join("instances").join(Uuid::parse_str(&first).unwrap().simple().to_string()[..16].to_string());
     let second_overlay = vault.join("instances").join(Uuid::parse_str(&second).unwrap().simple().to_string()[..16].to_string());
+    assert_eq!(fs::read_dir(&first_overlay).unwrap().count(), 1, "same account must reuse one Sandboxie instance root");
     let first_instance = fs::read_dir(&first_overlay).unwrap().next().unwrap().unwrap().path();
     let second_instance = fs::read_dir(&second_overlay).unwrap().next().unwrap().unwrap().path();
     assert_eq!(overlay(&first_instance).canonicalize().unwrap(), slot_root(&vault, &first).canonicalize().unwrap());

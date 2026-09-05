@@ -222,25 +222,26 @@ pub fn launch_slot(
     if slot_data_root != validate_slot_root(vault, slot_id)?.as_path() {
         return Err("并发账号数据必须使用槽位权威目录。".to_string());
     }
-    let instance_id = Uuid::new_v4().to_string();
+    let reused = reusable_instance(provider, vault, slot_id, slot_data_root)?;
+    let instance_id = reused
+        .as_ref()
+        .and_then(|root| root.file_name())
+        .and_then(|id| id.to_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
     let name = instance_box_name(slot_id, &instance_id)?;
-    let root = instance_box_root(vault, slot_id, &instance_id);
+    let root = reused.unwrap_or_else(|| instance_box_root(vault, slot_id, &instance_id));
     let parent = root.parent().ok_or("隔离实例目录无效。")?;
     for path in [vault.join("instances"), parent.to_path_buf()] {
         reject_reparse_point(&path)?;
     }
-    fs::create_dir_all(parent).map_err(|error| format!("无法创建隔离实例目录：{error}"))?;
-    fs::create_dir(&root).map_err(|error| format!("无法创建独立实例目录：{error}"))?;
-    configure_box(provider, &name, &root, slot_data_root, content)?;
-    fs::write(
-        root.join(INSTANCE_MARKER),
-        serde_json::to_vec(&InstanceMarker {
-            slot_id: slot_id.to_string(),
-            instance_id,
-        })
-        .map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| format!("无法记录隔离实例：{error}"))?;
+    if !root.exists() {
+        fs::create_dir_all(parent).map_err(|error| format!("无法创建隔离实例目录：{error}"))?;
+        fs::create_dir(&root).map_err(|error| format!("无法创建独立实例目录：{error}"))?;
+        configure_box(provider, &name, &root, slot_data_root, content)?;
+        fs::write(root.join(INSTANCE_MARKER), serde_json::to_vec(&InstanceMarker { slot_id: slot_id.to_string(), instance_id }).map_err(|error| error.to_string())?)
+            .map_err(|error| format!("无法记录隔离实例：{error}"))?;
+    }
 
     let mut command = quiet_command(&provider.start);
     command
@@ -309,6 +310,41 @@ pub fn remove_slot_data(vault: &Path, slot_id: &str) -> Result<(), String> {
         }
         fs::remove_dir_all(root).map_err(|error| format!("无法删除隔离实例目录：{error}"))?;
     }
+    Ok(())
+}
+
+fn reusable_instance(
+    provider: &SandboxieProvider,
+    vault: &Path,
+    slot_id: &str,
+    slot: &Path,
+) -> Result<Option<PathBuf>, String> {
+    let parent = vault.join("instances").join(compact_slot_id(slot_id));
+    if !parent.exists() { return Ok(None); }
+    reject_reparse_point(&parent)?;
+    let Some(entry) = fs::read_dir(&parent).map_err(|error| error.to_string())?.next() else { return Ok(None); };
+    let root = entry.map_err(|error| error.to_string())?.path();
+    reject_reparse_point(&root)?;
+    let marker: InstanceMarker = serde_json::from_slice(&fs::read(root.join(INSTANCE_MARKER)).map_err(|error| error.to_string())?)
+        .map_err(|error| format!("隔离实例记录损坏：{error}"))?;
+    if marker.slot_id != slot_id || root.file_name().and_then(|name| name.to_str()) != Some(marker.instance_id.as_str()) {
+        return Err("隔离实例记录与账号目录不一致。".to_string());
+    }
+    validate_instance_tree(&root, &virtual_data_root(&root), slot)?;
+    let name = instance_box_name(slot_id, &marker.instance_id)?;
+    verify_box_root(provider, &name, &root)?;
+    Ok(Some(root))
+}
+
+fn verify_box_root(provider: &SandboxieProvider, box_name: &str, root: &Path) -> Result<(), String> {
+    let output = quiet_command(&provider.sbie_ini).arg("queryex").arg(box_name).arg("FileRootPath").output()
+        .map_err(|error| format!("无法验证 Sandboxie 配置：{error}"))?;
+    if !output.status.success() { return Err("无法验证 Sandboxie FileRootPath。".to_string()); }
+    let text = decode_output(&output.stdout);
+    let actual_line = text.lines().map(str::trim).rfind(|line| !line.is_empty()).unwrap_or_default();
+    let actual = actual_line.strip_prefix("FileRootPath=").unwrap_or(actual_line).trim_start_matches(r"\??\");
+    let expected = root.to_string_lossy();
+    if !actual.eq_ignore_ascii_case(expected.trim_start_matches(r"\??\")) { return Err("Sandboxie FileRootPath 与实例目录不一致。".to_string()); }
     Ok(())
 }
 
