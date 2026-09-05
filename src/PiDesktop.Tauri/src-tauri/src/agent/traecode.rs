@@ -4,7 +4,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{atomic::{AtomicBool, Ordering}, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -124,17 +124,19 @@ impl TraeCodeProvider {
                 })
             }
         };
-        let output = self.run(&executable, &["login", "status"])?;
+        let output = self.run_owned(&executable, &["login".to_string(), "status".to_string()], None, None)?;
+        let status_text = format!("{}\n{}", output.stdout, output.stderr);
         let value = serde_json::from_str::<Value>(&output.stdout).ok();
         let logged_in = value
             .as_ref()
             .and_then(|value| value.get("loggedIn").or_else(|| value.get("logged_in")))
             .and_then(Value::as_bool)
             .unwrap_or_else(|| {
-                let text = output.stdout.to_ascii_lowercase();
-                !text.contains("not logged in")
+                let text = status_text.to_ascii_lowercase();
+                (text.contains("logged in") || text.contains("authenticated"))
+                    && !text.contains("not logged in")
                     && !text.contains("logged out")
-                    && text.contains("logged in")
+                    && !text.contains("unauthenticated")
             });
         Ok(TraeLoginStatus {
             available: true,
@@ -171,11 +173,18 @@ impl TraeCodeProvider {
     }
 
     pub fn login(&self) -> Result<TraeLoginStatus> {
+        self.login_cancellable(None)
+    }
+
+    pub fn login_cancellable(&self, cancelled: Option<&AtomicBool>) -> Result<TraeLoginStatus> {
+        if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            return Err(AgentError::new("TraeCode CLI 已取消"));
+        }
         let mut login_config = self.config.clone();
         login_config.timeout_secs = 10 * 60;
         let login_provider = Self::new(login_config);
         let executable = login_provider.resolve_executable()?;
-        login_provider.run(&executable, &["login"])?;
+        login_provider.run_cancellable(&executable, &["login"], cancelled)?;
         let status = self.login_status()?;
         Self::remember_login_status(&status);
         Ok(status)
@@ -237,11 +246,16 @@ impl TraeCodeProvider {
     }
 
     fn run(&self, executable: &Path, args: &[&str]) -> Result<BoundedOutput> {
+        self.run_cancellable(executable, args, None)
+    }
+
+    fn run_cancellable(&self, executable: &Path, args: &[&str], cancelled: Option<&AtomicBool>) -> Result<BoundedOutput> {
         let owned = args
             .iter()
             .map(|value| (*value).to_string())
             .collect::<Vec<_>>();
-        self.run_owned(executable, &owned, None)
+        let output = self.run_owned(executable, &owned, None, cancelled)?;
+        if output.success { Ok(output) } else { Err(AgentError::new("TraeCode CLI command failed")) }
     }
 
     fn run_owned(
@@ -249,12 +263,15 @@ impl TraeCodeProvider {
         executable: &Path,
         args: &[String],
         current_dir: Option<&Path>,
+        cancelled: Option<&AtomicBool>,
     ) -> Result<BoundedOutput> {
         let mut command = Command::new(executable);
         command.args(args);
         fs::create_dir_all(&self.config.home_dir)
             .map_err(|error| AgentError::new(format!("无法创建 TraeCode 运行目录：{error}")))?;
         command.env("TRAE_HOME", &self.config.home_dir);
+        command.env_remove("TRAECLI_PERSONAL_ACCESS_TOKEN");
+        command.env_remove("TRAECLI_HOST");
         if let Some(directory) = current_dir {
             command.current_dir(directory);
         }
@@ -276,6 +293,11 @@ impl TraeCodeProvider {
         let err_thread = thread::spawn(|| read_bounded(stderr));
         let deadline = Instant::now() + Duration::from_secs(self.config.timeout_secs.max(1));
         let status = loop {
+            if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(AgentError::new("TraeCode CLI 已取消"));
+            }
             if let Some(status) = child
                 .try_wait()
                 .map_err(|error| AgentError::new(format!("TraeCode CLI wait failed: {error}")))?
@@ -295,18 +317,10 @@ impl TraeCodeProvider {
         let stderr = err_thread
             .join()
             .map_err(|_| AgentError::new("TraeCode stderr reader failed"))??;
-        if !status.success() {
-            return Err(AgentError::new(format!(
-                "TraeCode CLI exited with {}: {}",
-                status,
-                String::from_utf8_lossy(&stderr)
-                    .chars()
-                    .take(1_200)
-                    .collect::<String>()
-            )));
-        }
         Ok(BoundedOutput {
             stdout: String::from_utf8_lossy(&stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&stderr).into_owned(),
+            success: status.success(),
         })
     }
 }
@@ -328,7 +342,8 @@ impl AgentProvider for TraeCodeProvider {
         let output_path = temporary_directory.join("last-message.json");
         let result = (|| {
             let args = self.build_exec_args(conversation, tools, &schema_path, &output_path)?;
-            self.run_owned(&executable, &args, Some(&temporary_directory))?;
+            let output = self.run_owned(&executable, &args, Some(&temporary_directory), None)?;
+            if !output.success { return Err(AgentError::new("TraeCode CLI execution failed")); }
             let message = fs::read_to_string(&output_path).map_err(|error| {
                 AgentError::new(format!("TraeCode final message file unavailable: {error}"))
             })?;
@@ -341,6 +356,8 @@ impl AgentProvider for TraeCodeProvider {
 
 struct BoundedOutput {
     stdout: String,
+    stderr: String,
+    success: bool,
 }
 
 fn read_bounded<R: Read>(reader: R) -> Result<Vec<u8>> {
