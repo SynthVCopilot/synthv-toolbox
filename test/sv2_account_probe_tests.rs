@@ -1082,6 +1082,74 @@ fn refreshed_session_persists_and_reloads_in_an_isolated_fixture() {
 
 #[cfg(windows)]
 #[test]
+fn read_only_authorization_recovers_only_an_unchanged_single_session() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
+    let root = std::env::temp_dir().join(format!("sv2-read-only-{}", uuid::Uuid::new_v4()));
+    let data_root = root.join("data");
+    let license = data_root.join("license");
+    fs::create_dir_all(&license).unwrap();
+    let issued = DateTime::<Utc>::from_timestamp(Utc::now().timestamp(), 0).unwrap();
+    let plaintext = make_plaintext(
+        issued + ChronoDuration::hours(1),
+        issued + ChronoDuration::days(31),
+        issued,
+    );
+    let credentials = parse_session_plaintext(Zeroizing::new(plaintext.clone().into_bytes())).unwrap();
+    let key = *b"fixture8";
+    let session = license.join("session");
+    fs::write(&session, &*encrypt_session(plaintext.as_bytes(), &key).unwrap()).unwrap();
+    let (_, fingerprint) = read_stable_session(&data_root).unwrap().unwrap();
+    let root_key = ProbeRootKey::AccountEnvironment {
+        slot_id: format!("slot-{}", uuid::Uuid::new_v4()),
+        concurrent: false,
+    };
+    let quarantine = root_key.quarantine_key();
+    let failed = Sv2AccountProbeView::sync_failed("fixture");
+    let original_bytes = fs::read(&session).unwrap();
+    let original_time = fs::metadata(&session).unwrap().last_write_time();
+
+    set_sync_quarantine(&quarantine, &failed);
+    let active = read_only_authorization(
+        &data_root, &root_key, &fingerprint, &credentials, true,
+        |_| RemoteOutcome::Authorized(vec!["Fixture Voice".to_string()]),
+    )
+    .unwrap();
+    assert_eq!(active.session_status, Sv2SessionInspectionStatus::InUse);
+    assert_eq!(active.authorization_status, Sv2AuthorizationStatus::Verified);
+    assert!(sync_quarantine_get(&quarantine).is_none());
+    assert_eq!(fs::read(&session).unwrap(), original_bytes);
+    assert_eq!(fs::metadata(&session).unwrap().last_write_time(), original_time);
+
+    set_sync_quarantine(&quarantine, &failed);
+    let idle = read_only_authorization(
+        &data_root, &root_key, &fingerprint, &credentials, false,
+        |_| RemoteOutcome::Authorized(vec!["Fixture Voice".to_string()]),
+    )
+    .unwrap();
+    assert_eq!(idle.session_status, Sv2SessionInspectionStatus::Ready);
+    assert!(sync_quarantine_get(&quarantine).is_none());
+
+    set_sync_quarantine(&quarantine, &failed);
+    assert!(read_only_authorization(
+        &data_root, &root_key, &fingerprint, &credentials, false,
+        |_| { fs::write(&session, b"changed-session").unwrap(); RemoteOutcome::Authorized(vec!["Fixture Voice".to_string()]) },
+    )
+    .is_none());
+    assert!(sync_quarantine_get(&quarantine).is_some());
+
+    fs::write(&session, &original_bytes).unwrap();
+    let (_, fingerprint) = read_stable_session(&data_root).unwrap().unwrap();
+    assert!(read_only_authorization(
+        &data_root, &root_key, &fingerprint, &credentials, false, |_| RemoteOutcome::Offline,
+    )
+    .is_some());
+    assert!(sync_quarantine_get(&quarantine).is_some());
+    clear_sync_quarantine(&quarantine);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
 fn active_license_decision_is_network_free_and_preserves_failures() {
     let _guard = PROBE_TEST_GATE.lock().unwrap();
     let authorized = view_from_active_license(RemoteOutcome::Authorized(vec![
