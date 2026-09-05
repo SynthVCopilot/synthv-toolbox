@@ -11,8 +11,11 @@
 - 实例列表按进程 PID 优先匹配 `slot.concurrent.runningPids`，其余普通进程匹配 `activeSlotId`，无法匹配时显示“未知环境 / 未关联账号”。
 - 进程列表后台每 2 秒更新，仅在账号页或 Bridge 页可见且没有前台操作时执行；不轮询账号授权探测。
 - Windows 进程探测补充可见窗口标题，macOS 返回空标题并由前端回退到进程名。
+- 普通主槽只接收严格识别为 SynthV Studio 的普通进程；SV1、Flat 和未知 Sandbox 进程显示为未关联。
+- 轮询使用单飞请求与代际令牌，结果过期时丢弃；账号页只替换实例列表节点，避免重建用户正在编辑的表单。
 
 ## 验证
 
 - TypeScript DTO 与渲染代码已同步。
 - `cargo check` 进入项目 build script，但因本地缺少 `components/synthv-agent-bridge/node_modules` 资源而停止；Rust 修改已按 windows-sys 0.61 的 `HWND`/`BOOL` 签名调整。
+- `test/concurrent-instance-ui.mjs` 覆盖轮询保护、PID 关联、未知进程和共享文案契约。

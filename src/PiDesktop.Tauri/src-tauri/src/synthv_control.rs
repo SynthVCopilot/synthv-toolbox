@@ -269,7 +269,8 @@ mod platform {
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow, ShowWindow,
+        EnumWindows, GetWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow, ShowWindow,
+        GW_OWNER,
         SW_RESTORE,
     };
 
@@ -372,12 +373,13 @@ mod platform {
     struct WindowTitleLookup {
         process_id: u32,
         title: String,
+        owned_title: String,
     }
 
     fn window_title(process_id: u32) -> String {
-        let mut lookup = WindowTitleLookup { process_id, title: String::new() };
+        let mut lookup = WindowTitleLookup { process_id, title: String::new(), owned_title: String::new() };
         unsafe { EnumWindows(Some(find_window_title), &mut lookup as *mut _ as LPARAM); }
-        lookup.title
+        if lookup.title.is_empty() { lookup.owned_title } else { lookup.title }
     }
 
     unsafe extern "system" fn find_window_title(hwnd: HWND, lparam: LPARAM) -> BOOL {
@@ -386,10 +388,18 @@ mod platform {
         let mut process_id = 0u32;
         GetWindowThreadProcessId(hwnd, &mut process_id);
         if process_id != lookup.process_id { return 1; }
-        let mut buffer = [0u16; 512];
-        let length = GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32);
-        lookup.title = wide_text(&buffer[..length.max(0) as usize]);
-        0
+        let length = GetWindowTextLengthW(hwnd);
+        if length <= 0 { return 1; }
+        let mut buffer = vec![0u16; length as usize + 1];
+        let actual = GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32);
+        let title = wide_text(&buffer[..actual.max(0) as usize]);
+        if title.is_empty() { return 1; }
+        if GetWindow(hwnd, GW_OWNER).is_null() {
+            lookup.title = title;
+        } else if lookup.owned_title.is_empty() {
+            lookup.owned_title = title;
+        }
+        1
     }
 
     unsafe extern "system" fn find_visible_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
