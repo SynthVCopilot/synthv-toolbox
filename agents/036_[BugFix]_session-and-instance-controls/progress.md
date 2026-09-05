@@ -11,7 +11,12 @@
 - `npm run build` 与 `npm run test:contracts` 全部通过；jsdom 用例覆盖列表简化、标题、旧响应、轮询保留详情和按钮条件。浏览器实际验证应用内终止对话框只删除 Project B，保留 Project A/Flat；预览服务已停止，新测试页已关闭。
 - `cargo fmt --check` 与 `cargo clippy --all-targets -- -D warnings` 通过。全量桌面 lib test 链接后被火绒删除、执行 OS error 5；不把此轮记为通过。
 - 火绒调查：核验 Microsoft link.exe 签名有效，检测目标已删除。读取已安装与旧 release PE 元数据：产品/版本正确、未签名；dumpbin 验证 ASLR/DEP，高熵 VA；mt 提取确认 asInvoker/uiAccess=false。未发现可合理移除的危险加载能力，没有通过改变哈希尝试规避检测。
-- 待完成：最终提交、main 保护检查与远端 Windows/macOS 全量构建检查。
+- 最终提交、main 保护检查与远端 Windows/macOS 全量构建检查均已完成，结果见后续记录。
 - 最终复核修正 macOS `ps` 不再混入 args，保留实际路径的连续空格；补充隔离 harness 的 macOS Command shim。合并子任务 c77b304 后保留主分支平台 cfg，并为新增 helper 添加相同 cfg；9 项实例测试与全量 clippy 再次通过。
 - 预览新启动实例补齐身份/版本；无法识别客户端时显示真实 Unsupported 信息，成功文案仅表示完成检查。前端 build 与全部 contracts 再次通过。
 - 针对用户询问检测名，查阅火绒公开 ShellLoader 分析：该术语用于 ShellCode 加载器，但未检索到 `.gx` 具体规则说明，不能把其他样本行为归因于本项目。未确定本次检测原因。
+- 已确认 main 未受保护，合并 e5f3df6 并推送。首次 CI macOS 全量测试/控制 harness 通过，严格 lint 报 Windows 专用 helper 在 macOS 未使用；4e7b1be 添加 Windows cfg 后再次推送，第二次 CI 33992797551 的 macOS 测试及 lint 全部通过，进入打包。
+- 临时预览页恢复可访问后，使用浏览器关闭接口成功关闭；只保留用户原有两个标签页。所有本次预览服务与浏览器页面已清理。
+- 第二次 CI 33992797551 完成，Windows x64/macOS Universal 均 success：Windows 核心 251 passed、3 ignored，独立控制 harness 9 passed；macOS 核心 233 passed、2 ignored，独立控制 harness 8 passed；另有集成测试、前端 contracts、lint、FFmpeg smoke 与打包均通过。
+- 可下载产物：Windows NSIS artifact 9977265629；macOS universal app/DMG artifact 9977241450。代码提交 4e7b1be，CI：https://github.com/SynthVCopilot/synthv-toolbox/actions/runs/33992797551 。
+- 客户端修复已交付；明确保留外部限制：远端 token endpoint 403 仍未解除，已过期会话不能保证续期；火绒样本的实际命中原因尚未确定。CI 成功与防护关闭期间的功能测试不能视为火绒复测通过。
