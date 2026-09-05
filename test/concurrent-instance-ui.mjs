@@ -22,6 +22,48 @@ profiles.slots[1].concurrent.runningPids.push(10);
 assert.equal(instanceAccount(process(10), profiles).slot, undefined);
 
 const source = fs.readFileSync(new URL('../src/PiDesktop.Tauri/src/main.ts', import.meta.url), 'utf8');
+const timerStart = source.indexOf('function readInstanceRefreshInterval(');
+const timerEnd = source.indexOf('async function refreshVisibleSynthvInstances(', timerStart);
+let savedInterval = null;
+let nextTimer = 0;
+let refreshCalls = 0;
+const timers = new Map();
+const timerContext = vm.createContext({
+  instanceRefreshOptions: [0, 5000, 10000, 30000, 60000],
+  instanceRefreshInterval: 5000, instanceRefreshTimer: undefined, instanceRefreshGeneration: 0,
+  localStorage: { getItem: () => savedInterval, setItem: (_key, value) => { savedInterval = value; } },
+  window: {
+    setInterval: (callback, interval) => { timers.set(++nextTimer, { callback, interval }); return nextTimer; },
+    clearInterval: id => timers.delete(id),
+  },
+  refreshVisibleSynthvInstances: () => { refreshCalls++; },
+});
+vm.runInContext(stripTypeScriptTypes(source.slice(timerStart, timerEnd)), timerContext);
+assert.equal(timerContext.readInstanceRefreshInterval(), 5000, 'new installations default to five seconds');
+timerContext.setInstanceRefreshInterval(5000);
+assert.equal(timers.size, 1);
+timers.get(nextTimer).callback();
+assert.equal(refreshCalls, 1);
+timerContext.setInstanceRefreshInterval(10000);
+assert.equal(timers.size, 1, 'changing frequency replaces the old timer');
+assert.equal(timers.get(nextTimer).interval, 10000);
+assert.equal(timerContext.readInstanceRefreshInterval(), 10000, 'the selected frequency persists');
+timerContext.setInstanceRefreshInterval(0);
+assert.equal(timers.size, 0, 'automatic refresh can be disabled');
+assert.equal(timerContext.readInstanceRefreshInterval(), 0);
+timerContext.setInstanceRefreshInterval(1);
+assert.equal(timers.size, 0, 'unsupported frequency does not start a timer');
+savedInterval = 'invalid';
+assert.equal(timerContext.readInstanceRefreshInterval(), 5000);
+
+const controlsStart = source.indexOf('function renderInstanceRefreshControls(');
+const controlsEnd = source.indexOf('function renderSv2InstanceRows(', controlsStart);
+timerContext.icon = () => '<svg></svg>';
+vm.runInContext(stripTypeScriptTypes(source.slice(controlsStart, controlsEnd)), timerContext);
+const controls = new JSDOM(timerContext.renderInstanceRefreshControls()).window.document;
+assert.equal(controls.querySelector('select').value, '0');
+assert.equal(controls.querySelector('[data-refresh-synthv-processes]').disabled, false, 'manual refresh remains available when automatic refresh is off');
+
 const start = source.indexOf('async function refreshVisibleSynthvInstances(');
 const end = source.indexOf('function scheduleDownloadPoll', start);
 const poll = stripTypeScriptTypes(source.slice(start, end));

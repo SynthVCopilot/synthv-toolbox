@@ -89,6 +89,9 @@ let audioCaptureTargets: AudioCaptureTarget[] = [];
 let synthvProcesses: SynthVProcess[] = [];
 let instanceRefreshInFlight = false;
 let instanceRefreshGeneration = 0;
+const instanceRefreshOptions = [0, 5000, 10000, 30000, 60000];
+let instanceRefreshInterval = readInstanceRefreshInterval();
+let instanceRefreshTimer: number | undefined;
 let synthvShortcutProfile: SynthVShortcutProfile | undefined;
 let httpApiStatus: HttpApiStatus = {
   enabled: false,
@@ -388,6 +391,25 @@ async function refreshAccountUsage(slotId?: string): Promise<void> {
   } finally {
     if (accountUsageRefreshInFlight === request) accountUsageRefreshInFlight = undefined;
   }
+}
+
+function readInstanceRefreshInterval(): number {
+  try {
+    const saved = localStorage.getItem("pi.synthv.instanceRefreshMs");
+    if (saved !== null && instanceRefreshOptions.includes(Number(saved))) return Number(saved);
+  } catch { /* preference remains in memory */ }
+  return 5000;
+}
+
+function setInstanceRefreshInterval(interval: number): void {
+  if (!instanceRefreshOptions.includes(interval)) return;
+  instanceRefreshInterval = interval;
+  instanceRefreshGeneration += 1;
+  if (instanceRefreshTimer !== undefined) window.clearInterval(instanceRefreshTimer);
+  instanceRefreshTimer = interval > 0
+    ? window.setInterval(() => { void refreshVisibleSynthvInstances(); }, interval)
+    : undefined;
+  try { localStorage.setItem("pi.synthv.instanceRefreshMs", String(interval)); } catch { /* preference remains in memory */ }
 }
 
 async function refreshVisibleSynthvInstances(): Promise<void> {
@@ -1127,7 +1149,12 @@ function renderAccounts(): string {
 }
 
 function renderSv2InstanceList(): string {
-  return `<section class="panel account-instances-panel"><div class="panel-heading"><div><h2>当前打开的 SynthV 实例</h2><p>按窗口标题和 PID 跟踪实例，并显示关联账号。</p></div><button class="secondary compact" data-refresh-synthv-processes>${icon("sync", 16)} 刷新</button></div><div class="synthv-process-list">${renderSv2InstanceRows()}</div></section>`;
+  return `<section class="panel account-instances-panel"><div class="panel-heading"><h2>SynthV 实例</h2>${renderInstanceRefreshControls()}</div><div class="synthv-process-list">${renderSv2InstanceRows()}</div></section>`;
+}
+
+function renderInstanceRefreshControls(): string {
+  const options = instanceRefreshOptions.map((interval) => `<option value="${interval}"${interval === instanceRefreshInterval ? " selected" : ""}>${interval ? `每 ${interval / 1000} 秒` : "关闭"}</option>`).join("");
+  return `<div class="instance-refresh-controls"><label>自动刷新<select data-instance-refresh-interval aria-label="实例自动刷新频率">${options}</select></label><button class="secondary compact" data-refresh-synthv-processes aria-label="刷新 SynthV 实例" title="刷新 SynthV 实例">${icon("refresh", 16)} 刷新</button></div>`;
 }
 
 function renderSv2InstanceRows(): string {
@@ -1729,7 +1756,7 @@ function renderBridge(): string {
     : '<div class="empty-inline compact-empty">没有发现 scripts 目录，可以在右侧手动填写。</div>';
   const shortcuts = synthvShortcutProfile ?? { bridgeStart: "F13", bridgeStop: "F14", detail: "正在读取快捷键配置…" };
   const processList = renderBridgeProcessRows();
-  const processControls = `<section class="panel bridge-instances-panel"><div class="panel-heading"><span class="feature-icon violet">${icon("bridge", 25)}</span><div><h2>运行中的 SynthV</h2><p>${escapeHtml(shortcuts.detail)}</p></div><button class="secondary compact" data-refresh-synthv-processes>${icon("sync", 16)} 刷新</button></div><div class="shortcut-tags"><span>启动 / 重连：${escapeHtml(shortcuts.bridgeStart)}</span><span>停止：${escapeHtml(shortcuts.bridgeStop)}</span></div><div class="synthv-process-list">${processList}</div></section>`;
+  const processControls = `<section class="panel bridge-instances-panel"><div class="panel-heading"><span class="feature-icon violet">${icon("bridge", 25)}</span><div><h2>SynthV 实例</h2><p>${escapeHtml(shortcuts.detail)}</p></div>${renderInstanceRefreshControls()}</div><div class="shortcut-tags"><span>启动 / 重连：${escapeHtml(shortcuts.bridgeStart)}</span><span>停止：${escapeHtml(shortcuts.bridgeStop)}</span></div><div class="synthv-process-list">${processList}</div></section>`;
   return `<div class="bridge-grid"><section class="panel"><div class="panel-heading"><span class="feature-icon orange">${icon("bridge", 25)}</span><div><h2>Synthesizer V 探测</h2><p>Windows 与 macOS 使用各自的标准路径，只进行只读检查。</p></div><button class="secondary compact" data-scan>${icon("sync", 16)} 重新探测</button></div>
     <div class="detection-groups">
       <section class="detection-group"><div class="detection-group-title"><strong>应用安装</strong><span>${applicationLocations.length}</span></div><div class="installation-list">${applicationList}</div></section>
@@ -2411,6 +2438,13 @@ document.addEventListener("input", (event) => {
   }, 250);
 });
 
+document.addEventListener("change", (event) => {
+  const target = event.target;
+  if (target instanceof HTMLSelectElement && target.hasAttribute("data-instance-refresh-interval")) {
+    setInstanceRefreshInterval(Number(target.value));
+  }
+});
+
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && pendingInstanceTermination) {
     event.preventDefault();
@@ -3071,7 +3105,7 @@ void (async () => {
   try {
     await refresh();
     await listenForSvpRouteRequests();
-    window.setInterval(() => { void refreshVisibleSynthvInstances(); }, 2000);
+    setInstanceRefreshInterval(instanceRefreshInterval);
     render();
     refreshAiCatalogLive();
   } catch (reason) {

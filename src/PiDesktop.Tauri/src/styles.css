@@ -893,6 +893,10 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .bridge-grid, .mcp-layout, .settings-layout { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); align-items: start; gap: 12px; }
 .panel { padding: 20px; border-radius: 8px; }
 .panel-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 17px; }
+.account-instances-panel .panel-heading, .bridge-instances-panel .panel-heading { flex-wrap: wrap; }
+.instance-refresh-controls { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.instance-refresh-controls label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+.instance-refresh-controls select { width: auto; min-width: 88px; padding: 5px 8px; font-size: 11px; }
 .detection-groups { display: flex; flex-direction: column; gap: 18px; }
 .detection-group-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; }
 .detection-group-title strong { font-size: 12px; font-weight: 650; }
