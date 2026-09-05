@@ -448,7 +448,7 @@ impl Sv2ProfileService {
             last_activated_at_utc: Some(now),
             concurrent_content: Sv2ConcurrentContentPreferences::default(),
         });
-        manifest.active_slot_id = Some(id);
+        manifest.active_slot_id = Some(id.clone());
         if let Err(error) = save_manifest(paths, &manifest) {
             let _ = fs::remove_file(paths.canonical.join(MARKER_FILE));
             return Err(error);
