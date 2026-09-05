@@ -1145,6 +1145,10 @@ fn explicit_http_rejections_do_not_claim_refresh_rotation() {
         RefreshFailure::Expired
     ));
     assert!(matches!(
+        refresh_failure_for_http_response(400, br#"{"error":"unsupported_client"}"#),
+        RefreshFailure::Rejected(400)
+    ));
+    assert!(matches!(
         refresh_failure_for_http_response(200, b"not used by this classifier"),
         RefreshFailure::Ambiguous
     ));

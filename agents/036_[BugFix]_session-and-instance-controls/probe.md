@@ -6,3 +6,4 @@
 - [x] 用随机临时 fixture 验证生产持久化路径能替换、重读、解密并验证 session。
 - [x] 本机只读授权检查确认未过期会话能返回授权且前后文件未变化；会话 `azp` 与旧硬编码 client id 不同。
 - [x] 未过期 access token 仅执行授权 GET；受信 issuer 的 `azp` 用于过期会话刷新。HTTP 403/429/5xx 记录为端点不可用，不进入 rotation quarantine。
+- [x] 运行中读取也跳过旧 quarantine，授权 GET 后重新核对 session 指纹；空闲读取在网络返回后核对指纹，并只在整个请求组为同一物理根且授权确认时清除 quarantine。
