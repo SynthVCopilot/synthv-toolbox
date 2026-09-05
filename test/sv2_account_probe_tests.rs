@@ -989,10 +989,7 @@ fn diagnostic_real_session_root_is_read_only() {
             })
         })
         .unwrap_or("<invalid>");
-    let access_azp_matches = access_claims
-        .get("azp")
-        .and_then(serde_json::Value::as_str)
-        == Some(TOKEN_CLIENT_ID);
+    let access_azp_trusted = refresh_client_id(credentials.access_token()).is_ok();
     let access_azp = access_claims
         .get("azp")
         .and_then(serde_json::Value::as_str)
@@ -1037,7 +1034,7 @@ fn diagnostic_real_session_root_is_read_only() {
         .expect("session disappeared after read-only diagnostic");
 
     eprintln!(
-        "SV2 diagnostic: stable={}, stable_after_license={}, full_cache={}, device_present={}, user_present={}, access_expired={}, refresh_expired={}, issuer={}, access_azp={}, access_azp_matches={}, license={}",
+        "SV2 diagnostic: stable={}, stable_after_license={}, full_cache={}, device_present={}, user_present={}, access_expired={}, refresh_expired={}, issuer={}, access_azp={}, access_azp_trusted={}, license={}",
         first == second,
         second == after_license,
         credentials.has_full_cache(),
@@ -1047,7 +1044,7 @@ fn diagnostic_real_session_root_is_read_only() {
         refresh_expired,
         issuer,
         access_azp,
-        access_azp_matches,
+        access_azp_trusted,
         license_result,
     );
 }
@@ -1110,6 +1107,47 @@ fn active_license_decision_is_network_free_and_preserves_failures() {
         unauthorized.session_status,
         Sv2SessionInspectionStatus::Invalid
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn refresh_uses_the_trusted_session_client_id() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
+    let token = make_claims_jwt(serde_json::json!({
+        "exp": Utc::now().timestamp() + 3600,
+        "iat": Utc::now().timestamp(),
+        "iss": TOKEN_ISSUER,
+        "azp": "svstudio2-agent",
+    }));
+    assert_eq!(refresh_client_id(&token).unwrap(), "svstudio2-agent");
+
+    let untrusted = make_claims_jwt(serde_json::json!({
+        "exp": Utc::now().timestamp() + 3600,
+        "iat": Utc::now().timestamp(),
+        "iss": "https://untrusted.example/realm",
+        "azp": "svstudio2-agent",
+    }));
+    assert!(refresh_client_id(&untrusted).is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn explicit_http_rejections_do_not_claim_refresh_rotation() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
+    for status in [403, 429, 500, 503] {
+        assert!(matches!(
+            refresh_failure_for_http_response(status, b"<html>challenge</html>"),
+            RefreshFailure::Unavailable(returned) if returned == status
+        ));
+    }
+    assert!(matches!(
+        refresh_failure_for_http_response(400, br#"{"error":"invalid_grant"}"#),
+        RefreshFailure::Expired
+    ));
+    assert!(matches!(
+        refresh_failure_for_http_response(200, b"not used by this classifier"),
+        RefreshFailure::Ambiguous
+    ));
 }
 
 #[cfg(windows)]
