@@ -457,6 +457,7 @@ export interface SynthVProcess {
   processId: number;
   name: string;
   command: string;
+  windowTitle?: string;
 }
 
 export interface SynthVShortcutProfile {

@@ -19,6 +19,7 @@ pub struct SynthVProcess {
     pub process_id: u32,
     pub name: String,
     pub command: String,
+    pub window_title: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -170,6 +171,7 @@ mod platform {
                     process_id,
                     name,
                     command,
+                    window_title: String::new(),
                 })
             })
             .collect::<Vec<_>>();
@@ -267,7 +269,7 @@ mod platform {
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow, ShowWindow,
+        EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow, ShowWindow,
         SW_RESTORE,
     };
 
@@ -289,6 +291,7 @@ mod platform {
                     process_id: entry.th32ProcessID,
                     command: name.clone(),
                     name,
+                    window_title: window_title(entry.th32ProcessID),
                 });
             }
             ok = unsafe { Process32NextW(snapshot, &mut entry) } != 0;
@@ -364,6 +367,29 @@ mod platform {
     struct WindowLookup {
         process_id: u32,
         hwnd: *mut HWND,
+    }
+
+    struct WindowTitleLookup {
+        process_id: u32,
+        title: String,
+    }
+
+    fn window_title(process_id: u32) -> String {
+        let mut lookup = WindowTitleLookup { process_id, title: String::new() };
+        unsafe { EnumWindows(Some(find_window_title), &mut lookup as *mut _ as LPARAM); }
+        lookup.title
+    }
+
+    unsafe extern "system" fn find_window_title(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        if IsWindowVisible(hwnd) == 0 { return 1; }
+        let lookup = &mut *(lparam as *mut WindowTitleLookup);
+        let mut process_id = 0u32;
+        GetWindowThreadProcessId(hwnd, &mut process_id);
+        if process_id != lookup.process_id { return 1; }
+        let mut buffer = [0u16; 512];
+        let length = GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32);
+        lookup.title = wide_text(&buffer[..length.max(0) as usize]);
+        0
     }
 
     unsafe extern "system" fn find_visible_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
