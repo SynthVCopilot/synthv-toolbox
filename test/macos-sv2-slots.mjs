@@ -21,7 +21,8 @@ assert.match(profiles, /\/usr\/sbin\/lsof/);
 assert.match(profileTests, /macos_paths_stay_under_the_current_users_application_support/);
 assert.match(main, /app\.platform === "macos"/);
 assert.match(main, /supportsWindowsSv2Extensions/);
-assert.match(main, /macOS v1 不会强制结束进程，也不会启动并发实例/);
+assert.match(main, /t\("accountUi.saveYourWorkAndExitTheProgramsBelowThen"\)/);
+assert.match(read(join(webRoot, "i18nAccounts.ts")), /macOS v1 不会强制结束进程，也不会启动并发实例/);
 assert.match(readme, /Windows 和 macOS 都提供可选的 SV2 本地数据槽位/);
 
 console.log("macOS SV2 slot contracts passed.");
