@@ -1,4 +1,5 @@
 import "./styles.css";
+import "./i18nCommon";
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { registerModelAuthElement } from "@model-auth/vue/custom-element";
@@ -1388,28 +1389,28 @@ function renderOnboarding(): void {
     <div class="onboarding-glow one"></div><div class="onboarding-glow two"></div>
     <section class="onboarding-card">
       <div class="onboarding-brand"><div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div><span>Synthesizer V Toolbox</span></div>
-      <div class="eyebrow">首次启动 · 选择工作方式</div>
-      <h1>一个工具箱，按你的方式工作。</h1>
-      <p class="lead">随时可以在设置中切换。纯工具箱模式不会显示或启动任何 AI 功能。</p>
+      <div class="eyebrow">${t("onboarding.eyebrow")}</div>
+      <h1>${t("onboarding.title")}</h1>
+      <p class="lead">${t("onboarding.lead")}</p>
       <div class="mode-grid">
         <button class="mode-card" data-onboarding="toolbox">
           <span class="mode-icon slate">${icon("toolbox", 30)}</span>
-          <span class="recommended">轻量 · 本地优先</span>
-          <strong>纯工具箱模式</strong>
-          <p>直接使用音频、MIDI、工程与 Bridge 工具。界面简洁，不需要模型配置。</p>
+          <span class="recommended">${t("onboarding.toolbox.badge")}</span>
+          <strong>${t("onboarding.toolbox.title")}</strong>
+          <p>${t("onboarding.toolbox.description")}</p>
           <ul><li>${icon("check", 16)} 确定性基础处理</li><li>${icon("check", 16)} 不显示 AI / MCP 入口</li><li>${icon("check", 16)} 不启动模型运行时</li></ul>
-          <span class="mode-cta">使用纯工具箱 ${icon("arrow", 17)}</span>
+          <span class="mode-cta">${t("onboarding.toolbox.action")} ${icon("arrow", 17)}</span>
         </button>
         <button class="mode-card featured" data-onboarding="ai">
           <span class="mode-icon purple">${icon("sparkles", 30)}</span>
-          <span class="recommended accent">完整体验</span>
-          <strong>AI 模式</strong>
-          <p>在完整工具箱之上加入 Copilot、智能增强、能力编排与外部 MCP。</p>
+          <span class="recommended accent">${t("onboarding.ai.badge")}</span>
+          <strong>${t("onboarding.ai.title")}</strong>
+          <p>${t("onboarding.ai.description")}</p>
           <ul><li>${icon("check", 16)} 自动纠正与置信度复核</li><li>${icon("check", 16)} 高级参数微调建议</li><li>${icon("check", 16)} 外部 MCP 工具接入</li></ul>
-          <span class="mode-cta">启用 AI 模式 ${icon("arrow", 17)}</span>
+          <span class="mode-cta">${t("onboarding.ai.action")} ${icon("arrow", 17)}</span>
         </button>
       </div>
-      <p class="privacy-note">${icon("plug", 16)} AI 模式只在你通过浏览器授权官方提供商后发起请求；OAuth token 不会显示在界面中。</p>
+      <p class="privacy-note">${icon("plug", 16)} ${t("onboarding.privacy")}</p>
     </section>
   </main>${busy ? '<div class="busy-overlay"><span class="spinner"></span></div>' : ""}`;
 }
@@ -1660,25 +1661,25 @@ function scheduleHistoryRefresh(): void {
 }
 
 function formatHistoryTime(value: string | null | undefined): string {
-  return value ? new Date(value).toLocaleString("zh-CN") : "等待首次备份";
+  return value ? new Date(value).toLocaleString(locale()) : t("history.waitingBackup");
 }
 
 function renderHistoryPage(): string {
   const history = creativeHistory.length
     ? creativeHistory.map((item) => `<article class="timeline-item"><span class="status-dot online"></span><div><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.summary)}</small><code>${escapeHtml(new Date(item.createdAtUtc).toLocaleString("zh-CN"))}${item.outputPath ? ` · ${escapeHtml(item.outputPath)}` : ""}</code></div></article>`).join("")
-    : '<div class="empty-inline">还没有工作流记录；完成一次工具操作后会自动出现在这里。</div>';
+    : `<div class="empty-inline">${t("history.emptyWorkflow")}</div>`;
   const checkpoints = projectCheckpoints.length
     ? projectCheckpoints.map((item) => `<article class="checkpoint-item"><span class="feature-icon blue">${icon("shield", 17)}</span><div><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.sourcePath)}</small><code>SHA-256 ${escapeHtml(item.sourceSha256.slice(0, 16))}… · ${new Date(item.createdAtUtc).toLocaleString("zh-CN")}</code></div><button class="secondary compact" data-restore-checkpoint="${escapeHtml(item.id)}">恢复副本</button></article>`).join("")
-    : '<div class="empty-inline">还没有工程检查点。</div>';
+    : `<div class="empty-inline">${t("history.emptySnapshots")}</div>`;
   const backup = projectBackupState;
   const itemError = backup?.projects.some((item) => item.lastError) ?? false;
-  const backupStatus = historyLoadState === "error" ? "读取失败" : historyLoadState === "loading" ? "正在读取" : backup?.lastError || itemError ? "需要处理" : backup ? "自动跟踪中" : "等待读取";
-  const tracked = backup?.projects.length ? backup.projects.map((item) => `<article class="checkpoint-item"><span class="feature-icon blue">${icon("history", 17)}</span><div><strong>${escapeHtml(item.sourcePath)}</strong><small>最近发现：${escapeHtml(formatHistoryTime(item.lastSeenAtUtc))} · 备份 ${item.backupCount} 次</small><code>${item.lastError ? `失败：${escapeHtml(item.lastError)}` : `上次备份：${escapeHtml(formatHistoryTime(item.lastBackupAtUtc))}`}</code></div></article>`).join("") : '<div class="empty-inline">尚未追踪到 .svp 工程。打开并保存工程后，后台会自动开始检测。</div>';
-  const loadError = historyLoadState === "error" ? `<div class="audio-inline-error" role="alert">历史状态读取失败：${escapeHtml(historyLoadError)}</div>` : "";
-  return `<section class="panel history-intro"><span class="feature-icon blue">${icon("history", 22)}</span><div><span class="eyebrow">AUTOMATIC HISTORY</span><h2>工程历史自动保存</h2><p>每分钟检测已追踪的 .svp 工程变化，应用运行或托盘驻留时持续工作。未保存内容需要先由 SynthV 正常保存。</p></div><span class="availability ${historyLoadState === "ready" && !backup?.lastError && !itemError ? "ready" : "warning"}">${backupStatus}</span></section>${loadError}
-    <section class="panel history-checkpoint-grid"><div class="section-heading"><div><h2>自动备份状态</h2><p>检测间隔：${backup?.intervalSeconds ?? 60} 秒${backup?.lastError ? ` · ${escapeHtml(backup.lastError)}` : ""}</p></div></div><div class="checkpoint-list">${tracked}</div></section>
-    <section class="panel"><div class="section-heading"><div><h2>已有快照</h2><p>可恢复快照会生成新的工程副本。</p></div></div><div class="checkpoint-list">${checkpoints}</div></section>
-    <section class="panel workflow-history"><div class="section-heading"><div><h2>工作流记录</h2><p>按时间保留工具输入摘要、执行结果和输出位置。</p></div></div><div class="timeline-list">${history}</div></section>`;
+  const backupStatus = historyLoadState === "error" ? t("history.readingFailed", { error: "" }).replace(/：$/, "") : historyLoadState === "loading" ? t("history.reading") : backup?.lastError || itemError ? t("history.needsAttention") : backup ? t("history.tracking") : t("history.waiting");
+  const tracked = backup?.projects.length ? backup.projects.map((item) => `<article class="checkpoint-item"><span class="feature-icon blue">${icon("history", 17)}</span><div><strong>${escapeHtml(item.sourcePath)}</strong><small>${t("history.recentlyFound", { time: formatHistoryTime(item.lastSeenAtUtc), count: item.backupCount })}</small><code>${item.lastError ? escapeHtml(t("history.failed", { error: item.lastError })) : escapeHtml(t("history.lastBackup", { time: formatHistoryTime(item.lastBackupAtUtc) }))}</code></div></article>`).join("") : `<div class="empty-inline">${t("history.emptyTracked")}</div>`;
+  const loadError = historyLoadState === "error" ? `<div class="audio-inline-error" role="alert">${escapeHtml(t("history.readingFailed", { error: historyLoadError }))}</div>` : "";
+  return `<section class="panel history-intro"><span class="feature-icon blue">${icon("history", 22)}</span><div><span class="eyebrow">${t("history.eyebrow")}</span><h2>${t("history.title")}</h2><p>${t("history.description")}</p></div><span class="availability ${historyLoadState === "ready" && !backup?.lastError && !itemError ? "ready" : "warning"}">${backupStatus}</span></section>${loadError}
+    <section class="panel history-checkpoint-grid"><div class="section-heading"><div><h2>${t("history.backupStatus")}</h2><p>${t("history.backupDescription", { seconds: backup?.intervalSeconds ?? 60 })}${backup?.lastError ? ` · ${escapeHtml(backup.lastError)}` : ""}</p></div></div><div class="checkpoint-list">${tracked}</div></section>
+    <section class="panel"><div class="section-heading"><div><h2>${t("history.snapshots")}</h2><p>${t("history.snapshotDescription")}</p></div></div><div class="checkpoint-list">${checkpoints}</div></section>
+    <section class="panel workflow-history"><div class="section-heading"><div><h2>${t("history.workflow")}</h2><p>${t("history.workflowDescription")}</p></div></div><div class="timeline-list">${history}</div></section>`;
 }
 
 interface FeatureAvailability {
@@ -1833,23 +1834,23 @@ function renderWorkflowResult(result: WorkflowResult, ai: boolean): string {
   const structured = lyricTemplate ?? abAudio ?? (diagnostic
     ? `${asObject(data.probe) ? scalar : ""}${diagnostic}`
     : batch ?? scalar);
-  const raw = `<details class="raw-result"><summary>${icon("file", 14)} 查看原始结构化数据</summary><pre>${escapeHtml(JSON.stringify(result.data, null, 2))}</pre></details>`;
-  const exportActions = `<div class="result-actions"><span>导出当前报告</span><button class="secondary" data-export-workflow="markdown">${icon("download", 15)} Markdown</button><button class="secondary" data-export-workflow="json">${icon("download", 15)} JSON</button></div>`;
+  const raw = `<details class="raw-result"><summary>${icon("file", 14)} ${t("workflow.rawData")}</summary><pre>${escapeHtml(JSON.stringify(result.data, null, 2))}</pre></details>`;
+  const exportActions = `<div class="result-actions"><span>${t("workflow.exportReport")}</span><button class="secondary" data-export-workflow="markdown">${icon("download", 15)} Markdown</button><button class="secondary" data-export-workflow="json">${icon("download", 15)} JSON</button></div>`;
   const review = result.aiReview
-    ? `<div class="ai-review"><strong>${icon("sparkles", 15)} AI 复核</strong><p>${escapeHtml(result.aiReview)}</p></div>`
-    : ai ? `<button class="secondary" data-review-workflow>${icon("sparkles", 16)} 用已配置模型复核结果</button>` : "";
-  return `<section class="workflow-result"><div class="result-head"><div><span class="availability ready">运行完成</span><h3>${escapeHtml(result.summary)}</h3></div>${result.outputPath ? `<code>${escapeHtml(result.outputPath)}</code>` : ""}</div>${structured}${raw}${exportActions}${review}</section>`;
+    ? `<div class="ai-review"><strong>${icon("sparkles", 15)} ${t("workflow.aiReview")}</strong><p>${escapeHtml(result.aiReview)}</p></div>`
+    : ai ? `<button class="secondary" data-review-workflow>${icon("sparkles", 16)} ${t("workflow.review")}</button>` : "";
+  return `<section class="workflow-result"><div class="result-head"><div><span class="availability ready">${t("workflow.completed")}</span><h3>${escapeHtml(result.summary)}</h3></div>${result.outputPath ? `<code>${escapeHtml(result.outputPath)}</code>` : ""}</div>${structured}${raw}${exportActions}${review}</section>`;
 }
 
 function renderRhymeLookupResult(): string {
-  if (!lyricRhymeResult) return `<div class="lyric-empty">输入一个字（如“光”）或韵母（如 <code>ang</code>），这里会显示字典内全部同韵字。</div>`;
+  if (!lyricRhymeResult) return `<div class="lyric-empty">${t("lyrics.emptyRhyme")}</div>`;
   const result = lyricRhymeResult;
-  return `<section class="rhyme-results"><div class="rhyme-result-head"><div><span class="availability ready">${result.matchMode === "family" ? "同韵部" : "精确韵母"}</span><strong>${escapeHtml(result.rhymeKeys.join(" / "))}</strong></div><span>${result.total.toLocaleString()} 个字${result.queryPinyin.length ? ` · ${escapeHtml(result.queryPinyin.join(" / "))}` : ""}</span></div><div class="rhyme-character-grid">${result.characters.map((item) => `<button type="button" data-rhyme-character="${escapeHtml(item.character)}" title="${escapeHtml(item.pinyin.join(" / "))}">${escapeHtml(item.character)}</button>`).join("")}</div><small class="coverage-note">${escapeHtml(result.coverageNote)} 点击任一字可加入歌词草稿。</small></section>`;
+  return `<section class="rhyme-results"><div class="rhyme-result-head"><div><span class="availability ready">${result.matchMode === "family" ? t("lyrics.rhymeFamily") : t("lyrics.rhymeExact")}</span><strong>${escapeHtml(result.rhymeKeys.join(" / "))}</strong></div><span>${t("lyrics.characters", { count: result.total.toLocaleString() })}${result.queryPinyin.length ? ` · ${escapeHtml(result.queryPinyin.join(" / "))}` : ""}</span></div><div class="rhyme-character-grid">${result.characters.map((item) => `<button type="button" data-rhyme-character="${escapeHtml(item.character)}" title="${escapeHtml(item.pinyin.join(" / "))}">${escapeHtml(item.character)}</button>`).join("")}</div><small class="coverage-note">${escapeHtml(result.coverageNote)} ${t("lyrics.addToDraft")}</small></section>`;
 }
 
 function renderLyricCandidates(): string {
-  if (!lyricCandidates) return `<div class="lyric-empty">填写创作意图或意象后，Copilot 会给出互不重复的原创候选；采用前仍由你决定。</div>`;
-  return `<div class="lyric-candidate-list">${lyricCandidates.candidates.map((candidate, index) => `<article class="lyric-candidate ${candidate.rhymeMatched === false ? "off-rhyme" : ""}"><div><span>${candidate.rhymeMatched == null ? "未限定韵脚" : candidate.rhymeMatched ? `押 ${escapeHtml(lyricCandidates?.targetRhyme ?? "目标韵")}` : "句尾未命中"}</span>${candidate.rhymeFoot ? `<code>${escapeHtml(candidate.rhymeFoot)}</code>` : ""}</div><strong>${escapeHtml(candidate.text)}</strong>${candidate.note ? `<p>${escapeHtml(candidate.note)}</p>` : ""}<button type="button" class="secondary" data-use-lyric-candidate="${index}">${icon("plus", 14)} 加入草稿</button></article>`).join("")}</div>`;
+  if (!lyricCandidates) return `<div class="lyric-empty">${t("lyrics.emptyCandidates")}</div>`;
+  return `<div class="lyric-candidate-list">${lyricCandidates.candidates.map((candidate, index) => `<article class="lyric-candidate ${candidate.rhymeMatched === false ? "off-rhyme" : ""}"><div><span>${candidate.rhymeMatched == null ? t("lyrics.unlimitedRhyme") : candidate.rhymeMatched ? t("lyrics.rhymeMatch", { rhyme: escapeHtml(lyricCandidates?.targetRhyme ?? "目标韵") }) : t("lyrics.rhymeMiss")}</span>${candidate.rhymeFoot ? `<code>${escapeHtml(candidate.rhymeFoot)}</code>` : ""}</div><strong>${escapeHtml(candidate.text)}</strong>${candidate.note ? `<p>${escapeHtml(candidate.note)}</p>` : ""}<button type="button" class="secondary" data-use-lyric-candidate="${index}">${icon("plus", 14)} ${t("lyrics.useCandidate")}</button></article>`).join("")}</div>`;
 }
 
 function renderLyricStudio(ai: boolean): string {
@@ -1857,11 +1858,11 @@ function renderLyricStudio(ai: boolean): string {
   const lineCount = lyricDraft.trim() ? lyricDraft.trim().split(/\r?\n/).length : 0;
   const projectOptions = lyricProjects.map((project) => `<option value="${escapeHtml(project.id)}" ${project.id === lyricProjectId ? "selected" : ""}>${escapeHtml(project.title)} · ${project.lineCount} 行 · r${project.revision}</option>`).join("");
   const projectStatus = lyricProjectId === undefined
-    ? "未保存草稿"
+    ? t("lyrics.unsavedDraft")
     : lyricProjectHasUnsavedChanges()
-      ? `本地项目 r${lyricProjectRevision} · 有未保存修改`
-      : `本地项目 r${lyricProjectRevision} · 已保存`;
-  const projectToolbar = `<section class="lyric-project-toolbar panel-inset"><div><span class="eyebrow">LOCAL SONG PROJECT</span><strong>${escapeHtml(projectStatus)}</strong><small>项目保存在本机；输入时的临时草稿仍会自动保存。</small></div><div class="lyric-project-actions"><button type="button" class="secondary compact" data-new-lyric-project>新项目</button><select id="lyric-project-select" ${lyricProjects.length ? "" : "disabled"}><option value="">${lyricProjects.length ? "选择已保存项目" : "尚无已保存项目"}</option>${projectOptions}</select><button type="button" class="secondary compact" data-load-lyric-project ${lyricProjects.length ? "" : "disabled"}>打开</button><button type="button" class="primary compact" data-save-lyric-project>${lyricProjectId === undefined ? "保存为项目" : "保存"}</button></div></section>`;
+      ? t("lyrics.localProjectUnsaved", { revision: lyricProjectRevision })
+      : t("lyrics.localProjectSaved", { revision: lyricProjectRevision });
+  const projectToolbar = `<section class="lyric-project-toolbar panel-inset"><div><span class="eyebrow">LOCAL SONG PROJECT</span><strong>${escapeHtml(projectStatus)}</strong><small>${t("lyrics.projectLocalDescription")}</small></div><div class="lyric-project-actions"><button type="button" class="secondary compact" data-new-lyric-project>${t("lyrics.newProject")}</button><select id="lyric-project-select" ${lyricProjects.length ? "" : "disabled"}><option value="">${lyricProjects.length ? t("lyrics.chooseProject") : t("lyrics.noProjects")}</option>${projectOptions}</select><button type="button" class="secondary compact" data-load-lyric-project ${lyricProjects.length ? "" : "disabled"}>${t("lyrics.open")}</button><button type="button" class="primary compact" data-save-lyric-project>${lyricProjectId === undefined ? t("lyrics.saveAsProject") : t("lyrics.save")}</button></div></section>`;
   const structureRows = lyricSections.map((section, index) => `<article class="lyric-section-row" data-lyric-section-id="${escapeHtml(section.id)}"><span class="section-index">${index + 1}</span><label>段落名称<input data-lyric-section-field="label" maxlength="60" value="${escapeHtml(section.label)}" /></label><label>行数<input data-lyric-section-field="lineCount" type="number" min="1" max="32" value="${section.lineCount}" /></label><label>格式<input data-lyric-section-field="rhymeScheme" maxlength="32" value="${escapeHtml(section.rhymeScheme)}" placeholder="可选，如 ABAB" /></label><input type="hidden" data-lyric-section-field="kind" value="${escapeHtml(section.kind)}" /><div class="lyric-row-actions"><button type="button" class="icon-plain" data-move-lyric-section="up" data-section-id="${escapeHtml(section.id)}" title="上移" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" class="icon-plain" data-move-lyric-section="down" data-section-id="${escapeHtml(section.id)}" title="下移" ${index === lyricSections.length - 1 ? "disabled" : ""}>↓</button><button type="button" class="icon-plain danger" data-remove-lyric-section="${escapeHtml(section.id)}" title="删除">×</button></div></article>`).join("");
   const copilot = ai ? `<section class="lyric-copilot panel-inset"><div class="lyric-subhead"><div><span class="eyebrow">COPILOT</span><h3>${icon("sparkles", 17)} 帮我续写</h3></div><span class="availability ready">只给候选，不会改稿</span></div><form id="lyric-candidate-form" class="lyric-candidate-form"><label class="wide">这一句 / 这一段想表达什么<textarea id="lyric-brief" rows="3" maxlength="2000" placeholder="例如：夜车离开故乡时，想起没说出口的告别">${escapeHtml(lyricCandidateBrief)}</textarea></label><label class="wide">画面或关键词<input id="lyric-imagery" maxlength="1000" value="${escapeHtml(lyricCandidateImagery)}" placeholder="月台、旧信、雨后的路灯、车窗倒影" /></label><label>写到哪一段<select id="lyric-candidate-section">${sectionOptions}</select></label><label>语气<input id="lyric-candidate-tone" maxlength="80" value="${escapeHtml(lyricCandidateTone)}" placeholder="克制、口语化、明亮" /></label><label>句尾提示（可空）<input id="lyric-candidate-rhyme" maxlength="24" value="${escapeHtml(lyricCandidateRhyme)}" placeholder="如：ang / 光" /></label><label>候选数量<select id="lyric-candidate-count">${[2, 3, 4, 5, 6].map((count) => `<option value="${count}" ${lyricCandidateCount === count ? "selected" : ""}>${count} 条</option>`).join("")}</select></label><button class="primary wide">${icon("sparkles", 16)} 给我几个写法</button></form>${renderLyricCandidates()}</section>` : `<section class="lyric-copilot locked panel-inset"><div class="lyric-subhead"><div><span class="eyebrow">COPILOT</span><h3>${icon("sparkles", 17)} 帮我续写</h3></div><span class="availability blocked">AI 模式</span></div><p>这里始终是你的草稿。开启 AI 后，可以为某一段索取原创写法，选择后再手动加入。</p><button type="button" class="secondary" data-enable-ai>开启 Copilot</button></section>`;
   return `<div class="lyric-mode-banner"><span class="feature-icon ${ai ? "violet" : "emerald"}">${icon(ai ? "sparkles" : "lyrics", 21)}</span><div><strong>把注意力放在歌词上</strong><p>草稿会自动保存在本机；结构、韵脚和 Copilot 都是按需打开的辅助工具。</p></div><span class="lyric-save-state">本机自动保存</span></div>${projectToolbar}<div class="lyric-workbench-grid lyric-writing-layout"><main class="lyric-editor panel-inset"><div class="lyric-editor-head"><label class="lyric-title">歌名<input id="lyric-song-title" maxlength="120" value="${escapeHtml(lyricSongTitle)}" placeholder="未命名歌词" /></label><div class="lyric-editor-actions"><button type="button" class="secondary compact" data-copy-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>复制</button><button type="button" class="secondary compact" data-clear-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>清空</button></div></div><label class="lyric-draft-label">歌词草稿<textarea id="lyric-draft" rows="22" spellcheck="false" placeholder="从这里开始写。\n\n你可以直接写完整歌词，也可以先写几个句子或画面。">${escapeHtml(lyricDraft)}</textarea></label><footer class="lyric-editor-footer"><span>${lineCount} 行 · ${lyricDraft.length.toLocaleString()} 字</span><span>输入时自动保存</span></footer></main><aside class="lyric-helper-stack">${copilot}<details class="lyric-tools panel-inset"><summary><span><span class="eyebrow">OPTIONAL TOOLS</span><strong>${icon("recipe", 16)} 段落结构</strong></span><small>${lyricSections.length} 段 · ${lyricSections.reduce((sum, section) => sum + section.lineCount, 0)} 行</small></summary><form id="lyric-structure-form"><div class="lyric-presets"><span>快速开始</span><button type="button" data-lyric-preset="compact">流行</button><button type="button" data-lyric-preset="pop">完整歌曲</button><button type="button" data-lyric-preset="rap">说唱</button><button type="button" data-lyric-preset="blank">空白</button></div><div class="lyric-section-list">${structureRows}</div><div class="lyric-structure-actions"><button type="button" class="secondary" data-add-lyric-section>${icon("plus", 15)} 添加段落</button><button class="primary">${icon("recipe", 15)} 插入段落骨架</button></div></form></details><details class="lyric-tools panel-inset"><summary><span><span class="eyebrow">OPTIONAL TOOLS</span><strong>${icon("pronunciation", 16)} 韵脚助手</strong></span><small>只在需要时查询</small></summary><form id="rhyme-lookup-form" class="rhyme-search"><input id="rhyme-query" required maxlength="24" value="${escapeHtml(lyricRhymeQuery)}" placeholder="输入一个字或韵母，如 光 / ang" /><select id="rhyme-match-mode"><option value="family" ${lyricRhymeMode === "family" ? "selected" : ""}>同韵部</option><option value="exact" ${lyricRhymeMode === "exact" ? "selected" : ""}>精确韵母</option></select><button class="secondary">查找同韵字</button></form>${renderRhymeLookupResult()}</details></aside></div>`;
@@ -2057,7 +2058,7 @@ function renderWorkflowPanel(id: string): string {
     form = catalogFeature ? `<div class="mode-limit"><strong>能力入口已就绪</strong><br />${escapeHtml(catalogFeature.base.join(" · "))}。后端工作流接入后会在这里显示参数与执行结果；当前不会对工程或音频执行写入。</div>` : "";
   }
   const result = workflowResult ? renderWorkflowResult(workflowResult, ai) : "";
-  return `<section class="workflow-panel"><div class="workflow-heading"><span class="feature-icon ${feature?.accent ?? "violet"}">${icon(feature?.icon ?? "toolbox", 25)}</span><div><span class="eyebrow">${escapeHtml(group?.title ?? "ACTIVE WORKFLOW")}</span><h2>${escapeHtml(feature?.title ?? "工作流")}</h2><p>${escapeHtml(feature?.description ?? "")}</p></div></div>${form}${result}</section>`;
+  return `<section class="workflow-panel"><div class="workflow-heading"><span class="feature-icon ${feature?.accent ?? "violet"}">${icon(feature?.icon ?? "toolbox", 25)}</span><div><span class="eyebrow">${escapeHtml(group?.title ?? t("workflow.active"))}</span><h2>${escapeHtml(feature?.title ?? t("workflow.defaultTitle"))}</h2><p>${escapeHtml(feature?.description ?? "")}</p></div></div>${form}${result}</section>`;
 }
 
 function renderToolboxUpdateResult(): string {
@@ -2075,7 +2076,7 @@ function renderToolboxUpdateResult(): string {
 
 function renderCopilot(): string {
   const messages = conversation?.messages.filter((message) => message.role === "user" || message.role === "assistant") ?? [];
-  const approvals = fileApprovals.length ? `<section class="file-approvals"><strong>需要文件访问批准</strong>${fileApprovals.map((item) => `<article><code>${escapeHtml(item.path)}</code><small>${escapeHtml(item.purpose)}</small><button class="primary compact" data-approve-file="${escapeHtml(item.id)}">通过</button><button class="secondary compact" data-deny-file="${escapeHtml(item.id)}">拒绝</button></article>`).join("")}</section>` : "";
+  const approvals = fileApprovals.length ? `<section class="file-approvals"><strong>${t("copilot.fileApproval")}</strong>${fileApprovals.map((item) => `<article><code>${escapeHtml(item.path)}</code><small>${escapeHtml(item.purpose)}</small><button class="primary compact" data-approve-file="${escapeHtml(item.id)}">${t("copilot.approve")}</button><button class="secondary compact" data-deny-file="${escapeHtml(item.id)}">${t("copilot.deny")}</button></article>`).join("")}</section>` : "";
   const provider = activeAiProvider();
   const providerName = provider ? aiProviderDisplayName(provider) : "尚未选择提供商";
   const providerModel = provider?.model || "选择模型";
@@ -2083,12 +2084,12 @@ function renderCopilot(): string {
     ? `${provider.accounts.filter((account) => account.authorized).length} 个 OAuth · ${provider.apiKeys.length} 个 API Key`
     : "未配置连接";
   return `<div class="copilot-layout">
-    <aside class="sessions-panel"><div class="sessions-panel-head"><button class="primary full" data-new-conversation>${icon("plus", 17)} 新建对话</button><span class="nav-label">历史对话</span></div><div class="session-list">${conversations.length ? conversations.map((item) => `<button class="session-item ${conversation?.id === item.id ? "active" : ""}" data-conversation="${escapeHtml(item.id)}"><strong>${escapeHtml(item.title)}</strong><small>${item.messageCount} 条消息 · ${escapeHtml(item.updatedAt.slice(0, 10))}</small></button>`).join("") : '<p class="empty-small">还没有历史对话</p>'}</div></aside>
+    <aside class="sessions-panel"><div class="sessions-panel-head"><button class="primary full" data-new-conversation>${icon("plus", 17)} ${t("copilot.newConversation")}</button><span class="nav-label">${t("copilot.history")}</span></div><div class="session-list">${conversations.length ? conversations.map((item) => `<button class="session-item ${conversation?.id === item.id ? "active" : ""}" data-conversation="${escapeHtml(item.id)}"><strong>${escapeHtml(item.title)}</strong><small>${item.messageCount} 条消息 · ${escapeHtml(item.updatedAt.slice(0, 10))}</small></button>`).join("") : `<p class="empty-small">${t("copilot.emptyHistory")}</p>`}</div></aside>
     <section class="chat-panel">
       <div class="chat-header"><div class="chat-title"><strong>${escapeHtml(conversation?.title ?? "新对话")}</strong><small>Copilot 只会调用已启用的能力</small></div><div class="chat-header-actions" aria-label="对话工具栏"><button type="button" class="chat-model-button" data-open-ai-provider-picker aria-label="选择供应商和模型；当前为 ${escapeHtml(providerName)} ${escapeHtml(providerModel)}"><span class="chat-model-mark">${icon("sparkles", 14)}</span><span><strong>${escapeHtml(providerName)}</strong><small>${escapeHtml(providerModel)} · ${providerStatus}</small></span>${icon("arrow", 14)}</button><div class="chat-work-mode" role="group" aria-label="Agent 工作模式"><button type="button" class="${app?.agentWorkMode === "edit" ? "active" : ""}" data-agent-work-mode="edit" aria-pressed="${app?.agentWorkMode === "edit"}">Edit</button><button type="button" class="${app?.agentWorkMode === "solo" ? "active" : ""}" data-agent-work-mode="solo" aria-pressed="${app?.agentWorkMode === "solo"}">Solo</button></div></div></div>
       ${approvals}
       <div class="messages">${messages.length ? messages.map(renderMessage).join("") : `<div class="empty-chat"><span class="mode-icon purple">${icon("bot", 30)}</span><h2>今天想完成什么？</h2><p>可以从分析音频、检查工程或连接 SynthV 开始。</p><div class="prompt-chips"><button data-prompt="分析这段音频的 BPM、调性和能量变化">分析音频特征</button><button data-prompt="检查当前 SynthV 工程并总结轨道结构">检查 SynthV 工程</button><button data-prompt="帮我规划从演唱音频到 MIDI 或 SynthV 工程的工作流">规划音频到 SynthV</button></div></div>`}</div>
-      <form id="chat-form" class="composer"><div class="composer-shell"><textarea id="chat-input" rows="1" placeholder="向 Copilot 描述任务…"></textarea><button class="primary icon-button" type="submit" title="发送" aria-label="发送消息">${icon("send", 19)}</button></div><span>Copilot 可能出错，重要修改请在 SynthV 中复核。按 Ctrl/⌘ + Enter 发送。</span></form>
+      <form id="chat-form" class="composer"><div class="composer-shell"><textarea id="chat-input" rows="1" placeholder="${t("copilot.placeholder")}"></textarea><button class="primary icon-button" type="submit" title="${t("copilot.send")}" aria-label="${t("copilot.send")}">${icon("send", 19)}</button></div><span>${t("copilot.review")}</span></form>
     </section>
   </div>`;
 }
@@ -2100,35 +2101,35 @@ function renderMessage(message: ChatMessage): string {
 
 function renderComponents(): string {
   if (!app) return "";
-  const statusLabel = { queued: "排队中", downloading: "下载中", installing: "安装中", completed: "已完成", failed: "失败", cancelled: "已取消" } as const;
+  const statusLabel = { queued: t("components.status.queued"), downloading: t("components.status.downloading"), installing: t("components.status.installing"), completed: t("components.status.completed"), failed: t("components.status.failed"), cancelled: t("components.status.cancelled") } as const;
   const activeDownloads = app.downloads.filter((item) => item.status !== "completed");
   const queue = activeDownloads.length ? `<section class="download-queue panel">
-    <div class="section-heading"><div><h2>下载队列</h2><p>队列串行执行；内置下载器只获取固定版本，并在安装前校验 SHA-256。</p></div><span class="queue-count">${activeDownloads.length}</span></div>
+    <div class="section-heading"><div><h2>${t("components.queue")}</h2><p>${t("components.queueDescription")}</p></div><span class="queue-count">${activeDownloads.length}</span></div>
     <div class="download-list">${activeDownloads.map((item) => `<article class="download-item ${item.status}">
       <span class="component-status ${item.status === "completed" ? "ready" : ""}">${item.status === "failed" ? icon("plug", 17) : icon("download", 17)}</span>
       <div><div class="download-title"><strong>${escapeHtml(item.displayName)}</strong><span>${statusLabel[item.status]}</span></div><div class="progress-track"><span style="width:${Math.max(2, Math.min(100, item.progress))}%"></span></div><small>${escapeHtml(item.detail)}</small></div>
-      ${item.status === "queued" ? `<button class="secondary compact" data-cancel-component-task="${escapeHtml(item.id)}">取消</button>` : ["failed", "cancelled"].includes(item.status) ? `<button class="secondary compact" data-retry-component-task="${escapeHtml(item.id)}">重试</button>` : ""}
+      ${item.status === "queued" ? `<button class="secondary compact" data-cancel-component-task="${escapeHtml(item.id)}">${t("common.cancel")}</button>` : ["failed", "cancelled"].includes(item.status) ? `<button class="secondary compact" data-retry-component-task="${escapeHtml(item.id)}">${t("common.retry")}</button>` : ""}
     </article>`).join("")}</div>
   </section>` : "";
-  return `${queue}<div class="section-heading"><div><h2>本地组件</h2><p>下载任务会加入队列；无固定来源与 SHA-256 的组件会拒绝安装。</p></div></div>
+  return `${queue}<div class="section-heading"><div><h2>${t("components.local")}</h2><p>${t("components.localDescription")}</p></div></div>
     <div class="component-list">${app.components.map((component) => {
       const task = app?.downloads.find((item) => item.componentId === component.id && ["queued", "downloading", "installing"].includes(item.status));
       const isRemoving = removingComponentId === component.id;
       let actionButton: string;
       if (isRemoving) {
-        actionButton = `<button class="secondary component-remove-action" disabled>删除中…</button>`;
+        actionButton = `<button class="secondary component-remove-action" disabled>${t("components.removing")}</button>`;
       } else if (task) {
         actionButton = `<button class="secondary" disabled>${statusLabel[task.status]}</button>`;
       } else if (component.removable) {
-        actionButton = `<button class="secondary component-remove-action" data-remove-component="${escapeHtml(component.id)}">${icon("trash", 16)} ${component.installed ? "删除" : "清理残留"}</button>`;
+        actionButton = `<button class="secondary component-remove-action" data-remove-component="${escapeHtml(component.id)}">${icon("trash", 16)} ${component.installed ? t("common.delete") : t("components.cleanup")}</button>`;
       } else if (component.installed) {
-        actionButton = `<button class="secondary" disabled>已就绪</button>`;
+        actionButton = `<button class="secondary" disabled>${t("components.ready")}</button>`;
       } else if (component.downloaded) {
-        actionButton = `<button class="secondary" data-open-component-download="${escapeHtml(component.id)}">打开安装包位置</button>`;
+        actionButton = `<button class="secondary" data-open-component-download="${escapeHtml(component.id)}">${t("components.openPackage")}</button>`;
       } else if (component.installable) {
-        actionButton = `<button class="secondary" data-install-component="${escapeHtml(component.id)}">加入队列</button>`;
+        actionButton = `<button class="secondary" data-install-component="${escapeHtml(component.id)}">${t("components.addQueue")}</button>`;
       } else {
-        actionButton = `<button class="secondary" disabled>当前平台不可用</button>`;
+        actionButton = `<button class="secondary" disabled>${t("components.unavailable")}</button>`;
       }
       return `<article class="component-row"><span class="component-status ${component.installed || component.downloaded ? "ready" : ""}">${component.installed ? icon("check", 18) : icon("download", 18)}</span><div><h3>${escapeHtml(component.displayName)}</h3><p>${escapeHtml(component.description)}</p><div class="tags"><span>${escapeHtml(component.audience)}</span><span>${escapeHtml(component.status)}</span></div></div>${actionButton}</article>`;
     }).join("")}</div>`;
@@ -2665,7 +2666,7 @@ function wireForms(): void {
     lyricRhymeMode = (document.querySelector<HTMLSelectElement>("#rhyme-match-mode")?.value ?? "family") as RhymeMatchMode;
     void run(async () => {
       lyricRhymeResult = await api.lookupChineseRhyme(lyricRhymeQuery, lyricRhymeMode);
-      notice = `已找到 ${lyricRhymeResult.total.toLocaleString()} 个 ${lyricRhymeResult.rhymeKeys.join(" / ")} 同韵字。`;
+      notice = t("lyrics.characters", { count: lyricRhymeResult.total.toLocaleString() }) + ` · ${lyricRhymeResult.rhymeKeys.join(" / ")}`;
     });
   });
   document.querySelector<HTMLFormElement>("#lyric-structure-form")?.addEventListener("submit", (event) => {
@@ -2689,7 +2690,7 @@ function wireForms(): void {
         targetRhyme: lyricCandidateRhyme,
         candidateCount: lyricCandidateCount,
       }));
-      notice = `Copilot 已生成 ${lyricCandidates.candidates.length} 条原创候选，尚未写入草稿。`;
+      notice = `${t("copilot.history")}: ${lyricCandidates.candidates.length}`;
     });
   });
   document.querySelector<HTMLFormElement>("#pronunciation-form")?.addEventListener("submit", (event) => {
@@ -3108,18 +3109,18 @@ document.addEventListener("click", (event) => {
     const draft = document.querySelector<HTMLTextAreaElement>("#lyric-draft");
     if (!draft?.value.trim()) return;
     void navigator.clipboard.writeText(draft.value).then(() => {
-      notice = "歌词已复制到剪贴板。";
+      notice = t("lyrics.copy");
       render();
     }).catch(() => {
-      error = "无法访问剪贴板，请直接从草稿框复制。";
+      error = t("lyrics.copy");
       render();
     });
     return;
   }
   if (target.hasAttribute("data-new-lyric-project")) {
-    if (lyricProjectHasUnsavedChanges() && !window.confirm("当前项目有未保存修改。新建项目会清空当前工作区，是否继续？")) return;
+    if (lyricProjectHasUnsavedChanges() && !window.confirm(t("lyrics.localProjectUnsaved", { revision: lyricProjectRevision }))) return;
     startNewLyricProject();
-    notice = "已建立新的本地歌词草稿；保存后会成为独立歌曲项目。";
+    notice = t("lyrics.unsavedDraft");
     render();
     return;
   }
@@ -3131,14 +3132,14 @@ document.addEventListener("click", (event) => {
         : await api.createLyricProject(lyricSongTitle, lyricDraft, lyricSections, lyricRhymeTargets);
       applyLyricProject(project);
       lyricProjects = await api.listLyricProjects();
-      notice = `《${project.title}》已保存到本机项目（r${project.revision}）。`;
+      notice = t("lyrics.projectSaved", { title: project.title, revision: project.revision });
     });
     return;
   }
   if (target.hasAttribute("data-load-lyric-project")) {
     const id = document.querySelector<HTMLSelectElement>("#lyric-project-select")?.value;
     if (!id) {
-      error = "请选择要打开的歌词项目。";
+      error = t("lyrics.selectProject");
       render();
       return;
     }
@@ -3146,17 +3147,17 @@ document.addEventListener("click", (event) => {
     void run(async () => {
       const project = await api.loadLyricProject(id);
       applyLyricProject(project);
-      notice = `已打开《${project.title}》的本地项目。`;
+      notice = t("lyrics.projectOpened", { title: project.title });
     });
     return;
   }
   if (target.hasAttribute("data-clear-lyric-draft")) {
     const draft = document.querySelector<HTMLTextAreaElement>("#lyric-draft");
     if (!draft?.value.trim()) return;
-    if (!window.confirm("清空当前歌词草稿？此操作只能通过撤销或重新输入恢复。")) return;
+    if (!window.confirm(t("lyrics.clearConfirm"))) return;
     lyricDraft = "";
     persistLyricWorkspace();
-    notice = "歌词草稿已清空。";
+    notice = t("lyrics.cleared");
     render();
     return;
   }
@@ -3231,7 +3232,7 @@ document.addEventListener("click", (event) => {
     if (candidate) {
       lyricDraft = `${lyricDraft.trimEnd()}${lyricDraft.trim() ? "\n" : ""}${candidate.text}`;
       persistLyricWorkspace();
-      notice = "候选已加入草稿；原候选仍保留。";
+      notice = t("lyrics.candidateAdded");
       render();
     }
     return;
@@ -3246,7 +3247,7 @@ document.addEventListener("click", (event) => {
     }).join("\n\n");
     lyricDraft = `${lyricDraft.trimEnd()}${lyricDraft.trim() ? "\n\n" : ""}${skeleton}`;
     persistLyricWorkspace();
-    notice = "结构骨架已加入歌词草稿。";
+    notice = t("lyrics.templateAdded");
     render();
     return;
   }
