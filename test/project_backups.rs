@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 
-use crate::project_backups::ProjectBackupStore;
+use crate::project_backups::{worker_with_store, Message, ProjectBackupStore};
 
 fn temporary_root(name: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("synthv-toolbox-{name}-{}", uuid::Uuid::new_v4()));
@@ -35,7 +37,7 @@ fn backs_up_once_then_deduplicates_and_preserves_source() {
     assert!(store.observe_path(&source.to_string_lossy()).unwrap());
     store.process_once();
     let state = store.state();
-    assert_eq!(state.projects[0].backup_count, 1);
+    assert_eq!(state.projects[0].backup_count, 1, "{state:?}");
     assert_eq!(fs::read(&source).unwrap(), original);
     let checkpoints = checkpoint_paths(&root);
     assert_eq!(checkpoints.len(), 1);
@@ -63,8 +65,15 @@ fn changes_and_missing_snapshots_create_new_checkpoints_across_restart() {
     let mut restarted = ProjectBackupStore::open(root.clone());
     restarted.process_once();
     assert_eq!(restarted.state().projects[0].backup_count, 2);
-    let newest = checkpoint_paths(&root).pop().unwrap();
-    fs::remove_dir_all(newest).unwrap();
+    let changed_snapshot = checkpoint_paths(&root)
+        .into_iter()
+        .find(|path| {
+            fs::read(path.join("project.svp"))
+                .unwrap()
+                .starts_with(br#"{"version":2"#)
+        })
+        .unwrap();
+    fs::remove_dir_all(changed_snapshot).unwrap();
     restarted.process_once();
     assert_eq!(restarted.state().projects[0].backup_count, 3);
     let _ = fs::remove_dir_all(root);
@@ -98,5 +107,106 @@ fn excludes_its_own_snapshots() {
     let snapshot = checkpoint_paths(&root)[0].join("project.svp");
     assert!(store.observe_path(&snapshot.to_string_lossy()).is_err());
     assert_eq!(store.state().projects.len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn registers_a_missing_project_and_recovers_when_it_is_saved() {
+    let root = temporary_root("missing-then-saved");
+    let source = root.join("later.svp");
+    let mut store = ProjectBackupStore::open(root.clone());
+    assert!(store.observe_path(&source.to_string_lossy()).unwrap());
+    store.process_once();
+    assert_eq!(store.state().projects[0].backup_count, 0);
+    project(&source, 1);
+    store.process_once();
+    assert_eq!(store.state().projects[0].backup_count, 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn retries_a_temporary_registry_write_failure_without_registering_unsaved_projects() {
+    let root = temporary_root("registry-retry");
+    let first = root.join("first.svp");
+    let second = root.join("second.svp");
+    project(&first, 1);
+    project(&second, 1);
+    let mut store = ProjectBackupStore::open(root.clone());
+    store.observe_path(&first.to_string_lossy()).unwrap();
+    fs::remove_file(root.join("project-backups.json")).unwrap();
+    fs::create_dir(root.join("project-backups.json")).unwrap();
+    assert!(store.observe_path(&second.to_string_lossy()).is_err());
+    assert_eq!(store.state().projects.len(), 1);
+    fs::remove_dir(root.join("project-backups.json")).unwrap();
+    assert!(store.observe_path(&second.to_string_lossy()).unwrap());
+    assert_eq!(store.state().projects.len(), 2);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn never_overwrites_a_corrupt_registry() {
+    let root = temporary_root("corrupt-registry");
+    let source = root.join("song.svp");
+    project(&source, 1);
+    let registry = root.join("project-backups.json");
+    fs::write(&registry, "not json").unwrap();
+    let mut store = ProjectBackupStore::open(root.clone());
+    assert!(store.observe_path(&source.to_string_lossy()).is_err());
+    assert_eq!(fs::read_to_string(registry).unwrap(), "not json");
+    assert!(store.state().last_error.is_some());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[cfg(windows)]
+#[test]
+fn excludes_windows_canonical_snapshot_paths() {
+    let root = temporary_root("windows-canonical");
+    let source = root.join("song.svp");
+    project(&source, 1);
+    let mut store = ProjectBackupStore::open(root.clone());
+    store.observe_path(&source.to_string_lossy()).unwrap();
+    store.process_once();
+    let snapshot = checkpoint_paths(&root)[0].join("project.svp");
+    let extended = format!(r"\\?\{}", snapshot.to_string_lossy());
+    assert!(store.observe_path(&extended).is_err());
+    assert_eq!(store.state().projects.len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn worker_only_backs_up_existing_projects_on_its_interval() {
+    let root = temporary_root("worker-schedule");
+    let source = root.join("song.svp");
+    project(&source, 1);
+    let store = ProjectBackupStore::open(root.clone());
+    let state = Arc::new(Mutex::new(store.state()));
+    let (sender, receiver) = mpsc::channel();
+    let worker_state = state.clone();
+    let handle = std::thread::spawn(move || {
+        worker_with_store(store, receiver, worker_state, Duration::from_millis(25));
+    });
+    let (done, done_receiver) = mpsc::sync_channel(1);
+    sender
+        .send(Message::Observe {
+            path: source.to_string_lossy().into_owned(),
+            completed: Some(done),
+        })
+        .unwrap();
+    done_receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_eq!(state.lock().unwrap().projects[0].backup_count, 1);
+    project(&source, 2);
+    let (done, done_receiver) = mpsc::sync_channel(1);
+    sender
+        .send(Message::Observe {
+            path: source.to_string_lossy().into_owned(),
+            completed: Some(done),
+        })
+        .unwrap();
+    done_receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_eq!(state.lock().unwrap().projects[0].backup_count, 1);
+    std::thread::sleep(Duration::from_millis(60));
+    assert_eq!(state.lock().unwrap().projects[0].backup_count, 2);
+    drop(sender);
+    handle.join().unwrap();
     let _ = fs::remove_dir_all(root);
 }

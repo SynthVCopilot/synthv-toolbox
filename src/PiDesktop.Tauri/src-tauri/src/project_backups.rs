@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -60,16 +60,17 @@ impl Default for Registry {
     }
 }
 
-pub struct ProjectBackupStore {
+pub(crate) struct ProjectBackupStore {
     root: PathBuf,
     registry: Registry,
-    load_error: Option<String>,
+    registry_blocked: Option<String>,
+    last_error: Option<String>,
 }
 
 impl ProjectBackupStore {
-    pub fn open(root: PathBuf) -> Self {
+    pub(crate) fn open(root: PathBuf) -> Self {
         let registry_path = root.join(REGISTRY_NAME);
-        let (registry, load_error) = match fs::read_to_string(&registry_path) {
+        let (registry, registry_blocked) = match fs::read_to_string(&registry_path) {
             Ok(text) => match serde_json::from_str(&text) {
                 Ok(registry) => (registry, None),
                 Err(error) => (
@@ -86,27 +87,38 @@ impl ProjectBackupStore {
             ),
         };
         Self {
-            root,
+            root: normalize_path(&root),
             registry,
-            load_error,
+            last_error: registry_blocked.clone(),
+            registry_blocked,
         }
     }
 
-    pub fn observe_path(&mut self, path: &str) -> Result<bool, String> {
-        if self.load_error.is_some() {
-            return Err(self.load_error.clone().unwrap());
+    pub(crate) fn observe_path(&mut self, path: &str) -> Result<bool, String> {
+        if let Some(error) = &self.registry_blocked {
+            return Err(error.clone());
         }
         let source = accepted_source(path, &self.root)?;
         let key = source.to_string_lossy().into_owned();
         if let Some(project) = self.registry.projects.get_mut(&key) {
+            let previous = project.last_seen_at_utc.clone();
             project.last_seen_at_utc = Utc::now().to_rfc3339();
-            self.save_registry()?;
+            if let Err(error) = self.save_registry() {
+                self.registry
+                    .projects
+                    .get_mut(&key)
+                    .unwrap()
+                    .last_seen_at_utc = previous;
+                self.last_error = Some(error.clone());
+                return Err(error);
+            }
+            self.last_error = None;
             return Ok(false);
         }
         self.registry.projects.insert(
             key.clone(),
             TrackedProject {
-                source_path: key,
+                source_path: key.clone(),
                 last_seen_at_utc: Utc::now().to_rfc3339(),
                 last_backup_at_utc: None,
                 last_error: None,
@@ -115,12 +127,17 @@ impl ProjectBackupStore {
                 last_snapshot_path: None,
             },
         );
-        self.save_registry()?;
+        if let Err(error) = self.save_registry() {
+            self.registry.projects.remove(&key);
+            self.last_error = Some(error.clone());
+            return Err(error);
+        }
+        self.last_error = None;
         Ok(true)
     }
 
-    pub fn process_once(&mut self) {
-        if self.load_error.is_some() {
+    pub(crate) fn process_once(&mut self) {
+        if self.registry_blocked.is_some() {
             return;
         }
         let keys = self.registry.projects.keys().cloned().collect::<Vec<_>>();
@@ -132,18 +149,16 @@ impl ProjectBackupStore {
                 }
             }
         }
-        if let Err(error) = self.save_registry() {
-            self.load_error = Some(error);
-        }
+        self.last_error = self.save_registry().err();
     }
 
-    pub fn state(&self) -> ProjectBackupState {
+    pub(crate) fn state(&self) -> ProjectBackupState {
         let mut projects = self.registry.projects.values().cloned().collect::<Vec<_>>();
         projects.sort_by(|a, b| a.source_path.cmp(&b.source_path));
         ProjectBackupState {
             interval_seconds: INTERVAL_SECONDS,
             projects,
-            last_error: self.load_error.clone(),
+            last_error: self.last_error.clone(),
         }
     }
 
@@ -159,7 +174,7 @@ impl ProjectBackupStore {
         let snapshot_present = project
             .last_snapshot_path
             .as_ref()
-            .is_some_and(|p| Path::new(p).is_file());
+            .is_some_and(|path| snapshot_is_trusted(&self.root, path, &hash));
         if project.last_sha256.as_deref() == Some(&hash) && snapshot_present {
             if let Some(project) = self.registry.projects.get_mut(&key) {
                 project.last_error = None;
@@ -241,6 +256,7 @@ fn write_checkpoint(
         file.write_all(bytes)
             .and_then(|_| file.sync_all())
             .map_err(|error| format!("无法写入工程检查点：{error}"))?;
+        drop(file);
         let final_snapshot = final_dir.join("project.svp");
         let checkpoint = Checkpoint {
             id: id.clone(),
@@ -261,6 +277,7 @@ fn write_checkpoint(
             .write_all(&metadata)
             .and_then(|_| metadata_file.sync_all())
             .map_err(|error| format!("无法写入检查点元数据：{error}"))?;
+        drop(metadata_file);
         if &file_stamp(source)? != source_stamp {
             return Err("工程正在写入，稍后会重试自动备份。".to_string());
         }
@@ -277,7 +294,6 @@ fn write_checkpoint(
 fn accepted_source(value: &str, root: &Path) -> Result<PathBuf, String> {
     let path = PathBuf::from(value.trim());
     if !path.is_absolute()
-        || !path.is_file()
         || !path
             .extension()
             .and_then(|e| e.to_str())
@@ -285,12 +301,49 @@ fn accepted_source(value: &str, root: &Path) -> Result<PathBuf, String> {
     {
         return Err("自动备份只跟踪已保存的绝对 .svp 工程路径。".to_string());
     }
-    let source = fs::canonicalize(&path).map_err(|error| format!("无法解析工程路径：{error}"))?;
-    let backup_root = root.join("project-checkpoints");
+    let source = normalize_path(&path);
+    let backup_root = normalize_path(&root.join("project-checkpoints"));
     if source.starts_with(&backup_root) {
         return Err("不会跟踪自动备份快照。".to_string());
     }
     Ok(source)
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(path)
+        }
+    })
+}
+
+fn snapshot_is_trusted(root: &Path, snapshot_path: &str, expected_hash: &str) -> bool {
+    let checkpoints = normalize_path(&root.join("project-checkpoints"));
+    let snapshot = normalize_path(Path::new(snapshot_path));
+    if !snapshot.starts_with(&checkpoints)
+        || snapshot.file_name().and_then(|name| name.to_str()) != Some("project.svp")
+        || !snapshot.is_file()
+    {
+        return false;
+    }
+    let Some(directory) = snapshot.parent() else {
+        return false;
+    };
+    let Ok(metadata) = fs::read_to_string(directory.join("checkpoint.json")) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&metadata) else {
+        return false;
+    };
+    value.get("sourceSha256").and_then(Value::as_str) == Some(expected_hash)
+        && value
+            .get("snapshotPath")
+            .and_then(Value::as_str)
+            .is_some_and(|path| normalize_path(Path::new(path)) == snapshot)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -317,13 +370,19 @@ fn read_stable_svp(path: &Path) -> Result<(Vec<u8>, FileStamp), String> {
     if before != after {
         return Err("工程正在写入，稍后会重试自动备份。".to_string());
     }
+    if bytes.len() as u64 > MAX_PROJECT_BYTES || bytes.len() as u64 != after.len {
+        return Err("工程正在写入，稍后会重试自动备份。".to_string());
+    }
     let json = bytes.strip_suffix(&[0]).unwrap_or(&bytes);
-    serde_json::from_slice::<Value>(json)
+    let value = serde_json::from_slice::<Value>(json)
         .map_err(|error| format!("工程 JSON 无效，稍后会重试自动备份：{error}"))?;
+    if !value.is_object() {
+        return Err("工程 JSON 必须是对象，稍后会重试自动备份。".to_string());
+    }
     Ok((bytes, after))
 }
 
-enum Message {
+pub(crate) enum Message {
     Observe {
         path: String,
         completed: Option<mpsc::SyncSender<()>>,
@@ -348,19 +407,29 @@ pub fn start() {
 }
 
 pub fn observe_path(path: &str) {
+    enqueue(path, false);
+}
+
+pub fn observe_path_and_wait(path: &str) {
+    enqueue(path, true);
+}
+
+fn enqueue(path: &str, wait: bool) {
     if !is_candidate_path(path) {
         return;
     }
     start();
     if let Some(service) = SERVICE.get() {
         let (completed, receiver) = mpsc::sync_channel(1);
+        let completed = wait.then_some(completed);
         if service
             .sender
             .send(Message::Observe {
                 path: path.to_owned(),
-                completed: Some(completed),
+                completed,
             })
             .is_ok()
+            && wait
         {
             let _ = receiver.recv_timeout(Duration::from_secs(5));
         }
@@ -412,20 +481,35 @@ pub fn status() -> Result<ProjectBackupState, String> {
 }
 
 fn worker(receiver: mpsc::Receiver<Message>, state: Arc<Mutex<ProjectBackupState>>) {
-    let mut store = ProjectBackupStore::open(crate::agent::data_root());
+    worker_with_store(
+        ProjectBackupStore::open(crate::agent::data_root()),
+        receiver,
+        state,
+        Duration::from_secs(INTERVAL_SECONDS),
+    );
+}
+
+pub(crate) fn worker_with_store(
+    mut store: ProjectBackupStore,
+    receiver: mpsc::Receiver<Message>,
+    state: Arc<Mutex<ProjectBackupState>>,
+    interval: Duration,
+) {
+    let mut next_run = Instant::now() + interval;
     loop {
         let mut completed = Vec::new();
-        match receiver.recv_timeout(Duration::from_secs(INTERVAL_SECONDS)) {
+        let mut should_process = false;
+        match receiver.recv_timeout(next_run.saturating_duration_since(Instant::now())) {
             Ok(Message::Observe {
                 path,
                 completed: done,
             }) => {
-                let _ = store.observe_path(&path);
+                should_process |= store.observe_path(&path).unwrap_or(false);
                 if let Some(done) = done {
                     completed.push(done);
                 }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => store.process_once(),
+            Err(mpsc::RecvTimeoutError::Timeout) => should_process = true,
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
         }
         for _ in 0..256 {
@@ -436,12 +520,18 @@ fn worker(receiver: mpsc::Receiver<Message>, state: Arc<Mutex<ProjectBackupState
             else {
                 break;
             };
-            let _ = store.observe_path(&path);
+            should_process |= store.observe_path(&path).unwrap_or(false);
             if let Some(done) = done {
                 completed.push(done);
             }
         }
-        store.process_once();
+        if Instant::now() >= next_run {
+            should_process = true;
+        }
+        if should_process {
+            store.process_once();
+            next_run = Instant::now() + interval;
+        }
         if let Ok(mut current) = state.lock() {
             *current = store.state();
         }
