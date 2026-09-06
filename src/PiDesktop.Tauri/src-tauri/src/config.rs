@@ -1239,3 +1239,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../test/provider_auth_capability_config.rs"]
+mod provider_auth_capability_config;
