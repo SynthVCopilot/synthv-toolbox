@@ -390,7 +390,13 @@ fn route_mode_candidate(
         account_probe.session_status == Sv2SessionInspectionStatus::AccountMismatch;
     let session_sync_failed =
         account_probe.session_status == Sv2SessionInspectionStatus::SyncFailed;
-    let idle = locally_available && !remote_busy && !account_mismatch && !session_sync_failed;
+    let login_required =
+        account_probe.session_status == Sv2SessionInspectionStatus::LoginRequired;
+    let idle = locally_available
+        && !remote_busy
+        && !account_mismatch
+        && !session_sync_failed
+        && !login_required;
     let launch_mode = idle.then_some(mode);
 
     let manually_confirmed = slot
@@ -464,6 +470,8 @@ fn route_mode_candidate(
     }
     let reason = if session_sync_failed {
         "该账号会话未能安全更新，已从路由中排除；请在账号页查看错误并重新预检。".to_string()
+    } else if login_required {
+        "该账号没有可用的本地登录凭据，已从路由中排除；请先在 SV2 中重新登录。".to_string()
     } else if account_mismatch {
         "该槽位会话的账号不一致，已从路由中排除；请在 SV2 中确认登录账号。".to_string()
     } else if remote_busy {

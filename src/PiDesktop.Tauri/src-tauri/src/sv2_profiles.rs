@@ -1321,6 +1321,7 @@ fn account_probe_rank(probe: &Sv2AccountProbeView) -> u8 {
         (Sv2SessionInspectionStatus::Unsupported, _, _) => 3,
         (Sv2SessionInspectionStatus::Invalid, _, _) => 2,
         (Sv2SessionInspectionStatus::Expired, _, _) => 1,
+        (Sv2SessionInspectionStatus::LoginRequired, _, _) => 0,
         (Sv2SessionInspectionStatus::SyncFailed, _, _)
         | (Sv2SessionInspectionStatus::AccountMismatch, _, _)
         | (Sv2SessionInspectionStatus::Missing, _, _) => 0,

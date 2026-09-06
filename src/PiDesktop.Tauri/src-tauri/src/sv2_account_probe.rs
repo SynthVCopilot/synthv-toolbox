@@ -93,6 +93,7 @@ const RELOGIN_ERROR: &[u8] = b"device-require-relogin";
 pub enum Sv2SessionInspectionStatus {
     Ready,
     Missing,
+    LoginRequired,
     InUse,
     Expired,
     Invalid,
@@ -221,6 +222,16 @@ impl Sv2AccountProbeView {
                     .to_string();
         }
         view
+    }
+
+    fn login_required() -> Self {
+        Self::new(
+            Sv2SessionInspectionStatus::LoginRequired,
+            Sv2RemoteUseStatus::Unknown,
+            Sv2AuthorizationStatus::Unknown,
+            Vec::new(),
+            "本地登录缓存不含凭据；请先在 SV2 中重新登录。",
+        )
     }
 
     fn invalid() -> Self {
@@ -434,9 +445,16 @@ fn inspect_active_session_license(
         Ok(key) => key,
         Err(()) => return Sv2AccountProbeView::unsupported(),
     };
-    let credentials = match decrypt_session(ciphertext, &key).and_then(parse_session_plaintext) {
-        Ok(credentials) => credentials,
-        Err(()) => return Sv2AccountProbeView::invalid(),
+    let credentials = match decode_session_credentials(ciphertext, &key) {
+        SessionDecode::Credentials(credentials) => credentials,
+        SessionDecode::LoginRequired => {
+            let view = Sv2AccountProbeView::login_required();
+            if let Some(root) = root.as_ref() {
+                cache_put(fingerprint.clone(), root, &view, None);
+            }
+            return view;
+        }
+        SessionDecode::Invalid => return Sv2AccountProbeView::invalid(),
     };
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(3))
@@ -918,6 +936,47 @@ fn encrypt_session(plaintext: &[u8], key: &[u8; 8]) -> Result<Zeroizing<Vec<u8>>
         chunk[4..].reverse();
     }
     Ok(ciphertext)
+}
+
+enum SessionDecode {
+    Credentials(SessionCredentials),
+    LoginRequired,
+    Invalid,
+}
+
+fn decode_session_credentials(ciphertext: Zeroizing<Vec<u8>>, key: &[u8; 8]) -> SessionDecode {
+    let plaintext = match decrypt_session(ciphertext, key) {
+        Ok(plaintext) => plaintext,
+        Err(()) => return SessionDecode::Invalid,
+    };
+    if is_login_required_session_placeholder(&plaintext) {
+        return SessionDecode::LoginRequired;
+    }
+    parse_session_plaintext(plaintext)
+        .map(SessionDecode::Credentials)
+        .unwrap_or(SessionDecode::Invalid)
+}
+
+fn is_login_required_session_placeholder(plaintext: &[u8]) -> bool {
+    let Ok(plaintext) = std::str::from_utf8(plaintext) else {
+        return false;
+    };
+    if plaintext.is_empty()
+        || plaintext.len() > MAX_SESSION_BYTES
+        || plaintext.as_bytes().contains(&b'\r')
+    {
+        return false;
+    }
+    let lines = plaintext.split('\n').collect::<Vec<_>>();
+    if lines.len() != 5 || !lines[0].is_empty() || !lines[1].is_empty() {
+        return false;
+    }
+    let device_id = lines[4];
+    !device_id.is_empty()
+        && device_id.len() <= 512
+        && !device_id.chars().any(char::is_control)
+        && parse_session_time(lines[2]).is_ok()
+        && parse_session_time(lines[3]).is_ok()
 }
 
 fn parse_session_plaintext(mut plaintext: Zeroizing<Vec<u8>>) -> Result<SessionCredentials, ()> {
@@ -1811,6 +1870,7 @@ fn cached_view_for_fingerprint(
                 | Sv2SessionInspectionStatus::Expired
                 | Sv2SessionInspectionStatus::Unsupported
                 | Sv2SessionInspectionStatus::Invalid
+                | Sv2SessionInspectionStatus::LoginRequired
                 | Sv2SessionInspectionStatus::SyncFailed
         ) {
             return Some(view);
@@ -1889,6 +1949,7 @@ fn cache_put(
         (_, Sv2AuthorizationStatus::Verified, _) => Duration::MAX,
         (Sv2SessionInspectionStatus::Offline, _, _) => Duration::from_secs(3),
         (Sv2SessionInspectionStatus::Invalid, _, _) => Duration::from_secs(5),
+        (Sv2SessionInspectionStatus::LoginRequired, _, _) => Duration::MAX,
         (Sv2SessionInspectionStatus::SyncFailed, _, _) => Duration::MAX,
         (Sv2SessionInspectionStatus::AccountMismatch, _, _) => Duration::MAX,
         (Sv2SessionInspectionStatus::Expired, _, _) => Duration::from_secs(15),
@@ -2435,11 +2496,15 @@ fn refresh_windows_batch(requests: &[Sv2AccountProbeRequest<'_>]) -> Vec<Sv2Acco
 
     let mut sessions = Vec::with_capacity(pending.len());
     for session in pending {
-        let credentials =
-            decrypt_session(session.ciphertext, &key).and_then(parse_session_plaintext);
-        let credentials = match credentials {
-            Ok(value) => value,
-            Err(()) => {
+        let credentials = match decode_session_credentials(session.ciphertext, &key) {
+            SessionDecode::Credentials(credentials) => credentials,
+            SessionDecode::LoginRequired => {
+                let view = Sv2AccountProbeView::login_required();
+                cache_put(session.fingerprint, &session.root_key, &view, None);
+                results[session.request_index] = Some(view);
+                continue;
+            }
+            SessionDecode::Invalid => {
                 let view = Sv2AccountProbeView::invalid();
                 cache_put(session.fingerprint, &session.root_key, &view, None);
                 results[session.request_index] = Some(view);

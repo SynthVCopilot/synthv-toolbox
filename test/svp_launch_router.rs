@@ -488,6 +488,43 @@ fn account_mismatch_environment_is_never_routable() {
 }
 
 #[test]
+fn login_required_environment_is_never_routable() {
+    let (root, path) = voice_project("Mai 2");
+    let mut slot = route_slot(
+        "login-required",
+        "Login required account",
+        Sv2RemoteUseStatus::Clear,
+        Sv2AuthorizationStatus::Verified,
+        &["Mai 2"],
+        &[],
+    );
+    slot.concurrent.ready = true;
+    slot.concurrent_account_probe.session_status = Sv2SessionInspectionStatus::LoginRequired;
+    slot.concurrent_account_probe.remote_use = Sv2RemoteUseStatus::Unknown;
+    slot.concurrent_account_probe.authorization_status = Sv2AuthorizationStatus::Unknown;
+    slot.concurrent_account_probe.authorized_voices.clear();
+    slot.concurrent_account_probe.authorized_voice_products.clear();
+    slot.concurrent_account_probe.authorized_voice_count = 0;
+    let mut state = route_state(vec![slot]);
+    state.concurrent_provider.available = true;
+    state.blockers.push(crate::sv2_profiles::Sv2ProcessBlocker {
+        pid: Some(4242),
+        name: "synthv-studio.exe".to_string(),
+        reason: "test blocker".to_string(),
+    });
+
+    let plan = build_route_plan(path.to_str().unwrap(), &state).unwrap();
+
+    assert_eq!(plan.selected_slot_id, None);
+    assert_eq!(plan.candidates[0].launch_mode, None);
+    assert_eq!(
+        plan.candidates[0].session_status,
+        Sv2SessionInspectionStatus::LoginRequired
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn unsynchronized_environment_is_never_routable() {
     let (root, path) = voice_project("Mai 2");
     let mut slot = route_slot(

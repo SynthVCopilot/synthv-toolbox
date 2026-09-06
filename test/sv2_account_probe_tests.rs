@@ -882,6 +882,56 @@ fn enroll_response_only_marks_clear_with_server_identity() {
 }
 
 #[test]
+fn login_required_placeholder_requires_both_empty_credentials() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
+    let placeholder = "\n\n2099-01-02T03:00:00+00:00\n2099-01-02T02:00:00+00:00\ndevice-id";
+    let only_access_empty = "\nrefresh\n2099-01-02T03:00:00+00:00\n2099-01-02T02:00:00+00:00\ndevice-id";
+    let only_refresh_empty = "access\n\n2099-01-02T03:00:00+00:00\n2099-01-02T02:00:00+00:00\ndevice-id";
+
+    assert!(is_login_required_session_placeholder(placeholder.as_bytes()));
+    assert!(!is_login_required_session_placeholder(only_access_empty.as_bytes()));
+    assert!(!is_login_required_session_placeholder(only_refresh_empty.as_bytes()));
+    assert!(parse_session_plaintext(Zeroizing::new(placeholder.as_bytes().to_vec())).is_err());
+
+    let decoded = decode_session_credentials(encrypt_fixture(placeholder.as_bytes(), b"test-key"), b"test-key");
+    assert!(matches!(decoded, SessionDecode::LoginRequired));
+}
+
+#[cfg(windows)]
+#[test]
+fn login_required_cache_stays_visible_for_matching_content() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
+    clear_sv2_account_probe_cache();
+    let root = ProbeRootKey::AccountEnvironment {
+        slot_id: "slot-login-required".to_string(),
+        concurrent: false,
+    };
+    let fingerprint = SessionCacheKey {
+        canonical_root: PathBuf::from("C:/synthetic/slot-login-required"),
+        session_len: 104,
+        last_write_time: 1,
+        content_hash: [3; 32],
+    };
+    let view = Sv2AccountProbeView::login_required();
+    cache_put(fingerprint.clone(), &root, &view, None);
+
+    let rewritten = SessionCacheKey {
+        last_write_time: 2,
+        ..fingerprint.clone()
+    };
+    assert_eq!(
+        cache_get(&rewritten, &root).unwrap().session_status,
+        Sv2SessionInspectionStatus::LoginRequired
+    );
+    let changed = SessionCacheKey {
+        content_hash: [4; 32],
+        ..fingerprint
+    };
+    assert!(cache_get(&changed, &root).is_none());
+    clear_sv2_account_probe_cache();
+}
+
+#[test]
 fn public_views_never_echo_secret_or_response_sentinels() {
     let _guard = PROBE_TEST_GATE.lock().unwrap();
     const SENTINEL: &str = "DO_NOT_LEAK_THIS_SECRET";
