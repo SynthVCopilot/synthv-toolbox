@@ -920,10 +920,10 @@ function renderConcurrentDisclaimer(): string {
   return `<div class="dialog-backdrop" role="presentation">
     <section class="fluent-dialog" role="alertdialog" aria-modal="true" aria-labelledby="concurrent-warning-title">
       <span class="dialog-icon">${icon("boxes", 24)}</span>
-      <div><span class="eyebrow">首次使用风险告知</span><h2 id="concurrent-warning-title">并发隔离未被 Dreamtonics 官方承认</h2></div>
+      <div><span class="eyebrow">${t("accounts.concurrentTitle")}</span><h2 id="concurrent-warning-title">${t("accounts.concurrentTitle")}</h2></div>
       <p>将为“${escapeHtml(slot?.displayName ?? "此槽位")}”启动独立的 SV2 实例。Dreamtonics 尚未公开确认多实例使用方式。</p>
       <p class="dialog-choice-note">工具箱不会修改 SV2、绕过账号限制或代为踢出其他会话。继续即表示你已知晓并自行承担这一使用风险。</p>
-      <div class="dialog-actions"><button class="secondary" data-cancel-concurrent>取消</button><button class="primary" data-accept-concurrent>已知晓风险，继续启动</button></div>
+      <div class="dialog-actions"><button class="secondary" data-cancel-concurrent>${t("accounts.cancel")}</button><button class="primary" data-accept-concurrent>${t("accounts.concurrentContinue")}</button></div>
     </section>
   </div>`;
 }
@@ -932,14 +932,14 @@ function renderAccountIndicatorConsent(): string {
   return `<div class="dialog-backdrop" role="presentation">
     <section class="fluent-dialog account-indicator-consent" role="alertdialog" aria-modal="true" aria-labelledby="account-indicator-consent-title">
       <span class="dialog-icon route">${icon("shield", 24)}</span>
-      <div><span class="eyebrow">SV2 ACCOUNT LOGIN INDICATOR</span><h2 id="account-indicator-consent-title">开启账号登录指示器？</h2></div>
-      <p>开启后可在你进入「SV2 账号」页面或手动刷新时查询账号授权状态。</p>
+      <div><span class="eyebrow">SV2 ACCOUNT LOGIN INDICATOR</span><h2 id="account-indicator-consent-title">${t("accounts.consentTitle")}</h2></div>
+      <p>${t("accounts.consentDescription")}</p>
       <ul>
         <li>查询会读取官方授权；如果会话过期，工具箱会续期并保存更新后的会话。</li>
         <li>账号设置只读显示官方姓名和邮箱，并可保存本地备注。声库按账号独立保存，不跨账号同步。</li>
       </ul>
       <p class="dialog-choice-note">工具箱不会启动客户端、修改 SV2 或替你处理其他会话。你可以随时关闭此功能。</p>
-      <div class="dialog-actions"><button class="secondary" data-cancel-account-indicator>取消</button><button class="primary" data-confirm-account-indicator>${icon("check", 16)} 同意并开启</button></div>
+      <div class="dialog-actions"><button class="secondary" data-cancel-account-indicator>${t("accounts.cancel")}</button><button class="primary" data-confirm-account-indicator>${icon("check", 16)} ${t("accounts.consentConfirm")}</button></div>
     </section>
   </div>`;
 }
@@ -962,10 +962,10 @@ function renderProfileDeletionDialog(): string {
   return `<div class="dialog-backdrop" role="presentation">
     <section class="fluent-dialog component-removal-dialog" role="alertdialog" aria-modal="true" aria-labelledby="profile-deletion-title">
       <span class="dialog-icon danger">${icon("trash", 24)}</span>
-      <div><span class="eyebrow">SV2 ACCOUNT MANAGER</span><h2 id="profile-deletion-title">删除“${escapeHtml(slot.displayName)}”？</h2></div>
-      <p>这会删除该账号的数据、隔离环境配置和登录态恢复快照，无法撤销。</p>
+      <div><span class="eyebrow">SV2 ACCOUNT MANAGER</span><h2 id="profile-deletion-title">${t("accounts.deleteTitle", { name: escapeHtml(slot.displayName) })}</h2></div>
+      <p>${t("accounts.deleteDescription")}</p>
       <p class="dialog-choice-note">${defaultNote}</p>
-      <div class="dialog-actions"><button class="secondary" data-cancel-profile-deletion>取消</button><button class="danger-action" data-confirm-profile-deletion>${icon("trash", 16)} 删除账号</button></div>
+      <div class="dialog-actions"><button class="secondary" data-cancel-profile-deletion>${t("accounts.cancel")}</button><button class="danger-action" data-confirm-profile-deletion>${icon("trash", 16)} ${t("accounts.deleteConfirm")}</button></div>
     </section>
   </div>`;
 }
