@@ -37,6 +37,7 @@ import type {
   ProjectCheckpoint,
   RhymeMatchMode,
   Sv2AccountProbe,
+  Sv2AuthorizedVoiceProduct,
   Sv2CachedVoice,
   Sv2ProfileSlot,
   Sv2ProfilesState,
@@ -629,7 +630,7 @@ function renderProfileDeletionDialog(): string {
     <section class="fluent-dialog component-removal-dialog" role="alertdialog" aria-modal="true" aria-labelledby="profile-deletion-title">
       <span class="dialog-icon danger">${icon("trash", 24)}</span>
       <div><span class="eyebrow">SV2 ACCOUNT MANAGER</span><h2 id="profile-deletion-title">删除“${escapeHtml(slot.displayName)}”？</h2></div>
-      <p>这会删除该账号槽位的普通数据、隔离副本和登录态恢复快照，无法撤销。</p>
+      <p>这会删除该账号的数据、隔离环境配置和登录态恢复快照，无法撤销。</p>
       <p class="dialog-choice-note">${defaultNote}</p>
       <div class="dialog-actions"><button class="secondary" data-cancel-profile-deletion>取消</button><button class="danger-action" data-confirm-profile-deletion>${icon("trash", 16)} 删除账号</button></div>
     </section>
@@ -714,11 +715,7 @@ function renderSvpRouteCandidate(candidate: SvpRouteCandidate, plan: SvpRoutePla
       : candidate.sessionStatus === "inUse"
         ? "缓存会话正由本机使用"
         : `${accountProbeSessionLabel(candidate.sessionStatus)} · 占用未知`;
-  const authorizationLabel = candidate.authorizationSource === "session"
-    ? "官方授权"
-    : candidate.authorizationSource === "mixed"
-      ? "官方授权 + 手工确认"
-      : candidate.authorizationSource === "manual" ? "手工确认" : "授权未知";
+  const authorizationLabel = candidate.authorizationSource === "session" ? "官方授权" : "授权未知";
   const matchLabel = candidate.exactAuthorizationMatch
     ? `${icon("check", 14)} ${authorizationLabel}已匹配全部声库`
     : candidate.matchedVoices.length
@@ -943,7 +940,7 @@ function accountProbeBadge(slot: Sv2ProfileSlot): string {
   return `<span class="session-protection${emphasis}" title="${escapeHtml(tooltip)}">${icon(iconName, 14)} ${escapeHtml(label)}</span>`;
 }
 
-function voiceInventoryBadge(slot: Sv2ProfileSlot): string {
+function officialAuthorizationBadge(slot: Sv2ProfileSlot): string {
   const probes = slot.concurrent.ready
     ? [slot.accountProbe, slot.concurrentAccountProbe]
     : [slot.accountProbe];
@@ -961,11 +958,7 @@ function voiceInventoryBadge(slot: Sv2ProfileSlot): string {
       : verifiedCounts.length
       ? `<span class="voice-inventory confirmed" title="账号服务已确认声库授权。">${icon("check", 13)} 官方授权 ${Math.max(...verifiedCounts)} 个</span>`
       : `<span class="voice-inventory unknown" title="${escapeHtml(unresolvedOfficial.title)}">${icon("audio", 13)} ${escapeHtml(unresolvedOfficial.label)}</span>`;
-  const manualCount = slot.voiceInventory.manuallyConfirmedVoices.length;
-  const manual = manualCount
-    ? `<span class="voice-inventory confirmed" title="手工确认记录仅用于工程路由，不替代官方授权。">${icon("audio", 13)} 手工确认 ${manualCount} 个声库</span>`
-    : "";
-  return official + manual;
+  return official;
 }
 
 function accountProbeIdentity(probe: Sv2AccountProbe): { name?: string; email?: string } {
@@ -1143,9 +1136,7 @@ function renderAccounts(): string {
       : !concurrentEnabled
         ? "隔离功能已在全局设置中关闭"
         : providerDetail;
-    const localVoiceFact = slot.voiceInventory.manuallyConfirmedVoices.length
-      ? `<span class="voice-inventory confirmed" title="手工确认记录仅用于工程路由，不替代官方授权。">${icon("audio", 13)} 手工确认 ${slot.voiceInventory.manuallyConfirmedVoices.length} 个声库</span>`
-      : `<span class="voice-inventory unknown" title="macOS v1 不读取或解密登录缓存。">${icon("shield", 13)} 未读取账号授权</span>`;
+    const localVoiceFact = `<span class="voice-inventory unknown" title="macOS v1 不读取或解密登录缓存。">${icon("shield", 13)} 未读取账号授权</span>`;
     const windowsLaunchActions = concurrentEnabled && slot.concurrent.ready
       ? `<button class="primary" data-profile-concurrent-launch="${slot.id}" ${isolatedDisabled ? `disabled title="${escapeHtml(isolatedTitle)}"` : ""}>${icon("boxes", 16)} ${isolatedLabel}</button><button class="secondary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button>`
       : `<button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button><button class="secondary" data-profile-concurrent-prepare="${slot.id}" ${isolatedDisabled ? `disabled title="${escapeHtml(isolatedTitle)}"` : ""}>${icon("download", 16)} ${isolatedLabel}</button>`;
@@ -1154,7 +1145,7 @@ function renderAccounts(): string {
       : `<button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button>`;
     return `<article class="account-launch-card ${slot.isActive ? "active" : ""}" style="--profile-color:${color}">
       <div class="account-card-main"><span class="profile-avatar compact">${escapeHtml(initial)}</span><div class="account-card-identity"><div class="profile-title-line"><h2>${escapeHtml(accountTitle)}</h2>${accountUseDot(useState)}${slot.isActive ? '<span class="profile-active-badge">默认</span>' : ""}</div>${accountEmail}${note}</div><div class="account-card-actions">${windowsExtensions ? `<button class="icon-plain" data-profile-refresh-slot="${slot.id}" title="刷新此账号状态" aria-label="刷新 ${escapeHtml(accountTitle)}">${icon("refresh", 18)}</button>` : ""}<button class="icon-plain" data-manage-slot="${slot.id}" title="设置" aria-label="设置 ${escapeHtml(accountTitle)}">${icon("settings", 18)}</button><button class="icon-plain danger" data-delete-profile="${slot.id}" title="删除" aria-label="删除 ${escapeHtml(accountTitle)}">${icon("trash", 18)}</button><button class="icon-plain" data-profile-activate="${slot.id}" title="切换默认账户" aria-label="将 ${escapeHtml(accountTitle)} 设为默认账户" ${slot.isActive ? "disabled" : ""}>${icon("check", 18)}</button></div></div>
-      <div class="account-card-facts">${windowsExtensions ? `${accountProbeBadge(slot)}${voiceInventoryBadge(slot)}` : localVoiceFact}<span>${icon("sync", 13)} ${escapeHtml(lastUsed)}</span>${concurrentRunning ? `<span class="running">${icon("plug", 13)} ${slot.concurrent.runningPids.length} 个隔离进程</span>` : ""}</div>
+      <div class="account-card-facts">${windowsExtensions ? `${accountProbeBadge(slot)}${officialAuthorizationBadge(slot)}` : localVoiceFact}<span>${icon("sync", 13)} ${escapeHtml(lastUsed)}</span>${concurrentRunning ? `<span class="running">${icon("plug", 13)} ${slot.concurrent.runningPids.length} 个隔离进程</span>` : ""}</div>
       <div class="account-launch-actions">${launchActions}</div>
     </article>`;
   }).join("");
@@ -1187,13 +1178,21 @@ function supportsWindowsSv2Extensions(): boolean {
   return app?.platform === "windows" || app?.platform === "preview";
 }
 
-function renderAuthorizedVoice(voice: string, productIds: string[] = []): string {
+function renderAuthorizedVoice(voice: string, products: Sv2AuthorizedVoiceProduct[] = []): string {
+  const productIds = products.map((product) => product.id).filter(Boolean);
   const catalogEntry = findVoiceMetadata(voice, productIds, sv2VoiceCatalog ?? []);
   const cover = catalogEntry?.imageDataUrl
     ? `<img class="voice-cover" src="${escapeHtml(catalogEntry.imageDataUrl)}" alt="" />`
     : `<span class="voice-cover placeholder">${icon("audio", 14)}</span>`;
   const vendor = catalogEntry?.vendor ? `<small>${escapeHtml(catalogEntry.vendor)}</small>` : "";
-  return `<span class="authorized-voice" data-authorized-voice="${escapeHtml(voice)}" data-authorized-product-ids="${escapeHtml(productIds.join(","))}">${cover}<span>${escapeHtml(voice)}${vendor}</span></span>`;
+  const isTrial = products.length > 0 && products.every((product) => product.isTrial);
+  const expirations = products.map((product) => product.expiresAtUtc ? Date.parse(product.expiresAtUtc) : NaN);
+  const expiresAt = expirations.length > 0 && expirations.every(Number.isFinite) ? Math.max(...expirations) : undefined;
+  const expired = expiresAt !== undefined && expiresAt <= Date.now();
+  const label = isTrial ? (expired ? "试用已到期" : "限时试用") : expiresAt !== undefined ? (expired ? "授权已到期" : "限时授权") : "";
+  const badge = label ? `<span class="voice-trial-badge">${label}</span>` : "";
+  const expiry = expiresAt !== undefined ? `<small class="voice-license-expiry">${escapeHtml(new Date(expiresAt).toLocaleString())} 到期</small>` : "";
+  return `<span class="authorized-voice" data-authorized-voice="${escapeHtml(voice)}" data-authorized-products="${escapeHtml(JSON.stringify(products))}">${cover}<span><span class="voice-name">${escapeHtml(voice)}${badge}</span>${vendor}${expiry}</span></span>`;
 }
 
 function loadSv2VoiceCatalog(force = false): void {
@@ -1205,7 +1204,7 @@ function loadSv2VoiceCatalog(force = false): void {
     .finally(() => {
       sv2VoiceCatalogLoading = false;
       document.querySelectorAll<HTMLElement>("[data-authorized-voice]").forEach((entry) => {
-        entry.outerHTML = renderAuthorizedVoice(entry.dataset.authorizedVoice ?? "", entry.dataset.authorizedProductIds?.split(",").filter(Boolean) ?? []);
+        entry.outerHTML = renderAuthorizedVoice(entry.dataset.authorizedVoice ?? "", JSON.parse(entry.dataset.authorizedProducts ?? "[]") as Sv2AuthorizedVoiceProduct[]);
       });
     });
 }
@@ -1220,9 +1219,8 @@ function renderAccountManager(): string {
   if (accountManagerSection === "profile" && !supportsWindowsSv2Extensions()) {
     body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${managedSlot.sessionCached ? "账号信息待刷新" : "未登录"}</h3></div>${managedSlot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
       <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>备注<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" placeholder="例如：制作账号" /></label><button class="secondary">保存备注</button></form>
-      <form class="voice-license-form" data-profile-voice-form="${managedSlot.id}"><div class="voice-license-heading"><div><strong>补充手工确认声库</strong><small>每行记录一个完整产品名称；仅用于补充工程路由，不替代官方授权。</small></div></div><textarea name="voices" rows="4" maxlength="16384" placeholder="例如：&#10;Mai 2&#10;SOLARIA">${escapeHtml(managedSlot.voiceInventory.manuallyConfirmedVoices.join("\n"))}</textarea><button class="secondary" type="submit">保存确认记录</button></form>
-      <div class="manager-action-row">${managedSlot.isActive ? "" : `<button class="secondary" data-profile-activate="${managedSlot.id}">${icon("check", 15)} 设为默认账号</button>`}<button class="secondary" data-profile-folder="${managedSlot.id}">${icon("folder", 15)} 打开槽位数据目录</button><button class="secondary component-remove-action" data-delete-profile="${managedSlot.id}">${icon("trash", 15)} 删除账号</button></div>
-      <dl class="profile-storage-list compact"><div><dt>槽位数据</dt><dd><code title="${escapeHtml(managedSlot.dataPath)}">${escapeHtml(managedSlot.dataPath)}</code></dd></div></dl></div>` : '<div class="empty-inline">尚无账号，请先添加一个槽位。</div>';
+      <div class="manager-action-row">${managedSlot.isActive ? "" : `<button class="secondary" data-profile-activate="${managedSlot.id}">${icon("check", 15)} 设为默认账号</button>`}<button class="secondary" data-profile-folder="${managedSlot.id}">${icon("folder", 15)} 打开账号数据目录</button><button class="secondary component-remove-action" data-delete-profile="${managedSlot.id}">${icon("trash", 15)} 删除账号</button></div>
+      <dl class="profile-storage-list compact"><div><dt>账号数据</dt><dd><code title="${escapeHtml(managedSlot.dataPath)}">${escapeHtml(managedSlot.dataPath)}</code></dd></div></dl></div>` : '<div class="empty-inline">尚无账号，请先添加一个槽位。</div>';
   } else if (accountManagerSection === "profile") {
     const authorizationProbe = managedSlot?.accountProbe.authorizationStatus === "verified"
       ? managedSlot.accountProbe
@@ -1239,15 +1237,14 @@ function renderAccountManager(): string {
       : authorizationUnavailable;
     const authorizationList = authorizationStatus
       ? authorizations.length
-        ? `<div class="authorization-list">${authorizations.map((voice) => renderAuthorizedVoice(voice, authorizationProbe?.authorizedVoiceProducts.filter((product) => product.name === voice).map((product) => product.id) ?? [])).join("")}</div>`
+        ? `<div class="authorization-list">${authorizations.map((voice) => renderAuthorizedVoice(voice, authorizationProbe?.authorizedVoiceProducts.filter((product) => product.name === voice) ?? [])).join("")}</div>`
         : '<div class="empty-inline">当前账号没有可用声库授权。</div>'
       : `<div class="empty-inline">${escapeHtml(authorizationUnavailable)}。</div>`;
     body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(officialIdentity.name ?? (managedSlot.sessionCached ? "账号信息待刷新" : "未登录"))}</h3><p>${escapeHtml(officialIdentity.email ?? "账号信息待刷新")}</p><p>${accountUseDot(managedUseState)} ${escapeHtml(managedUseState.label)}</p></div>${managedSlot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
       <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>备注<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" placeholder="例如：制作账号" /></label><button class="secondary">保存备注</button></form>
-      <section class="voice-license-form authorization-panel"><div class="voice-license-heading"><div><strong>可用授权</strong><small>${escapeHtml(authorizationSummary)}</small></div><span class="inventory-status ${authorizationStatus ? "verified" : "unknown"}">${authorizationStatus ? `${authorizations.length} 个授权` : "未读取"}</span></div>${authorizationList}</section>
-      <form class="voice-license-form" data-profile-voice-form="${managedSlot.id}"><div class="voice-license-heading"><div><strong>补充手工确认声库</strong><small>每行记录一个完整产品名称；仅用于补充工程路由，不替代官方授权。</small></div></div><textarea name="voices" rows="4" maxlength="16384" placeholder="例如：&#10;Mai 2&#10;SOLARIA">${escapeHtml(managedSlot.voiceInventory.manuallyConfirmedVoices.join("\n"))}</textarea><button class="secondary" type="submit">保存确认记录</button></form>
-      <div class="manager-action-row">${managedSlot.isActive ? "" : `<button class="secondary" data-profile-activate="${managedSlot.id}">${icon("check", 15)} 设为默认账号</button>`}<button class="secondary" data-profile-folder="${managedSlot.id}">${icon("folder", 15)} 打开普通数据目录</button>${managedSlot.concurrent.ready ? `<button class="secondary" data-profile-concurrent-folder="${managedSlot.id}">${icon("folder", 15)} 打开隔离目录</button>` : ""}<button class="secondary component-remove-action" data-delete-profile="${managedSlot.id}">${icon("trash", 15)} 删除账号</button></div>
-      <dl class="profile-storage-list compact"><div><dt>普通数据</dt><dd><code title="${escapeHtml(managedSlot.dataPath)}">${escapeHtml(managedSlot.dataPath)}</code></dd></div>${managedSlot.concurrent.ready ? `<div><dt>隔离数据</dt><dd><code title="${escapeHtml(managedSlot.concurrent.dataPath)}">${escapeHtml(managedSlot.concurrent.dataPath)}</code></dd></div>` : ""}</dl></div>` : '<div class="empty-inline">尚无账号，请先添加一个槽位。</div>';
+      <section class="authorization-panel"><div class="authorization-heading"><div><strong>可用授权</strong><small>${escapeHtml(authorizationSummary)}</small></div><span class="inventory-status ${authorizationStatus ? "verified" : "unknown"}">${authorizationStatus ? `${authorizations.length} 个授权` : "未读取"}</span></div>${authorizationList}</section>
+      <div class="manager-action-row">${managedSlot.isActive ? "" : `<button class="secondary" data-profile-activate="${managedSlot.id}">${icon("check", 15)} 设为默认账号</button>`}<button class="secondary" data-profile-folder="${managedSlot.id}">${icon("folder", 15)} 打开账号数据目录</button><button class="secondary component-remove-action" data-delete-profile="${managedSlot.id}">${icon("trash", 15)} 删除账号</button></div>
+      <dl class="profile-storage-list compact"><div><dt>账号数据</dt><dd><code title="${escapeHtml(managedSlot.dataPath)}">${escapeHtml(managedSlot.dataPath)}</code></dd></div></dl></div>` : '<div class="empty-inline">尚无账号，请先添加一个槽位。</div>';
   } else if (accountManagerSection === "global" && !supportsWindowsSv2Extensions()) {
     body = `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("shield", 24)}</span><div><h3>macOS 槽位范围</h3><p>当前版本只支持顺序切换数据槽位。账号登录预检、授权读取和并发隔离仍仅在 Windows 提供。</p></div></section>`;
   } else if (accountManagerSection === "global") {
@@ -2284,7 +2281,7 @@ function wireForms(): void {
       profiles = await api.importCurrentSv2Profile(displayName);
       const prepared = await prepareConcurrentSlotsWhenEnabled();
       await refreshAccountUsage();
-      notice = `已导入账号槽位。${prepared ? "已自动准备隔离数据。" : ""}`;
+      notice = `已导入账号槽位。${prepared ? "已自动准备隔离环境。" : ""}`;
     });
   });
   document.querySelector<HTMLFormElement>("#profile-create-form")?.addEventListener("submit", (event) => {
@@ -2294,7 +2291,7 @@ function wireForms(): void {
       profiles = await api.createSv2Profile(displayName);
       const prepared = await prepareConcurrentSlotsWhenEnabled();
       await refreshAccountUsage();
-      notice = `已创建账号槽位。${prepared ? "已自动准备隔离数据。" : ""}`;
+      notice = `已创建账号槽位。${prepared ? "已自动准备隔离环境。" : ""}`;
     });
   });
   document.querySelectorAll<HTMLFormElement>("[data-profile-rename-form]").forEach((form) => form.addEventListener("submit", (event) => {
@@ -2303,21 +2300,6 @@ function wireForms(): void {
     const displayName = form.querySelector<HTMLInputElement>("input")?.value.trim() ?? "";
     if (!slotId) return;
     void run(async () => { profiles = await api.renameSv2Profile(slotId, displayName); notice = displayName ? "备注已保存。" : "备注已清除。"; });
-  }));
-  document.querySelectorAll<HTMLFormElement>("[data-profile-voice-form]").forEach((form) => form.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const slotId = form.dataset.profileVoiceForm ?? "";
-    const voices = (form.querySelector<HTMLTextAreaElement>('[name="voices"]')?.value ?? "")
-      .split(/\r?\n/)
-      .map((voice) => voice.trim())
-      .filter(Boolean);
-    if (!slotId) return;
-    void run(async () => {
-      profiles = await api.updateSv2ProfileVoiceLicenses(slotId, voices);
-      notice = voices.length
-        ? `已保存 ${voices.length} 条用户确认的声库记录。`
-        : "已清除用户确认记录；只有官方许可结果会显示为账号授权。";
-    });
   }));
   document.querySelector<HTMLFormElement>("#sv2-global-settings-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -2335,7 +2317,7 @@ function wireForms(): void {
       const prepared = await prepareConcurrentSlotsWhenEnabled();
       app = await api.setSv2AccountIndicator(accountProbeEnabled);
       if (!accountProbeEnabled) profiles = await api.sv2ProfileState();
-      notice = `全局设置已保存。${prepared ? `已自动准备 ${prepared} 个隔离数据目录。` : ""}`;
+      notice = `全局设置已保存。${prepared ? `已自动准备 ${prepared} 个隔离环境。` : ""}`;
     });
   });
   document.querySelector<HTMLFormElement>("#chat-form")?.addEventListener("submit", (event) => {
@@ -3010,7 +2992,6 @@ document.addEventListener("click", (event) => {
     }
     return;
   }
-  if (target.dataset.profileConcurrentFolder) { void run(async () => { setFeedback(await api.openSv2ConcurrentFolder(target.dataset.profileConcurrentFolder ?? "")); }); return; }
   if (target.dataset.scripts !== undefined) {
     const input = document.querySelector<HTMLInputElement>("#scripts-path");
     if (input && target.dataset.scripts) input.value = target.dataset.scripts;

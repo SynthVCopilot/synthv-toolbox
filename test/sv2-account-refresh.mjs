@@ -18,7 +18,6 @@ const main = read(join(webRoot, "main.ts"));
 
 assert.doesNotMatch(probe, /REPLACEFILE_WRITE_THROUGH/);
 assert.match(probe, /cached_identity_for_fingerprint/);
-assert.match(probe, /cached_identity_for_root/);
 assert.match(probe, /struct EquivalentSessionAlias/);
 assert.match(probe, /fn is_equivalent_session_root\(/);
 assert.match(probe, /fn apply_equivalent_session_aliases\(/);

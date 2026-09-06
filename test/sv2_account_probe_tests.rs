@@ -724,7 +724,7 @@ fn license_filter_is_active_voice_only_deduplicated_and_sorted() {
     let body = br#"{
             "status":"success",
             "data":[
-                {"status":"active","valid_to":"2100-01-01T00:00:00Z","product":{"name":"  Beta   Voice ","type":"Voice Databases 2","tags":[]}},
+                {"status":"active","valid_to":4102444800,"product":{"name":"  Beta   Voice ","type":"Voice Databases 2","tags":[]}},
                 {"status":"active","product":{"id":"123e4567-e89b-12d3-a456-426614174000","name":"Alpha Voice","type":"Voice Database","tags":[]}},
                 {"status":"active","product":{"name":"alpha voice","type":"Voice Database","tags":[]}},
                 {"status":"active","product":{"name":"Tagged Singer","type":"other","tags":"singer"}},
@@ -738,10 +738,26 @@ fn license_filter_is_active_voice_only_deduplicated_and_sorted() {
     assert_eq!(voices, vec!["Alpha Voice", "Beta Voice"]);
     assert_eq!(
         products,
-        vec![Sv2AuthorizedVoiceProduct {
-            id: "123e4567-e89b-12d3-a456-426614174000".to_string(),
-            name: "Alpha Voice".to_string(),
-        }]
+        vec![
+            Sv2AuthorizedVoiceProduct {
+                id: "123e4567-e89b-12d3-a456-426614174000".to_string(),
+                name: "Alpha Voice".to_string(),
+                is_trial: false,
+                expires_at_utc: None,
+            },
+            Sv2AuthorizedVoiceProduct {
+                id: String::new(),
+                name: "Alpha Voice".to_string(),
+                is_trial: false,
+                expires_at_utc: None,
+            },
+            Sv2AuthorizedVoiceProduct {
+                id: String::new(),
+                name: "Beta Voice".to_string(),
+                is_trial: false,
+                expires_at_utc: DateTime::from_timestamp(4102444800, 0),
+            }
+        ]
     );
     let view = view_from_remote(
         interpret_license_response(200, Zeroizing::new(body.to_vec())),
@@ -763,6 +779,106 @@ fn concurrent_error_codes_are_detected_without_exposing_body() {
             RemoteOutcome::ConcurrentUse
         ));
     }
+}
+
+#[test]
+fn trial_licenses_use_official_type_and_unix_expiry() {
+    let now = DateTime::from_timestamp(2_000_000_000, 0).unwrap();
+    let body = br#"{"data":[
+        {"status":"active","license_type":"trial","valid_to":2000000060,"product":{"name":"Trial Voice","type":"Voice Database"}},
+        {"status":"active","license_type":"trial","valid_to":2000000000,"product":{"name":"Expired Voice","type":"Voice Database"}},
+        {"status":"active","license_type":"trial","valid_to":9223372036854775807,"product":{"name":"Invalid Date","type":"Voice Database"}},
+        {"status":"active","license_type":"permanent","valid_to":null,"product":{"name":"Owned Voice","type":"Voice Database","isTrialable":true}},
+        {"status":"active","license_type":"trial","valid_to":null,"product":{"name":"Undated Trial","type":"Voice Database"}}
+    ]}"#;
+    let (voices, products) = extract_authorized_voice_products_at(body, now).unwrap();
+    assert_eq!(voices, ["Owned Voice", "Trial Voice", "Undated Trial"]);
+    assert!(!products[0].is_trial);
+    assert!(products[1].is_trial);
+    assert_eq!(
+        products[1].expires_at_utc,
+        Some(now + ChronoDuration::seconds(60))
+    );
+    assert!(products[2].is_trial);
+    assert!(products[2].expires_at_utc.is_none());
+    let mut view = Sv2AccountProbeView::new(
+        Sv2SessionInspectionStatus::Ready,
+        Sv2RemoteUseStatus::Clear,
+        Sv2AuthorizationStatus::Verified,
+        voices,
+        "verified",
+    );
+    view.authorized_voice_products = products;
+    remove_expired_authorizations(&mut view, now + ChronoDuration::seconds(60));
+    assert_eq!(view.authorized_voices, ["Owned Voice", "Undated Trial"]);
+    assert_eq!(view.authorized_voice_count, 2);
+    assert_eq!(view.authorization_status, Sv2AuthorizationStatus::Verified);
+}
+
+#[test]
+fn permanent_license_wins_over_trial_in_either_response_order() {
+    let now = DateTime::from_timestamp(2_000_000_000, 0).unwrap();
+    let trial = serde_json::json!({"status":"active","license_type":"trial","valid_to":2000000060,
+        "product":{"id":"123e4567-e89b-12d3-a456-426614174000","name":"Fixture Voice","type":"Voice Database"}});
+    let permanent = serde_json::json!({"status":"active","license_type":"permanent","valid_to":null,
+        "product":{"id":"123e4567-e89b-12d3-a456-426614174000","name":"Fixture Voice","type":"Voice Database"}});
+    for rows in [
+        vec![trial.clone(), permanent.clone()],
+        vec![permanent, trial],
+    ] {
+        let body = serde_json::to_vec(&serde_json::json!({"data":rows})).unwrap();
+        let (_, products) = extract_authorized_voice_products_at(&body, now).unwrap();
+        assert_eq!(products.len(), 1);
+        assert!(!products[0].is_trial);
+        assert!(products[0].expires_at_utc.is_none());
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn cached_trials_expire_without_invalidating_the_account_session() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
+    clear_sv2_account_probe_cache();
+    let root = ProbeRootKey::AccountEnvironment {
+        slot_id: "trial-cache".to_string(),
+        concurrent: false,
+    };
+    let fingerprint = SessionCacheKey {
+        canonical_root: PathBuf::from("C:/synthetic/trial-cache"),
+        session_len: 8,
+        last_write_time: 1,
+        content_hash: [0; 32],
+    };
+    let mut view = Sv2AccountProbeView::new(
+        Sv2SessionInspectionStatus::Ready,
+        Sv2RemoteUseStatus::Clear,
+        Sv2AuthorizationStatus::Verified,
+        vec!["Fixture Voice".to_string()],
+        "verified",
+    );
+    view.authorized_voice_products
+        .push(Sv2AuthorizedVoiceProduct {
+            id: String::new(),
+            name: "Fixture Voice".to_string(),
+            is_trial: true,
+            expires_at_utc: Some(Utc::now() - ChronoDuration::seconds(1)),
+        });
+    cache_put(
+        fingerprint.clone(),
+        &root,
+        &view,
+        Some(Utc::now() + ChronoDuration::minutes(5)),
+    );
+    let cached = cache_get(&fingerprint, &root).unwrap();
+    assert_eq!(cached.session_status, Sv2SessionInspectionStatus::Ready);
+    assert_eq!(
+        cached.authorization_status,
+        Sv2AuthorizationStatus::Verified
+    );
+    assert!(cached.authorized_voices.is_empty());
+    assert!(cached.authorized_voice_products.is_empty());
+    assert_eq!(cached.authorized_voice_count, 0);
+    clear_sv2_account_probe_cache();
 }
 
 #[test]
@@ -1497,6 +1613,104 @@ fn same_session_content_survives_an_atomic_metadata_rewrite() {
         Sv2AuthorizationStatus::Verified
     );
     assert_eq!(cached.authorized_voices, vec!["Synthetic Voice"]);
+    clear_sv2_account_probe_cache();
+}
+
+#[cfg(windows)]
+#[test]
+fn rewritten_sessions_keep_only_same_account_unexpired_authorization() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
+    clear_sv2_account_probe_cache();
+    let now = DateTime::from_timestamp(Utc::now().timestamp(), 0).unwrap();
+    let root = ProbeRootKey::AccountEnvironment {
+        slot_id: "rewrite-slot".to_string(),
+        concurrent: false,
+    };
+    let fingerprint = SessionCacheKey {
+        canonical_root: PathBuf::from("C:/synthetic/rewrite-slot"),
+        session_len: 8,
+        last_write_time: 1,
+        content_hash: [0; 32],
+    };
+    let original = parse_session_plaintext(Zeroizing::new(
+        make_identity_plaintext(
+            now + ChronoDuration::minutes(30),
+            now,
+            "subject-a",
+            "old-login",
+            "device-a",
+        )
+        .into_bytes(),
+    ))
+    .unwrap();
+    let view = Sv2AccountProbeView::new(
+        Sv2SessionInspectionStatus::Ready,
+        Sv2RemoteUseStatus::Clear,
+        Sv2AuthorizationStatus::Verified,
+        vec!["Fixture Voice".to_string()],
+        "verified",
+    )
+    .with_account_identity(original.access_token());
+    assert!(!serde_json::to_string(&view).unwrap().contains("accountKey"));
+    cache_put(
+        fingerprint.clone(),
+        &root,
+        &view,
+        Some(original.access_expires_at),
+    );
+    let machine_key = b"test-key";
+    let read = |subject, expiry| {
+        cached_view_for_rewritten_session(
+            encrypt_session(
+                make_identity_plaintext(
+                    expiry,
+                    now - ChronoDuration::hours(1),
+                    subject,
+                    "new-login",
+                    "device-b",
+                )
+                .as_bytes(),
+                machine_key,
+            )
+            .unwrap(),
+            machine_key,
+            &root,
+        )
+    };
+    let same_account = read("subject-a", now + ChronoDuration::hours(1));
+    assert_eq!(
+        same_account.authorization_status,
+        Sv2AuthorizationStatus::Verified
+    );
+    assert_eq!(same_account.authorized_voices, ["Fixture Voice"]);
+    assert_eq!(
+        Sv2AccountProbeView::in_use_with_cached_authorization(Some(&same_account))
+            .authorization_status,
+        Sv2AuthorizationStatus::Verified
+    );
+    let other_account = read("subject-b", now + ChronoDuration::hours(1));
+    assert_eq!(
+        other_account.authorization_status,
+        Sv2AuthorizationStatus::Unknown
+    );
+    assert!(other_account.authorized_voices.is_empty());
+    let expired_session = read("subject-a", now - ChronoDuration::seconds(1));
+    assert_eq!(
+        expired_session.session_status,
+        Sv2SessionInspectionStatus::Expired
+    );
+    assert!(expired_session.authorized_voices.is_empty());
+    probe_cache()
+        .lock()
+        .unwrap()
+        .get_mut(&ProbeCacheKey::new(&fingerprint, &root))
+        .unwrap()
+        .access_expires_at = Some(now - ChronoDuration::seconds(1));
+    let expired_cache = read("subject-a", now + ChronoDuration::hours(1));
+    assert_eq!(
+        expired_cache.authorization_status,
+        Sv2AuthorizationStatus::Unknown
+    );
     clear_sv2_account_probe_cache();
 }
 
