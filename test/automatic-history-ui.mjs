@@ -107,7 +107,9 @@ function createHistoryHarness(api) {
 
 assert.ok(source.includes('class="tool-tabs"') && source.includes('aria-current="page"'));
 assert.ok(!source.includes("workflow-tool-tabs") && !source.includes("data-close-workflow"));
-assert.equal((source.match(/refreshAudioPreparationIfSelected\(\);/g) ?? []).length, 2, "default and direct tool entry share audio initialization");
+const navigation = source.slice(source.indexOf('const targetPage ='), source.indexOf('const onboarding ='));
+assert.match(navigation, /refreshAudioPreparationIfSelected\(\);/, "default tool entry initializes audio");
+assert.match(source, /if \(featureId === "audio-preparation"\) \{\s*render\(\);\s*refreshAudioPreparationIfSelected\(\);/, "direct tool entry initializes audio");
 assert.match(source, /historyLoadState === "ready" && !backup\?\.lastError && !itemError/);
 
 console.log("Automatic history and direct tool workspace behavior tests passed.");

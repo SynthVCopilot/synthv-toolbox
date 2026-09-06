@@ -24,7 +24,7 @@ const ids = ['audio-preparation', 'cover', 'tuning-learning', 'media-import', 's
 const state = {
   t, locale: () => i18n.global.locale.value, icon: () => '',
   conversation: undefined, conversations: [], fileApprovals: [], activeAiProvider: () => undefined, aiProviderDisplayName: (provider) => provider.displayName,
-  app: { mode: 'ai', bridgeConnected: true }, features: [], toolGroups: [], workflowResult: undefined,
+  app: { mode: 'ai', bridgeConnected: true, components: [], downloads: [] }, features: [], toolGroups: [], workflowResult: undefined,
   audioRuntime: { available: true, version: '8', detail: 'Runtime detail', source: 'system' },
   audioStartInFlight: false, audioJob: undefined, audioPlanRequestInFlight: false, audioLoudnessAnalysisInFlight: false,
   audioProbe: undefined, audioLoudness: undefined, audioPrepareForm: { inputPath: '', sampleFormat: 's24' },
@@ -49,12 +49,12 @@ let renders = 0;
 for (const language of ['en', 'zh-CN']) {
   i18n.global.locale.value = language;
   for (const mode of ['ai', 'toolbox']) for (const connected of [false, true]) {
-    state.app = { mode, bridgeConnected: connected };
+    state.app = { mode, bridgeConnected: connected, components: [], downloads: [] };
     for (const id of ids) { rendered(id); renders++; }
   }
 }
 i18n.global.locale.value = 'en';
-state.app = { mode: 'ai', bridgeConnected: true };
+state.app = { mode: 'ai', bridgeConnected: true, components: [], downloads: [] };
 state.profiles.slots = [{ id: 'a', displayName: 'Slot A', isActive: true }, { id: 'b', displayName: 'Slot B' }];
 state.syncCategories = ['userDictionaries', 'scripts', 'presets', 'safeSettings'].map((id) => ({ id, label: '后端标签', description: '后端描述' }));
 state.syncManifest = { overwrite: true, entries: [{ action: 'copy', relativePath: 'presets/default', sourceSize: 20 }] };
