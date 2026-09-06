@@ -211,3 +211,72 @@ jobs:
           path: ${{ runner.temp }}/synthv-toolbox-artifacts/${{ matrix.target }}
           if-no-files-found: error
           retention-days: 14
+
+  rust_tests:
+    name: Rust tests (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: macOS native
+            os: macos-14
+            target: aarch64-apple-darwin
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22.19.0"
+          cache: npm
+          cache-dependency-path: |
+            src/PiDesktop.Tauri/package-lock.json
+            src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/package-lock.json
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust test build
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src/PiDesktop.Tauri/src-tauri/target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-tests-${{ hashFiles('src/PiDesktop.Tauri/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-tests-
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+            ${{ runner.os }}-cargo-
+
+      - name: Build bundled SynthV Bridge
+        working-directory: src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+          npm prune --omit=dev --no-audit --no-fund
+
+      - name: Install desktop dependencies
+        working-directory: src/PiDesktop.Tauri
+        run: npm ci --no-audit --no-fund
+
+      - name: Check frontend production build
+        working-directory: src/PiDesktop.Tauri
+        run: npm run build
+
+      - name: Test Rust core and FFmpeg fixtures
+        run: cargo test --manifest-path src/PiDesktop.Tauri/src-tauri/Cargo.toml --all-targets -- --test-threads=1
+
+      - name: Test precise SynthV instance controls
+        run: cargo test --manifest-path test/synthv-control-regression/Cargo.toml
