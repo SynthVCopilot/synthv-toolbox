@@ -460,6 +460,10 @@ function refreshAudioRuntimeStatus(): void {
   });
 }
 
+function refreshAudioPreparationIfSelected(): void {
+  if (page === "import" && activeWorkflow === "audio-preparation") refreshAudioRuntimeStatus();
+}
+
 function syncAudioPreparationFormsFromDom(): void {
   const rate = optionalFinite(document.querySelector<HTMLInputElement>("#audio-prep-rate")?.value ?? "");
   const channels = optionalFinite(document.querySelector<HTMLSelectElement>("#audio-prep-channels")?.value ?? "");
@@ -1607,7 +1611,7 @@ function renderHistoryPage(): string {
   const backupStatus = historyLoadState === "error" ? "读取失败" : historyLoadState === "loading" ? "正在读取" : backup?.lastError || itemError ? "需要处理" : backup ? "自动跟踪中" : "等待读取";
   const tracked = backup?.projects.length ? backup.projects.map((item) => `<article class="checkpoint-item"><span class="feature-icon blue">${icon("history", 17)}</span><div><strong>${escapeHtml(item.sourcePath)}</strong><small>最近发现：${escapeHtml(formatHistoryTime(item.lastSeenAtUtc))} · 备份 ${item.backupCount} 次</small><code>${item.lastError ? `失败：${escapeHtml(item.lastError)}` : `上次备份：${escapeHtml(formatHistoryTime(item.lastBackupAtUtc))}`}</code></div></article>`).join("") : '<div class="empty-inline">尚未追踪到 .svp 工程。打开并保存工程后，后台会自动开始检测。</div>';
   const loadError = historyLoadState === "error" ? `<div class="audio-inline-error" role="alert">历史状态读取失败：${escapeHtml(historyLoadError)}</div>` : "";
-  return `<section class="panel history-intro"><span class="feature-icon blue">${icon("history", 22)}</span><div><span class="eyebrow">AUTOMATIC HISTORY</span><h2>工程历史自动保存</h2><p>每分钟检测已追踪的 .svp 工程变化，应用运行或托盘驻留时持续工作。未保存内容需要先由 SynthV 正常保存。</p></div><span class="availability ${historyLoadState === "error" || backup?.lastError || itemError ? "warning" : "ready"}">${backupStatus}</span></section>${loadError}
+  return `<section class="panel history-intro"><span class="feature-icon blue">${icon("history", 22)}</span><div><span class="eyebrow">AUTOMATIC HISTORY</span><h2>工程历史自动保存</h2><p>每分钟检测已追踪的 .svp 工程变化，应用运行或托盘驻留时持续工作。未保存内容需要先由 SynthV 正常保存。</p></div><span class="availability ${historyLoadState === "ready" && !backup?.lastError && !itemError ? "ready" : "warning"}">${backupStatus}</span></section>${loadError}
     <section class="panel history-checkpoint-grid"><div class="section-heading"><div><h2>自动备份状态</h2><p>检测间隔：${backup?.intervalSeconds ?? 60} 秒${backup?.lastError ? ` · ${escapeHtml(backup.lastError)}` : ""}</p></div></div><div class="checkpoint-list">${tracked}</div></section>
     <section class="panel"><div class="section-heading"><div><h2>已有快照</h2><p>可恢复快照会生成新的工程副本。</p></div></div><div class="checkpoint-list">${checkpoints}</div></section>
     <section class="panel workflow-history"><div class="section-heading"><div><h2>工作流记录</h2><p>按时间保留工具输入摘要、执行结果和输出位置。</p></div></div><div class="timeline-list">${history}</div></section>`;
@@ -3308,7 +3312,7 @@ document.addEventListener("click", (event) => {
     });
     else {
       render();
-      if (page === "import" && activeWorkflow === "audio-preparation") refreshAudioRuntimeStatus();
+      refreshAudioPreparationIfSelected();
     }
     resetContentScroll();
     return;
@@ -3346,7 +3350,7 @@ document.addEventListener("click", (event) => {
     notice = "";
     if (featureId === "audio-preparation") {
       render();
-      refreshAudioRuntimeStatus();
+      refreshAudioPreparationIfSelected();
     } else if (featureId === "batch-recipes") void run(async () => { workflowRecipes = await api.listWorkflowRecipes(); });
     else if (featureId === "ab-audition") void run(async () => {
       audioCaptureCapability = await api.audioCaptureCapability();
