@@ -1,7 +1,8 @@
 import { createApp, nextTick, reactive } from "vue";
 import AppShell from "./AppShell.vue";
+import { i18n } from "../i18n";
 
-export type ShellPage = "home" | "accounts" | "import" | "quality" | "lyrics" | "history" | "copilot" | "components" | "bridge" | "mcp" | "settings";
+export type ShellPage = "home" | "accounts" | "import" | "quality" | "lyrics" | "history" | "copilot" | "components" | "bridge" | "connections" | "settings";
 
 export interface ShellState {
   page: ShellPage;
@@ -24,7 +25,7 @@ export interface ShellController {
 
 export function mountShell(element: HTMLElement, initial: ShellState): ShellController {
   const state = reactive<ShellState>({ ...initial });
-  createApp(AppShell, { state }).mount(element);
+  createApp(AppShell, { state }).use(i18n).mount(element);
   return {
     update(next) { Object.assign(state, next); },
     afterUpdate(callback) { void nextTick(callback); },

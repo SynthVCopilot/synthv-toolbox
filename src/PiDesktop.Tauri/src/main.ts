@@ -10,6 +10,7 @@ import { findVoiceMetadata } from "./voiceCatalog";
 import { icon } from "./icons";
 import { featureCatalog, toolGroups, type FeatureCatalogItem, type ToolGroup } from "./featureCatalog";
 import { mountShell, type ShellController } from "./vue/shell";
+import { locale, setLocale, t } from "./i18n";
 import type {
   AiProviderId,
   AgentWorkMode,
@@ -70,7 +71,7 @@ registerModelAuthElement();
 const root = document.querySelector<HTMLDivElement>("#app")!;
 if (!root) throw new Error("Missing #app root");
 
-type Page = "home" | "accounts" | "import" | "quality" | "lyrics" | "history" | "copilot" | "components" | "bridge" | "mcp" | "settings";
+type Page = "home" | "accounts" | "import" | "quality" | "lyrics" | "history" | "copilot" | "components" | "bridge" | "connections" | "settings";
 type AccountManagerSection = "profile" | "global" | "add";
 
 interface PendingAccountIndicatorConsent {
@@ -359,19 +360,9 @@ function startNewLyricProject(): void {
 restoreLyricWorkspace();
 if (!lyricSavedSnapshot) lyricSavedSnapshot = lyricWorkspaceSnapshot();
 
-const pageMeta: Record<Page, { title: string; subtitle: string }> = {
-  home: { title: "概览", subtitle: "查看环境状态与常用能力" },
-  accounts: { title: "SV2 账号", subtitle: "管理本机 SV2 槽位；Windows 还支持可选并发隔离" },
-  import: { title: "导入与转换", subtitle: "把曲谱或演唱音频变成可继续编辑的 MIDI 与 SynthV 音符" },
-  quality: { title: "分析与质检", subtitle: "集中完成音频分析、工程诊断、发音检查与交付复检" },
-  lyrics: { title: "作词", subtitle: "专注写下歌词，需要时再调用结构、韵脚与 AI 辅助" },
-  history: { title: "历史", subtitle: "查看工作流记录与工程自动备份" },
-  copilot: { title: "Copilot", subtitle: "让 AI 在受控工具边界内协助工作" },
-  components: { title: "组件中心", subtitle: "管理本地模型与运行组件" },
-  bridge: { title: "SynthV Bridge", subtitle: "探测、安装、诊断并连接 Synthesizer V" },
-  mcp: { title: "外部 MCP", subtitle: "接入额外的本地工具服务器" },
-  settings: { title: "设置", subtitle: "调整运行模式与模型配置" },
-};
+function pageMeta(target: Page): { title: string; subtitle: string } {
+  return { title: t(`pages.${target}.0`), subtitle: t(`pages.${target}.1`) };
+}
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "")
@@ -818,23 +809,23 @@ function renderSidebar(): string {
       <div><strong>Synthesizer V Toolbox</strong><span>Creative utility suite</span></div>
     </div>
     <nav class="nav" aria-label="主导航">
-      <span class="nav-label">工作区</span>
-      ${navItem("home", "概览", "home")}
-      ${app.platform === "windows" || app.platform === "macos" || app.platform === "preview" ? navItem("accounts", "SV2 账号", "users") : ""}
-      ${navItem("import", "导入与转换", "pipeline")}
-      ${navItem("quality", "分析与质检", "doctor")}
-      ${navItem("lyrics", "作词", "lyrics")}
-      ${navItem("history", "历史", "history")}
-      ${app.mode === "ai" ? navItem("copilot", "Copilot", "bot") : ""}
-      <span class="nav-label">系统</span>
-      ${navItem("components", "组件中心", "boxes")}
-      ${navItem("bridge", "SynthV Bridge", "bridge")}
-      ${app.mode === "ai" ? navItem("mcp", "外部 MCP", "server") : ""}
+      <span class="nav-label">${t("nav.workspace")}</span>
+      ${navItem("home", t("nav.home"), "home")}
+      ${app.platform === "windows" || app.platform === "macos" || app.platform === "preview" ? navItem("accounts", t("nav.accounts"), "users") : ""}
+      ${navItem("import", t("nav.import"), "pipeline")}
+      ${navItem("quality", t("nav.quality"), "doctor")}
+      ${navItem("lyrics", t("nav.lyrics"), "lyrics")}
+      ${navItem("history", t("nav.history"), "history")}
+      ${app.mode === "ai" ? navItem("copilot", t("nav.copilot"), "bot") : ""}
+      <span class="nav-label">${t("nav.system")}</span>
+      ${navItem("components", t("nav.components"), "boxes")}
+      ${navItem("bridge", t("nav.bridge"), "bridge")}
+      ${navItem("connections", t("nav.connections"), "server")}
     </nav>
     <div class="sidebar-footer">
       <span class="version">v${escapeHtml(app.appVersion)} · ${escapeHtml(app.platform)}</span>
-      <button class="nav-item sidebar-toggle" data-toggle-sidebar title="${sidebarCollapsed ? "展开侧栏" : "收起侧栏"}" aria-label="${sidebarCollapsed ? "展开侧栏" : "收起侧栏"}" aria-expanded="${!sidebarCollapsed}">${icon("arrow", 18)}<span>${sidebarCollapsed ? "展开侧栏" : "收起侧栏"}</span></button>
-      ${navItem("settings", "设置", "settings")}
+      <button class="nav-item sidebar-toggle" data-toggle-sidebar title="${sidebarCollapsed ? t("nav.expand") : t("nav.collapse")}" aria-label="${sidebarCollapsed ? t("nav.expand") : t("nav.collapse")}" aria-expanded="${!sidebarCollapsed}">${icon("arrow", 18)}<span>${sidebarCollapsed ? t("nav.expand") : t("nav.collapse")}</span></button>
+      ${navItem("settings", t("nav.settings"), "settings")}
     </div>`;
 }
 
@@ -857,8 +848,8 @@ function render(): void {
     wireForms();
     return;
   }
-  if (app.mode !== "ai" && (page === "copilot" || page === "mcp")) page = "home";
-  const meta = pageMeta[page];
+  if (app.mode !== "ai" && page === "copilot") page = "home";
+  const meta = pageMeta(page);
   const pageHtml = renderPage();
   const noticeHtml = notice ? `<div class="toast success">${icon("check", 18)}<pre>${escapeHtml(notice)}</pre></div>` : "";
   const errorHtml = error ? `<div class="toast error"><pre>${escapeHtml(error)}</pre></div>` : "";
@@ -1431,7 +1422,7 @@ function renderPage(): string {
     case "copilot": return renderCopilot();
     case "components": return renderComponents();
     case "bridge": return renderBridge();
-    case "mcp": return renderMcp();
+    case "connections": return renderMcp();
     case "settings": return renderSettings();
   }
 }
@@ -2205,9 +2196,12 @@ function renderBridge(): string {
 
 function renderMcp(): string {
   if (!app) return "";
-  return `<div class="warning-card"><span>${icon("server", 23)}</span><div><strong>MCP 服务器可以启动本地进程</strong><p>只添加你信任的命令。服务器必须显式启用后才会向 Copilot 暴露工具。</p></div></div>
-    <div class="mcp-layout"><section class="panel"><div class="section-heading"><div><h2>已配置服务器</h2><p>${app.mcpServers.length} 个配置</p></div></div><div class="mcp-list">${app.mcpServers.length ? app.mcpServers.map((server) => `<article><span class="server-icon">${icon("server", 20)}</span><div><strong>${escapeHtml(server.name)}</strong><code>${escapeHtml([server.command, ...server.args].join(" "))}</code></div><span class="availability">${server.enabled ? "已启用" : "已停用"}</span><button class="icon-plain" data-test-mcp="${escapeHtml(server.id)}" title="测试">${icon("sync", 17)}</button><button class="icon-plain danger" data-delete-mcp="${escapeHtml(server.id)}" title="删除">${icon("trash", 17)}</button></article>`).join("") : '<div class="empty-inline">尚未添加外部 MCP 服务器。</div>'}</div></section>
-    <section class="panel"><div class="section-heading"><div><h2>添加 stdio MCP</h2><p>进程通过私有 stdin/stdout 与 Rust 后端通信。</p></div></div><form id="mcp-form" class="form-stack"><label>显示名称<input id="mcp-name" required placeholder="例如 Filesystem tools" /></label><label>命令<input id="mcp-command" required placeholder="例如 npx、node 或绝对路径" /></label><label>参数（每行一个）<textarea id="mcp-args" rows="4" placeholder="-y\n@modelcontextprotocol/server-filesystem\n/path/to/workspace"></textarea></label><label class="checkbox"><input id="mcp-enabled" type="checkbox" checked /> 保存后立即启用</label><button class="primary">添加服务器</button></form></section></div>`;
+  const externalMcp = app.mode === "ai"
+    ? `<div class="warning-card"><span>${icon("server", 23)}</span><div><strong>${t("connections.externalWarning")}</strong><p>${t("connections.externalWarningDescription")}</p></div></div>
+      <div class="mcp-layout"><section class="panel"><div class="section-heading"><div><h2>${t("connections.external")}</h2><p>${t("connections.configurations", { count: app.mcpServers.length })}</p></div></div><div class="mcp-list">${app.mcpServers.length ? app.mcpServers.map((server) => `<article><span class="server-icon">${icon("server", 20)}</span><div><strong>${escapeHtml(server.name)}</strong><code>${escapeHtml([server.command, ...server.args].join(" "))}</code></div><span class="availability">${server.enabled ? t("connections.enabled") : t("connections.disabledServer")}</span><button class="icon-plain" data-test-mcp="${escapeHtml(server.id)}" title="${t("nav.connections")}">${icon("sync", 17)}</button><button class="icon-plain danger" data-delete-mcp="${escapeHtml(server.id)}" title="${t("connections.deleted")}">${icon("trash", 17)}</button></article>`).join("") : `<div class="empty-inline">${t("connections.noServers")}</div>`}</div></section>
+      <section class="panel"><div class="section-heading"><div><h2>${t("connections.addStdio")}</h2><p>${t("connections.stdioDescription")}</p></div></div><form id="mcp-form" class="form-stack"><label>${t("connections.name")}<input id="mcp-name" required placeholder="Filesystem tools" /></label><label>${t("connections.command")}<input id="mcp-command" required placeholder="npx, node, or an absolute path" /></label><label>${t("connections.arguments")}<textarea id="mcp-args" rows="4" placeholder="-y\n@modelcontextprotocol/server-filesystem\n/path/to/workspace"></textarea></label><label class="checkbox"><input id="mcp-enabled" type="checkbox" checked /> ${t("connections.enableOnSave")}</label><button class="primary">${t("connections.addServer")}</button></form></section></div>`
+    : `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("server", 24)}</span><div><h2>${t("connections.aiOnly")}</h2><p>${t("connections.aiOnlyDescription")}</p></div></section>`;
+  return `<div class="connections-layout"><section class="panel http-api-settings"><div class="section-heading"><div><h2>${t("connections.localService")}</h2><p>${t("connections.localServiceDescription")}</p></div><span class="availability ${httpApiStatus.running ? "ready" : httpApiStatus.enabled || httpApiStatus.agentEnabled ? "warning" : ""}">${httpApiStatus.running ? t("connections.running") : httpApiStatus.enabled || httpApiStatus.agentEnabled ? t("connections.failed") : t("connections.off")}</span></div><form id="http-api-form" class="http-api-form"><label class="fluent-switch large"><input id="http-api-enabled" name="enabled" type="checkbox" ${httpApiStatus.enabled ? "checked" : ""} aria-label="${t("connections.mcpTools")}" aria-describedby="http-api-help" /><span></span>${t("connections.mcpTools")}</label><label class="fluent-switch large"><input id="http-agent-enabled" name="agentEnabled" type="checkbox" ${httpApiStatus.agentEnabled ? "checked" : ""} aria-label="${t("connections.agentChat")}" aria-describedby="http-api-help" /><span></span>${t("connections.agentChat")}</label><label class="http-api-port">${t("connections.port")}<input id="http-api-port" name="port" type="number" min="1" max="65535" step="1" value="${httpApiStatus.port || 17831}" inputmode="numeric" required aria-describedby="http-api-help" /></label><button class="primary" type="submit" ${busy ? "disabled" : ""}>${t("connections.apply")}</button></form><div id="http-api-help" class="http-api-status"><span><strong>${t("connections.listening")}</strong>${httpApiStatus.running ? t("connections.active") : httpApiStatus.enabled || httpApiStatus.agentEnabled ? t("connections.inactive") : t("connections.disabled")}</span>${httpApiStatus.endpoint ? `<span><strong>MCP</strong><code>${escapeHtml(httpApiStatus.endpoint)}</code></span>` : ""}${httpApiStatus.agentEndpoint ? `<span><strong>Agent</strong><code>${escapeHtml(httpApiStatus.agentEndpoint)}</code></span>` : ""}${httpApiStatus.lastError ? `<span class="error-text"><strong>${t("connections.error")}</strong>${escapeHtml(httpApiStatus.lastError)}</span>` : ""}</div></section>${externalMcp}</div>`;
 }
 
 function fallbackAiProviders(): AiProviderSummary[] {
@@ -2396,13 +2390,13 @@ async function executeModelAuthAction(action: ModelAuthAction, detail: unknown[]
 
 function renderAiProviderSettings(): string {
   const legacyWarning = app?.model?.legacyConfigured
-    ? `<div class="ai-legacy-warning">${icon("shield", 17)}<span><strong>检测到旧版 API token 配置</strong><small>旧配置不会作为 OAuth 账号展示。请完成浏览器授权；后端迁移完成前仍会保留旧配置。</small></span></div>`
+    ? `<div class="ai-legacy-warning">${icon("shield", 17)}<span><strong>${t("settings.legacyCredentials")}</strong><small>${t("settings.legacyCredentialsDescription")}</small></span></div>`
     : "";
   const activeProvider = activeAiProvider();
   const activeVerified = Boolean(activeProvider && (activeProvider.accounts.some((account) => account.authorized) || activeProvider.apiKeys.length));
-  const activeStatus = activeProvider ? `${activeProvider.accounts.filter((account) => account.authorized).length} 个 OAuth · ${activeProvider.apiKeys.length} 个 API Key` : "未配置连接";
-  return `<section class="panel ai-provider-panel"><div class="section-heading"><div><h2>模型提供商</h2><p>可使用 OAuth 订阅或多份 API Key 接入；凭据均由本机后端处理。</p></div><span class="availability ${activeVerified ? "ready" : "warning"}">${activeStatus}</span></div>
-    ${legacyWarning}<div class="ai-provider-summary"><div><strong>${escapeHtml(activeProvider ? aiProviderDisplayName(activeProvider) : "尚未选择提供商")}</strong><small>${escapeHtml(activeProvider?.model || "选择认证方式、提供商与模型后即可开始对话。")}</small></div><button type="button" class="primary" data-open-ai-provider-picker ${busy ? "disabled" : ""}>添加或切换连接</button></div>
+  const activeStatus = activeProvider ? t("settings.oauthSummary", { count: activeProvider.accounts.filter((account) => account.authorized).length, keys: activeProvider.apiKeys.length }) : t("settings.notConfigured");
+  return `<section class="panel ai-provider-panel"><div class="section-heading"><div><h2>${t("settings.providers")}</h2><p>${t("settings.providersDescription")}</p></div><span class="availability ${activeVerified ? "ready" : "warning"}">${activeStatus}</span></div>
+    ${legacyWarning}<div class="ai-provider-summary"><div><strong>${escapeHtml(activeProvider ? aiProviderDisplayName(activeProvider) : t("settings.noProvider"))}</strong><small>${escapeHtml(activeProvider?.model || t("settings.chooseProvider"))}</small></div><button type="button" class="primary" data-open-ai-provider-picker ${busy ? "disabled" : ""}>${t("settings.addProvider")}</button></div>
   </section>`;
 }
 
@@ -2411,21 +2405,25 @@ function renderSettings(): string {
   const showSvpRouting = app.platform === "windows" || app.platform === "preview";
   const association = app.svpAssociation;
   const associationLabel = !association.supported
-    ? "当前平台不支持"
+    ? t("settings.unsupported")
     : association.isDefault
-      ? "已设为 .svp 默认打开方式"
+      ? t("settings.defaultApp")
       : association.registered
-        ? "已注册，等待设为默认应用"
-        : "尚未注册为可选打开方式";
-  return `<div class="settings-layout"><section class="panel"><div class="section-heading"><div><h2>运行模式</h2><p>切换后导航与 Rust 后端能力会同时更新。</p></div></div><div class="mode-setting"><button class="setting-choice ${app.mode === "toolbox" ? "active" : ""}" data-set-mode="toolbox"><span class="mode-icon slate">${icon("toolbox", 23)}</span><span><strong>纯工具箱</strong><small>确定性基础流程，不启动 AI</small></span>${app.mode === "toolbox" ? icon("check", 20) : ""}</button><button class="setting-choice ${app.mode === "ai" ? "active" : ""}" data-set-mode="ai"><span class="mode-icon purple">${icon("sparkles", 23)}</span><span><strong>AI 模式</strong><small>Copilot、智能增强与 MCP</small></span>${app.mode === "ai" ? icon("check", 20) : ""}</button></div></section>
-    ${app.mode === "ai" ? renderAiProviderSettings() : `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("bot", 24)}</span><div><h2>AI 运行时已关闭</h2><p>当前不会显示 Copilot、模型或 MCP 设置，也不会向模型端点发送请求。</p></div></section>`}
-    ${showSvpRouting ? `<section class="panel smart-route-settings"><div class="section-heading"><div><h2>智能 .svp 启动</h2><p>根据工程所需声库，从空闲账号中建议最合适的启动槽位。</p></div><label class="fluent-switch large"><input id="svp-routing-enabled" type="checkbox" ${app.smartSvpLaunchEnabled ? "checked" : ""} ${association.supported ? "" : "disabled"} aria-label="启用智能 .svp 启动" /><span></span>${app.smartSvpLaunchEnabled ? "已开启" : "已关闭"}</label></div><div class="smart-route-state ${association.isDefault ? "ready" : "pending"}"><span class="feature-icon ${association.isDefault ? "emerald" : "blue"}">${icon("file", 20)}</span><div><strong>${escapeHtml(associationLabel)}</strong><p>${escapeHtml(association.detail)}</p></div><button class="secondary compact" data-open-svp-default-apps ${association.supported ? "" : "disabled"}>打开默认应用设置</button></div><div class="smart-route-boundary">${icon("shield", 17)}<span><strong>智能路由只在工具箱已经运行时生效</strong><small>冷启动或关闭此功能时，工具箱会把工程透明转交给原始 .svp 处理程序；不会监控、终止或劫持已经启动的 SV2。路由优先采用账号服务返回的授权摘要，并以你的确认记录作为补充；任何未知结果都必须由你选择账号。</small></span></div></section>` : ""}
-    <section class="panel http-api-settings"><div class="section-heading"><div><h2>本地 HTTP 接口</h2><p>仅监听本机回环地址；MCP 工具与 Agent 对话分别授权，默认全部关闭。</p></div><span class="availability ${httpApiStatus.running ? "ready" : httpApiStatus.enabled || httpApiStatus.agentEnabled ? "warning" : ""}">${httpApiStatus.running ? "运行中" : httpApiStatus.enabled || httpApiStatus.agentEnabled ? "启动失败" : "已关闭"}</span></div><form id="http-api-form" class="http-api-form"><label class="fluent-switch large"><input id="http-api-enabled" name="enabled" type="checkbox" ${httpApiStatus.enabled ? "checked" : ""} aria-label="允许本地 HTTP 连接 MCP 工具" aria-describedby="http-api-help" /><span></span>MCP 工具接口</label><label class="fluent-switch large"><input id="http-agent-enabled" name="agentEnabled" type="checkbox" ${httpApiStatus.agentEnabled ? "checked" : ""} aria-label="允许本地 HTTP 连接 Agent" aria-describedby="http-api-help" /><span></span>Agent 对话接口</label><label class="http-api-port">监听端口<input id="http-api-port" name="port" type="number" min="1" max="65535" step="1" value="${httpApiStatus.port || 17831}" inputmode="numeric" required aria-describedby="http-api-help" /></label><button class="primary" type="submit" ${busy ? "disabled" : ""}>应用并保存</button></form><div id="http-api-help" class="http-api-status"><span><strong>监听</strong>${httpApiStatus.running ? "正在运行" : httpApiStatus.enabled || httpApiStatus.agentEnabled ? "未运行" : "未启用"}</span>${httpApiStatus.endpoint ? `<span><strong>MCP</strong><code>${escapeHtml(httpApiStatus.endpoint)}</code></span>` : ""}${httpApiStatus.agentEndpoint ? `<span><strong>Agent</strong><code>${escapeHtml(httpApiStatus.agentEndpoint)}</code></span>` : ""}${httpApiStatus.lastError ? `<span class="error-text"><strong>错误</strong>${escapeHtml(httpApiStatus.lastError)}</span>` : ""}</div></section>
-    <section class="panel app-update-settings"><div class="section-heading"><div><h2>应用更新</h2><p>按需检查官方 GitHub Releases；不会自动下载或安装。</p></div></div><div class="update-check-actions"><div><small>当前版本</small><strong>v${escapeHtml(app.appVersion)}</strong></div><button class="secondary" data-check-toolbox-update>${icon("sync", 16)} ${toolboxUpdate ? "重新检查" : "检查更新"}</button></div>${renderToolboxUpdateResult()}</section>
-    <section class="panel"><div class="section-heading"><div><h2>数据与平台</h2><p>配置和历史使用统一的跨平台用户目录。</p></div></div><dl class="detail-list"><div><dt>平台</dt><dd>${escapeHtml(app.platform)}</dd></div><div><dt>配置</dt><dd><code>${escapeHtml(app.configPath)}</code></dd></div><div><dt>应用版本</dt><dd>${escapeHtml(app.appVersion)}</dd></div></dl></section></div>`;
+        ? t("settings.registered")
+        : t("settings.unregistered");
+  return `<div class="settings-layout"><section class="panel language-settings"><div class="section-heading"><div><h2>${t("settings.language")}</h2></div><label><select id="language-select" aria-label="${t("settings.language")}"><option value="zh-CN" ${locale() === "zh-CN" ? "selected" : ""}>${t("settings.chinese")}</option><option value="en" ${locale() === "en" ? "selected" : ""}>${t("settings.english")}</option></select></label></div></section>
+    <section class="panel"><div class="section-heading"><div><h2>${t("settings.mode")}</h2><p>${t("settings.modeDescription")}</p></div></div><div class="mode-setting"><button class="setting-choice ${app.mode === "toolbox" ? "active" : ""}" data-set-mode="toolbox"><span class="mode-icon slate">${icon("toolbox", 23)}</span><span><strong>${t("settings.toolbox")}</strong><small>${t("settings.toolboxDescription")}</small></span>${app.mode === "toolbox" ? icon("check", 20) : ""}</button><button class="setting-choice ${app.mode === "ai" ? "active" : ""}" data-set-mode="ai"><span class="mode-icon purple">${icon("sparkles", 23)}</span><span><strong>${t("settings.ai")}</strong><small>${t("settings.aiDescription")}</small></span>${app.mode === "ai" ? icon("check", 20) : ""}</button></div></section>
+    ${app.mode === "ai" ? renderAiProviderSettings() : `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("bot", 24)}</span><div><h2>${t("settings.aiDisabled")}</h2><p>${t("settings.aiDisabledDescription")}</p></div></section>`}
+    ${showSvpRouting ? `<section class="panel smart-route-settings"><div class="section-heading"><div><h2>${t("settings.smartRoute")}</h2><p>${t("settings.smartRouteDescription")}</p></div><label class="fluent-switch large"><input id="svp-routing-enabled" type="checkbox" ${app.smartSvpLaunchEnabled ? "checked" : ""} ${association.supported ? "" : "disabled"} aria-label="${t("settings.smartRoute")}" /><span></span>${app.smartSvpLaunchEnabled ? t("settings.enabled") : t("settings.disabled")}</label></div><div class="smart-route-state ${association.isDefault ? "ready" : "pending"}"><span class="feature-icon ${association.isDefault ? "emerald" : "blue"}">${icon("file", 20)}</span><div><strong>${escapeHtml(associationLabel)}</strong><p>${escapeHtml(association.detail)}</p></div><button class="secondary compact" data-open-svp-default-apps ${association.supported ? "" : "disabled"}>${t("settings.openDefaults")}</button></div><div class="smart-route-boundary">${icon("shield", 17)}<span><strong>智能路由只在工具箱已经运行时生效</strong><small>冷启动或关闭此功能时，工具箱会把工程透明转交给原始 .svp 处理程序；不会监控、终止或劫持已经启动的 SV2。路由优先采用账号服务返回的授权摘要，并以你的确认记录作为补充；任何未知结果都必须由你选择账号。</small></span></div></section>` : ""}
+    <section class="panel app-update-settings"><div class="section-heading"><div><h2>${t("settings.update")}</h2><p>${t("settings.updateDescription")}</p></div></div><div class="update-check-actions"><div><small>${t("settings.currentVersion")}</small><strong>v${escapeHtml(app.appVersion)}</strong></div><button class="secondary" data-check-toolbox-update>${icon("sync", 16)} ${toolboxUpdate ? t("settings.checkAgain") : t("settings.checkUpdate")}</button></div>${renderToolboxUpdateResult()}</section>
+    <section class="panel"><div class="section-heading"><div><h2>${t("settings.dataPlatform")}</h2><p>${t("settings.dataPlatformDescription")}</p></div></div><dl class="detail-list"><div><dt>${t("settings.platform")}</dt><dd>${escapeHtml(app.platform)}</dd></div><div><dt>${t("settings.config")}</dt><dd><code>${escapeHtml(app.configPath)}</code></dd></div><div><dt>${t("settings.appVersion")}</dt><dd>${escapeHtml(app.appVersion)}</dd></div></dl></section></div>`;
 }
 
 function wireForms(): void {
+  document.querySelector<HTMLSelectElement>("#language-select")?.addEventListener("change", (event) => {
+    setLocale((event.currentTarget as HTMLSelectElement).value === "en" ? "en" : "zh-CN");
+    render();
+  });
   document.querySelector<HTMLFormElement>("#audio-prepare-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const form = event.currentTarget as HTMLFormElement;
@@ -2784,14 +2782,14 @@ function wireForms(): void {
     const agentEnabled = form.querySelector<HTMLInputElement>('[name="agentEnabled"]')?.checked ?? false;
     const port = Number(form.querySelector<HTMLInputElement>('[name="port"]')?.value ?? 0);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      error = "端口必须是 1 到 65535 之间的整数。";
+      error = t("connections.portError");
       notice = "";
       render();
       return;
     }
     void run(async () => {
       httpApiStatus = await api.configureHttpApi(enabled, agentEnabled, port);
-      notice = enabled || agentEnabled ? "本地 HTTP 接口设置已保存。" : "本地 HTTP 接口已关闭。";
+      notice = enabled || agentEnabled ? t("connections.saved") : t("connections.closed");
     });
   });
   document.querySelector<HTMLFormElement>("#mcp-form")?.addEventListener("submit", (event) => {
@@ -2801,7 +2799,7 @@ function wireForms(): void {
     const args = (document.querySelector<HTMLTextAreaElement>("#mcp-args")?.value ?? "").split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
     const enabled = document.querySelector<HTMLInputElement>("#mcp-enabled")?.checked ?? false;
     const server: McpServerConfig = { id: crypto.randomUUID(), name, command, args, enabled };
-    void run(async () => { app = await api.saveMcpServer(server); notice = `${name} 已添加。`; });
+    void run(async () => { app = await api.saveMcpServer(server); notice = t("connections.serverAdded", { name }); });
   });
   document.querySelector<HTMLFormElement>("#bridge-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -3704,7 +3702,7 @@ document.addEventListener("click", (event) => {
   if (target.dataset.conversation) { void run(async () => { conversation = await api.openConversation(target.dataset.conversation ?? ""); fileApprovals = await api.agentFileApprovals(); }); return; }
   if (target.dataset.prompt) { void sendPrompt(target.dataset.prompt); return; }
   if (target.dataset.testMcp) { void run(async () => { setFeedback(await api.testMcpServer(target.dataset.testMcp ?? "")); }); return; }
-  if (target.dataset.deleteMcp) { void run(async () => { app = await api.deleteMcpServer(target.dataset.deleteMcp ?? ""); notice = "MCP 配置已删除。"; }); }
+  if (target.dataset.deleteMcp) { void run(async () => { app = await api.deleteMcpServer(target.dataset.deleteMcp ?? ""); notice = t("connections.deleted"); }); }
 });
 
 function svpRoutePlanFromPayload(payload: unknown): SvpRoutePlan | undefined {

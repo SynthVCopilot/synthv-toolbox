@@ -10,11 +10,18 @@ assert.match(types, /export interface HttpApiStatus[\s\S]*enabled: boolean;[\s\S
 assert.match(api, /getHttpApiStatus: \(\) => call<HttpApiStatus>\("get_http_api_status"\)/);
 assert.match(api, /configureHttpApi: \(enabled: boolean, agentEnabled: boolean, port: number\) =>[\s\S]*call<HttpApiStatus>\("configure_http_api", \{ enabled, agentEnabled, port \}\)/);
 assert.match(main, /id="http-api-enabled"[\s\S]*type="checkbox"/);
-assert.match(main, /id="http-agent-enabled"[\s\S]*name="agentEnabled"[\s\S]*允许本地 HTTP 连接 Agent/);
+assert.match(main, /id="http-agent-enabled"[\s\S]*name="agentEnabled"[\s\S]*connections\.agentChat/);
 assert.match(main, /id="http-api-port"[\s\S]*type="number"[\s\S]*value="\$\{httpApiStatus\.port \|\| 17831\}"/);
 assert.match(main, /getHttpApiStatus\(\)/);
 assert.match(main, /configureHttpApi\(enabled, agentEnabled, port\)/);
+assert.match(main, /pages\.\$\{target\}\.0/);
+assert.match(main, /navItem\("connections", t\("nav\.connections"\), "server"\)/);
+assert.match(main, /case "connections": return renderMcp\(\)/);
+assert.match(main, /connections\.aiOnly[\s\S]*connections\.aiOnlyDescription/);
+assert.match(main, /connections\.localService[\s\S]*id="http-api-form"/);
+assert.doesNotMatch(main.slice(main.indexOf("function renderSettings"), main.indexOf("function wireForms")), /id="http-api-form"/);
 assert.match(styles, /\.http-api-settings/);
+assert.match(styles, /\.connections-layout/);
 assert.match(styles, /\.fluent-switch\.large/);
 
 console.log("HTTP MCP UI contracts passed.");
