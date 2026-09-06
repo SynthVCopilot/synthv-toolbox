@@ -188,6 +188,7 @@ let audioJobPollTimer: number | undefined;
 let audioJobPollGeneration = 0;
 let audioInputGeneration = 0;
 let audioPlanRequestGeneration = 0;
+let audioRuntimeRequestGeneration = 0;
 let audioPlanRequestInFlight = false;
 let audioStartInFlight = false;
 let audioLoudnessAnalysisInFlight = false;
@@ -428,6 +429,19 @@ function scheduleAudioJobPoll(jobId: string): void {
     if (page === "toolbox" && activeWorkflow === "audio-preparation") render();
   };
   audioJobPollTimer = window.setTimeout(() => { void poll(); }, 800);
+}
+
+function refreshAudioRuntimeStatus(): void {
+  const generation = ++audioRuntimeRequestGeneration;
+  void audioApi.ffmpegStatus().then((status) => {
+    if (generation !== audioRuntimeRequestGeneration) return;
+    audioRuntime = status;
+    if (page === "toolbox" && activeWorkflow === "audio-preparation") render();
+  }).catch((reason) => {
+    if (generation !== audioRuntimeRequestGeneration) return;
+    audioRuntime = { available: false, detail: formatError(reason) };
+    if (page === "toolbox" && activeWorkflow === "audio-preparation") render();
+  });
 }
 
 function requestAudioPlan(kind: AudioJobKind): void {
@@ -2791,6 +2805,7 @@ document.addEventListener("click", (event) => {
       audioJob = merged;
       if (isTerminalAudioJob(merged)) {
         clearAudioJobPoll();
+        audioUiNotice = merged.status === "cancelled" ? "音频任务已取消。" : "音频任务已结束。";
       } else {
         scheduleAudioJobPoll(jobId);
       }
@@ -3242,13 +3257,7 @@ document.addEventListener("click", (event) => {
     const featureId = target.dataset.feature;
     if (featureId === "audio-preparation") {
       render();
-      void audioApi.ffmpegStatus().then((status) => {
-        audioRuntime = status;
-        if (page === "toolbox" && activeWorkflow === "audio-preparation") render();
-      }).catch((reason) => {
-        audioRuntime = { available: false, detail: formatError(reason) };
-        if (page === "toolbox" && activeWorkflow === "audio-preparation") render();
-      });
+      refreshAudioRuntimeStatus();
     } else if (featureId === "batch-recipes") void run(async () => { workflowRecipes = await api.listWorkflowRecipes(); });
     else if (featureId === "ab-audition") void run(async () => {
       audioCaptureCapability = await api.audioCaptureCapability();
