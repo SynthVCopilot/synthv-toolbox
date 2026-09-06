@@ -94,15 +94,14 @@ let previewLyricProjects: LyricProject[] = [];
 const previewManagedComponentIds = new Set(["pi-audio", "cvrs", "media-fetcher", "vocal-separation"]);
 const previewInstalledManagedComponentIds = new Set(["cvrs"]);
 let previewActiveAiProvider: AiProviderId = "anthropic";
-let previewAiAccountSequence = 2;
 let previewAiProviders: AiProviderSummary[] = [{
   id: "anthropic",
   displayName: "Claude / Anthropic",
   description: "可通过 Claude 账号 OAuth 或 Anthropic API Key 连接。",
   active: true,
-  connected: true,
-  healthyAccounts: 1,
-  totalAccounts: 1,
+  connected: false,
+  healthyAccounts: 0,
+  totalAccounts: 0,
   model: "claude-sonnet-4-6",
   oauthModels: [
     "claude-sonnet-4-6",
@@ -112,15 +111,7 @@ let previewAiProviders: AiProviderSummary[] = [{
     "claude-opus-5",
   ],
   apiKeyModels: ["claude-sonnet-4-6", "claude-haiku-4-5", "claude-opus-4-8"],
-  accounts: [{
-    id: "preview-anthropic-1",
-    label: "Claude official account",
-    expiresAt: Date.now() + 55 * 60_000,
-    authorized: true,
-    healthy: true,
-    enabled: true,
-    weight: 1,
-  }],
+  accounts: [],
   models: [
     "claude-sonnet-4-6",
     "claude-sonnet-5",
@@ -487,34 +478,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     return { succeeded: true, summary: "已打开 Windows 默认应用设置。", detail: "请为 .svp 选择 Synthesizer V Toolbox。" } as T;
   }
   if (command === "authorize_ai_provider") {
-    const provider = previewAiProvider(args?.provider);
-    if (!provider) throw new Error("未知的 AI 提供商。");
-    const accountNumber = previewAiAccountSequence++;
-    const credentialId = String(args?.credentialId ?? "").trim();
-    const account = {
-      id: credentialId || `preview-${provider.id}-${accountNumber}`,
-      label: `${provider.displayName} 预览账号 ${accountNumber}`,
-      expiresAt: Date.now() + 55 * 60_000,
-      authorized: true,
-      healthy: true,
-      enabled: true,
-      weight: 1,
-    };
-    if (credentialId) {
-      const index = provider.accounts.findIndex((item) => item.id === credentialId);
-      if (index < 0) throw new Error("没有找到要重新授权的账号。");
-      provider.accounts.splice(index, 1, account);
-    } else provider.accounts.push(account);
-    if (provider.id === "openai-codex" && !provider.oauthModels.includes("gpt-5.3-codex-spark")) {
-      provider.oauthModels.push("gpt-5.3-codex-spark");
-    }
-    refreshPreviewAiProvider(provider);
-    previewActiveAiProvider = provider.id;
-    previewAiProviders = previewAiProviders.map((item) => ({
-      ...item,
-      active: item.id === provider.id,
-    }));
-    return previewState() as T;
+    throw new Error("浏览器预览不执行 OAuth 授权。请在桌面应用中连接提供商，完成真实浏览器授权；此处不会创建模拟账号。");
   }
   if (command === "select_ai_provider") {
     const provider = previewAiProvider(args?.provider);
