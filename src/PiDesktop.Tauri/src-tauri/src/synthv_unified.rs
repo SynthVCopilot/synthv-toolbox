@@ -247,7 +247,7 @@ pub async fn observe_connected_project_paths(manager: &McpManager) {
         }
     }
     if hosts.is_empty() && manager.is_connected("synthv").await {
-        if let Ok(response) = tokio::time::timeout(
+        if let Some(response) = tokio::time::timeout(
             TOOL_TIMEOUT,
             manager.call_bridge_tool(
                 "sv_query",

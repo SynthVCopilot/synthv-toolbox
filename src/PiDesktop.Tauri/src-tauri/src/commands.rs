@@ -2200,16 +2200,16 @@ pub async fn restore_project_checkpoint(
     id: String,
     output_name: String,
 ) -> Result<OperationResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        creative_history::restore_checkpoint_copy(&id, &output_name).map(|path| {
-            succeeded(
-                "检查点已恢复为新的工程副本。",
-                format!("输出：{path}；原工程和检查点均未修改。"),
-            )
-        })
+    let path = tauri::async_runtime::spawn_blocking(move || {
+        creative_history::restore_checkpoint_copy(&id, &output_name)
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())??;
+    observe_workflow_path(&path);
+    Ok(succeeded(
+        "检查点已恢复为新的工程副本。",
+        format!("输出：{path}；原工程和检查点均未修改。"),
+    ))
 }
 
 #[tauri::command]
@@ -3351,11 +3351,6 @@ fn record_workflow_result(
     parameters: Value,
     mut result: WorkflowResult,
 ) -> WorkflowResult {
-    crate::project_backups::observe_value(&parameters);
-    crate::project_backups::observe_value(&result.data);
-    if let Some(path) = result.output_path.as_deref() {
-        observe_workflow_path(path);
-    }
     if let Err(error) = creative_history::record(
         result.kind.clone(),
         title,
