@@ -1,7 +1,7 @@
 import { createApp, nextTick, reactive } from "vue";
 import AppShell from "./AppShell.vue";
 
-export type ShellPage = "home" | "accounts" | "toolbox" | "lyrics" | "history" | "copilot" | "components" | "bridge" | "mcp" | "settings";
+export type ShellPage = "home" | "accounts" | "import" | "quality" | "lyrics" | "history" | "copilot" | "components" | "bridge" | "mcp" | "settings";
 
 export interface ShellState {
   page: ShellPage;

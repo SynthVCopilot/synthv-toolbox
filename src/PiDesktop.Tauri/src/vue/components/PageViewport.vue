@@ -16,7 +16,8 @@ const props = defineProps<{
 const pageOrder: ShellPage[] = [
   "home",
   "accounts",
-  "toolbox",
+  "import",
+  "quality",
   "lyrics",
   "history",
   "copilot",

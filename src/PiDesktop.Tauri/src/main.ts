@@ -60,7 +60,7 @@ registerModelAuthElement();
 const root = document.querySelector<HTMLDivElement>("#app")!;
 if (!root) throw new Error("Missing #app root");
 
-type Page = "home" | "accounts" | "toolbox" | "lyrics" | "history" | "copilot" | "components" | "bridge" | "mcp" | "settings";
+type Page = "home" | "accounts" | "import" | "quality" | "lyrics" | "history" | "copilot" | "components" | "bridge" | "mcp" | "settings";
 type AccountManagerSection = "profile" | "global" | "add";
 
 interface PendingAccountIndicatorConsent {
@@ -305,7 +305,8 @@ if (!lyricSavedSnapshot) lyricSavedSnapshot = lyricWorkspaceSnapshot();
 const pageMeta: Record<Page, { title: string; subtitle: string }> = {
   home: { title: "概览", subtitle: "查看环境状态与常用能力" },
   accounts: { title: "SV2 账号", subtitle: "管理本机 SV2 槽位；Windows 还支持可选并发隔离" },
-  toolbox: { title: "工具箱", subtitle: "直接使用创作工具，或进入自动化工作流" },
+  import: { title: "导入与转换", subtitle: "把曲谱或演唱音频变成可继续编辑的 MIDI 与 SynthV 音符" },
+  quality: { title: "分析与质检", subtitle: "集中完成音频分析、工程诊断、发音检查与交付复检" },
   lyrics: { title: "作词", subtitle: "专注写下歌词，需要时再调用结构、韵脚与 AI 辅助" },
   history: { title: "历史与检查点", subtitle: "回看自动保存的工作流记录，并管理工程检查点" },
   copilot: { title: "Copilot", subtitle: "让 AI 在受控工具边界内协助工作" },
@@ -494,7 +495,8 @@ function renderSidebar(): string {
       <span class="nav-label">工作区</span>
       ${navItem("home", "概览", "home")}
       ${app.platform === "windows" || app.platform === "macos" || app.platform === "preview" ? navItem("accounts", "SV2 账号", "users") : ""}
-      ${navItem("toolbox", "工具箱", "toolbox")}
+      ${navItem("import", "导入与转换", "pipeline")}
+      ${navItem("quality", "分析与质检", "doctor")}
       ${navItem("lyrics", "作词", "lyrics")}
       ${navItem("history", "历史与检查点", "history")}
       ${app.mode === "ai" ? navItem("copilot", "Copilot", "bot") : ""}
@@ -1075,7 +1077,8 @@ function renderPage(): string {
   switch (page) {
     case "home": return renderHome();
     case "accounts": return renderAccounts();
-    case "toolbox": return renderToolbox();
+    case "import": return renderToolCategory("import");
+    case "quality": return renderToolCategory("quality");
     case "lyrics": return renderLyricsPage();
     case "history": return renderHistoryPage();
     case "copilot": return renderCopilot();
@@ -1256,7 +1259,7 @@ function renderHome(): string {
       <div><span class="eyebrow">${app.mode === "ai" ? "AI workspace" : "Local utility workspace"}</span>
         <h2>${app.mode === "ai" ? "把重复操作交给 Copilot，创作判断留给你。" : "所有核心工具，集中在一个安静的工作区。"}</h2>
         <p>${app.mode === "ai" ? "从音频分析到 SynthV 工程操作，AI 只通过你启用的能力和 MCP 工具工作。" : "无需模型配置即可进行确定性的音频、MIDI、工程和 Bridge 操作。"}</p>
-        <div class="hero-actions"><button class="primary" data-page="${app.mode === "ai" ? "copilot" : "toolbox"}">${icon(app.mode === "ai" ? "bot" : "toolbox", 18)} ${app.mode === "ai" ? "打开 Copilot" : "打开工具箱"}</button><button class="secondary" data-page="bridge">检查 Bridge</button></div>
+        <div class="hero-actions"><button class="primary" data-page="${app.mode === "ai" ? "copilot" : "import"}">${icon(app.mode === "ai" ? "bot" : "pipeline", 18)} ${app.mode === "ai" ? "打开 Copilot" : "打开导入与转换"}</button><button class="secondary" data-page="bridge">检查 Bridge</button></div>
       </div>
       <div class="hero-orb"><div><img class="brand-logo" src="/assets/synthv-toolbox-logo.png" alt="SynthV Toolbox" /></div><span>${app.mode === "ai" ? "COPILOT READY" : "LOCAL FIRST"}</span></div>
     </div>
@@ -1316,6 +1319,10 @@ function featureAvailability(feature: Feature, current: BootstrapState): Feature
   };
 }
 
+function featureTarget(feature: Feature, availability: FeatureAvailability): string {
+  return availability.route ? `data-page="${availability.route}"` : `data-feature="${feature.id}"`;
+}
+
 function groupFeatures(group: ToolGroup): Feature[] {
   return group.featureIds.flatMap((id) => {
     const feature = features.find((item) => item.id === id);
@@ -1323,39 +1330,22 @@ function groupFeatures(group: ToolGroup): Feature[] {
   });
 }
 
-function featureTarget(feature: Feature, availability: FeatureAvailability): string {
-  return availability.route ? `data-page="${availability.route}"` : `data-feature="${feature.id}"`;
-}
-
-function renderToolGroupGrid(current: BootstrapState): string {
-  return `<div class="tool-group-grid">${toolGroups.map((group) => {
-    const entries = groupFeatures(group).map((feature) => ({
-      feature,
-      availability: featureAvailability(feature, current),
-    }));
-    const directCount = entries.filter((entry) => entry.availability.tone === "ready").length;
-    const primary = entries.find((entry) => entry.availability.tone === "ready")
-      ?? entries.find((entry) => !entry.availability.disabled)
-      ?? entries[0];
-    if (!primary) return "";
-    const tone = directCount > 0 ? "ready" : entries.some((entry) => entry.availability.tone === "warning") ? "warning" : "blocked";
-    const status = directCount === entries.length ? `${entries.length} 项可用` : directCount ? `${directCount} / ${entries.length} 项可用` : primary.availability.label;
-    const action = directCount > 0 ? `打开 ${group.title}` : primary.availability.actionLabel;
-    return `<article class="tool-group-card ${tone}">
-      <div class="tool-group-head"><span class="feature-icon ${group.accent}">${icon(group.icon, 25)}</span><span class="availability ${tone}">${escapeHtml(status)}</span></div>
-      <h3>${escapeHtml(group.title)}</h3><p>${escapeHtml(group.description)}</p>
-      <div class="tool-group-items">${entries.map(({ feature, availability }) => `<div class="tool-group-item ${availability.tone}"><span>${icon(availability.tone === "ready" ? "check" : availability.tone === "warning" ? "plug" : "shield", 14)}</span><strong>${escapeHtml(feature.title)}</strong><small>${escapeHtml(availability.label)}</small></div>`).join("")}</div>
-      <button class="card-action ${tone !== "ready" ? "restricted" : ""}" ${featureTarget(primary.feature, primary.availability)} ${primary.availability.disabled ? "disabled" : ""}>${escapeHtml(action)} ${icon("arrow", 17)}</button>
-    </article>`;
-  }).join("")}</div>`;
-}
-
-function renderToolbox(): string {
+function renderToolCategory(groupId: ToolGroup["id"]): string {
   if (!app) return "";
   const current = app;
-  return `${activeWorkflow ? renderWorkflowPanel(activeWorkflow) : ""}<section class="toolbox-section"><div class="section-heading"><div><h2>按任务选择</h2><p>常用本地能力默认可用；具体工具只在进入任务组后显示，Bridge、组件和平台限制仍会明确提示。</p></div><span class="tool-group-count">${toolGroups.length} 个任务组</span></div>
-    ${renderToolGroupGrid(current)}</section>
-    ${current.mode === "toolbox" ? `<div class="upgrade-banner"><span class="mode-icon purple">${icon("sparkles", 24)}</span><div><strong>需要自动纠正、置信度复核或高级参数微调？</strong><p>切换到 AI 模式即可在现有工具之上启用智能增强。</p></div><button class="secondary" data-enable-ai>了解 AI 模式</button></div>` : ""}`;
+  const group = toolGroups.find((item) => item.id === groupId);
+  if (!group) return "";
+  if (activeWorkflow && group.featureIds.includes(activeWorkflow)) return renderWorkflowPanel(activeWorkflow);
+  const cards = groupFeatures(group).map((feature) => {
+    const availability = featureAvailability(feature, current);
+    return `<article class="tool-card ${availability.tone}">
+      <div class="tool-card-head"><span class="feature-icon ${feature.accent}">${icon(feature.icon, 25)}</span><span class="availability ${availability.tone}">${escapeHtml(availability.label)}</span></div>
+      <h2>${escapeHtml(feature.title)}</h2><p>${escapeHtml(feature.description)}</p>
+      <ul class="tool-card-capabilities">${feature.base.map((capability) => `<li>${escapeHtml(capability)}</li>`).join("")}</ul>
+      <button class="card-action ${availability.tone !== "ready" ? "restricted" : ""}" aria-label="${escapeHtml(availability.route ? `${availability.actionLabel}：${feature.title}` : `打开${feature.title}`)}" ${featureTarget(feature, availability)} ${availability.disabled ? "disabled" : ""}>${escapeHtml(availability.actionLabel)} ${icon("arrow", 17)}</button>
+    </article>`;
+  }).join("");
+  return `<section class="tool-category"><div class="tool-catalog-grid">${cards}</div></section>`;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -2779,10 +2769,16 @@ document.addEventListener("click", (event) => {
   const targetPage = target.dataset.page as Page | undefined;
   if (targetPage) {
     const enteringAccounts = targetPage === "accounts" && page !== "accounts";
+    const enteringToolCategory = targetPage === "import" || targetPage === "quality";
+    const activeFeatureId = activeWorkflow;
+    const activeGroup = activeFeatureId ? toolGroups.find((group) => group.featureIds.includes(activeFeatureId)) : undefined;
     instanceRefreshGeneration += 1;
     page = targetPage;
+    if (enteringToolCategory && (activeGroup?.id !== targetPage || workflowResult?.kind === "lyric-template")) {
+      activeWorkflow = undefined;
+      workflowResult = undefined;
+    }
     if (page === "lyrics" && workflowResult?.kind !== "lyric-template") workflowResult = undefined;
-    if (page === "toolbox" && workflowResult?.kind === "lyric-template") workflowResult = undefined;
     accountManagerOpen = false;
     notice = "";
     error = "";
@@ -2802,7 +2798,6 @@ document.addEventListener("click", (event) => {
   if (mode) { void run(async () => { app = await api.setMode(mode); notice = `已切换到${mode === "ai" ? " AI 模式" : "纯工具箱模式"}。`; }); return; }
   const agentWorkMode = target.dataset.agentWorkMode as AgentWorkMode | undefined;
   if (agentWorkMode) { void run(async () => { app = await api.setAgentWorkMode(agentWorkMode); notice = `Agent 已切换到 ${agentWorkMode === "solo" ? "Solo" : "Edit"} 模式。`; }); return; }
-  if (target.hasAttribute("data-enable-ai")) { page = "settings"; render(); return; }
   if (target.hasAttribute("data-check-toolbox-update")) {
     void run(async () => {
       toolboxUpdate = await api.checkToolboxUpdate();
@@ -2819,12 +2814,15 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (target.dataset.feature) {
-    page = "toolbox";
-    activeWorkflow = target.dataset.feature;
+    const featureId = target.dataset.feature;
+    const feature = features.find((item) => item.id === featureId);
+    const group = feature ? toolGroups.find((item) => item.featureIds.includes(feature.id)) : undefined;
+    if (!feature || !group) return;
+    page = group.id;
+    activeWorkflow = feature.id;
     workflowResult = undefined;
     syncManifest = undefined;
     notice = "";
-    const featureId = target.dataset.feature;
     if (featureId === "batch-recipes") void run(async () => { workflowRecipes = await api.listWorkflowRecipes(); });
     else if (featureId === "ab-audition") void run(async () => {
       audioCaptureCapability = await api.audioCaptureCapability();
