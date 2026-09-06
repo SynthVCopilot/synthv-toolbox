@@ -2141,8 +2141,10 @@ function renderBridgeProcessRows(): string {
     : `<div class="empty-inline compact-empty">${t("bridge.noProcesses")}</div>`;
 }
 
-function bridgeTargetKey(scriptsPath: string): string {
-  return scriptsPath.trim().replaceAll("\\", "/").toLocaleLowerCase();
+function bridgeTargetKey(scriptsPath: string, bridgeProfile: BridgeProfile): string {
+  const installer = bridgeProfile === "sv1" ? "sv1" : bridgeProfile === "unsupported" ? "unsupported" : "modern";
+  const path = scriptsPath.trim().replaceAll("\\", "/");
+  return `${installer}:${app?.platform === "windows" ? path.toLocaleLowerCase() : path}`;
 }
 
 function bridgeTargets(installations: SynthVInstallation[]): BridgeTarget[] {
@@ -2151,7 +2153,7 @@ function bridgeTargets(installations: SynthVInstallation[]): BridgeTarget[] {
     const scriptsPath = installation.scriptsPath?.trim();
     const bridgeProfile = installation.bridgeProfile;
     if (!scriptsPath || (bridgeProfile !== "sv1" && bridgeProfile !== "sv2" && bridgeProfile !== "flat")) continue;
-    const key = bridgeTargetKey(scriptsPath);
+    const key = bridgeTargetKey(scriptsPath, bridgeProfile);
     const current = targets.get(key);
     if (current) current.installations.push(installation);
     else targets.set(key, { scriptsPath, bridgeProfile, installations: [installation] });
@@ -2164,9 +2166,24 @@ function bridgeProfileLabel(profile: BridgeProfile): string {
 }
 
 function renderBridgeResult(target: BridgeTarget): string {
-  const result = bridgeTargetResults.get(bridgeTargetKey(target.scriptsPath));
+  const result = bridgeTargetResults.get(bridgeTargetKey(target.scriptsPath, target.bridgeProfile));
   if (!result) return "";
   return `<div class="inline-status ${result.succeeded ? "" : "error-text"}"><span class="status-dot ${result.succeeded ? "online" : ""}"></span><span><strong>${escapeHtml(result.summary)}</strong>${result.detail ? `<small>${escapeHtml(result.detail)}</small>` : ""}</span></div>`;
+}
+
+async function runBridgeTargets(
+  action: "install" | "diagnose",
+  targets: Pick<BridgeTarget, "scriptsPath" | "bridgeProfile">[],
+): Promise<void> {
+  const results = action === "diagnose" ? await api.diagnoseBridge(targets) : await api.installBridge(targets);
+  for (const item of results) {
+    bridgeTargetResults.set(bridgeTargetKey(item.scriptsPath, item.bridgeProfile as BridgeProfile), item.result);
+  }
+  const failed = results.filter((item) => !item.result.succeeded).length;
+  notice = failed
+    ? t("bridge.batchPartial", { completed: results.length - failed, failed })
+    : t("bridge.batchComplete", { count: results.length });
+  await refresh();
 }
 
 function renderBridge(): string {
@@ -2820,7 +2837,7 @@ function wireForms(): void {
         const results = action === "diagnose"
           ? await api.diagnoseBridge([{ scriptsPath, bridgeProfile }])
           : await api.installBridge([{ scriptsPath, bridgeProfile }]);
-        for (const item of results) bridgeTargetResults.set(bridgeTargetKey(item.scriptsPath), item.result);
+        for (const item of results) bridgeTargetResults.set(bridgeTargetKey(item.scriptsPath, item.bridgeProfile as BridgeProfile), item.result);
         if (action === "install" && results[0]?.result.succeeded) app = await api.saveScriptsPath(scriptsPath);
         setFeedback(results[0]?.result ?? { succeeded: false, summary: t("bridge.noTarget"), detail: t("bridge.enterDirectory") });
       }
@@ -2839,15 +2856,7 @@ function wireForms(): void {
     const targets = button.dataset.bridgeTarget
       ? [{ scriptsPath: button.dataset.scriptsPath ?? "", bridgeProfile: (button.dataset.bridgeProfile ?? "sv2") as BridgeProfile }]
       : app ? bridgeTargets(app.installations).map(({ scriptsPath, bridgeProfile }) => ({ scriptsPath, bridgeProfile })) : [];
-    void run(async () => {
-      const results = action === "diagnose" ? await api.diagnoseBridge(targets) : await api.installBridge(targets);
-      for (const item of results) bridgeTargetResults.set(bridgeTargetKey(item.scriptsPath), item.result);
-      const failed = results.filter((item) => !item.result.succeeded).length;
-      notice = failed
-        ? t("bridge.batchPartial", { completed: results.length - failed, failed })
-        : t("bridge.batchComplete", { count: results.length });
-      await refresh();
-    });
+    if (action === "install" || action === "diagnose") void run(() => runBridgeTargets(action, targets));
   }));
 }
 
