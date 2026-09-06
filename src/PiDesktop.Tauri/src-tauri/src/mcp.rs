@@ -353,7 +353,7 @@ impl McpManager {
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
             {
-                crate::project_backups::observe_value(value);
+                observe_mcp_response(value);
             }
         }
         result
@@ -405,6 +405,37 @@ pub fn extract_mcp_json(value: &Value) -> Result<Value, String> {
     let text = extract_mcp_text(value)
         .ok_or_else(|| "SynthV Bridge 没有返回可解析的文本结果。".to_string())?;
     serde_json::from_str(&text).map_err(|error| format!("SynthV Bridge 结果不是有效 JSON：{error}"))
+}
+
+fn observe_mcp_response(value: &Value) {
+    if let Some(object) = value.as_object() {
+        let mut non_text = object.clone();
+        non_text.remove("content");
+        crate::project_backups::observe_value(&Value::Object(non_text));
+    } else {
+        crate::project_backups::observe_value(value);
+    }
+    for parsed in mcp_json_values(value) {
+        crate::project_backups::observe_value(&parsed);
+    }
+}
+
+fn mcp_json_values(value: &Value) -> Vec<Value> {
+    let mut values = extract_mcp_json(value).into_iter().collect::<Vec<_>>();
+    let text_blocks = value
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|item| item.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    for text in text_blocks.into_iter().skip(1) {
+        if let Ok(parsed) = serde_json::from_str::<Value>(text) {
+            values.push(parsed);
+        }
+    }
+    values
 }
 
 fn extract_mcp_text(value: &Value) -> Option<String> {
@@ -460,7 +491,7 @@ impl ToolExecutor for McpToolExecutor {
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
                 if !is_error {
-                    crate::project_backups::observe_value(&value);
+                    observe_mcp_response(&value);
                 }
                 Ok(ToolResult {
                     tool_call_id: call.id.clone(),
@@ -533,30 +564,5 @@ fn namespaced_tool_name(id: &str, remote_name: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn external_tool_names_are_sanitized_and_bounded() {
-        let name = namespaced_tool_name("my.server", &"tool name/with spaces".repeat(8));
-        assert!(name.starts_with("mcp_my_server_"));
-        assert!(name.len() <= 64);
-        assert!(name
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-')));
-    }
-
-    #[test]
-    fn synthv_tools_keep_their_stable_public_names() {
-        let listed = json!({
-            "tools": [{
-                "name": "sv_status",
-                "description": "Read status",
-                "inputSchema": { "type": "object" }
-            }]
-        });
-        let tools = parse_tools("synthv", "SynthV Bridge", &listed);
-        assert_eq!(tools[0].definition.name, "sv_status");
-        assert_eq!(tools[0].remote_name, "sv_status");
-    }
-}
+#[path = "../../../../test/mcp_response_discovery.rs"]
+mod tests;

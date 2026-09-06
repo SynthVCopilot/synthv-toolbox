@@ -1611,7 +1611,7 @@ pub async fn preview_svp_route(
     project_path: String,
     state: State<'_, AppState>,
 ) -> Result<SvpRoutePlan, String> {
-    crate::project_backups::observe_path(&project_path);
+    observe_workflow_path(&project_path);
     let profiles = state.sv2_profiles.clone();
     tauri::async_runtime::spawn_blocking(move || profiles.preview_svp_route(project_path))
         .await
@@ -1625,7 +1625,7 @@ pub async fn launch_svp_route(
     mode: SvpLaunchMode,
     state: State<'_, AppState>,
 ) -> Result<OperationResult, String> {
-    crate::project_backups::observe_path(&project_path);
+    observe_workflow_path(&project_path);
     let settings = state.settings.read().await;
     if mode == SvpLaunchMode::Concurrent && !settings.sv2_concurrent_enabled {
         return Err("并发隔离功能已在全局设置中关闭。".to_string());
@@ -2176,7 +2176,7 @@ pub async fn create_project_checkpoint(
     project_path: String,
     label: String,
 ) -> Result<ProjectCheckpoint, String> {
-    crate::project_backups::observe_path(&project_path);
+    observe_workflow_path(&project_path);
     tauri::async_runtime::spawn_blocking(move || {
         creative_history::create_checkpoint(&project_path, &label)
     })
@@ -2340,7 +2340,7 @@ pub async fn load_lyric_project(id: String) -> Result<LyricProject, String> {
 
 #[tauri::command]
 pub async fn run_project_doctor(project_path: String) -> Result<WorkflowResult, String> {
-    crate::project_backups::observe_path(&project_path);
+    observe_workflow_path(&project_path);
     let parameters = json!({ "projectPath": project_path });
     let request = ProjectDoctorRequest { project_path };
     let report =
@@ -2362,7 +2362,7 @@ pub async fn run_pronunciation_diagnostics(
     lyrics: Option<String>,
 ) -> Result<WorkflowResult, String> {
     if let Some(path) = project_path.as_deref() {
-        crate::project_backups::observe_path(path);
+        observe_workflow_path(path);
     }
     let parameters = json!({
         "projectPath": project_path,
@@ -2619,7 +2619,7 @@ pub async fn run_batch_workflow(
     state: State<'_, AppState>,
 ) -> Result<BatchWorkflowResult, String> {
     for input_path in &input_paths {
-        crate::project_backups::observe_path(input_path);
+        observe_workflow_path(input_path);
     }
     if input_paths.is_empty() || input_paths.len() > 100 {
         return Err("批处理一次需要 1–100 个输入文件。".to_string());
@@ -2924,7 +2924,7 @@ pub async fn run_project_probe(
     project_path: String,
     state: State<'_, AppState>,
 ) -> Result<WorkflowResult, String> {
-    crate::project_backups::observe_path(&project_path);
+    observe_workflow_path(&project_path);
     let resource_dir = state.resource_dir.clone();
     let components_dir = state.components_dir.clone();
     let path_for_run = project_path.clone();
@@ -2949,7 +2949,7 @@ pub async fn add_project_reference(
     output_name: String,
     state: State<'_, AppState>,
 ) -> Result<WorkflowResult, String> {
-    crate::project_backups::observe_path(&project_path);
+    observe_workflow_path(&project_path);
     let resource_dir = state.resource_dir.clone();
     let components_dir = state.components_dir.clone();
     let run_project = project_path.clone();
@@ -2988,7 +2988,7 @@ pub async fn export_project_without_parameters(
     output_name: String,
     state: State<'_, AppState>,
 ) -> Result<WorkflowResult, String> {
-    crate::project_backups::observe_path(&project_path);
+    observe_workflow_path(&project_path);
     let resource_dir = state.resource_dir.clone();
     let components_dir = state.components_dir.clone();
     let run_project = project_path.clone();
@@ -3019,7 +3019,7 @@ pub async fn export_project_lyrics(
     word_output_name: String,
     state: State<'_, AppState>,
 ) -> Result<WorkflowResult, String> {
-    crate::project_backups::observe_path(&project_path);
+    observe_workflow_path(&project_path);
     let resource_dir = state.resource_dir.clone();
     let components_dir = state.components_dir.clone();
     let run_project = project_path.clone();
@@ -3354,7 +3354,7 @@ fn record_workflow_result(
     crate::project_backups::observe_value(&parameters);
     crate::project_backups::observe_value(&result.data);
     if let Some(path) = result.output_path.as_deref() {
-        crate::project_backups::observe_path(path);
+        observe_workflow_path(path);
     }
     if let Err(error) = creative_history::record(
         result.kind.clone(),
@@ -3369,6 +3369,21 @@ fn record_workflow_result(
         }
     }
     result
+}
+
+fn observe_workflow_path(value: &str) {
+    let path = Path::new(value.trim());
+    if path.is_absolute() {
+        crate::project_backups::observe_path(value);
+    } else if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("svp"))
+    {
+        if let Ok(current_dir) = std::env::current_dir() {
+            crate::project_backups::observe_path(&current_dir.join(path).to_string_lossy());
+        }
+    }
 }
 
 fn batch_recipe_title(recipe_id: &str) -> &'static str {

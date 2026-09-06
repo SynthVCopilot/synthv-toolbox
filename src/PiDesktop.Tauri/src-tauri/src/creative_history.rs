@@ -198,6 +198,11 @@ pub fn record(
     parameters: Value,
     result: Value,
 ) -> Result<CreativeHistoryEntry, String> {
+    observe_project_value(&parameters);
+    observe_project_value(&result);
+    if let Some(path) = output_path.as_deref() {
+        observe_project_path(path);
+    }
     let kind = validate_kind(kind.into())?;
     let entry = CreativeHistoryEntry {
         id: Uuid::new_v4().to_string(),
@@ -424,6 +429,38 @@ fn escape_markdown(value: &str) -> String {
 
 fn history_dir() -> PathBuf {
     crate::agent::data_root().join("creative-history")
+}
+
+fn observe_project_value(value: &Value) {
+    match value {
+        Value::String(path) => observe_project_path(path),
+        Value::Array(values) => {
+            for value in values {
+                observe_project_value(value);
+            }
+        }
+        Value::Object(values) => {
+            for value in values.values() {
+                observe_project_value(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn observe_project_path(value: &str) {
+    let path = Path::new(value.trim());
+    if path.is_absolute() {
+        crate::project_backups::observe_path(value);
+    } else if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("svp"))
+    {
+        if let Ok(current_dir) = std::env::current_dir() {
+            crate::project_backups::observe_path(&current_dir.join(path).to_string_lossy());
+        }
+    }
 }
 
 fn checkpoint_dir() -> PathBuf {
