@@ -2402,6 +2402,12 @@ function wireForms(): void {
 }
 
 async function sendPrompt(input: string): Promise<void> {
+  if (!activeAiProvider()?.connected) {
+    aiProviderPickerOpen = true;
+    syncModelAuthDialog();
+    refreshAiCatalogLive();
+    return;
+  }
   await run(async () => {
     if (!conversation) conversation = await api.newConversation();
     const optimistic: ChatMessage = { role: "user", content: input };

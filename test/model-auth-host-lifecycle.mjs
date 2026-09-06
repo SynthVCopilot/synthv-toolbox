@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { readFile } from "node:fs/promises";
+import { stripTypeScriptTypes } from "node:module";
 import { JSDOM } from "../src/PiDesktop.Tauri/node_modules/jsdom/lib/api.js";
 import { mountModelAuthDialog } from "../src/PiDesktop.Tauri/src/modelAuthDialog.ts";
 
@@ -29,6 +31,23 @@ function deferred() {
   const promise = new Promise((done, fail) => { resolve = done; reject = fail; });
   return { promise, resolve, reject };
 }
+
+test("未配置连接时发送会打开认证弹窗，不创建对话或发起模型请求", async () => {
+  const source = await readFile(new URL("../src/PiDesktop.Tauri/src/main.ts", import.meta.url), "utf8");
+  const body = source.slice(source.indexOf("async function sendPrompt("), source.indexOf("async function refreshAiProviderSummary("));
+  const run = () => assert.fail("must not start a model request");
+  for (const provider of [undefined, { connected: false }]) {
+    let opened = 0, refreshed = 0;
+    const harness = new Function("activeAiProvider", "syncModelAuthDialog", "refreshAiCatalogLive", "run",
+      `let aiProviderPickerOpen = false; ${stripTypeScriptTypes(body)}; return { sendPrompt, isOpen: () => aiProviderPickerOpen };`)(
+      () => provider, () => opened++, () => refreshed++, run,
+    );
+    await harness.sendPrompt("test draft");
+    assert.equal(harness.isOpen(), true);
+    assert.equal(opened, 1);
+    assert.equal(refreshed, 1);
+  }
+});
 
 test("页面重绘只同步状态，不重新挂载或重复绑定动作", async () => {
   const f = fixture();
