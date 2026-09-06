@@ -26,7 +26,7 @@ const pageOrder: ShellPage[] = [
   "settings",
 ];
 
-const pageTransition = ref("page-block-forward");
+const pageMotion = ref("");
 
 const pageComponent = computed(() => {
   if (props.page === "accounts") return AccountsPageBlock;
@@ -36,7 +36,7 @@ const pageComponent = computed(() => {
 
 watch(() => props.page, (next, previous) => {
   if (next === previous) return;
-  pageTransition.value = pageOrder.indexOf(next) >= pageOrder.indexOf(previous)
+  pageMotion.value = pageOrder.indexOf(next) >= pageOrder.indexOf(previous)
     ? "page-block-forward"
     : "page-block-backward";
 });
@@ -45,10 +45,6 @@ watch(() => props.page, (next, previous) => {
 <template>
   <section id="page-content" class="content" :class="{ 'content-flush': page === 'copilot' }">
     <FeedbackStack :notice-html="noticeHtml" :error-html="errorHtml" />
-    <div class="page-block-host">
-      <Transition :name="pageTransition">
-        <component :is="pageComponent" :key="page" :html="html" />
-      </Transition>
-    </div>
+    <component :is="pageComponent" :key="page" :html="html" :class="pageMotion" />
   </section>
 </template>
