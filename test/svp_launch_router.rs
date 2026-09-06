@@ -75,6 +75,7 @@ fn route_slot(
         last_activated_at_utc: None,
         is_active: false,
         session_cached: true,
+        installed_voice_ids: Vec::new(),
         data_path: format!("test/{id}"),
         session_protection: ready_session_protection(),
         concurrent_session_protection: ready_session_protection(),
