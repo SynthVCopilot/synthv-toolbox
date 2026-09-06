@@ -360,7 +360,10 @@ pub fn install_bridge(bridge_dir: &Path, scripts_path: &str) -> OperationResult 
     )
 }
 
-pub fn install_bridge_many(bridge_dir: &Path, targets: Vec<BridgeTarget>) -> Vec<BridgeTargetResult> {
+pub fn install_bridge_many(
+    bridge_dir: &Path,
+    targets: Vec<BridgeTarget>,
+) -> Vec<BridgeTargetResult> {
     unique_bridge_targets(targets)
         .into_iter()
         .map(|target| {
@@ -372,7 +375,10 @@ pub fn install_bridge_many(bridge_dir: &Path, targets: Vec<BridgeTarget>) -> Vec
                     &target.scripts_path,
                 ),
                 BridgeProfile::Flat => install_bridge(bridge_dir, &target.scripts_path),
-                BridgeProfile::Unsupported => failed("此 SynthV 版本不支持安装 Bridge 脚本。", "请使用已支持的 SV1 或 SV2 scripts 目录。"),
+                BridgeProfile::Unsupported => failed(
+                    "此 SynthV 版本不支持安装 Bridge 脚本。",
+                    "请使用已支持的 SV1 或 SV2 scripts 目录。",
+                ),
             };
             BridgeTargetResult {
                 scripts_path: target.scripts_path,
@@ -387,17 +393,33 @@ pub fn diagnose_bridge_many(targets: Vec<BridgeTarget>) -> Vec<BridgeTargetResul
     unique_bridge_targets(targets)
         .into_iter()
         .map(|target| {
-            let required_file = match target.bridge_profile {
+            let expected_bundle = match target.bridge_profile {
                 BridgeProfile::Sv2 | BridgeProfile::Flat => Some("SynthV Agent Bridge"),
-                BridgeProfile::Sv1 => Some("SynthV Agent Bridge SV1 Legacy/SynthVAgentBridgeSV1Legacy.lua"),
+                BridgeProfile::Sv1 => Some("SynthV Agent Bridge SV1 Legacy"),
                 BridgeProfile::Unsupported => None,
             };
-            let result = match required_file {
-                Some(file) if bridge_script_bundle_is_valid(Path::new(&target.scripts_path).join(file).as_path(), target.bridge_profile) => {
-                    succeeded("Bridge 脚本已安装。", "已验证 Bridge、停止和侧栏脚本。")
+            let result = match expected_bundle {
+                Some(_)
+                    if bridge_script_bundle_is_valid(
+                        Path::new(&target.scripts_path),
+                        target.bridge_profile,
+                    ) =>
+                {
+                    let detail = if target.bridge_profile == BridgeProfile::Sv1 {
+                        "已验证 SV1 兼容脚本与协议版本。"
+                    } else {
+                        "已验证 Bridge、停止和侧栏脚本版本。"
+                    };
+                    succeeded("Bridge 脚本已安装。", detail)
                 }
-                Some(file) => failed("Bridge 脚本尚未安装。", format!("缺少 {file}")),
-                None => failed("此 SynthV 版本不支持 Bridge 脚本。", "请选择 SV1 或 SV2 scripts 目录。"),
+                Some(bundle) => failed(
+                    "Bridge 脚本尚未安装或版本不匹配。",
+                    format!("缺少或未匹配 {bundle}"),
+                ),
+                None => failed(
+                    "此 SynthV 版本不支持 Bridge 脚本。",
+                    "请选择 SV1 或 SV2 scripts 目录。",
+                ),
             };
             BridgeTargetResult {
                 scripts_path: target.scripts_path,
@@ -409,18 +431,26 @@ pub fn diagnose_bridge_many(targets: Vec<BridgeTarget>) -> Vec<BridgeTargetResul
 }
 
 fn bridge_script_bundle_is_valid(directory: &Path, profile: BridgeProfile) -> bool {
-    let required = match profile {
-        BridgeProfile::Sv1 => ["SynthVAgentBridgeSV1Legacy.lua"].as_slice(),
-        BridgeProfile::Sv2 | BridgeProfile::Flat => ["SynthVAgentBridge.lua", "StopSynthVAgentBridge.lua", "SynthVAgentSidebar.lua"].as_slice(),
-        BridgeProfile::Unsupported => return false,
-    };
-    required.iter().all(|file| {
-        let Ok(content) = std::fs::read_to_string(directory.join(file)) else {
-            return false;
-        };
-        content.len() > 512
-    }) && std::fs::read_to_string(directory.join(required[0]))
-        .is_ok_and(|content| content.contains("BRIDGE_VERSION"))
+    const COMPONENT_VERSION: &str = "0.3.1";
+    match profile {
+        BridgeProfile::Sv1 => std::fs::read_to_string(
+            directory.join("SynthV Agent Bridge SV1 Legacy/SynthVAgentBridgeSV1Legacy.lua"),
+        )
+        .is_ok_and(|content| {
+            content.contains("SCRIPT_NAME = \"SynthV Agent Bridge SV1 Legacy\"")
+                && content.contains("PROTOCOL_VERSION = 1")
+        }),
+        BridgeProfile::Sv2 | BridgeProfile::Flat => {
+            let directory = directory.join("SynthV Agent Bridge");
+            let bridge = std::fs::read_to_string(directory.join("SynthVAgentBridge.lua"));
+            let stop = std::fs::read_to_string(directory.join("StopSynthVAgentBridge.lua"));
+            let sidebar = std::fs::read_to_string(directory.join("SynthVAgentSidebar.lua"));
+            matches!(bridge, Ok(ref content) if content.contains(&format!("BRIDGE_VERSION = \"{COMPONENT_VERSION}\"")) && content.contains("PROTOCOL_VERSION = 3"))
+                && matches!(stop, Ok(ref content) if content.contains("BRIDGE_NAME = \"SynthV Agent Bridge\""))
+                && matches!(sidebar, Ok(ref content) if content.contains(&format!("SIDEBAR_VERSION = \"{COMPONENT_VERSION}\"")) && content.contains("SIDEBAR_BUILD_ID"))
+        }
+        BridgeProfile::Unsupported => false,
+    }
 }
 
 pub fn unique_bridge_targets(targets: Vec<BridgeTarget>) -> Vec<BridgeTarget> {

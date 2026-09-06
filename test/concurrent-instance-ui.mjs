@@ -99,6 +99,7 @@ const sample = {
 const renderContext = vm.createContext({
   busy: false, synthvProcesses: [sample], profiles: { activeSlotId: 'sample', slots: [slot('sample', [])] },
   instanceAccount, instanceProjectTitle,
+  t: key => ({ 'bridge.unlinkedAccount': '未关联账号', 'bridge.focus': '切换到', 'bridge.terminate': '终止', 'bridge.details': '详情', 'bridge.noInstances': '当前没有检测到 SynthV 实例。' }[key] ?? key),
   escapeHtml: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;'),
 });
 vm.runInContext(stripTypeScriptTypes(source.slice(renderStart, renderEnd)), renderContext);
