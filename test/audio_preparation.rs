@@ -1030,6 +1030,17 @@ fn artifacts_only_exist_after_completed_regular_output_and_revalidate_links() {
         .register_completed_artifact(&output.to_string_lossy(), &root, "pcm-prepare")
         .unwrap();
     assert!(service.audio_artifact_info(&artifact).is_ok());
+    fs::write(&output, b"replacement audio payload").unwrap();
+    assert!(service.audio_artifact_info(&artifact).is_err());
+    assert!(service.validated_generated_artifact(&artifact).is_err());
+    let request = http::Request::builder()
+        .uri(format!("toolbox-audio://localhost/{artifact}"))
+        .body(Vec::new())
+        .unwrap();
+    assert_eq!(
+        service.serve_audio_artifact_request(&request).status(),
+        http::StatusCode::NOT_FOUND
+    );
     #[cfg(unix)]
     {
         let outside = case_root.join("outside.wav");

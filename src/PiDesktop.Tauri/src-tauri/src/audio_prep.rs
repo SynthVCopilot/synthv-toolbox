@@ -223,6 +223,8 @@ struct AudioArtifact {
 enum AudioArtifactLocation {
     Generated {
         canonical_output_root: PathBuf,
+        byte_length: u64,
+        modified_at: Option<SystemTime>,
     },
     Source {
         canonical_source: PathBuf,
@@ -921,6 +923,8 @@ impl AudioPreparationService {
     ) -> Result<String, String> {
         let output = Path::new(output);
         validate_completed_output(&self.output_root, output)?;
+        let metadata = fs::metadata(output)
+            .map_err(|error| format!("Unable to inspect the completed audio output: {error}"))?;
         let current_root = fs::canonicalize(&self.output_root).map_err(|error| {
             format!("Unable to validate the completed output directory: {error}")
         })?;
@@ -939,6 +943,8 @@ impl AudioPreparationService {
                     path: output.to_path_buf(),
                     location: AudioArtifactLocation::Generated {
                         canonical_output_root: current_root,
+                        byte_length: metadata.len(),
+                        modified_at: metadata.modified().ok(),
                     },
                     operation: operation.to_string(),
                     mime_type: Some("audio/wav".to_string()),
@@ -962,6 +968,8 @@ impl AudioPreparationService {
         match &artifact.location {
             AudioArtifactLocation::Generated {
                 canonical_output_root,
+                byte_length,
+                modified_at,
             } => {
                 validate_completed_output(&self.output_root, &artifact.path)?;
                 let current_root = fs::canonicalize(&self.output_root).map_err(|error| {
@@ -972,6 +980,11 @@ impl AudioPreparationService {
                         "Audio result is no longer available because its output directory changed."
                             .to_string(),
                     );
+                }
+                let metadata = fs::metadata(&artifact.path)
+                    .map_err(|_| "Audio result is no longer available.".to_string())?;
+                if metadata.len() != *byte_length || metadata.modified().ok() != *modified_at {
+                    return Err("Audio result changed after it was completed.".to_string());
                 }
             }
             AudioArtifactLocation::Source {
