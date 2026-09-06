@@ -455,3 +455,7 @@ mod tests {
         assert!(result.is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../../test/provider_auth_capability_traecode.rs"]
+mod provider_auth_capability_traecode;
