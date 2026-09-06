@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
@@ -32,35 +32,10 @@ pub async fn run_managed_process(
     run_managed_command(command, cancelled, label).await
 }
 
-pub async fn run_managed_process_with_timeout(
-    program: &Path,
-    args: &[String],
-    cancelled: &AtomicBool,
-    label: &str,
-    timeout: Duration,
-) -> Result<ManagedProcessOutput, String> {
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    run_managed_command_with_timeout(command, cancelled, label, Some(timeout)).await
-}
-
 pub async fn run_managed_command(
-    command: Command,
-    cancelled: &AtomicBool,
-    label: &str,
-) -> Result<ManagedProcessOutput, String> {
-    run_managed_command_with_timeout(command, cancelled, label, None).await
-}
-
-async fn run_managed_command_with_timeout(
     mut command: Command,
     cancelled: &AtomicBool,
     label: &str,
-    timeout: Option<Duration>,
 ) -> Result<ManagedProcessOutput, String> {
     if cancelled.load(Ordering::Acquire) {
         return Err(format!("{label}已取消。"));
@@ -96,7 +71,6 @@ async fn run_managed_command_with_timeout(
     let mut stdout_result = None;
     let mut stderr_result = None;
 
-    let started_at = Instant::now();
     let status = loop {
         if cancelled.load(Ordering::Acquire) {
             process_tree.terminate(&mut child).await?;
@@ -107,16 +81,6 @@ async fn run_managed_command_with_timeout(
                 let _ = stderr_task.await;
             }
             return Err(format!("{label}已取消。"));
-        }
-        if timeout.is_some_and(|duration| started_at.elapsed() >= duration) {
-            process_tree.terminate(&mut child).await?;
-            if stdout_result.is_none() {
-                let _ = stdout_task.await;
-            }
-            if stderr_result.is_none() {
-                let _ = stderr_task.await;
-            }
-            return Err(format!("{label}超时。"));
         }
         if let Some(status) = child
             .try_wait()

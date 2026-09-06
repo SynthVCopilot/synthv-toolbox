@@ -600,13 +600,22 @@ fn runtime_source_priority_is_explicit_managed_bundled_then_path() {
     assert_eq!(runtime.source, "explicit");
 
     let runtime = resolve_runtime_from_candidates(
-        Some(root.join("missing")),
-        Some(managed),
+        None,
+        Some(managed.clone()),
         bundled.clone(),
         vec![path.clone()],
     )
     .unwrap();
     assert_eq!(runtime.source, "managed");
+
+    let error = resolve_runtime_from_candidates(
+        Some(root.join("missing")),
+        Some(managed),
+        bundled.clone(),
+        vec![path.clone()],
+    )
+    .unwrap_err();
+    assert!(error.contains("已选择的 FFmpeg 目录"));
 
     let runtime = resolve_runtime_from_candidates(None, None, bundled, vec![path.clone()]).unwrap();
     assert_eq!(runtime.source, "bundled");
@@ -615,6 +624,32 @@ fn runtime_source_priority_is_explicit_managed_bundled_then_path() {
         resolve_runtime_from_candidates(None, None, root.join("missing-bundle"), vec![path])
             .unwrap();
     assert_eq!(runtime.source, "path");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn selected_ffmpeg_directory_requires_executable_pair_and_returns_an_absolute_path() {
+    let directory = fake_runtime_root().join("ffmpeg");
+    let selected = crate::components::validate_ffmpeg_directory(&directory.to_string_lossy())
+        .await
+        .unwrap();
+    assert!(selected.is_absolute());
+
+    let root =
+        temporary_test_base().join(format!("synthv-toolbox-nonexecutable-{}", Uuid::new_v4()));
+    fs::create_dir_all(&root).unwrap();
+    let (ffmpeg_name, ffprobe_name) = if cfg!(windows) {
+        ("ffmpeg.exe", "ffprobe.exe")
+    } else {
+        ("ffmpeg", "ffprobe")
+    };
+    fs::write(root.join(ffmpeg_name), b"not an executable").unwrap();
+    fs::write(root.join(ffprobe_name), b"not an executable").unwrap();
+    assert!(
+        crate::components::validate_ffmpeg_directory(&root.to_string_lossy())
+            .await
+            .is_err()
+    );
     fs::remove_dir_all(root).unwrap();
 }
 

@@ -1568,6 +1568,24 @@ async fn ffmpeg_status(runtime: Result<Runtime, String>) -> FfmpegRuntimeStatus 
     }
 }
 
+pub(crate) async fn validate_ffmpeg_binaries(ffmpeg: &Path, ffprobe: &Path) -> Result<(), String> {
+    for (name, binary) in [("ffmpeg", ffmpeg), ("ffprobe", ffprobe)] {
+        let output = run_captured_process(
+            binary.as_os_str(),
+            vec![OsString::from("-version")],
+            Duration::from_secs(8),
+            None,
+            &format!("{name} 版本检查"),
+        )
+        .await
+        .map_err(|error| format!("无法运行 {name} 进行版本检查：{error}"))?;
+        if !output.status.success() {
+            return Err(format!("{name} 版本检查失败。"));
+        }
+    }
+    Ok(())
+}
+
 async fn probe_media_with_runtime(runtime: &Runtime, path: String) -> Result<MediaProbe, String> {
     probe_media_with_runtime_inner(runtime, path, None).await
 }

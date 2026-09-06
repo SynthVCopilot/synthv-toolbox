@@ -1417,22 +1417,8 @@ pub async fn validate_ffmpeg_directory(directory: &str) -> Result<PathBuf, Strin
     let (ffmpeg, ffprobe) = find_ffmpeg_pair(&root).ok_or_else(|| {
         "目录必须是包含 ffmpeg 和 ffprobe 的解压根目录，或其 bin 目录。".to_string()
     })?;
-    let cancelled = AtomicBool::new(false);
-    for (name, binary) in [("ffmpeg", ffmpeg), ("ffprobe", ffprobe)] {
-        let output = crate::managed_process::run_managed_process_with_timeout(
-            &binary,
-            &["-version".to_string()],
-            &cancelled,
-            &format!("{name} 版本检查"),
-            Duration::from_secs(8),
-        )
-        .await
-        .map_err(|error| format!("无法运行 {name} 进行版本检查：{error}"))?;
-        if !output.status.success() {
-            return Err(format!("{name} 版本检查失败。"));
-        }
-    }
-    Ok(root)
+    crate::audio_prep::validate_ffmpeg_binaries(&ffmpeg, &ffprobe).await?;
+    fs::canonicalize(root).map_err(|error| format!("无法规范化 FFmpeg 目录：{error}"))
 }
 
 fn sandboxie_download_directory() -> PathBuf {

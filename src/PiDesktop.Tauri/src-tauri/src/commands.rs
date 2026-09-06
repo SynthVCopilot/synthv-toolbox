@@ -75,15 +75,16 @@ use crate::synthv::{
     OperationResult, SynthVInstallation,
 };
 
+use crate::synthv_control::{self, BridgeShortcutAction, SynthVProcess, SynthVShortcutProfile};
+use crate::tuning_profiles::{self, TuningParameters, TuningProfile};
+use crate::workbuddy_store;
+use crate::workflows::{self, WorkflowResult};
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FfmpegConfiguration {
     pub directory: Option<String>,
 }
-use crate::synthv_control::{self, BridgeShortcutAction, SynthVProcess, SynthVShortcutProfile};
-use crate::tuning_profiles::{self, TuningParameters, TuningProfile};
-use crate::workbuddy_store;
-use crate::workflows::{self, WorkflowResult};
 
 static AUTHORIZATIONS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
 
