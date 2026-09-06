@@ -2,6 +2,7 @@ import { addMessages } from "./i18n";
 
 addMessages("zh-CN", {
   bridge: {
+    shortcuts: "{start} 触发 Bridge 启动或重连，{stop} 触发停止；Cover 保存使用 {save}。快捷键发送到被聚焦的 SynthV 进程。",
     noProcesses: "没有发现正在运行的 SynthV 进程。",
     startConnect: "F13 启动并连接",
     stop: "F14 停止",
@@ -51,6 +52,7 @@ addMessages("zh-CN", {
 
 addMessages("en", {
   bridge: {
+    shortcuts: "{start} starts or reconnects Bridge; {stop} stops it. Cover saves with {save}. Shortcuts are sent to the focused SynthV process.",
     noProcesses: "No running SynthV processes were found.",
     startConnect: "Start and connect (F13)",
     stop: "Stop (F14)",
