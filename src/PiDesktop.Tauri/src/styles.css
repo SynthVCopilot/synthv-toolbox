@@ -961,7 +961,7 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .ai-provider-summary strong, .ai-provider-summary small { display: block; }
 .ai-provider-summary strong { font-size: 13px; font-weight: 600; }
 .ai-provider-summary small { overflow: hidden; margin-top: 4px; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.ai-provider-summary > button { flex: 0 0 auto; white-space: nowrap; }
+.ai-provider-panel .section-heading > button { flex: 0 0 auto; white-space: nowrap; }
 .ai-provider-mark { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 7px; font-size: 14px; font-weight: 700; }
 .ai-provider-mark.claude { color: #a34f2c; background: color-mix(in srgb,#d97745 11%,var(--surface-solid)); }
 .ai-provider-mark.codex { color: var(--primary); background: var(--primary-soft); }
@@ -1429,7 +1429,6 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
   .chat-model-button { max-width: calc(100vw - 142px); }
   .chat-work-mode button { min-width: 42px; padding-inline: 7px; }
   .ai-provider-summary { align-items: stretch; flex-direction: column; }
-  .ai-provider-summary > button { width: 100%; }
   .ai-provider-picker-backdrop { padding: 12px; }
   .ai-auth-method-choice { grid-template-columns: 1fr; }
   .ai-auth-method-card { min-height: 112px; }

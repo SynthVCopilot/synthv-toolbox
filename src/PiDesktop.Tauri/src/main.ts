@@ -2497,9 +2497,9 @@ function renderAiProviderSettings(): string {
     : "";
   const activeProvider = activeAiProvider();
   const activeVerified = Boolean(activeProvider && (activeProvider.accounts.some((account) => account.authorized) || activeProvider.apiKeys.length));
-  const activeStatus = activeProvider ? t("settings.oauthSummary", { count: activeProvider.accounts.filter((account) => account.authorized).length, keys: activeProvider.apiKeys.length }) : t("settings.notConfigured");
-  return `<section class="panel ai-provider-panel"><div class="section-heading"><div><h2>${t("settings.providers")}</h2><p>${t("settings.providersDescription")}</p></div><span class="availability ${activeVerified ? "ready" : "warning"}">${activeStatus}</span></div>
-    ${legacyWarning}<div class="ai-provider-summary"><div><strong>${escapeHtml(activeProvider ? aiProviderDisplayName(activeProvider) : t("settings.noProvider"))}</strong><small>${escapeHtml(activeProvider?.model || t("settings.chooseProvider"))}</small></div><button type="button" class="primary" data-open-ai-provider-picker ${busy ? "disabled" : ""}>${t("settings.addProvider")}</button></div>
+  const activeStatus = activeVerified && activeProvider ? t("settings.oauthSummary", { count: activeProvider.accounts.filter((account) => account.authorized).length, keys: activeProvider.apiKeys.length }) : t("settings.notConfigured");
+  return `<section class="panel ai-provider-panel"><div class="section-heading"><div><h2>${t("settings.providers")}</h2><p>${t("settings.providersDescription")}</p></div><button type="button" class="primary" data-open-ai-provider-picker ${busy ? "disabled" : ""}>${t("accountUi.addConnection")}</button></div>
+    ${legacyWarning}<div class="ai-provider-summary"><div><strong>${escapeHtml(activeVerified && activeProvider ? aiProviderDisplayName(activeProvider) : t("accountUi.noConnectedProvider"))}</strong><small>${escapeHtml(activeVerified ? activeProvider?.model || t("accountUi.chooseModel") : t("accountUi.addCredentialsFirst"))}</small></div><span class="availability ${activeVerified ? "ready" : "warning"}">${activeStatus}</span></div>
   </section>`;
 }
 

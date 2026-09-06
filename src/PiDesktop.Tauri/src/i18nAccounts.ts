@@ -9,6 +9,7 @@ addMessages("zh-CN", { accounts: { unsupported: "当前平台不支持账号槽�
 addMessages("en", { accounts: { unsupported: "Account slots are unavailable on this platform", blocked: "Standard slots cannot be switched right now", recovery: "This slot needs manual recovery", recheck: "Check again", officialPath: "Official path", vault: "Vault", neverLaunched: "Not launched yet", pending: "Account information needs refresh", signedOut: "Signed out", note: "Note: {name}", noNote: "No note", default: "Default", addFirst: "Add your first account", addFirstDescription: "Import the current environment or create an empty slot", settings: "Account settings", manager: "Account manager", close: "Close", saveNote: "Save note", setDefault: "Make default", openData: "Open account data folder", delete: "Delete account", noAccounts: "No accounts yet. Add a slot first.", global: "Global settings", saveGlobal: "Save global settings", enableIndicator: "Enable account sign-in indicator", enableIsolation: "Enable isolation", importCurrent: "Import current environment", createEmpty: "Create empty slot", import: "Import", create: "Create", notePlaceholder: "Note (optional)", consentTitle: "Enable the account sign-in indicator?", consentConfirm: "Accept and enable", cancel: "Cancel", deleteTitle: "Delete {name}?", deleteConfirm: "Delete account", switchDefault: "Switch default account", refresh: "Refresh account status", configure: "Settings", concurrentTitle: "Concurrent isolation is not officially supported", concurrentContinue: "I understand the risk and want to continue", consentDescription: "When enabled, account authorization can be checked from the accounts page or manually.", deleteDescription: "This permanently removes the account data, isolated-environment configuration, and sign-in recovery snapshot." } });
 
 addMessages("zh-CN", { accountUi: {
+  addConnection: "添加连接", noConnectedProvider: "尚未连接模型提供商", chooseModel: "请选择模型。", addCredentialsFirst: "添加 OAuth 订阅或 API Key 后即可选择模型。",
   "toolboxDoesNotModifySvBypassAccountRestrictionsOr": "工具箱不会修改 SV2、绕过账号限制或代为踢出其他会话。继续即表示你已知晓并自行承担这一使用风险。",
   "thisSlot": "此槽位",
   "theCheckReadsOfficialAuthorizationsIfTheSessionHas": "查询会读取官方授权；如果会话过期，工具箱会续期并保存更新后的会话。",
@@ -195,6 +196,7 @@ addMessages("zh-CN", { accountUi: {
   "onAColdStartOrWhenThisFeatureIs": "冷启动或关闭此功能时，工具箱会把工程透明转交给原始 .svp 处理程序；不会监控、终止或劫持已经启动的 SV2。路由优先采用账号服务返回的授权摘要，并以你的确认记录作为补充；任何未知结果都必须由你选择账号。"
 } });
 addMessages("en", { accountUi: {
+  addConnection: "Add connection", noConnectedProvider: "No model provider connected", chooseModel: "Choose a model.", addCredentialsFirst: "Add an OAuth subscription or API key to choose a model.",
   "toolboxDoesNotModifySvBypassAccountRestrictionsOr": "Toolbox does not modify SV2, bypass account restrictions, or disconnect other sessions. Continuing means you understand and accept this risk.",
   "thisSlot": "this slot",
   "theCheckReadsOfficialAuthorizationsIfTheSessionHas": "The check reads official authorizations. If the session has expired, Toolbox renews it and saves the updated session.",
