@@ -324,7 +324,7 @@ pub fn run() {
             commands::configure_http_api,
         ])
         .run(tauri::generate_context!())
-        .expect("failed to run Synthesizer V Tool Box");
+        .expect("failed to run Synthesizer V Toolbox");
 }
 
 fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
@@ -332,7 +332,7 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         return Ok(());
     }
     let menu = MenuBuilder::new(app)
-        .text(TRAY_SHOW_ID, "打开 Synthesizer V Tool Box")
+        .text(TRAY_SHOW_ID, "打开 Synthesizer V Toolbox")
         .separator()
         .text(TRAY_QUIT_ID, "退出")
         .build()?;
@@ -340,7 +340,7 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let mut tray = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .show_menu_on_left_click(cfg!(target_os = "macos"))
-        .tooltip("Synthesizer V Tool Box")
+        .tooltip("Synthesizer V Toolbox")
         .on_menu_event(|app, event| match event.id().as_ref() {
             TRAY_SHOW_ID => show_main_window(app),
             TRAY_QUIT_ID => app.exit(0),
@@ -372,7 +372,7 @@ fn promote_to_interactive(app: &tauri::AppHandle) {
         .svp_passthrough_only
         .store(false, Ordering::Release);
     if let Err(error) = setup_tray(app) {
-        eprintln!("failed to create Synthesizer V Tool Box tray icon: {error}");
+        eprintln!("failed to create Synthesizer V Toolbox tray icon: {error}");
     }
     show_main_window(app);
 }

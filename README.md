@@ -1,6 +1,6 @@
-# Synthesizer V Tool Box
+# Synthesizer V Toolbox
 
-Synthesizer V Tool Box 是面向 Synthesizer V 创作流程的桌面工具箱，支持 Windows 和 macOS。它把常用的音频、MIDI、工程文件和 Bridge 工具集中在一个应用中；需要时也可启用 AI 辅助功能。
+Synthesizer V Toolbox 是面向 Synthesizer V 创作流程的桌面工具箱，支持 Windows 和 macOS。它把常用的音频、MIDI、工程文件和 Bridge 工具集中在一个应用中；需要时也可启用 AI 辅助功能。
 
 ## 主要功能
 

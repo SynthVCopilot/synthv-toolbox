@@ -2,7 +2,7 @@
 
 > 状态：方案评估与实施指导
 >
-> 适用项目：Synthesizer V Tool Box
+> 适用项目：Synthesizer V Toolbox
 
 ## 结论
 

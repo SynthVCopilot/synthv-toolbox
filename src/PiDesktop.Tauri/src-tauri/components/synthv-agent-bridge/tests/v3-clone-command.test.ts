@@ -357,7 +357,7 @@ test("record_ai_usage writes explicit guarded Track plugin data", async (context
           trackIndex: 2,
           trackFingerprint: "main-group:private-track-uuid",
           usage: "assisted",
-          agent: "Synthesizer V Tool Box",
+          agent: "Synthesizer V Toolbox",
           model: "configured-model",
         },
       },
@@ -369,7 +369,7 @@ test("record_ai_usage writes explicit guarded Track plugin data", async (context
     trackIndex: 2,
     trackFingerprint: "main-group:private-track-uuid",
     usage: "assisted",
-    agent: "Synthesizer V Tool Box",
+    agent: "Synthesizer V Toolbox",
     model: "configured-model",
   });
   assert.equal(result.outcome, "changed");

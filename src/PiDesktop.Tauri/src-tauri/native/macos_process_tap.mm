@@ -176,7 +176,7 @@ extern "C" void* synthv_macos_process_tap_start(uint32_t process_id, const char*
         if (status != noErr || process == kAudioObjectUnknown) { write_error(error, error_capacity, "目标 PID 不是当前 Core Audio 客户端；请确认已选择正在运行并输出音频的 SynthV 进程。"); delete capture; return nullptr; }
         @autoreleasepool {
             CATapDescription* description = [[CATapDescription alloc] initStereoMixdownOfProcesses:@[@(process)]];
-            description.name = @"Synthesizer V Tool Box Process Tap";
+            description.name = @"Synthesizer V Toolbox Process Tap";
             description.privateTap = YES;
             description.muteBehavior = CATapUnmuted;
             status = AudioHardwareCreateProcessTap(description, &capture->tap);
@@ -190,7 +190,7 @@ extern "C" void* synthv_macos_process_tap_start(uint32_t process_id, const char*
         NSString* uid = (__bridge_transfer NSString*)tap_uid;
         NSString* aggregate_uid = [NSUUID UUID].UUIDString;
         NSDictionary* tap_entry = @{ @kAudioSubTapUIDKey: uid };
-        NSDictionary* aggregate_description = @{ @kAudioAggregateDeviceNameKey: @"Synthesizer V Tool Box Private Capture", @kAudioAggregateDeviceUIDKey: aggregate_uid, @kAudioAggregateDeviceIsPrivateKey: @YES, @kAudioAggregateDeviceTapListKey: @[tap_entry], @kAudioAggregateDeviceTapAutoStartKey: @NO };
+        NSDictionary* aggregate_description = @{ @kAudioAggregateDeviceNameKey: @"Synthesizer V Toolbox Private Capture", @kAudioAggregateDeviceUIDKey: aggregate_uid, @kAudioAggregateDeviceIsPrivateKey: @YES, @kAudioAggregateDeviceTapListKey: @[tap_entry], @kAudioAggregateDeviceTapAutoStartKey: @NO };
         status = AudioHardwareCreateAggregateDevice((__bridge CFDictionaryRef)aggregate_description, &capture->aggregate);
         if (status != noErr) { write_error(error, error_capacity, status_message("创建 Process Tap aggregate device", status)); cleanup_after_start_failure(capture); delete capture; return nullptr; }
         AudioObjectPropertyAddress format_address = { kAudioDevicePropertyStreamFormat, kAudioDevicePropertyScopeInput, kAudioObjectPropertyElementMain };

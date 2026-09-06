@@ -1,7 +1,7 @@
 [package]
 name = "synthv-toolbox"
 version = "0.1.6"
-description = "Cross-platform Synthesizer V Tool Box with optional AI copilot"
+description = "Cross-platform Synthesizer V Toolbox with optional AI copilot"
 authors = ["SynthVCopilot"]
 edition = "2021"
 license = "Apache-2.0"

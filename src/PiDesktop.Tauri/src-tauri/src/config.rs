@@ -22,7 +22,7 @@ static SETTINGS_LOAD_ERROR: OnceLock<String> = OnceLock::new();
 pub(crate) fn model_config_mutation_guard() -> Result<MutexGuard<'static, ()>, String> {
     MODEL_CONFIG_MUTATION_LOCK
         .lock()
-        .map_err(|_| "模型配置写入锁已损坏。请重启 Synthesizer V Tool Box 后重试。".to_string())
+        .map_err(|_| "模型配置写入锁已损坏。请重启 Synthesizer V Toolbox 后重试。".to_string())
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

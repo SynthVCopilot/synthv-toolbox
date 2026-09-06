@@ -387,7 +387,7 @@ const previewState = (): BootstrapState => ({
     { id: "cvrs", displayName: "CVRS 工程工具", description: "工程探测、安全副本、无参导出与 LRC。", audience: "AI 与人工", installed: previewInstalledManagedComponentIds.has("cvrs"), downloaded: false, installable: true, removable: previewInstalledManagedComponentIds.has("cvrs"), status: previewInstalledManagedComponentIds.has("cvrs") ? "已就绪" : "可由 Toolbox 内置下载器下载" },
     { id: "media-fetcher", displayName: "媒体导入器", description: "固定版本 yt-dlp，用于显式 Bilibili/YouTube URL 导入。", audience: "AI 与人工", installed: previewInstalledManagedComponentIds.has("media-fetcher"), downloaded: false, installable: true, removable: previewInstalledManagedComponentIds.has("media-fetcher"), status: previewInstalledManagedComponentIds.has("media-fetcher") ? "已就绪" : "可由 Toolbox 内置下载器下载" },
     { id: "vocal-separation", displayName: "人声伴奏分离", description: "使用 Demucs htdemucs 把单个混音分成 vocals 与 inst。", audience: "AI 与人工", installed: previewInstalledManagedComponentIds.has("vocal-separation"), downloaded: false, installable: true, removable: previewInstalledManagedComponentIds.has("vocal-separation"), status: previewInstalledManagedComponentIds.has("vocal-separation") ? "已就绪" : "可安装本地运行环境" },
-    { id: "sandboxie", displayName: "Sandboxie Plus 1.18.2", description: "Synthesizer V Tool Box 并发隔离提供方；下载官方安装包后由用户交互安装。", audience: "Windows 并发隔离", installed: false, downloaded: false, installable: true, removable: false, status: "可由 Toolbox 内置下载器下载官方 x64 安装包" },
+    { id: "sandboxie", displayName: "Sandboxie Plus 1.18.2", description: "Synthesizer V Toolbox 并发隔离提供方；下载官方安装包后由用户交互安装。", audience: "Windows 并发隔离", installed: false, downloaded: false, installable: true, removable: false, status: "可由 Toolbox 内置下载器下载官方 x64 安装包" },
   ],
   downloads: previewDownloads,
   mcpServers: previewMode === "ai" ? [{ id: "demo", name: "Demo tools", command: "node", args: ["server.mjs"], enabled: true }] : [],
@@ -400,7 +400,7 @@ const previewState = (): BootstrapState => ({
     registered: previewSmartSvpLaunchEnabled,
     isDefault: false,
     detail: previewSmartSvpLaunchEnabled
-      ? "已注册为 .svp 可选打开方式；请在 Windows 默认应用中选择 Synthesizer V Tool Box。"
+      ? "已注册为 .svp 可选打开方式；请在 Windows 默认应用中选择 Synthesizer V Toolbox。"
       : "智能启动默认关闭，不会改变当前 .svp 打开方式。",
   },
 });
@@ -482,7 +482,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     return previewState() as T;
   }
   if (command === "open_svp_default_apps_settings") {
-    return { succeeded: true, summary: "已打开 Windows 默认应用设置。", detail: "请为 .svp 选择 Synthesizer V Tool Box。" } as T;
+    return { succeeded: true, summary: "已打开 Windows 默认应用设置。", detail: "请为 .svp 选择 Synthesizer V Toolbox。" } as T;
   }
   if (command === "authorize_ai_provider") {
     const provider = previewAiProvider(args?.provider);
@@ -732,7 +732,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     currentVersion: previewState().appVersion,
     latestVersion: "0.2.0",
     updateAvailable: true,
-    releaseName: "Synthesizer V Tool Box v0.2.0",
+    releaseName: "Synthesizer V Toolbox v0.2.0",
     releaseUrl: "https://github.com/SynthVCopilot/synthv-toolbox/releases/tag/v0.2.0",
     publishedAtUtc: new Date().toISOString(),
     releaseNotes: "## 更新内容\n\n- 新增更新检查工具\n- 修复若干问题",
@@ -740,7 +740,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   } as T;
   if (command === "open_toolbox_releases") return {
     succeeded: true,
-    summary: "已打开 Synthesizer V Tool Box 官方发布页。",
+    summary: "已打开 Synthesizer V Toolbox 官方发布页。",
     detail: "预览模式不会启动外部浏览器。",
   } as T;
   if (command === "sv2_profile_state") return previewProfiles as T;
@@ -949,7 +949,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "remove_local_component") {
     const componentId = String(args?.id ?? "");
     if (!previewManagedComponentIds.has(componentId)) {
-      return { succeeded: false, summary: "该组件不由 Synthesizer V Tool Box 管理。", detail: "预览模式不会删除系统或外部安装的组件。" } as T;
+      return { succeeded: false, summary: "该组件不由 Synthesizer V Toolbox 管理。", detail: "预览模式不会删除系统或外部安装的组件。" } as T;
     }
     if (!previewInstalledManagedComponentIds.delete(componentId)) {
       return { succeeded: true, summary: "组件当前未安装。", detail: "预览状态中没有需要删除的工具箱运行环境或配置。" } as T;
