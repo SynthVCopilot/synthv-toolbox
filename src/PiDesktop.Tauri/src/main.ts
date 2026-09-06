@@ -128,6 +128,8 @@ let projectCheckpoints: ProjectCheckpoint[] = [];
 let projectBackupState: ProjectBackupState | undefined;
 let historyRefreshTimer: number | undefined;
 let historyRefreshGeneration = 0;
+let historyLoadState: "idle" | "loading" | "ready" | "error" = "idle";
+let historyLoadError = "";
 let syncCategories: Sv2SyncCategory[] = [];
 let syncManifest: Sv2SyncManifest | undefined;
 let syncSourceSlotId = "";
@@ -744,7 +746,7 @@ function navItem(target: Page, label: string, glyph: Parameters<typeof icon>[0])
 function renderSidebar(): string {
   if (!app) return "";
   return `<div class="brand" data-page="home" title="返回概览">
-      <div class="brand-mark small"><img class="brand-logo" src="/assets/synthv-toolbox-logo.png" alt="SynthV Toolbox" /></div>
+      <div class="brand-mark small"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="SynthV Toolbox" /></div>
       <div><strong>SynthV Toolbox</strong><span>Creative utility suite</span></div>
     </div>
     <nav class="nav" aria-label="主导航">
@@ -772,7 +774,7 @@ function render(): void {
   if (!app) return;
   if (app.settingsLoadError) {
     root.innerHTML = `<main class="fatal settings-recovery" role="alert">
-      <div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.png" alt="SynthV Toolbox" /></div>
+      <div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="SynthV Toolbox" /></div>
       <span class="eyebrow">设置恢复保护模式</span>
       <h1>配置需要修复，原文件尚未被覆盖</h1>
       <p>工具箱检测到设置文件无法安全读取，因此已停用所有设置写入。OAuth 凭据和账号映射不会被默认配置替换。</p>
@@ -1320,7 +1322,7 @@ function renderOnboarding(): void {
   root.innerHTML = `<main class="onboarding">
     <div class="onboarding-glow one"></div><div class="onboarding-glow two"></div>
     <section class="onboarding-card">
-      <div class="onboarding-brand"><div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.png" alt="SynthV Toolbox" /></div><span>SynthV Toolbox</span></div>
+      <div class="onboarding-brand"><div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="SynthV Toolbox" /></div><span>SynthV Toolbox</span></div>
       <div class="eyebrow">首次启动 · 选择工作方式</div>
       <h1>一个工具箱，按你的方式工作。</h1>
       <p class="lead">随时可以在设置中切换。纯工具箱模式不会显示或启动任何 AI 功能。</p>
@@ -1535,7 +1537,7 @@ function renderHome(): string {
         <p>${app.mode === "ai" ? "从音频分析到 SynthV 工程操作，AI 只通过你启用的能力和 MCP 工具工作。" : "无需模型配置即可进行确定性的音频、MIDI、工程和 Bridge 操作。"}</p>
         <div class="hero-actions"><button class="primary" data-page="${app.mode === "ai" ? "copilot" : "import"}">${icon(app.mode === "ai" ? "bot" : "pipeline", 18)} ${app.mode === "ai" ? "打开 Copilot" : "打开导入与转换"}</button><button class="secondary" data-page="bridge">检查 Bridge</button></div>
       </div>
-      <div class="hero-orb"><div><img class="brand-logo" src="/assets/synthv-toolbox-logo.png" alt="SynthV Toolbox" /></div><span>${app.mode === "ai" ? "COPILOT READY" : "LOCAL FIRST"}</span></div>
+      <div class="hero-orb"><div><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="SynthV Toolbox" /></div><span>${app.mode === "ai" ? "COPILOT READY" : "LOCAL FIRST"}</span></div>
     </div>
     <div class="stats-grid">
       <article class="stat-card"><span>运行模式</span><strong>${app.mode === "ai" ? "AI 增强" : "纯工具箱"}</strong><small>${app.mode === "ai" ? aiConnectionSummary() : "模型运行时已停用"}</small></article>
@@ -1563,6 +1565,9 @@ function stopHistoryRefresh(): void {
 
 function scheduleHistoryRefresh(): void {
   stopHistoryRefresh();
+  historyLoadState = "loading";
+  historyLoadError = "";
+  render();
   const generation = historyRefreshGeneration;
   const refresh = async () => {
     if (generation !== historyRefreshGeneration || page !== "history") return;
@@ -1572,10 +1577,13 @@ function scheduleHistoryRefresh(): void {
       projectBackupState = backup;
       creativeHistory = workflow;
       projectCheckpoints = checkpoints;
+      historyLoadState = "ready";
+      historyLoadError = "";
       render();
     } catch (reason) {
       if (generation !== historyRefreshGeneration || page !== "history") return;
-      error = formatError(reason);
+      historyLoadState = "error";
+      historyLoadError = formatError(reason);
       render();
     }
     if (generation === historyRefreshGeneration && page === "history") historyRefreshTimer = window.setTimeout(() => void refresh(), 5000);
@@ -1595,9 +1603,11 @@ function renderHistoryPage(): string {
     ? projectCheckpoints.map((item) => `<article class="checkpoint-item"><span class="feature-icon blue">${icon("shield", 17)}</span><div><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.sourcePath)}</small><code>SHA-256 ${escapeHtml(item.sourceSha256.slice(0, 16))}… · ${new Date(item.createdAtUtc).toLocaleString("zh-CN")}</code></div><button class="secondary compact" data-restore-checkpoint="${escapeHtml(item.id)}">恢复副本</button></article>`).join("")
     : '<div class="empty-inline">还没有工程检查点。</div>';
   const backup = projectBackupState;
-  const backupStatus = backup?.lastError ? "需要处理" : backup ? "自动跟踪中" : "正在读取";
-  const tracked = backup?.projects.length ? backup.projects.map((item) => `<article class="checkpoint-item"><span class="feature-icon blue">${icon("history", 17)}</span><div><strong>${escapeHtml(item.sourcePath)}</strong><small>上次检测：${escapeHtml(formatHistoryTime(item.lastSeenAtUtc))} · 备份 ${item.backupCount} 次</small><code>${item.lastError ? `失败：${escapeHtml(item.lastError)}` : `上次备份：${escapeHtml(formatHistoryTime(item.lastBackupAtUtc))}`}</code></div></article>`).join("") : '<div class="empty-inline">尚未追踪到 .svp 工程。打开并保存工程后，后台会自动开始检测。</div>';
-  return `<section class="panel history-intro"><span class="feature-icon blue">${icon("history", 22)}</span><div><span class="eyebrow">AUTOMATIC HISTORY</span><h2>工程历史自动保存</h2><p>每分钟检测已追踪的 .svp 工程变化，应用运行或托盘驻留时持续工作。未保存内容需要先由 SynthV 正常保存。</p></div><span class="availability ${backup?.lastError ? "warning" : "ready"}">${backupStatus}</span></section>
+  const itemError = backup?.projects.some((item) => item.lastError) ?? false;
+  const backupStatus = historyLoadState === "error" ? "读取失败" : historyLoadState === "loading" ? "正在读取" : backup?.lastError || itemError ? "需要处理" : backup ? "自动跟踪中" : "等待读取";
+  const tracked = backup?.projects.length ? backup.projects.map((item) => `<article class="checkpoint-item"><span class="feature-icon blue">${icon("history", 17)}</span><div><strong>${escapeHtml(item.sourcePath)}</strong><small>最近发现：${escapeHtml(formatHistoryTime(item.lastSeenAtUtc))} · 备份 ${item.backupCount} 次</small><code>${item.lastError ? `失败：${escapeHtml(item.lastError)}` : `上次备份：${escapeHtml(formatHistoryTime(item.lastBackupAtUtc))}`}</code></div></article>`).join("") : '<div class="empty-inline">尚未追踪到 .svp 工程。打开并保存工程后，后台会自动开始检测。</div>';
+  const loadError = historyLoadState === "error" ? `<div class="audio-inline-error" role="alert">历史状态读取失败：${escapeHtml(historyLoadError)}</div>` : "";
+  return `<section class="panel history-intro"><span class="feature-icon blue">${icon("history", 22)}</span><div><span class="eyebrow">AUTOMATIC HISTORY</span><h2>工程历史自动保存</h2><p>每分钟检测已追踪的 .svp 工程变化，应用运行或托盘驻留时持续工作。未保存内容需要先由 SynthV 正常保存。</p></div><span class="availability ${historyLoadState === "error" || backup?.lastError || itemError ? "warning" : "ready"}">${backupStatus}</span></section>${loadError}
     <section class="panel history-checkpoint-grid"><div class="section-heading"><div><h2>自动备份状态</h2><p>检测间隔：${backup?.intervalSeconds ?? 60} 秒${backup?.lastError ? ` · ${escapeHtml(backup.lastError)}` : ""}</p></div></div><div class="checkpoint-list">${tracked}</div></section>
     <section class="panel"><div class="section-heading"><div><h2>已有快照</h2><p>可恢复快照会生成新的工程副本。</p></div></div><div class="checkpoint-list">${checkpoints}</div></section>
     <section class="panel workflow-history"><div class="section-heading"><div><h2>工作流记录</h2><p>按时间保留工具输入摘要、执行结果和输出位置。</p></div></div><div class="timeline-list">${history}</div></section>`;
@@ -1631,10 +1641,6 @@ function featureAvailability(feature: Feature, current: BootstrapState): Feature
   };
 }
 
-function featureTarget(feature: Feature, availability: FeatureAvailability): string {
-  return availability.route ? `data-page="${availability.route}"` : `data-feature="${feature.id}"`;
-}
-
 function groupFeatures(group: ToolGroup): Feature[] {
   return group.featureIds.flatMap((id) => {
     const feature = features.find((item) => item.id === id);
@@ -1653,11 +1659,11 @@ function renderToolCategory(groupId: ToolGroup["id"]): string {
     : groupFeatureList.find((feature) => featureAvailability(feature, current).tone === "ready") ?? groupFeatureList[0];
   const tabs = groupFeatureList.map((feature) => {
     const availability = featureAvailability(feature, current);
-    return `<button class="tool-tab ${selected?.id === feature.id ? "active" : ""} ${availability.tone}" data-feature="${escapeHtml(feature.id)}"><span>${escapeHtml(feature.title)}</span><small>${escapeHtml(availability.label)}</small></button>`;
+    return `<button class="tool-tab ${selected?.id === feature.id ? "active" : ""} ${availability.tone}" data-feature="${escapeHtml(feature.id)}" ${selected?.id === feature.id ? 'aria-current="page"' : ""}><span>${escapeHtml(feature.title)}</span><small>${escapeHtml(availability.label)}</small></button>`;
   }).join("");
   const selectedAvailability = selected ? featureAvailability(selected, current) : undefined;
   const blocked = selected && selectedAvailability?.tone !== "ready" ? `<section class="panel tool-unavailable"><span class="feature-icon orange">${icon(selected.icon, 22)}</span><div><h2>${escapeHtml(selected.title)}</h2><p>${escapeHtml(selected.description)}</p><p>${escapeHtml(selectedAvailability?.label ?? "当前工具不可用")}。请处理依赖后再开始。</p></div>${selectedAvailability?.route ? `<button class="secondary" data-page="${selectedAvailability.route}">${escapeHtml(selectedAvailability.actionLabel)} ${icon("arrow", 16)}</button>` : ""}</section>` : selected ? renderWorkflowPanel(selected.id) : '<div class="empty-inline">当前分类没有可用工具。</div>';
-  return `<section class="tool-category"><div class="tool-tabs" role="tablist" aria-label="工具选择">${tabs}</div>${blocked}</section>`;
+  return `<section class="tool-category"><nav class="tool-tabs" aria-label="${escapeHtml(group.title)}中的工具">${tabs}</nav>${blocked}</section>`;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -1982,13 +1988,8 @@ function renderWorkflowPanel(id: string): string {
     const catalogFeature = features.find((item) => item.id === id);
     form = catalogFeature ? `<div class="mode-limit"><strong>能力入口已就绪</strong><br />${escapeHtml(catalogFeature.base.join(" · "))}。后端工作流接入后会在这里显示参数与执行结果；当前不会对工程或音频执行写入。</div>` : "";
   }
-  const switcher = group ? `<nav class="workflow-tool-tabs" aria-label="${escapeHtml(group.title)}中的工具">${groupFeatures(group).map((item) => {
-    const availability = featureAvailability(item, current);
-    const active = item.id === id;
-    return `<button class="workflow-tool-tab ${active ? "active" : ""} ${availability.tone}" ${active ? 'aria-current="page"' : ""} ${featureTarget(item, availability)} ${availability.disabled ? "disabled" : ""}><span>${icon(item.icon, 15)} ${escapeHtml(item.title)}</span><small>${active ? "当前工具" : escapeHtml(availability.label)}</small></button>`;
-  }).join("")}</nav>` : "";
   const result = workflowResult ? renderWorkflowResult(workflowResult, ai) : "";
-  return `<section class="panel workflow-panel"><div class="workflow-heading"><span class="feature-icon ${feature?.accent ?? "violet"}">${icon(feature?.icon ?? "toolbox", 25)}</span><div><span class="eyebrow">${escapeHtml(group?.title ?? "ACTIVE WORKFLOW")}</span><h2>${escapeHtml(feature?.title ?? "工作流")}</h2><p>${escapeHtml(feature?.description ?? "")}</p></div><button class="icon-plain" data-close-workflow title="关闭">×</button></div>${switcher}${form}${result}</section>`;
+  return `<section class="workflow-panel"><div class="workflow-heading"><span class="feature-icon ${feature?.accent ?? "violet"}">${icon(feature?.icon ?? "toolbox", 25)}</span><div><span class="eyebrow">${escapeHtml(group?.title ?? "ACTIVE WORKFLOW")}</span><h2>${escapeHtml(feature?.title ?? "工作流")}</h2><p>${escapeHtml(feature?.description ?? "")}</p></div></div>${form}${result}</section>`;
 }
 
 function renderToolboxUpdateResult(): string {
@@ -3365,7 +3366,6 @@ document.addEventListener("click", (event) => {
     resetContentScroll();
     return;
   }
-  if (target.hasAttribute("data-close-workflow")) { activeWorkflow = undefined; workflowResult = undefined; render(); return; }
   if (target.hasAttribute("data-review-workflow") && workflowResult) {
     const currentResult = workflowResult;
     void run(async () => {
@@ -3643,6 +3643,6 @@ void (async () => {
     render();
     refreshAiCatalogLive();
   } catch (reason) {
-    root.innerHTML = `<div class="fatal"><div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.png" alt="SynthV Toolbox" /></div><h1>无法启动 SynthV Toolbox</h1><pre>${escapeHtml(formatError(reason))}</pre><p>请确认应用由 Tauri 运行，而不是直接打开前端页面。</p></div>`;
+    root.innerHTML = `<div class="fatal"><div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="SynthV Toolbox" /></div><h1>无法启动 SynthV Toolbox</h1><pre>${escapeHtml(formatError(reason))}</pre><p>请确认应用由 Tauri 运行，而不是直接打开前端页面。</p></div>`;
   }
 })();
