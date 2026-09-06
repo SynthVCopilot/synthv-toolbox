@@ -2116,6 +2116,55 @@ function renderMessage(message: ChatMessage): string {
   return `<div class="message ${mine ? "user" : "assistant"}"><span class="avatar">${mine ? "你" : "π"}</span><div><small>${mine ? "你" : "Copilot"}</small><p>${escapeHtml(message.content)}</p></div></div>`;
 }
 
+async function loadFfmpegConfiguration(): Promise<void> {
+  const generation = ++ffmpegConfigurationGeneration;
+  ffmpegDirectory = undefined;
+  ffmpegDirectoryDraft = undefined;
+  ffmpegConfigurationLoading = true;
+  try {
+    const configuration = await api.getFfmpegConfiguration();
+    if (generation !== ffmpegConfigurationGeneration || page !== "components") return;
+    ffmpegDirectory = configuration.directory;
+  } catch (reason) {
+    if (generation !== ffmpegConfigurationGeneration || page !== "components") return;
+    error = formatError(reason);
+    ffmpegDirectory = null;
+  } finally {
+    if (generation === ffmpegConfigurationGeneration && page === "components") {
+      ffmpegConfigurationLoading = false;
+      render();
+    }
+  }
+}
+
+async function saveFfmpegDirectory(directory: string | null): Promise<void> {
+  const result = await api.setFfmpegDirectory(directory);
+  setFeedback(result);
+  if (!result.succeeded) return;
+  ffmpegDirectory = directory;
+  ffmpegDirectoryDraft = undefined;
+  const configuration = await api.getFfmpegConfiguration();
+  ffmpegDirectory = configuration.directory;
+  await refresh();
+  refreshAudioRuntimeStatus();
+}
+
+async function selectFfmpegDirectory(): Promise<void> {
+  const generation = ffmpegConfigurationGeneration;
+  try {
+    const directory = await api.pickDirectory();
+    if (!directory || page !== "components" || generation !== ffmpegConfigurationGeneration) return;
+    ffmpegDirectoryDraft = directory;
+    const input = document.querySelector<HTMLInputElement>("#ffmpeg-directory");
+    if (input) input.value = directory;
+  } catch (reason) {
+    if (page !== "components" || generation !== ffmpegConfigurationGeneration) return;
+    error = formatError(reason);
+    notice = "";
+    render();
+  }
+}
+
 function renderComponents(): string {
   if (!app) return "";
   const statusLabel = { queued: "排队中", downloading: "下载中", installing: "安装中", completed: "已完成", failed: "失败", cancelled: "已取消" } as const;
@@ -2155,7 +2204,7 @@ function renderComponents(): string {
       } else {
         actionButton = `<button class="secondary" disabled>当前平台不可用</button>`;
       }
-      const extra = component.id === "ffmpeg" ? `<div class="component-extra"><strong>FFmpeg 来源</strong><small>可选本地目录；清除后自动使用 PATH、受管版本或内置版本。</small>${ffmpegControls}</div>` : "";
+      const extra = component.id === "ffmpeg" ? `<div class="component-extra"><strong>FFmpeg 来源</strong><small>选择包含 ffmpeg 和 ffprobe 的目录；清除后自动检测受管版本、内置版本或系统 PATH。</small>${ffmpegControls}</div>` : "";
       return `<article class="component-row"><span class="component-status ${component.installed || component.downloaded ? "ready" : ""}">${component.installed ? icon("check", 18) : icon("download", 18)}</span><div><h3>${escapeHtml(component.displayName)}</h3><p>${escapeHtml(component.description)}</p>${extra}</div>${actionButton}</article>`;
     }).join("")}</div>`;
 }
@@ -2793,16 +2842,8 @@ function wireForms(): void {
   document.querySelector<HTMLFormElement>("#ffmpeg-config-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const directory = document.querySelector<HTMLInputElement>("#ffmpeg-directory")?.value.trim() ?? "";
-    void run(async () => {
-      const result = await api.setFfmpegDirectory(directory || null);
-      setFeedback(result);
-      if (result.succeeded) {
-        ffmpegDirectory = directory || null;
-        ffmpegDirectoryDraft = undefined;
-        await refresh();
-        refreshAudioRuntimeStatus();
-      }
-    });
+    ffmpegDirectoryDraft = directory;
+    void run(() => saveFfmpegDirectory(directory || null));
   });
   document.querySelector<HTMLFormElement>("#bridge-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -3402,24 +3443,7 @@ document.addEventListener("click", (event) => {
     if (enteringAccounts || leavingAccounts) accountPageGeneration += 1;
     page = targetPage;
     if (enteringComponents) {
-      const generation = ++ffmpegConfigurationGeneration;
-      ffmpegDirectory = undefined;
-      ffmpegDirectoryDraft = undefined;
-      ffmpegConfigurationLoading = true;
-      void api.getFfmpegConfiguration().then((configuration) => {
-        if (generation !== ffmpegConfigurationGeneration) return;
-        if (page !== "components") return;
-        ffmpegDirectory = configuration.directory;
-        ffmpegConfigurationLoading = false;
-        render();
-      }).catch((reason) => {
-        if (generation !== ffmpegConfigurationGeneration) return;
-        if (page !== "components") return;
-        error = formatError(reason);
-        ffmpegDirectory = null;
-        ffmpegConfigurationLoading = false;
-        render();
-      });
+      void loadFfmpegConfiguration();
     }
     if (leavingHistory) stopHistoryRefresh();
     if (enteringToolCategory && (activeGroup?.id !== targetPage || workflowResult?.kind === "lyric-template")) {
@@ -3674,29 +3698,11 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (target.hasAttribute("data-pick-ffmpeg-directory")) {
-    void api.pickDirectory().then((directory) => {
-      if (!directory) return;
-      ffmpegDirectoryDraft = directory;
-      const input = document.querySelector<HTMLInputElement>("#ffmpeg-directory");
-      if (input) input.value = directory;
-    }).catch((reason) => {
-      error = formatError(reason);
-      notice = "";
-      render();
-    });
+    void selectFfmpegDirectory();
     return;
   }
   if (target.hasAttribute("data-clear-ffmpeg-directory")) {
-    void run(async () => {
-      const result = await api.setFfmpegDirectory(null);
-      setFeedback(result);
-      if (result.succeeded) {
-        ffmpegDirectory = null;
-        ffmpegDirectoryDraft = undefined;
-        await refresh();
-        refreshAudioRuntimeStatus();
-      }
-    });
+    void run(() => saveFfmpegDirectory(null));
     return;
   }
   if (target.hasAttribute("data-open-ffmpeg-download")) {
