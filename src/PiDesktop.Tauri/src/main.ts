@@ -11,6 +11,7 @@ import { icon } from "./icons";
 import { featureCatalog, toolGroups, type FeatureCatalogItem, type ToolGroup } from "./featureCatalog";
 import { mountShell, type ShellController } from "./vue/shell";
 import { locale, setLocale, t } from "./i18n";
+import "./i18nHome";
 import type {
   AiProviderId,
   AgentWorkMode,
@@ -1597,20 +1598,20 @@ function renderHome(): string {
   const current = app;
   const ready = app.components.filter((component) => component.installed).length;
   return `<div class="hero-panel">
-      <div><span class="eyebrow">${app.mode === "ai" ? "AI workspace" : "Local utility workspace"}</span>
-        <h2>${app.mode === "ai" ? "把重复操作交给 Copilot，创作判断留给你。" : "所有核心工具，集中在一个安静的工作区。"}</h2>
-        <p>${app.mode === "ai" ? "从音频分析到 SynthV 工程操作，AI 只通过你启用的能力和 MCP 工具工作。" : "无需模型配置即可进行确定性的音频、MIDI、工程和 Bridge 操作。"}</p>
-        <div class="hero-actions"><button class="primary" data-page="${app.mode === "ai" ? "copilot" : "import"}">${icon(app.mode === "ai" ? "bot" : "pipeline", 18)} ${app.mode === "ai" ? "打开 Copilot" : "打开导入与转换"}</button><button class="secondary" data-page="bridge">检查 Bridge</button></div>
+      <div><span class="eyebrow">${app.mode === "ai" ? t("home.aiWorkspace") : t("home.localWorkspace")}</span>
+        <h2>${app.mode === "ai" ? t("home.aiTitle") : t("home.localTitle")}</h2>
+        <p>${app.mode === "ai" ? t("home.aiDescription") : t("home.localDescription")}</p>
+        <div class="hero-actions"><button class="primary" data-page="${app.mode === "ai" ? "copilot" : "import"}">${icon(app.mode === "ai" ? "bot" : "pipeline", 18)} ${app.mode === "ai" ? t("home.openCopilot") : t("home.openImport")}</button><button class="secondary" data-page="bridge">${t("home.checkBridge")}</button></div>
       </div>
       <div class="hero-orb"><div><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div><span>${app.mode === "ai" ? "COPILOT READY" : "LOCAL FIRST"}</span></div>
     </div>
     <div class="stats-grid">
-      <article class="stat-card"><span>运行模式</span><strong>${app.mode === "ai" ? "AI 增强" : "纯工具箱"}</strong><small>${app.mode === "ai" ? aiConnectionSummary() : "模型运行时已停用"}</small></article>
-      <article class="stat-card"><span>本地组件</span><strong>${ready} / ${app.components.length}</strong><small>已检测为可用</small></article>
-      <article class="stat-card"><span>SynthV</span><strong>${app.installations.length ? "已发现" : "未发现"}</strong><small>${app.installations[0]?.displayName ?? "可手动选择 scripts 目录"}</small></article>
-      <article class="stat-card"><span>工具连接</span><strong>${app.bridgeConnected ? "在线" : "离线"}</strong><small>${app.mode === "ai" ? `${app.mcpServers.filter((server) => server.enabled).length} 个 MCP 已启用` : "Bridge 可独立使用"}</small></article>
+      <article class="stat-card"><span>${t("home.mode")}</span><strong>${app.mode === "ai" ? t("home.ai") : t("home.toolbox")}</strong><small>${app.mode === "ai" ? aiConnectionSummary() : t("home.runtimeOff")}</small></article>
+      <article class="stat-card"><span>${t("home.components")}</span><strong>${ready} / ${app.components.length}</strong><small>${t("home.available")}</small></article>
+      <article class="stat-card"><span>SynthV</span><strong>${app.installations.length ? t("home.discovered") : t("home.notDiscovered")}</strong><small>${app.installations[0]?.displayName ?? t("home.manualScripts")}</small></article>
+      <article class="stat-card"><span>${t("home.toolConnections")}</span><strong>${app.bridgeConnected ? t("home.online") : t("home.offline")}</strong><small>${app.mode === "ai" ? t("home.enabledMcp", { count: app.mcpServers.filter((server) => server.enabled).length }) : t("home.independentBridge")}</small></article>
     </div>
-    <section class="section-block"><div class="section-heading"><div><h2>快速开始</h2><p>继续最近的工作，或打开常用能力。</p></div></div>
+    <section class="section-block"><div class="section-heading"><div><h2>${t("home.quickStart")}</h2><p>${t("home.quickDescription")}</p></div></div>
       <div class="quick-grid">${features.filter((feature) => feature.homePriority !== undefined).sort((left, right) => (left.homePriority ?? 0) - (right.homePriority ?? 0)).slice(0, 3).map((feature) => {
         const availability = featureAvailability(feature, current);
         const target = availability.route ? `data-page="${availability.route}"` : `data-feature="${feature.id}"`;
@@ -1688,21 +1689,21 @@ interface FeatureAvailability {
 
 function featureAvailability(feature: Feature, current: BootstrapState): FeatureAvailability {
   if (feature.windowsOnly && current.platform !== "windows" && current.platform !== "preview") {
-    return { label: "仅 Windows", tone: "blocked", actionLabel: "当前平台不可用", disabled: true };
+    return { label: t("home.windowsOnly"), tone: "blocked", actionLabel: t("home.unavailable"), disabled: true };
   }
   const missing = (feature.componentIds ?? [])
     .map((id) => current.components.find((component) => component.id === id))
     .filter((component) => !component?.installed);
   if (missing.length) {
-    return { label: `缺少 ${missing.length} 个组件`, tone: "warning", actionLabel: "前往组件中心", route: "components" };
+    return { label: t("home.missing", { count: missing.length }), tone: "warning", actionLabel: t("home.install"), route: "components" };
   }
   if (feature.requiresConnectedBridge && !current.bridgeConnected) {
-    return { label: "Bridge 未连接", tone: "warning", actionLabel: "连接 Bridge", route: "bridge" };
+    return { label: t("home.bridgeRequired"), tone: "warning", actionLabel: t("home.connect"), route: "bridge" };
   }
   return {
-    label: "可直接使用",
+    label: t("home.ready"),
     tone: "ready",
-    actionLabel: "打开工具",
+    actionLabel: t("home.openTool"),
   };
 }
 
@@ -1727,8 +1728,8 @@ function renderToolCategory(groupId: ToolGroup["id"]): string {
     return `<button class="tool-tab ${selected?.id === feature.id ? "active" : ""} ${availability.tone}" data-feature="${escapeHtml(feature.id)}" ${selected?.id === feature.id ? 'aria-current="page"' : ""}><span>${escapeHtml(feature.title)}</span><small>${escapeHtml(availability.label)}</small></button>`;
   }).join("");
   const selectedAvailability = selected ? featureAvailability(selected, current) : undefined;
-  const blocked = selected && selectedAvailability?.tone !== "ready" ? `<section class="panel tool-unavailable"><span class="feature-icon orange">${icon(selected.icon, 22)}</span><div><h2>${escapeHtml(selected.title)}</h2><p>${escapeHtml(selected.description)}</p><p>${escapeHtml(selectedAvailability?.label ?? "当前工具不可用")}。请处理依赖后再开始。</p></div>${selectedAvailability?.route ? `<button class="secondary" data-page="${selectedAvailability.route}">${escapeHtml(selectedAvailability.actionLabel)} ${icon("arrow", 16)}</button>` : ""}</section>` : selected ? renderWorkflowPanel(selected.id) : '<div class="empty-inline">当前分类没有可用工具。</div>';
-  return `<section class="tool-category"><nav class="tool-tabs" aria-label="${escapeHtml(group.title)}中的工具">${tabs}</nav>${blocked}</section>`;
+  const blocked = selected && selectedAvailability?.tone !== "ready" ? `<section class="panel tool-unavailable"><span class="feature-icon orange">${icon(selected.icon, 22)}</span><div><h2>${escapeHtml(selected.title)}</h2><p>${escapeHtml(selected.description)}</p><p>${escapeHtml(selectedAvailability?.label ?? t("home.unavailableTool"))} ${t("home.resolveDependencies")}</p></div>${selectedAvailability?.route ? `<button class="secondary" data-page="${selectedAvailability.route}">${escapeHtml(selectedAvailability.actionLabel)} ${icon("arrow", 16)}</button>` : ""}</section>` : selected ? renderWorkflowPanel(selected.id) : `<div class="empty-inline">${t("home.noTools")}</div>`;
+  return `<section class="tool-category"><nav class="tool-tabs" aria-label="${escapeHtml(t("home.groupTools", { group: group.title }))}">${tabs}</nav>${blocked}</section>`;
 }
 
 type JsonObject = Record<string, unknown>;

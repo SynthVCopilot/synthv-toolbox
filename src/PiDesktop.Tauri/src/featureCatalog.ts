@@ -1,3 +1,5 @@
+import { addMessages, t } from "./i18n";
+import { englishFeatureMessages, englishGroupMessages } from "./featureMessages";
 import type { IconName } from "./icons";
 
 export interface FeatureCatalogItem {
@@ -24,7 +26,7 @@ export interface ToolGroup {
   featureIds: string[];
 }
 
-export const featureCatalog: FeatureCatalogItem[] = [
+const featureDefinitions: FeatureCatalogItem[] = [
   { id: "cover", title: "一键 Cover", description: "从 BV 或 YouTube 来源自动下载、分离、提取旋律、映射歌词并导入当前 SynthV 工程。", icon: "sparkles", accent: "violet", homePriority: 1, base: ["来源到双轨", "旋律 MIDI 与歌词", "自动 F13 Bridge 连接"], ai: ["快捷指令编排", "指定声库授权提示", "失败阶段解释与重试"], requirements: ["媒体导入器", "人声伴奏分离", "pi-audio", "SynthV Bridge"], componentIds: ["media-fetcher", "vocal-separation", "pi-audio", "ffmpeg"], requiresConnectedBridge: false },
   { id: "tuning-learning", title: "分声库调声学习", description: "从参考人声提取演唱特征，为每个声库独立学习并应用有边界的调声参数。", icon: "waveform", accent: "emerald", homePriority: 2, base: ["离线演唱特征", "分声库档案", "A/B 反馈更新"], ai: ["自动参数建议", "Bridge 安全应用", "Solo 迭代基础"], requirements: ["pi-audio", "SynthV Bridge（应用时）"], componentIds: ["pi-audio"] },
   { id: "media-import", title: "BV / YouTube 音频导入", description: "预览明确提供的 Bilibili 或 YouTube 来源，并在权利确认后下载为受管理 WAV。", icon: "download", accent: "blue", homePriority: 2, base: ["BV / URL 元数据预览", "受管 WAV 与 SHA-256", "来源与权利确认记录"], ai: ["后续自动分离与 Cover 编排", "来源结构说明", "失败原因归类"], requirements: ["media-fetcher", "FFmpeg", "Node.js 22+"], componentIds: ["media-fetcher", "ffmpeg"] },
@@ -43,7 +45,7 @@ export const featureCatalog: FeatureCatalogItem[] = [
   { id: "selective-sync", title: "账号资源同步", description: "在账号槽位间选择性同步词典、脚本、预设和安全设置，登录态与声库数据库始终排除。", icon: "sync", accent: "violet", base: ["白名单类别", "SHA-256 差异预览", "冲突与过期清单保护"], ai: ["冲突影响解释", "同步范围建议", "同步后复核"], requirements: ["Windows", "至少两个槽位"], windowsOnly: true },
 ];
 
-export const toolGroups: ToolGroup[] = [
+const groupDefinitions: ToolGroup[] = [
   {
     id: "import",
     title: "导入与转换",
@@ -61,3 +63,24 @@ export const toolGroups: ToolGroup[] = [
     featureIds: ["tuning-learning", "audio-insight", "project-doctor", "pronunciation-doctor", "render-review"],
   },
 ];
+
+addMessages("zh-CN", {
+  features: Object.fromEntries(featureDefinitions.map(({ id, title, description, base, ai, requirements }) => [id, { title, description, base, ai, requirements }])),
+  groups: Object.fromEntries(groupDefinitions.map(({ id, title, description }) => [id, { title, description }])),
+});
+addMessages("en", { features: englishFeatureMessages, groups: englishGroupMessages });
+
+export const featureCatalog: FeatureCatalogItem[] = featureDefinitions.map((feature) => ({
+  ...feature,
+  get title() { return t(`features.${feature.id}.title`); },
+  get description() { return t(`features.${feature.id}.description`); },
+  get base() { return feature.base.map((_, index) => t(`features.${feature.id}.base.${index}`)); },
+  get ai() { return feature.ai.map((_, index) => t(`features.${feature.id}.ai.${index}`)); },
+  get requirements() { return feature.requirements.map((_, index) => t(`features.${feature.id}.requirements.${index}`)); },
+}));
+
+export const toolGroups: ToolGroup[] = groupDefinitions.map((group) => ({
+  ...group,
+  get title() { return t(`groups.${group.id}.title`); },
+  get description() { return t(`groups.${group.id}.description`); },
+}));
