@@ -172,6 +172,10 @@ let mediaTaskPollTimer: number | undefined;
 let toastDismissTimer: number | undefined;
 let toastSignature = "";
 let accountUsageRefreshInFlight: Promise<void> | undefined;
+let accountUsageRefreshScope: string | undefined;
+let accountUsageRefreshPageGeneration: number | undefined;
+let accountPageGeneration = 0;
+let cachedAccountProfiles: Sv2ProfilesState | undefined;
 let aiCatalogRefreshInFlight: Promise<void> | undefined;
 let lyricPersistTimer: number | undefined;
 let sidebarCollapsed = (() => {
@@ -612,6 +616,7 @@ function setFeedback(result: OperationResult): void {
 async function run(task: () => Promise<void>): Promise<void> {
   if (busy) return;
   instanceRefreshGeneration += 1;
+  if (page === "accounts") accountPageGeneration += 1;
   busy = true;
   notice = "";
   error = "";
@@ -638,25 +643,84 @@ async function refresh(): Promise<void> {
   ]);
 }
 
-async function refreshAccountUsage(slotId?: string): Promise<void> {
+async function refreshAccountUsage(slotId?: string, pageGeneration = accountPageGeneration): Promise<void> {
   if (!app?.sv2AccountIndicatorEnabled) return;
-  if (accountUsageRefreshInFlight) return accountUsageRefreshInFlight;
+  if (page !== "accounts" || pageGeneration !== accountPageGeneration) return;
+  const scope = slotId ?? "all";
+  if (accountUsageRefreshInFlight) {
+    if (accountUsageRefreshScope === scope && accountUsageRefreshPageGeneration === pageGeneration) return accountUsageRefreshInFlight;
+    const inFlight = accountUsageRefreshInFlight;
+    try {
+      await inFlight;
+    } catch {
+      // A queued refresh must still run after an older page's request fails.
+    }
+    if (accountUsageRefreshInFlight === inFlight) {
+      accountUsageRefreshInFlight = undefined;
+      accountUsageRefreshScope = undefined;
+      accountUsageRefreshPageGeneration = undefined;
+    }
+    return refreshAccountUsage(slotId, pageGeneration);
+  }
   const request = (async () => {
     try {
       const snapshot = slotId
         ? await api.sv2AccountUsageSnapshotForSlot(slotId)
         : await api.sv2AccountUsageSnapshot();
-      profiles = snapshot.profiles;
+      if (page === "accounts" && pageGeneration === accountPageGeneration) profiles = snapshot.profiles;
     } finally {
-      if (page === "accounts") render();
+      if (page === "accounts" && pageGeneration === accountPageGeneration) render();
     }
   })();
   accountUsageRefreshInFlight = request;
+  accountUsageRefreshScope = scope;
+  accountUsageRefreshPageGeneration = pageGeneration;
   try {
     await request;
   } finally {
-    if (accountUsageRefreshInFlight === request) accountUsageRefreshInFlight = undefined;
+    if (accountUsageRefreshInFlight === request) {
+      accountUsageRefreshInFlight = undefined;
+      accountUsageRefreshScope = undefined;
+      accountUsageRefreshPageGeneration = undefined;
+    }
   }
+}
+
+function refreshAccountPageInBackground(pageGeneration: number): void {
+  const request = supportsWindowsSv2Extensions() && app?.sv2AccountIndicatorEnabled
+    ? refreshAccountUsage(undefined, pageGeneration)
+    : api.sv2ProfileState().then((snapshot) => {
+      if (page === "accounts" && pageGeneration === accountPageGeneration) {
+        profiles = snapshot;
+        render();
+      }
+    });
+  void request.catch((reason) => {
+    if (page === "accounts" && pageGeneration === accountPageGeneration) {
+      error = formatError(reason);
+      render();
+    }
+  });
+}
+
+function loadCachedAccountPage(pageGeneration: number): void {
+  if (profiles) {
+    refreshAccountPageInBackground(pageGeneration);
+    return;
+  }
+  const previousProfiles = profiles;
+  void api.sv2CachedProfileState()
+    .then((snapshot) => {
+      if (page === "accounts" && pageGeneration === accountPageGeneration && profiles === previousProfiles) {
+        cachedAccountProfiles = snapshot;
+        profiles = snapshot;
+        render();
+      }
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      if (page === "accounts" && pageGeneration === accountPageGeneration) refreshAccountPageInBackground(pageGeneration);
+    });
 }
 
 function readInstanceRefreshInterval(): number {
@@ -1175,6 +1239,7 @@ function environmentDefinitelyUnavailable(environment: AccountProbeEnvironmentSt
 }
 
 function accountProbeBadge(slot: Sv2ProfileSlot): string {
+  if (profiles === cachedAccountProfiles) return `<span class="session-protection">${icon("refresh", 14)} 正在更新账号状态</span>`;
   if (!app?.sv2AccountIndicatorEnabled) {
     return `<span class="session-protection" title="账号登录指示器已关闭；未读取或解密此槽位的登录缓存。">${icon("shield", 14)} 登录指示器已关闭</span>`;
   }
@@ -1218,6 +1283,7 @@ function accountProbeBadge(slot: Sv2ProfileSlot): string {
 }
 
 function officialAuthorizationBadge(slot: Sv2ProfileSlot): string {
+  if (profiles === cachedAccountProfiles) return "";
   const probes = slot.concurrent.ready
     ? [slot.accountProbe, slot.concurrentAccountProbe]
     : [slot.accountProbe];
@@ -3296,10 +3362,12 @@ document.addEventListener("click", (event) => {
   if (targetPage) {
     const leavingHistory = page === "history" && targetPage !== "history";
     const enteringAccounts = targetPage === "accounts" && page !== "accounts";
+    const leavingAccounts = page === "accounts" && targetPage !== "accounts";
     const enteringToolCategory = targetPage === "import" || targetPage === "quality";
     const activeFeatureId = activeWorkflow;
     const activeGroup = activeFeatureId ? toolGroups.find((group) => group.featureIds.includes(activeFeatureId)) : undefined;
     instanceRefreshGeneration += 1;
+    if (enteringAccounts || leavingAccounts) accountPageGeneration += 1;
     page = targetPage;
     if (leavingHistory) stopHistoryRefresh();
     if (enteringToolCategory && (activeGroup?.id !== targetPage || workflowResult?.kind === "lyric-template")) {
@@ -3317,10 +3385,10 @@ document.addEventListener("click", (event) => {
     error = "";
     if (page === "copilot") void run(async () => { [conversations, fileApprovals] = await Promise.all([api.listConversations(), api.agentFileApprovals()]); });
     else if (page === "history") scheduleHistoryRefresh();
-    else if (enteringAccounts && (app?.platform === "windows" || app?.platform === "macos" || app?.platform === "preview")) void run(async () => {
-      if (supportsWindowsSv2Extensions() && app?.sv2AccountIndicatorEnabled) await refreshAccountUsage();
-      else profiles = await api.sv2ProfileState();
-    });
+    else if (enteringAccounts && (app?.platform === "windows" || app?.platform === "macos" || app?.platform === "preview")) {
+      render();
+      loadCachedAccountPage(accountPageGeneration);
+    }
     else {
       render();
       refreshAudioPreparationIfSelected();

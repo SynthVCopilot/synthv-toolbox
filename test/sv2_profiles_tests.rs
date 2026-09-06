@@ -123,6 +123,50 @@ fn state_reports_each_slots_installed_voice_ids() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn cached_state_reads_manifest_without_recovery_or_voice_scan() {
+    let (root, paths) = fixture();
+    let mut manifest = import_fixture(&paths, "A");
+    let active_id = manifest.active_slot_id.clone().unwrap();
+    let other_id = add_parked(&paths, &mut manifest, "B");
+    let installed = "00000000-0000-4000-8000-000000000008";
+    let version =
+        slot_data_root(&paths, &manifest, &active_id).join(format!("databases/{installed}/101"));
+    fs::create_dir_all(&version).unwrap();
+    fs::write(version.join("m"), b"manifest").unwrap();
+    fs::write(version.join("model.dnni"), b"model").unwrap();
+    fs::write(&paths.journal, b"unfinished recovery must remain untouched").unwrap();
+
+    let service = Sv2ProfileService {
+        paths: Ok(paths.clone()),
+        gate: Mutex::new(()),
+    };
+    let state = service.cached_state().unwrap();
+
+    assert_eq!(state.active_slot_id.as_deref(), Some(active_id.as_str()));
+    assert_eq!(state.slots.len(), 2);
+    assert!(state.slots.iter().any(|slot| slot.id == other_id));
+    assert!(state
+        .slots
+        .iter()
+        .all(|slot| slot.installed_voice_ids.is_empty()));
+    assert!(paths.journal.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cached_state_rejects_a_malformed_manifest() {
+    let (root, paths) = fixture();
+    fs::write(&paths.manifest, b"not json").unwrap();
+    let service = Sv2ProfileService {
+        paths: Ok(paths),
+        gate: Mutex::new(()),
+    };
+
+    assert!(service.cached_state().is_err());
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn import_fixture(paths: &SlotPaths, name: &str) -> SlotManifest {
     fs::create_dir_all(paths.canonical.join("license")).unwrap();
     fs::write(paths.canonical.join("license/session"), b"session").unwrap();
