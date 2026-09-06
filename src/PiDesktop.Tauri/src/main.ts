@@ -2365,11 +2365,11 @@ async function executeModelAuthAction(action: ModelAuthAction, detail: unknown[]
 
 function renderAiProviderSettings(): string {
   const legacyWarning = app?.model?.legacyConfigured
-    ? `<div class="ai-legacy-warning">${icon("shield", 17)}<span><strong>检测到旧版 API token 配置</strong><small>旧配置不会作为 OAuth 账号展示。请完成浏览器授权；后端迁移完成前仍会保留旧配置。</small></span></div>`
+    ? `<div class="ai-legacy-warning">${icon("shield", 17)}<span><strong>${t("settings.legacyCredentials")}</strong><small>${t("settings.legacyCredentialsDescription")}</small></span></div>`
     : "";
   const activeProvider = activeAiProvider();
   const activeVerified = Boolean(activeProvider && (activeProvider.accounts.some((account) => account.authorized) || activeProvider.apiKeys.length));
-  const activeStatus = activeProvider ? `${activeProvider.accounts.filter((account) => account.authorized).length} 个 OAuth · ${activeProvider.apiKeys.length} 个 API Key` : "未配置连接";
+  const activeStatus = activeProvider ? t("settings.oauthSummary", { count: activeProvider.accounts.filter((account) => account.authorized).length, keys: activeProvider.apiKeys.length }) : t("settings.notConfigured");
   return `<section class="panel ai-provider-panel"><div class="section-heading"><div><h2>${t("settings.providers")}</h2><p>${t("settings.providersDescription")}</p></div><span class="availability ${activeVerified ? "ready" : "warning"}">${activeStatus}</span></div>
     ${legacyWarning}<div class="ai-provider-summary"><div><strong>${escapeHtml(activeProvider ? aiProviderDisplayName(activeProvider) : t("settings.noProvider"))}</strong><small>${escapeHtml(activeProvider?.model || t("settings.chooseProvider"))}</small></div><button type="button" class="primary" data-open-ai-provider-picker ${busy ? "disabled" : ""}>${t("settings.addProvider")}</button></div>
   </section>`;
@@ -2380,12 +2380,12 @@ function renderSettings(): string {
   const showSvpRouting = app.platform === "windows" || app.platform === "preview";
   const association = app.svpAssociation;
   const associationLabel = !association.supported
-    ? "当前平台不支持"
+    ? t("settings.unsupported")
     : association.isDefault
-      ? "已设为 .svp 默认打开方式"
+      ? t("settings.defaultApp")
       : association.registered
-        ? "已注册，等待设为默认应用"
-        : "尚未注册为可选打开方式";
+        ? t("settings.registered")
+        : t("settings.unregistered");
   return `<div class="settings-layout"><section class="panel language-settings"><div class="section-heading"><div><h2>${t("settings.language")}</h2></div><label><select id="language-select" aria-label="${t("settings.language")}"><option value="zh-CN" ${locale() === "zh-CN" ? "selected" : ""}>${t("settings.chinese")}</option><option value="en" ${locale() === "en" ? "selected" : ""}>${t("settings.english")}</option></select></label></div></section>
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.mode")}</h2><p>${t("settings.modeDescription")}</p></div></div><div class="mode-setting"><button class="setting-choice ${app.mode === "toolbox" ? "active" : ""}" data-set-mode="toolbox"><span class="mode-icon slate">${icon("toolbox", 23)}</span><span><strong>${t("settings.toolbox")}</strong><small>${t("settings.toolboxDescription")}</small></span>${app.mode === "toolbox" ? icon("check", 20) : ""}</button><button class="setting-choice ${app.mode === "ai" ? "active" : ""}" data-set-mode="ai"><span class="mode-icon purple">${icon("sparkles", 23)}</span><span><strong>${t("settings.ai")}</strong><small>${t("settings.aiDescription")}</small></span>${app.mode === "ai" ? icon("check", 20) : ""}</button></div></section>
     ${app.mode === "ai" ? renderAiProviderSettings() : `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("bot", 24)}</span><div><h2>${t("settings.aiDisabled")}</h2><p>${t("settings.aiDisabledDescription")}</p></div></section>`}
@@ -2757,14 +2757,14 @@ function wireForms(): void {
     const agentEnabled = form.querySelector<HTMLInputElement>('[name="agentEnabled"]')?.checked ?? false;
     const port = Number(form.querySelector<HTMLInputElement>('[name="port"]')?.value ?? 0);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      error = "端口必须是 1 到 65535 之间的整数。";
+      error = t("connections.portError");
       notice = "";
       render();
       return;
     }
     void run(async () => {
       httpApiStatus = await api.configureHttpApi(enabled, agentEnabled, port);
-      notice = enabled || agentEnabled ? "本地 HTTP 接口设置已保存。" : "本地 HTTP 接口已关闭。";
+      notice = enabled || agentEnabled ? t("connections.saved") : t("connections.closed");
     });
   });
   document.querySelector<HTMLFormElement>("#mcp-form")?.addEventListener("submit", (event) => {
@@ -2774,7 +2774,7 @@ function wireForms(): void {
     const args = (document.querySelector<HTMLTextAreaElement>("#mcp-args")?.value ?? "").split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
     const enabled = document.querySelector<HTMLInputElement>("#mcp-enabled")?.checked ?? false;
     const server: McpServerConfig = { id: crypto.randomUUID(), name, command, args, enabled };
-    void run(async () => { app = await api.saveMcpServer(server); notice = `${name} 已添加。`; });
+    void run(async () => { app = await api.saveMcpServer(server); notice = t("connections.serverAdded", { name }); });
   });
   document.querySelector<HTMLFormElement>("#bridge-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -3661,7 +3661,7 @@ document.addEventListener("click", (event) => {
   if (target.dataset.conversation) { void run(async () => { conversation = await api.openConversation(target.dataset.conversation ?? ""); fileApprovals = await api.agentFileApprovals(); }); return; }
   if (target.dataset.prompt) { void sendPrompt(target.dataset.prompt); return; }
   if (target.dataset.testMcp) { void run(async () => { setFeedback(await api.testMcpServer(target.dataset.testMcp ?? "")); }); return; }
-  if (target.dataset.deleteMcp) { void run(async () => { app = await api.deleteMcpServer(target.dataset.deleteMcp ?? ""); notice = "MCP 配置已删除。"; }); }
+  if (target.dataset.deleteMcp) { void run(async () => { app = await api.deleteMcpServer(target.dataset.deleteMcp ?? ""); notice = t("connections.deleted"); }); }
 });
 
 function svpRoutePlanFromPayload(payload: unknown): SvpRoutePlan | undefined {
