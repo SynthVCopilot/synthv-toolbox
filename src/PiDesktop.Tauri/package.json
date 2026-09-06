@@ -14,7 +14,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@model-auth/vue": "https://github.com/lsy-404/model-auth/releases/download/v0.2.2/model-auth-vue-0.2.2.tgz",
+    "@model-auth/vue": "https://github.com/lsy-404/model-auth/releases/download/v0.2.4/model-auth-vue-0.2.4.tgz",
     "@tauri-apps/api": "2.11.1",
     "lucide": "1.41.0",
     "vue": "^3.5.42"

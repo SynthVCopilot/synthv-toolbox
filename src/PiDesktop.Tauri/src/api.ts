@@ -491,7 +491,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     const credentialId = String(args?.credentialId ?? "").trim();
     const account = {
       id: credentialId || `preview-${provider.id}-${accountNumber}`,
-      label: `${provider.id === "anthropic" ? "Claude" : "ChatGPT"} official account ${accountNumber}`,
+      label: `${provider.displayName} 预览账号 ${accountNumber}`,
       expiresAt: Date.now() + 55 * 60_000,
       authorized: true,
       healthy: true,

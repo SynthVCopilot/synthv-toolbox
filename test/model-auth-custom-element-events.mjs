@@ -42,6 +42,18 @@ let authorization;
 dialog.addEventListener("authorize-oauth", (event) => { authorization = event.detail; });
 dialog.shadowRoot.querySelector('[data-part="oauth-config"] button').click();
 assert.deepEqual(authorization, ["anthropic"]);
+assert.equal(dialog.shadowRoot.querySelector('[role="progressbar"]').getAttribute("aria-valuenow"), "2");
+assert.equal(dialog.shadowRoot.querySelector('[data-part="confirm"]'), null);
+dialog.providers = [{ ...dialog.providers[0], oauthCredentials: [{ id: "verified", label: "Test", enabled: true, healthy: true, weight: 1 }] }];
+await new Promise((resolve) => setTimeout(resolve, 0));
+assert.equal(dialog.shadowRoot.querySelector('[role="progressbar"]').getAttribute("aria-valuenow"), "3");
+let selection;
+dialog.addEventListener("select-model", (event) => { selection = event.detail; });
+dialog.shadowRoot.querySelector('[part="model-row"]').click();
+await new Promise((resolve) => setTimeout(resolve, 0));
+assert.equal(selection, undefined);
+dialog.shadowRoot.querySelector('[data-part="confirm"]').click();
+assert.deepEqual(selection, [{ providerId: "anthropic", model: "claude" }]);
 
 let closed = false;
 dialog.addEventListener("close", () => { closed = true; });
