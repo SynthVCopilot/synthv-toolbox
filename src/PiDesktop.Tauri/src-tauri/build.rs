@@ -1,4 +1,5 @@
 fn main() {
+    println!("cargo:rerun-if-changed=icons");
     let attributes = tauri_build::Attributes::new();
     #[cfg(windows)]
     {
