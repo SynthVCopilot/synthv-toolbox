@@ -105,6 +105,7 @@ pub async fn import_audio_cancellable(
     }
 
     let source_preview = preview_cancellable(&source, &cancelled).await?;
+    crate::downloads::ensure_ffmpeg(resource_root.clone(), Some(Arc::clone(&cancelled))).await?;
     let runtime = media_fetcher()?;
     let import_id = Uuid::new_v4().to_string();
     let directory = imports_root()?.join(&import_id);

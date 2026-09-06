@@ -293,6 +293,8 @@ impl AudioPreparationService {
     }
 
     pub async fn probe_media(&self, path: String) -> Result<MediaProbe, String> {
+        canonical_input(&path)?;
+        self.ensure_runtime(None).await?;
         let _usage_guard = component_usage_guard()?;
         let mut probe = probe_media_with_runtime(&self.runtime()?, path).await?;
         let mime_type = audio_mime_for_probe(&probe).map(str::to_string);
@@ -303,8 +305,18 @@ impl AudioPreparationService {
     }
 
     pub async fn analyze_loudness(&self, path: String) -> Result<LoudnessReport, String> {
+        canonical_input(&path)?;
+        self.ensure_runtime(None).await?;
         let _usage_guard = component_usage_guard()?;
         analyze_loudness_with_runtime(&self.runtime()?, path).await
+    }
+
+    async fn ensure_runtime(&self, cancelled: Option<Arc<AtomicBool>>) -> Result<(), String> {
+        #[cfg(test)]
+        if self.runtime_override.is_some() {
+            return Ok(());
+        }
+        crate::downloads::ensure_ffmpeg(self.resource_dir.clone(), cancelled).await
     }
 
     fn runtime(&self) -> Result<Runtime, String> {
@@ -321,6 +333,7 @@ impl AudioPreparationService {
     ) -> Result<AudioWritePlan, String> {
         validate_prepare(&request)?;
         let input = canonical_input(&request.input_path)?;
+        self.ensure_runtime(None).await?;
         let _usage_guard = component_usage_guard()?;
         let probe =
             probe_media_with_runtime(&self.runtime()?, input.to_string_lossy().into_owned())
@@ -631,6 +644,7 @@ impl AudioPreparationService {
             }
         });
         let result = async {
+            self.ensure_runtime(Some(Arc::clone(&cancelled))).await?;
             let _usage_guard = component_usage_guard()?;
             if cancelled.load(Ordering::SeqCst) {
                 return Err("Audio operation was cancelled before it started.".to_string());
@@ -1853,6 +1867,10 @@ fn diagnostic_tail(value: &[u8]) -> String {
     } else {
         tail.to_string()
     }
+}
+
+pub(crate) fn ffmpeg_runtime_available(resource_dir: &Path) -> bool {
+    resolve_runtime(resource_dir).is_ok()
 }
 
 fn resolve_runtime(resource_dir: &Path) -> Result<Runtime, String> {
