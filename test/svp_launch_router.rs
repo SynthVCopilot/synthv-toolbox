@@ -41,6 +41,7 @@ fn account_probe(
             .iter()
             .map(|voice| (*voice).to_string())
             .collect(),
+        authorized_voice_products: Vec::new(),
         account_display_name: None,
         account_email: None,
     }

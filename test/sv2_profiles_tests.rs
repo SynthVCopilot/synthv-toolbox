@@ -11,6 +11,7 @@ fn account_probe(
         authorization_status,
         authorized_voice_count: 0,
         authorized_voices: Vec::new(),
+        authorized_voice_products: Vec::new(),
         account_display_name: None,
         account_email: None,
         checked_at_utc: Utc::now().to_rfc3339(),

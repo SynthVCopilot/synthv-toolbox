@@ -718,7 +718,7 @@ fn license_filter_is_active_voice_only_deduplicated_and_sorted() {
             "status":"success",
             "data":[
                 {"status":"active","valid_to":"2100-01-01T00:00:00Z","product":{"name":"  Beta   Voice ","type":"Voice Databases 2","tags":[]}},
-                {"status":"active","product":{"name":"Alpha Voice","type":"Voice Database","tags":[]}},
+                {"status":"active","product":{"id":"123e4567-e89b-12d3-a456-426614174000","name":"Alpha Voice","type":"Voice Database","tags":[]}},
                 {"status":"active","product":{"name":"alpha voice","type":"Voice Database","tags":[]}},
                 {"status":"active","product":{"name":"Tagged Singer","type":"other","tags":"singer"}},
                 {"status":"Active","product":{"name":"Wrong Status","type":"Voice Database","tags":[]}},
@@ -727,8 +727,21 @@ fn license_filter_is_active_voice_only_deduplicated_and_sorted() {
                 {"status":"active","product":{"name":"Legacy Alias","type":"voice_database","tags":[]}}
             ]
         }"#;
-    let voices = extract_authorized_voices(body).unwrap();
+    let (voices, products) = extract_authorized_voice_products(body).unwrap();
     assert_eq!(voices, vec!["Alpha Voice", "Beta Voice"]);
+    assert_eq!(
+        products,
+        vec![Sv2AuthorizedVoiceProduct {
+            id: "123e4567-e89b-12d3-a456-426614174000".to_string(),
+            name: "Alpha Voice".to_string(),
+        }]
+    );
+    let view = view_from_remote(
+        interpret_license_response(200, Zeroizing::new(body.to_vec())),
+        EnrollOutcome::Unknown,
+    );
+    assert_eq!(view.authorized_voices, voices);
+    assert_eq!(view.authorized_voice_products, products);
 }
 
 #[test]
@@ -955,7 +968,7 @@ fn shared_slot_alias_receives_authority_result_without_quarantine() {
         }),
     ];
 
-    apply_equivalent_session_aliases(&mut results, &aliases);
+    apply_equivalent_session_aliases(&mut results, &aliases, &[]);
 
     assert_eq!(
         results[1].as_ref().unwrap().session_status,
@@ -965,18 +978,14 @@ fn shared_slot_alias_receives_authority_result_without_quarantine() {
         results[1].as_ref().unwrap().authorization_status,
         Sv2AuthorizationStatus::Verified
     );
-    assert_eq!(
-        cache_get(
-            &fingerprint,
-            &ProbeRootKey::AccountEnvironment {
-                slot_id: "slot-authority".to_string(),
-                concurrent: true,
-            },
-        )
-        .unwrap()
-        .session_status,
-        Sv2SessionInspectionStatus::Ready
-    );
+    assert!(cache_get(
+        &fingerprint,
+        &ProbeRootKey::AccountEnvironment {
+            slot_id: "slot-authority".to_string(),
+            concurrent: true,
+        },
+    )
+    .is_none());
     assert!(sync_quarantine_get(&SyncQuarantineKey::AccountSlot(
         "slot-authority".to_string()
     ))
@@ -1068,6 +1077,9 @@ fn diagnostic_real_session_root_is_read_only() {
             .build();
         match query_license_snapshot_with_agent(&agent, credentials.access_token()) {
             RemoteOutcome::Authorized(voices) => format!("authorized:{}", voices.len()),
+            RemoteOutcome::AuthorizedProducts { voices, .. } => {
+                format!("authorized:{}", voices.len())
+            }
             RemoteOutcome::ConcurrentUse => "concurrent".to_string(),
             RemoteOutcome::Unauthorized => "unauthorized".to_string(),
             RemoteOutcome::Offline => "offline".to_string(),
@@ -1377,6 +1389,48 @@ fn active_license_cache_requires_matching_fingerprint_and_unexpired_access() {
         last_write_time: 2,
         ..fingerprint
     };
-    assert!(cache_get(&changed, &root).is_none());
+    assert!(cache_get(&changed, &root).is_some());
+    clear_sv2_account_probe_cache();
+}
+
+#[cfg(windows)]
+#[test]
+fn same_session_content_survives_an_atomic_metadata_rewrite() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
+    clear_sv2_account_probe_cache();
+    let root = ProbeRootKey::AccountEnvironment {
+        slot_id: "slot-active-cache".to_string(),
+        concurrent: false,
+    };
+    let checked_fingerprint = SessionCacheKey {
+        canonical_root: PathBuf::from("C:/synthetic/slot-active-cache"),
+        session_len: 8,
+        last_write_time: 1,
+        content_hash: [0; 32],
+    };
+    let rewritten_fingerprint = SessionCacheKey {
+        last_write_time: 2,
+        ..checked_fingerprint.clone()
+    };
+    let verified = Sv2AccountProbeView::new(
+        Sv2SessionInspectionStatus::Ready,
+        Sv2RemoteUseStatus::Clear,
+        Sv2AuthorizationStatus::Verified,
+        vec!["Synthetic Voice".to_string()],
+        "verified",
+    );
+    cache_put(
+        checked_fingerprint.clone(),
+        &root,
+        &verified,
+        Some(Utc::now() + ChronoDuration::minutes(10)),
+    );
+
+    let cached = cache_get(&rewritten_fingerprint, &root).unwrap();
+    assert_eq!(
+        cached.authorization_status,
+        Sv2AuthorizationStatus::Verified
+    );
+    assert_eq!(cached.authorized_voices, vec!["Synthetic Voice"]);
     clear_sv2_account_probe_cache();
 }

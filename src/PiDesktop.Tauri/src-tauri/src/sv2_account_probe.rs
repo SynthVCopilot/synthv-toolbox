@@ -125,10 +125,18 @@ pub struct Sv2AccountProbeView {
     pub authorization_status: Sv2AuthorizationStatus,
     pub authorized_voice_count: usize,
     pub authorized_voices: Vec<String>,
+    pub authorized_voice_products: Vec<Sv2AuthorizedVoiceProduct>,
     pub account_display_name: Option<String>,
     pub account_email: Option<String>,
     pub checked_at_utc: String,
     pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Sv2AuthorizedVoiceProduct {
+    pub id: String,
+    pub name: String,
 }
 
 impl Sv2AccountProbeView {
@@ -170,6 +178,7 @@ impl Sv2AccountProbeView {
             checked_at_utc: Utc::now().to_rfc3339(),
             detail: detail.to_string(),
             authorized_voices,
+            authorized_voice_products: Vec::new(),
             account_display_name: None,
             account_email: None,
         }
@@ -201,6 +210,8 @@ impl Sv2AccountProbeView {
         view.authorization_status = cached.authorization_status;
         view.authorized_voice_count = cached.authorized_voice_count;
         view.authorized_voices.clone_from(&cached.authorized_voices);
+        view.authorized_voice_products
+            .clone_from(&cached.authorized_voice_products);
         view.account_display_name
             .clone_from(&cached.account_display_name);
         view.account_email.clone_from(&cached.account_email);
@@ -385,10 +396,21 @@ fn cached_active_session_view(
     logical_identity: Option<(&str, bool)>,
 ) -> Sv2AccountProbeView {
     let root = probe_root_key_for_identity(data_root, logical_identity);
-    let cached = inspect_session_fingerprint(data_root)
-        .ok()
-        .flatten()
-        .and_then(|fingerprint| root.as_ref().and_then(|root| cache_get(&fingerprint, root)));
+    let cached = root.as_ref().and_then(|root| {
+        if let Some(view) = sync_quarantine_get(&root.quarantine_key()) {
+            return Some(view);
+        }
+        inspect_session_fingerprint(data_root)
+            .ok()
+            .flatten()
+            .and_then(|fingerprint| cache_get(&fingerprint, root))
+    });
+    if matches!(
+        cached.as_ref().map(|view| view.session_status),
+        Some(Sv2SessionInspectionStatus::SyncFailed)
+    ) {
+        return cached.expect("sync quarantine view is present");
+    }
     let mut view = Sv2AccountProbeView::in_use_with_cached_authorization(cached.as_ref());
     if view.account_display_name.is_none() && view.account_email.is_none() {
         if let Some((name, email)) = root.as_ref().and_then(cached_identity_for_root) {
@@ -601,6 +623,10 @@ where
 #[derive(Clone)]
 enum RemoteOutcome {
     Authorized(Vec<String>),
+    AuthorizedProducts {
+        voices: Vec<String>,
+        products: Vec<Sv2AuthorizedVoiceProduct>,
+    },
     ConcurrentUse,
     Unauthorized,
     Offline,
@@ -639,9 +665,12 @@ fn view_from_remote(licenses: RemoteOutcome, enroll: EnrollOutcome) -> Sv2Accoun
         } else {
             Sv2RemoteUseStatus::Unknown
         };
-    let (authorization_status, voices) = match licenses {
-        RemoteOutcome::Authorized(voices) => (Sv2AuthorizationStatus::Verified, voices),
-        _ => (Sv2AuthorizationStatus::Unknown, Vec::new()),
+    let (authorization_status, voices, products) = match licenses {
+        RemoteOutcome::Authorized(voices) => (Sv2AuthorizationStatus::Verified, voices, Vec::new()),
+        RemoteOutcome::AuthorizedProducts { voices, products } => {
+            (Sv2AuthorizationStatus::Verified, voices, products)
+        }
+        _ => (Sv2AuthorizationStatus::Unknown, Vec::new(), Vec::new()),
     };
     let accepted = authorization_status == Sv2AuthorizationStatus::Verified
         || matches!(enroll, EnrollOutcome::Clear | EnrollOutcome::ConcurrentUse)
@@ -670,13 +699,15 @@ fn view_from_remote(licenses: RemoteOutcome, enroll: EnrollOutcome) -> Sv2Accoun
         (_, _, true) => "本地登录缓存有效，但官方服务暂时不可达；远端占用与授权保持未知。",
         _ => "官方服务没有返回可判定的登录或授权结果；状态保持未知。",
     };
-    Sv2AccountProbeView::new(
+    let mut view = Sv2AccountProbeView::new(
         session_status,
         remote_use,
         authorization_status,
         voices,
         detail,
-    )
+    );
+    view.authorized_voice_products = products;
+    view
 }
 
 fn view_from_active_license(licenses: RemoteOutcome) -> Sv2AccountProbeView {
@@ -1407,6 +1438,8 @@ struct LicenseItem {
 
 #[derive(Deserialize)]
 struct LicenseProduct {
+    #[serde(default, alias = "product_id")]
+    id: Option<String>,
     #[serde(default)]
     name: Option<String>,
     #[serde(
@@ -1428,10 +1461,10 @@ fn interpret_license_response(status: u16, body: Zeroizing<Vec<u8>>) -> RemoteOu
     if status != 200 {
         return RemoteOutcome::Unknown;
     }
-    let Some(voices) = extract_authorized_voices(&body) else {
+    let Some((voices, products)) = extract_authorized_voice_products(&body) else {
         return RemoteOutcome::Unknown;
     };
-    RemoteOutcome::Authorized(voices)
+    RemoteOutcome::AuthorizedProducts { voices, products }
 }
 
 fn contains_json_string(body: &[u8], needle: &[u8]) -> bool {
@@ -1443,7 +1476,9 @@ fn contains_json_string(body: &[u8], needle: &[u8]) -> bool {
     })
 }
 
-fn extract_authorized_voices(body: &[u8]) -> Option<Vec<String>> {
+fn extract_authorized_voice_products(
+    body: &[u8],
+) -> Option<(Vec<String>, Vec<Sv2AuthorizedVoiceProduct>)> {
     let envelope: LicenseEnvelope = serde_json::from_slice(body).ok()?;
     let licenses = envelope.data?;
     if licenses.len() > MAX_LICENSE_ITEMS {
@@ -1451,6 +1486,7 @@ fn extract_authorized_voices(body: &[u8]) -> Option<Vec<String>> {
     }
 
     let mut names = BTreeMap::<String, String>::new();
+    let mut products = BTreeMap::<String, Sv2AuthorizedVoiceProduct>::new();
     for license in licenses {
         if license.status.as_deref() != Some("active") {
             continue;
@@ -1464,7 +1500,17 @@ fn extract_authorized_voices(body: &[u8]) -> Option<Vec<String>> {
         let Some(name) = product.name.and_then(normalize_product_name) else {
             continue;
         };
-        names.entry(name.to_lowercase()).or_insert(name);
+        let name = names.entry(name.to_lowercase()).or_insert(name).clone();
+        if let Some(id) = product
+            .id
+            .as_deref()
+            .and_then(|value| uuid::Uuid::parse_str(value).ok())
+            .map(|value| value.to_string())
+        {
+            products
+                .entry(id.clone())
+                .or_insert(Sv2AuthorizedVoiceProduct { id, name });
+        }
     }
 
     let mut voices = names.into_values().collect::<Vec<_>>();
@@ -1474,7 +1520,8 @@ fn extract_authorized_voices(body: &[u8]) -> Option<Vec<String>> {
             .then_with(|| left.cmp(right))
     });
     voices.truncate(MAX_AUTHORIZED_VOICES);
-    Some(voices)
+    let products = products.into_values().take(MAX_AUTHORIZED_VOICES).collect();
+    Some((voices, products))
 }
 
 fn is_voice_product(product: &LicenseProduct) -> bool {
@@ -1549,7 +1596,6 @@ impl ProbeRootKey {
 struct ProbeCacheKey {
     root: ProbeRootKey,
     session_len: u64,
-    last_write_time: u64,
     content_hash: [u8; 32],
 }
 
@@ -1559,7 +1605,6 @@ impl ProbeCacheKey {
         Self {
             root: root.clone(),
             session_len: fingerprint.session_len,
-            last_write_time: fingerprint.last_write_time,
             content_hash: fingerprint.content_hash,
         }
     }
@@ -1808,7 +1853,7 @@ fn cache_put(
         view.remote_use,
     ) {
         (_, _, Sv2RemoteUseStatus::Detected) => Duration::from_secs(5),
-        (_, Sv2AuthorizationStatus::Verified, _) => Duration::from_secs(30),
+        (_, Sv2AuthorizationStatus::Verified, _) => Duration::MAX,
         (Sv2SessionInspectionStatus::Offline, _, _) => Duration::from_secs(3),
         (Sv2SessionInspectionStatus::Invalid, _, _) => Duration::from_secs(5),
         (Sv2SessionInspectionStatus::SyncFailed, _, _) => Duration::MAX,
@@ -1831,6 +1876,8 @@ fn cache_put(
             return;
         };
         ttl = ttl.min(remaining);
+    } else if view.authorization_status == Sv2AuthorizationStatus::Verified {
+        return;
     }
     if ttl.is_zero() {
         return;
@@ -2249,6 +2296,7 @@ fn finish_batch_results(
 fn apply_equivalent_session_aliases(
     results: &mut [Option<Sv2AccountProbeView>],
     aliases: &[Option<EquivalentSessionAlias>],
+    sessions: &[BatchSession],
 ) {
     for (request_index, alias) in aliases.iter().enumerate() {
         let Some(alias) = alias else {
@@ -2257,7 +2305,16 @@ fn apply_equivalent_session_aliases(
         let view = results[alias.leader_request_index]
             .clone()
             .unwrap_or_else(Sv2AccountProbeView::invalid);
-        cache_put(alias.fingerprint.clone(), &alias.root_key, &view, None);
+        let access_expires_at = sessions
+            .iter()
+            .find(|session| session.request_index == alias.leader_request_index)
+            .map(|session| session.credentials.access_expires_at);
+        cache_put(
+            alias.fingerprint.clone(),
+            &alias.root_key,
+            &view,
+            access_expires_at,
+        );
         results[request_index] = Some(view);
     }
 }
@@ -2336,7 +2393,7 @@ fn refresh_windows_batch(requests: &[Sv2AccountProbeRequest<'_>]) -> Vec<Sv2Acco
                 cache_put(session.fingerprint, &session.root_key, &view, None);
                 results[session.request_index] = Some(view.clone());
             }
-            apply_equivalent_session_aliases(&mut results, &equivalent_session_aliases);
+            apply_equivalent_session_aliases(&mut results, &equivalent_session_aliases, &[]);
             return finish_batch_results(requests, results);
         }
     };
@@ -2696,7 +2753,7 @@ fn refresh_windows_batch(requests: &[Sv2AccountProbeRequest<'_>]) -> Vec<Sv2Acco
     }
 
     drop(key);
-    apply_equivalent_session_aliases(&mut results, &equivalent_session_aliases);
+    apply_equivalent_session_aliases(&mut results, &equivalent_session_aliases, &sessions);
     finish_batch_results(requests, results)
 }
 
