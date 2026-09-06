@@ -5,7 +5,8 @@ import { stripTypeScriptTypes } from "node:module";
 
 const source = fs.readFileSync(new URL("../src/PiDesktop.Tauri/src/main.ts", import.meta.url), "utf8");
 const start = source.indexOf("async function refreshAccountUsage(");
-const end = source.indexOf("function readInstanceRefreshInterval", start);
+const end = source.indexOf("function startInstanceRefresh", start);
+assert.ok(start >= 0 && end > start, "account refresh implementation must be found");
 const pending = [];
 let renders = 0;
 const context = vm.createContext({
