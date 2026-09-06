@@ -382,6 +382,7 @@ const previewState = (): BootstrapState => ({
     displayName: "Synthesizer V Studio 2",
     scriptsPath: "/Library/Application Support/Dreamtonics/Synthesizer V Studio 2/scripts",
     source: "macOS 用户脚本目录",
+    bridgeProfile: "sv2",
   }],
   components: [
     { id: "ffmpeg", displayName: "FFmpeg", description: "音视频转码与抽取；所有音频流程的基础。", audience: "AI 与人工", installed: true, downloaded: false, installable: true, removable: false, status: "已就绪" },
@@ -1284,8 +1285,8 @@ export const api = {
   acceptSv2ConcurrentDisclaimer: () =>
     call<BootstrapState>("accept_sv2_concurrent_disclaimer"),
   saveScriptsPath: (scriptsPath: string) => call<BootstrapState>("save_scripts_path", { scriptsPath }),
-  installBridge: (scriptsPath: string) => call<OperationResult>("install_bridge", { scriptsPath }),
-  diagnoseBridge: (scriptsPath: string) => call<OperationResult>("diagnose_bridge", { scriptsPath }),
+  installBridge: (targets: { scriptsPath: string; bridgeProfile: "sv2" | "sv1" | "flat" | "unsupported" }[]) => call<{ scriptsPath: string; bridgeProfile: string; result: OperationResult }[]>("install_bridge", { targets }),
+  diagnoseBridge: (targets: { scriptsPath: string; bridgeProfile: "sv2" | "sv1" | "flat" | "unsupported" }[]) => call<{ scriptsPath: string; bridgeProfile: string; result: OperationResult }[]>("diagnose_bridge", { targets }),
   connectBridge: () => call<OperationResult>("connect_bridge"),
   listSynthvProcesses: () => call<SynthVProcess[]>("list_synthv_processes"),
   focusSv2Instance: (processId: number, processIdentity: string) =>

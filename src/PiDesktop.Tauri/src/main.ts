@@ -57,6 +57,7 @@ import type {
   SvpLaunchMode,
   SvpRouteCandidate,
   SvpRoutePlan,
+  SynthVInstallation,
   SynthVProcess,
   SynthVShortcutProfile,
   ToolboxUpdateCheck,
@@ -82,6 +83,13 @@ interface PendingAccountIndicatorConsent {
 type Feature = FeatureCatalogItem;
 const features: Feature[] = featureCatalog;
 
+type BridgeProfile = NonNullable<SynthVInstallation["bridgeProfile"]>;
+interface BridgeTarget {
+  scriptsPath: string;
+  bridgeProfile: BridgeProfile;
+  installations: SynthVInstallation[];
+}
+
 let app: BootstrapState | undefined;
 let page: Page = "home";
 let busy = false;
@@ -102,10 +110,12 @@ let audioCaptureTargets: AudioCaptureTarget[] = [];
 let synthvProcesses: SynthVProcess[] = [];
 let instanceRefreshInFlight = false;
 let instanceRefreshGeneration = 0;
-const instanceRefreshOptions = [0, 5000, 10000, 30000, 60000];
-let instanceRefreshInterval = readInstanceRefreshInterval();
+const instanceRefreshInterval = 3000;
 let instanceRefreshTimer: number | undefined;
 let synthvShortcutProfile: SynthVShortcutProfile | undefined;
+let bridgeManualScriptsPath = "";
+let bridgeManualProfile: BridgeProfile = "sv2";
+const bridgeTargetResults = new Map<string, OperationResult>();
 let httpApiStatus: HttpApiStatus = {
   enabled: false,
   agentEnabled: false,
@@ -714,23 +724,10 @@ function loadCachedAccountPage(pageGeneration: number): void {
     });
 }
 
-function readInstanceRefreshInterval(): number {
-  try {
-    const saved = localStorage.getItem("pi.synthv.instanceRefreshMs");
-    if (saved !== null && instanceRefreshOptions.includes(Number(saved))) return Number(saved);
-  } catch { /* preference remains in memory */ }
-  return 5000;
-}
-
-function setInstanceRefreshInterval(interval: number): void {
-  if (!instanceRefreshOptions.includes(interval)) return;
-  instanceRefreshInterval = interval;
+function startInstanceRefresh(): void {
   instanceRefreshGeneration += 1;
   if (instanceRefreshTimer !== undefined) window.clearInterval(instanceRefreshTimer);
-  instanceRefreshTimer = interval > 0
-    ? window.setInterval(() => { void refreshVisibleSynthvInstances(); }, interval)
-    : undefined;
-  try { localStorage.setItem("pi.synthv.instanceRefreshMs", String(interval)); } catch { /* preference remains in memory */ }
+  instanceRefreshTimer = window.setInterval(() => { void refreshVisibleSynthvInstances(); }, instanceRefreshInterval);
 }
 
 async function refreshVisibleSynthvInstances(): Promise<void> {
@@ -1490,12 +1487,7 @@ function renderAccounts(): string {
 }
 
 function renderSv2InstanceList(): string {
-  return `<section class="panel account-instances-panel"><div class="panel-heading"><h2>SynthV 实例</h2>${renderInstanceRefreshControls()}</div><div class="synthv-process-list">${renderSv2InstanceRows()}</div></section>`;
-}
-
-function renderInstanceRefreshControls(): string {
-  const options = instanceRefreshOptions.map((interval) => `<option value="${interval}"${interval === instanceRefreshInterval ? " selected" : ""}>${interval ? `每 ${interval / 1000} 秒` : "关闭"}</option>`).join("");
-  return `<div class="instance-refresh-controls"><label>自动刷新<select data-instance-refresh-interval aria-label="实例自动刷新频率">${options}</select></label><button class="secondary compact" data-refresh-synthv-processes aria-label="刷新 SynthV 实例" title="刷新 SynthV 实例">${icon("refresh", 16)} 刷新</button></div>`;
+  return `<section class="panel account-instances-panel"><div class="panel-heading"><h2>SynthV 实例</h2></div><div class="synthv-process-list">${renderSv2InstanceRows()}</div></section>`;
 }
 
 function renderSv2InstanceRows(): string {
@@ -2145,26 +2137,59 @@ function renderBridgeProcessRows(): string {
     : '<div class="empty-inline compact-empty">没有发现正在运行的 SynthV 进程。</div>';
 }
 
+function bridgeTargetKey(scriptsPath: string): string {
+  return scriptsPath.trim().replaceAll("\\", "/").toLocaleLowerCase();
+}
+
+function bridgeTargets(installations: SynthVInstallation[]): BridgeTarget[] {
+  const targets = new Map<string, BridgeTarget>();
+  for (const installation of installations) {
+    const scriptsPath = installation.scriptsPath?.trim();
+    const bridgeProfile = installation.bridgeProfile;
+    if (!scriptsPath || (bridgeProfile !== "sv1" && bridgeProfile !== "sv2" && bridgeProfile !== "flat")) continue;
+    const key = bridgeTargetKey(scriptsPath);
+    const current = targets.get(key);
+    if (current) current.installations.push(installation);
+    else targets.set(key, { scriptsPath, bridgeProfile, installations: [installation] });
+  }
+  return [...targets.values()].sort((left, right) => left.scriptsPath.localeCompare(right.scriptsPath));
+}
+
+function bridgeProfileLabel(profile: BridgeProfile): string {
+  return profile === "sv2" ? "SV2 脚本" : profile === "sv1" ? "SV1 兼容脚本" : profile === "flat" ? "Flat 兼容脚本" : "不支持脚本安装";
+}
+
+function renderBridgeResult(target: BridgeTarget): string {
+  const result = bridgeTargetResults.get(bridgeTargetKey(target.scriptsPath));
+  if (!result) return "";
+  return `<div class="inline-status ${result.succeeded ? "" : "error-text"}"><span class="status-dot ${result.succeeded ? "online" : ""}"></span><span><strong>${escapeHtml(result.summary)}</strong>${result.detail ? `<small>${escapeHtml(result.detail)}</small>` : ""}</span></div>`;
+}
+
 function renderBridge(): string {
   if (!app) return "";
   const applicationLocations = app.installations.filter((item) => item.installPath);
-  const scriptsLocations = app.installations.filter((item) => item.scriptsPath);
+  const targets = bridgeTargets(app.installations);
+  const unsupportedLocations = app.installations.filter((item) => item.bridgeProfile === "unsupported");
   const applicationList = applicationLocations.length
     ? applicationLocations.map((item) => `<article class="installation-item"><span class="status-dot online"></span><span><strong>${escapeHtml(item.displayName)}</strong><small title="${escapeHtml(item.installPath ?? "")}">${escapeHtml(item.installPath ?? "")}</small></span><span class="location-source">${escapeHtml(item.source)}</span></article>`).join("")
     : '<div class="empty-inline compact-empty">没有发现 Synthesizer V 应用安装。</div>';
-  const scriptsList = scriptsLocations.length
-    ? scriptsLocations.map((item) => `<button class="installation-item" data-scripts="${escapeHtml(item.scriptsPath ?? "")}" title="选择此 scripts 目录作为 Bridge 安装目标"><span class="status-dot online"></span><span><strong>${escapeHtml(item.displayName)}</strong><small title="${escapeHtml(item.scriptsPath ?? "")}">${escapeHtml(item.scriptsPath ?? "")}</small></span><span class="location-action">选择</span></button>`).join("")
-    : '<div class="empty-inline compact-empty">没有发现 scripts 目录，可以在右侧手动填写。</div>';
+  const scriptsList = targets.length
+    ? targets.map((target) => `<article class="installation-item"><span class="status-dot online"></span><span><strong>${escapeHtml(target.installations.map((item) => item.displayName).join(" / "))}</strong><small title="${escapeHtml(target.scriptsPath)}">${escapeHtml(target.scriptsPath)}</small></span><span class="location-source">${escapeHtml(bridgeProfileLabel(target.bridgeProfile))}</span></article>`).join("")
+    : '<div class="empty-inline compact-empty">没有发现可管理的 scripts 目录，可以在右侧手动填写。</div>';
+  const unsupportedList = unsupportedLocations.length
+    ? `<section class="detection-group"><div class="detection-group-title"><strong>无需或不支持脚本安装</strong><span>${unsupportedLocations.length}</span></div><div class="installation-list">${unsupportedLocations.map((item) => `<article class="installation-item"><span class="status-dot"></span><span><strong>${escapeHtml(item.displayName)}</strong><small>${escapeHtml(item.installPath ?? "未找到安装目录")}</small></span><span class="location-source">${escapeHtml(bridgeProfileLabel(item.bridgeProfile ?? "unsupported"))}</span></article>`).join("")}</div></section>`
+    : "";
   const shortcuts = synthvShortcutProfile ?? { bridgeStart: "F13", bridgeStop: "F14", detail: "正在读取快捷键配置…" };
   const processList = renderBridgeProcessRows();
-  const processControls = `<section class="panel bridge-instances-panel"><div class="panel-heading"><span class="feature-icon violet">${icon("bridge", 25)}</span><div><h2>SynthV 实例</h2><p>${escapeHtml(shortcuts.detail)}</p></div>${renderInstanceRefreshControls()}</div><div class="shortcut-tags"><span>启动 / 重连：${escapeHtml(shortcuts.bridgeStart)}</span><span>停止：${escapeHtml(shortcuts.bridgeStop)}</span></div><div class="synthv-process-list">${processList}</div></section>`;
+  const processControls = `<section class="panel bridge-instances-panel"><div class="panel-heading"><span class="feature-icon violet">${icon("bridge", 25)}</span><div><h2>SynthV 实例</h2><p>${escapeHtml(shortcuts.detail)}</p></div></div><div class="shortcut-tags"><span>启动 / 重连：${escapeHtml(shortcuts.bridgeStart)}</span><span>停止：${escapeHtml(shortcuts.bridgeStop)}</span></div><div class="synthv-process-list">${processList}</div></section>`;
   return `<div class="bridge-grid"><section class="panel"><div class="panel-heading"><span class="feature-icon orange">${icon("bridge", 25)}</span><div><h2>Synthesizer V 探测</h2><p>Windows 与 macOS 使用各自的标准路径，只进行只读检查。</p></div><button class="secondary compact" data-scan>${icon("sync", 16)} 重新探测</button></div>
     <div class="detection-groups">
       <section class="detection-group"><div class="detection-group-title"><strong>应用安装</strong><span>${applicationLocations.length}</span></div><div class="installation-list">${applicationList}</div></section>
-      <section class="detection-group"><div class="detection-group-title"><strong>Scripts 目录</strong><span>${scriptsLocations.length}</span></div><p class="detection-group-help">选择一个目录后，会填入右侧的 Bridge 安装目标。</p><div class="installation-list">${scriptsList}</div></section>
+      <section class="detection-group"><div class="detection-group-title"><strong>可管理的 Scripts 目录</strong><span>${targets.length}</span></div><p class="detection-group-help">相同目录只执行一次；SV1 与 SV2 使用各自匹配的安装脚本。</p><div class="installation-list">${scriptsList}</div></section>${unsupportedList}
     </div></section>
-    <section class="panel"><div class="panel-heading"><span class="feature-icon blue">${icon("plug", 25)}</span><div><h2>Bridge 管理</h2><p>安装器只写入你指定的 scripts 目录，不开放网络端口。</p></div></div>
-      <form id="bridge-form" class="form-stack"><label>Scripts 目录<input id="scripts-path" value="${escapeHtml(app.scriptsPath ?? app.installations.find((item) => item.scriptsPath)?.scriptsPath ?? "")}" placeholder="选择或粘贴 SynthV scripts 目录" /></label><div class="button-row"><button class="primary" value="install">安装 / 更新</button><button class="secondary" value="diagnose">检查安装</button><button class="secondary" value="connect">测试连接</button></div></form>
+    <section class="panel"><div class="panel-heading"><span class="feature-icon blue">${icon("plug", 25)}</span><div><h2>Bridge 管理</h2><p>可对全部已识别目录批量安装或检查；每个目标独立执行并显示结果。</p></div></div>
+      ${targets.length ? `<div class="button-row"><button class="primary" type="button" data-bridge-batch="install">安装 / 更新全部 (${targets.length})</button><button class="secondary" type="button" data-bridge-batch="diagnose">检查全部安装</button></div><div class="installation-list">${targets.map((target) => `<article class="installation-item"><span class="status-dot online"></span><span><strong>${escapeHtml(target.installations.map((item) => item.displayName).join(" / "))}</strong><small>${escapeHtml(target.scriptsPath)}</small>${renderBridgeResult(target)}</span><div class="button-row"><button class="secondary compact" type="button" data-bridge-target="install" data-scripts-path="${escapeHtml(target.scriptsPath)}" data-bridge-profile="${target.bridgeProfile}">安装 / 更新</button><button class="secondary compact" type="button" data-bridge-target="diagnose" data-scripts-path="${escapeHtml(target.scriptsPath)}" data-bridge-profile="${target.bridgeProfile}">检查</button></div></article>`).join("")}</div>` : ""}
+      <form id="bridge-form" class="form-stack"><label>手动 Scripts 目录<input id="scripts-path" value="${escapeHtml(bridgeManualScriptsPath || (app.scriptsPath ?? ""))}" placeholder="粘贴 SynthV scripts 目录" /></label><label>目标类型<select id="bridge-profile"><option value="sv2" ${bridgeManualProfile === "sv2" ? "selected" : ""}>SV2 脚本</option><option value="sv1" ${bridgeManualProfile === "sv1" ? "selected" : ""}>SV1 兼容脚本</option><option value="flat" ${bridgeManualProfile === "flat" ? "selected" : ""}>Flat 兼容脚本</option></select></label><div class="button-row"><button class="primary" value="install">安装 / 更新此目录</button><button class="secondary" value="diagnose">检查此目录</button><button class="secondary" value="connect">测试连接</button></div></form>
       <div class="inline-status"><span class="status-dot ${app.bridgeBundled ? "online" : ""}"></span><span>${app.bridgeBundled ? "内置 Bridge 资源已就绪" : "当前构建未包含 Bridge 资源"}</span></div>
     </section>${processControls}</div>`;
 }
@@ -2781,13 +2806,43 @@ function wireForms(): void {
     const submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;
     const action = submitter?.value;
     const scriptsPath = document.querySelector<HTMLInputElement>("#scripts-path")?.value.trim() ?? "";
+    const bridgeProfileValue = document.querySelector<HTMLSelectElement>("#bridge-profile")?.value;
+    const bridgeProfile = (bridgeProfileValue === "sv1" || bridgeProfileValue === "flat" ? bridgeProfileValue : "sv2") as BridgeProfile;
+    bridgeManualScriptsPath = scriptsPath;
+    bridgeManualProfile = bridgeProfile;
     void run(async () => {
       if (action === "connect") setFeedback(await api.connectBridge());
-      else if (action === "diagnose") setFeedback(await api.diagnoseBridge(scriptsPath));
-      else { await api.saveScriptsPath(scriptsPath); setFeedback(await api.installBridge(scriptsPath)); }
+      else {
+        const results = action === "diagnose"
+          ? await api.diagnoseBridge([{ scriptsPath, bridgeProfile }])
+          : await api.installBridge([{ scriptsPath, bridgeProfile }]);
+        for (const item of results) bridgeTargetResults.set(bridgeTargetKey(item.scriptsPath), item.result);
+        if (action === "install" && results[0]?.result.succeeded) app = await api.saveScriptsPath(scriptsPath);
+        setFeedback(results[0]?.result ?? { succeeded: false, summary: "没有可执行的 Bridge 目标。", detail: "请填写 scripts 目录。" });
+      }
       await refresh();
     });
   });
+  document.querySelector<HTMLInputElement>("#scripts-path")?.addEventListener("input", (event) => {
+    bridgeManualScriptsPath = (event.currentTarget as HTMLInputElement).value;
+  });
+  document.querySelector<HTMLSelectElement>("#bridge-profile")?.addEventListener("change", (event) => {
+    const value = (event.currentTarget as HTMLSelectElement).value;
+    bridgeManualProfile = value === "sv1" || value === "flat" ? value : "sv2";
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-bridge-batch], [data-bridge-target]").forEach((button) => button.addEventListener("click", () => {
+    const action = button.dataset.bridgeBatch ?? button.dataset.bridgeTarget;
+    const targets = button.dataset.bridgeTarget
+      ? [{ scriptsPath: button.dataset.scriptsPath ?? "", bridgeProfile: (button.dataset.bridgeProfile ?? "sv2") as BridgeProfile }]
+      : app ? bridgeTargets(app.installations).map(({ scriptsPath, bridgeProfile }) => ({ scriptsPath, bridgeProfile })) : [];
+    void run(async () => {
+      const results = action === "diagnose" ? await api.diagnoseBridge(targets) : await api.installBridge(targets);
+      for (const item of results) bridgeTargetResults.set(bridgeTargetKey(item.scriptsPath), item.result);
+      const failed = results.filter((item) => !item.result.succeeded).length;
+      notice = failed ? `${results.length - failed} 个目标已完成，${failed} 个目标需要处理。` : `${results.length} 个 Bridge 目标已完成。`;
+      await refresh();
+    });
+  }));
 }
 
 async function sendPrompt(input: string): Promise<void> {
@@ -2856,13 +2911,6 @@ document.addEventListener("input", (event) => {
 document.addEventListener("change", (event) => {
   const target = event.target as HTMLElement;
   if (target.closest(".audio-preparation")) syncAudioPreparationFormsFromDom();
-});
-
-document.addEventListener("change", (event) => {
-  const target = event.target;
-  if (target instanceof HTMLSelectElement && target.hasAttribute("data-instance-refresh-interval")) {
-    setInstanceRefreshInterval(Number(target.value));
-  }
 });
 
 // Media loading happens outside the promise that resolves the opaque artifact
@@ -3474,13 +3522,6 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (target.hasAttribute("data-scan")) { void run(async () => { if (app) app.installations = await api.scanSynthV(); notice = "探测完成。"; }); return; }
-  if (target.hasAttribute("data-refresh-synthv-processes")) {
-    void run(async () => {
-      [synthvProcesses, synthvShortcutProfile, profiles] = await Promise.all([api.listSynthvProcesses(), api.synthvShortcutProfile(), api.sv2ProfileState()]);
-      notice = synthvProcesses.length ? `发现 ${synthvProcesses.length} 个运行中的 SynthV 进程。` : "没有发现运行中的 SynthV 进程。";
-    });
-    return;
-  }
   if (target.dataset.focusSv2) {
     const processId = Number(target.dataset.focusSv2);
     const identity = target.dataset.processIdentity || "";
@@ -3721,7 +3762,7 @@ void (async () => {
     await refresh();
     await listenForSvpRouteRequests();
     await listenForAudioPreparationDrops();
-    setInstanceRefreshInterval(instanceRefreshInterval);
+    startInstanceRefresh();
     render();
     refreshAiCatalogLive();
   } catch (reason) {
