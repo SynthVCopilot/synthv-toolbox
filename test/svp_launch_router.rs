@@ -44,6 +44,7 @@ fn account_probe(
         authorized_voice_products: Vec::new(),
         account_display_name: None,
         account_email: None,
+        account_key: None,
     }
 }
 
@@ -63,7 +64,6 @@ fn route_slot(
     remote_use: Sv2RemoteUseStatus,
     authorization_status: Sv2AuthorizationStatus,
     authorized_voices: &[&str],
-    manually_confirmed_voices: &[&str],
 ) -> Sv2ProfileSlotView {
     let defaults = Sv2ConcurrentDefaults::default();
     let probe = account_probe(remote_use, authorization_status, authorized_voices);
@@ -84,19 +84,6 @@ fn route_slot(
             running_pids: Vec::new(),
             detail: String::new(),
             content: Sv2ConcurrentContentPreferences::default().resolve(defaults),
-        },
-        voice_inventory: Sv2VoiceInventoryView {
-            status: if manually_confirmed_voices.is_empty() {
-                Sv2VoiceInventoryStatus::Unknown
-            } else {
-                Sv2VoiceInventoryStatus::Manual
-            },
-            manually_confirmed_voices: manually_confirmed_voices
-                .iter()
-                .map(|voice| (*voice).to_string())
-                .collect(),
-            verified_authorized_voice_count: authorized_voices.len(),
-            detail: String::new(),
         },
         account_probe: probe.clone(),
         concurrent_account_probe: probe,
@@ -137,7 +124,6 @@ fn remote_detected_account_is_excluded_from_routing() {
             Sv2RemoteUseStatus::Detected,
             Sv2AuthorizationStatus::Verified,
             &["Mai 2"],
-            &[],
         ),
         route_slot(
             "available",
@@ -145,7 +131,6 @@ fn remote_detected_account_is_excluded_from_routing() {
             Sv2RemoteUseStatus::Unknown,
             Sv2AuthorizationStatus::Verified,
             &["Mai 2"],
-            &[],
         ),
     ]);
 
@@ -171,7 +156,6 @@ fn ready_clear_official_exact_match_is_selected_without_confirmation() {
         Sv2RemoteUseStatus::Clear,
         Sv2AuthorizationStatus::Verified,
         &["Mai 2"],
-        &[],
     )]);
 
     let plan = build_route_plan(path.to_str().unwrap(), &state).unwrap();
@@ -196,7 +180,6 @@ fn unknown_remote_use_requires_confirmation() {
         Sv2RemoteUseStatus::Unknown,
         Sv2AuthorizationStatus::Verified,
         &["Mai 2"],
-        &[],
     )]);
 
     let plan = build_route_plan(path.to_str().unwrap(), &state).unwrap();
@@ -207,35 +190,25 @@ fn unknown_remote_use_requires_confirmation() {
 }
 
 #[test]
-fn verified_official_authorization_is_preferred_over_manual_record() {
+fn unknown_authorization_requires_confirmation() {
     let (root, path) = voice_project("Mai 2");
-    let state = route_state(vec![
-        route_slot(
-            "manual",
-            "A manual account",
-            Sv2RemoteUseStatus::Clear,
-            Sv2AuthorizationStatus::Unknown,
-            &[],
-            &["Mai 2"],
-        ),
-        route_slot(
-            "official",
-            "Z official account",
-            Sv2RemoteUseStatus::Clear,
-            Sv2AuthorizationStatus::Verified,
-            &["Mai 2"],
-            &[],
-        ),
-    ]);
+    let state = route_state(vec![route_slot(
+        "unknown",
+        "Unknown account",
+        Sv2RemoteUseStatus::Clear,
+        Sv2AuthorizationStatus::Unknown,
+        &[],
+    )]);
 
     let plan = build_route_plan(path.to_str().unwrap(), &state).unwrap();
 
-    assert_eq!(plan.selected_slot_id.as_deref(), Some("official"));
+    assert_eq!(plan.selected_slot_id.as_deref(), Some("unknown"));
     assert_eq!(
         plan.candidates[0].authorization_source,
-        SvpAuthorizationSource::Session
+        SvpAuthorizationSource::Unknown
     );
-    assert!(!plan.requires_confirmation);
+    assert!(!plan.candidates[0].exact_authorization_match);
+    assert!(plan.requires_confirmation);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -248,7 +221,6 @@ fn normal_expired_and_concurrent_clear_selects_concurrent() {
         Sv2RemoteUseStatus::Clear,
         Sv2AuthorizationStatus::Verified,
         &["Mai 2"],
-        &[],
     );
     slot.account_probe.session_status = Sv2SessionInspectionStatus::Expired;
     slot.concurrent.ready = true;
@@ -276,7 +248,6 @@ fn concurrent_detected_and_normal_clear_selects_normal() {
         Sv2RemoteUseStatus::Clear,
         Sv2AuthorizationStatus::Verified,
         &["Mai 2"],
-        &[],
     );
     slot.concurrent.ready = true;
     slot.concurrent_account_probe.remote_use = Sv2RemoteUseStatus::Detected;
@@ -301,7 +272,6 @@ fn equally_healthy_modes_prefer_normal() {
         Sv2RemoteUseStatus::Clear,
         Sv2AuthorizationStatus::Verified,
         &["Mai 2"],
-        &[],
     );
     slot.concurrent.ready = true;
     let mut state = route_state(vec![slot]);
@@ -323,7 +293,6 @@ fn running_concurrent_does_not_exclude_clear_normal() {
         Sv2RemoteUseStatus::Clear,
         Sv2AuthorizationStatus::Verified,
         &["Mai 2"],
-        &[],
     );
     slot.concurrent.ready = true;
     slot.concurrent.running_pids.push(4242);
@@ -346,7 +315,6 @@ fn normal_blocker_does_not_exclude_clear_concurrent() {
         Sv2RemoteUseStatus::Clear,
         Sv2AuthorizationStatus::Verified,
         &["Mai 2"],
-        &[],
     );
     slot.concurrent.ready = true;
     let mut state = route_state(vec![slot]);
@@ -373,7 +341,6 @@ fn active_slot_can_route_normal_second_process_while_blocked() {
         Sv2RemoteUseStatus::Clear,
         Sv2AuthorizationStatus::Verified,
         &["Mai 2"],
-        &[],
     );
     slot.is_active = true;
     let mut state = route_state(vec![slot]);
@@ -398,7 +365,6 @@ fn non_active_slot_remains_blocked_for_normal_switch() {
         Sv2RemoteUseStatus::Clear,
         Sv2AuthorizationStatus::Verified,
         &["Mai 2"],
-        &[],
     );
     let mut state = route_state(vec![slot]);
     state.active_slot_id = Some("active-slot".to_string());
@@ -422,7 +388,6 @@ fn running_account_can_route_another_concurrent_instance() {
         Sv2RemoteUseStatus::Clear,
         Sv2AuthorizationStatus::Verified,
         &["Mai 2"],
-        &[],
     );
     slot.concurrent.ready = true;
     slot.concurrent.running_pids = vec![4242, 4343];
@@ -460,7 +425,6 @@ fn account_mismatch_environment_is_never_routable() {
         Sv2RemoteUseStatus::Clear,
         Sv2AuthorizationStatus::Verified,
         &["Mai 2"],
-        &[],
     );
     slot.concurrent.ready = true;
     slot.concurrent_account_probe.session_status = Sv2SessionInspectionStatus::AccountMismatch;
@@ -496,7 +460,6 @@ fn login_required_environment_is_never_routable() {
         Sv2RemoteUseStatus::Clear,
         Sv2AuthorizationStatus::Verified,
         &["Mai 2"],
-        &[],
     );
     slot.concurrent.ready = true;
     slot.concurrent_account_probe.session_status = Sv2SessionInspectionStatus::LoginRequired;
@@ -535,7 +498,6 @@ fn unsynchronized_environment_is_never_routable() {
         Sv2RemoteUseStatus::Clear,
         Sv2AuthorizationStatus::Verified,
         &["Mai 2"],
-        &[],
     );
     slot.concurrent.ready = true;
     slot.concurrent_account_probe.session_status = Sv2SessionInspectionStatus::SyncFailed;
@@ -582,32 +544,6 @@ fn extracts_main_and_group_voice_requirements_without_instrumentals() {
     assert_eq!(voices[0].version, Some(104));
     assert_eq!(voices[1].name, "SOLARIA");
     assert_eq!(voices[1].version, Some(101));
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn confirmed_voice_names_are_deduplicated_without_fuzzy_aliasing() {
-    let voices = validate_confirmed_voice_names(vec![
-        "  Mai   2 ".to_string(),
-        "mai 2".to_string(),
-        "Mai".to_string(),
-    ])
-    .unwrap();
-    assert_eq!(voices, vec!["Mai", "Mai 2"]);
-}
-
-#[test]
-fn local_databases_are_not_treated_as_account_authorization() {
-    let root = std::env::temp_dir().join(format!("svp-inventory-test-{}", Uuid::new_v4()));
-    let version = root.join("databases").join("opaque-license-id").join("104");
-    fs::create_dir_all(&version).unwrap();
-    fs::write(version.join("model.dnni"), b"opaque").unwrap();
-
-    let inventory = inspect_voice_inventory(&root, &[]);
-
-    assert_eq!(inventory.status, Sv2VoiceInventoryStatus::Unknown);
-    assert!(!inventory.detail.contains("opaque-license-id"));
-    assert!(!inventory.detail.contains("安装"));
     fs::remove_dir_all(root).unwrap();
 }
 

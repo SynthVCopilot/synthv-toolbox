@@ -87,6 +87,18 @@ fn shared_content_rules_are_scoped_to_a_directory() {
 }
 
 #[test]
+fn direct_write_mapping_accepts_sandboxie_escaped_trailing_separator() {
+    assert!(sandbox_directory_rule_matches(
+        r"C:\slots\account\\",
+        r"C:\slots\account\"
+    ));
+    assert!(!sandbox_directory_rule_matches(
+        r"C:\slots\another-account\\",
+        r"C:\slots\account\"
+    ));
+}
+
+#[test]
 fn utf16_command_output_is_decoded() {
     let text = "C:\\并发\\box\r\n";
     let bytes = text
