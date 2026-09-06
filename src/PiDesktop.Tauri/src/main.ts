@@ -920,10 +920,10 @@ function renderConcurrentDisclaimer(): string {
   return `<div class="dialog-backdrop" role="presentation">
     <section class="fluent-dialog" role="alertdialog" aria-modal="true" aria-labelledby="concurrent-warning-title">
       <span class="dialog-icon">${icon("boxes", 24)}</span>
-      <div><span class="eyebrow">首次使用风险告知</span><h2 id="concurrent-warning-title">并发隔离未被 Dreamtonics 官方承认</h2></div>
-      <p>将为“${escapeHtml(slot?.displayName ?? "此槽位")}”启动独立的 SV2 实例。Dreamtonics 尚未公开确认多实例使用方式。</p>
-      <p class="dialog-choice-note">工具箱不会修改 SV2、绕过账号限制或代为踢出其他会话。继续即表示你已知晓并自行承担这一使用风险。</p>
-      <div class="dialog-actions"><button class="secondary" data-cancel-concurrent>取消</button><button class="primary" data-accept-concurrent>已知晓风险，继续启动</button></div>
+      <div><span class="eyebrow">${t("accounts.concurrentTitle")}</span><h2 id="concurrent-warning-title">${t("accounts.concurrentTitle")}</h2></div>
+      <p>${t("accountUi.concurrentLaunchDescription", { name: escapeHtml(slot?.displayName ?? t("accountUi.thisSlot")) })}</p>
+      <p class="dialog-choice-note">${t("accountUi.toolboxDoesNotModifySvBypassAccountRestrictionsOr")}</p>
+      <div class="dialog-actions"><button class="secondary" data-cancel-concurrent>${t("accounts.cancel")}</button><button class="primary" data-accept-concurrent>${t("accounts.concurrentContinue")}</button></div>
     </section>
   </div>`;
 }
@@ -932,14 +932,14 @@ function renderAccountIndicatorConsent(): string {
   return `<div class="dialog-backdrop" role="presentation">
     <section class="fluent-dialog account-indicator-consent" role="alertdialog" aria-modal="true" aria-labelledby="account-indicator-consent-title">
       <span class="dialog-icon route">${icon("shield", 24)}</span>
-      <div><span class="eyebrow">SV2 ACCOUNT LOGIN INDICATOR</span><h2 id="account-indicator-consent-title">开启账号登录指示器？</h2></div>
-      <p>开启后可在你进入「SV2 账号」页面或手动刷新时查询账号授权状态。</p>
+      <div><span class="eyebrow">${t("accountUi.signInIndicator")}</span><h2 id="account-indicator-consent-title">${t("accounts.consentTitle")}</h2></div>
+      <p>${t("accounts.consentDescription")}</p>
       <ul>
-        <li>查询会读取官方授权；如果会话过期，工具箱会续期并保存更新后的会话。</li>
-        <li>账号设置只读显示官方姓名和邮箱，并可保存本地备注。声库按账号独立保存，不跨账号同步。</li>
+        <li>${t("accountUi.theCheckReadsOfficialAuthorizationsIfTheSessionHas")}</li>
+        <li>${t("accountUi.accountSettingsShowTheOfficialNameAndEmailAs")}</li>
       </ul>
-      <p class="dialog-choice-note">工具箱不会启动客户端、修改 SV2 或替你处理其他会话。你可以随时关闭此功能。</p>
-      <div class="dialog-actions"><button class="secondary" data-cancel-account-indicator>取消</button><button class="primary" data-confirm-account-indicator>${icon("check", 16)} 同意并开启</button></div>
+      <p class="dialog-choice-note">${t("accountUi.toolboxWillNotLaunchTheClientModifySvOr")}</p>
+      <div class="dialog-actions"><button class="secondary" data-cancel-account-indicator>${t("accounts.cancel")}</button><button class="primary" data-confirm-account-indicator>${icon("check", 16)} ${t("accounts.consentConfirm")}</button></div>
     </section>
   </div>`;
 }
@@ -956,16 +956,16 @@ function renderProfileDeletionDialog(): string {
   const hasReplacement = profiles!.slots.some((item) => item.id !== slot.id);
   const defaultNote = slot.isActive
     ? hasReplacement
-      ? "该账号目前是默认账号；删除后会自动切换到另一个账号。"
-      : "这是最后一个账号；删除后桌面快捷方式和 .svp 文件不再有默认账号。"
-    : "此操作不会影响当前默认账号。";
+      ? t("accountUi.thisIsTheDefaultAccountAnotherAccountWillBecome")
+      : t("accountUi.thisIsTheLastAccountDesktopShortcutsAndSvp")
+    : t("accountUi.thisDoesNotAffectTheCurrentDefaultAccount");
   return `<div class="dialog-backdrop" role="presentation">
     <section class="fluent-dialog component-removal-dialog" role="alertdialog" aria-modal="true" aria-labelledby="profile-deletion-title">
       <span class="dialog-icon danger">${icon("trash", 24)}</span>
-      <div><span class="eyebrow">SV2 ACCOUNT MANAGER</span><h2 id="profile-deletion-title">删除“${escapeHtml(slot.displayName)}”？</h2></div>
-      <p>这会删除该账号的数据、隔离环境配置和登录态恢复快照，无法撤销。</p>
+      <div><span class="eyebrow">${t("accounts.manager")}</span><h2 id="profile-deletion-title">${t("accounts.deleteTitle", { name: escapeHtml(slot.displayName) })}</h2></div>
+      <p>${t("accounts.deleteDescription")}</p>
       <p class="dialog-choice-note">${defaultNote}</p>
-      <div class="dialog-actions"><button class="secondary" data-cancel-profile-deletion>取消</button><button class="danger-action" data-confirm-profile-deletion>${icon("trash", 16)} 删除账号</button></div>
+      <div class="dialog-actions"><button class="secondary" data-cancel-profile-deletion>${t("accounts.cancel")}</button><button class="danger-action" data-confirm-profile-deletion>${icon("trash", 16)} ${t("accounts.deleteConfirm")}</button></div>
     </section>
   </div>`;
 }
@@ -993,25 +993,25 @@ function renderBlockedSwitchDialog(): string {
     return `<div class="dialog-backdrop" role="presentation">
       <section class="fluent-dialog switch-dialog" role="alertdialog" aria-modal="true" aria-labelledby="blocked-switch-title">
         <span class="dialog-icon danger">${icon("plug", 24)}</span>
-        <div><span class="eyebrow">检测到运行中的程序</span><h2 id="blocked-switch-title">无法安全切换到“${escapeHtml(slot?.displayName ?? "此槽位")}”</h2></div>
-        <p>请先保存并退出下列程序，然后重新启动目标槽位。macOS v1 不会强制结束进程，也不会启动并发实例。</p>
-        <div class="dialog-process-list">${blockers.map((blocker) => `<div><span><strong>${escapeHtml(blocker.name)}</strong><small>${escapeHtml(blocker.reason)}</small></span><code>${blocker.pid ? `PID ${blocker.pid}` : "无可用 PID"}</code></div>`).join("")}</div>
-        <div class="dialog-actions"><button class="primary" data-cancel-profile-switch>知道了</button></div>
+        <div><span class="eyebrow">${t("accountUi.runningProgramsDetected")}</span><h2 id="blocked-switch-title">${t("accountUi.blockedSwitchTitle", { name: escapeHtml(slot?.displayName ?? t("accountUi.thisSlot")) })}</h2></div>
+        <p>${t("accountUi.saveYourWorkAndExitTheProgramsBelowThen")}</p>
+        <div class="dialog-process-list">${blockers.map((blocker) => `<div><span><strong>${escapeHtml(blocker.name)}</strong><small>${escapeHtml(blocker.reason)}</small></span><code>${blocker.pid ? `PID ${blocker.pid}` : t("accountUi.pidUnavailable")}</code></div>`).join("")}</div>
+        <div class="dialog-actions"><button class="primary" data-cancel-profile-switch>${t("accountUi.gotIt")}</button></div>
       </section>
     </div>`;
   }
   const provider = profiles?.concurrentProvider;
   const concurrentRunning = Boolean(slot?.concurrent.runningPids.length);
   const canRunConcurrent = Boolean(provider?.available);
-  const concurrentLabel = slot?.concurrent.ready ? "以并发模式运行" : "准备并发副本并运行";
+  const concurrentLabel = slot?.concurrent.ready ? t("accountUi.runConcurrently") : t("accountUi.prepareAConcurrentCopyAndRun");
   return `<div class="dialog-backdrop" role="presentation">
     <section class="fluent-dialog switch-dialog" role="alertdialog" aria-modal="true" aria-labelledby="blocked-switch-title">
       <span class="dialog-icon danger">${icon("plug", 24)}</span>
-      <div><span class="eyebrow">检测到运行中的程序</span><h2 id="blocked-switch-title">无法安全切换到“${escapeHtml(slot?.displayName ?? "此槽位")}”</h2></div>
-      <p>下列程序正在使用当前 SV2 槽位。请先保存工程：强制切换会结束这些 PID 的整个进程树，未保存内容可能丢失；并发模式不会关闭当前程序。</p>
-      <div class="dialog-process-list">${blockers.map((blocker) => `<div><span><strong>${escapeHtml(blocker.name)}</strong><small>${escapeHtml(blocker.reason)}</small></span><code>${blocker.pid ? `PID ${blocker.pid}` : "无可用 PID"}</code></div>`).join("")}</div>
-      <p class="dialog-choice-note">${canRunConcurrent ? `${escapeHtml(provider?.name ?? "Sandboxie")} 已就绪；${slot?.concurrent.ready ? "将直接启动隔离实例。" : "会先准备隔离环境，再启动隔离实例。"}` : concurrentRunning ? "此槽位的并发实例已经在运行。" : `并发模式不可用：${escapeHtml(provider?.detail ?? "未检测到隔离提供方。")}`}</p>
-      <div class="dialog-actions"><button class="secondary" data-cancel-profile-switch>取消</button><button class="secondary" data-run-blocked-concurrent ${canRunConcurrent ? "" : "disabled"}>${concurrentLabel}</button><button class="danger-action" data-force-profile-switch>强制切换并启动</button></div>
+      <div><span class="eyebrow">${t("accountUi.runningProgramsDetected")}</span><h2 id="blocked-switch-title">${t("accountUi.blockedSwitchTitle", { name: escapeHtml(slot?.displayName ?? t("accountUi.thisSlot")) })}</h2></div>
+      <p>${t("accountUi.theseProgramsAreUsingTheCurrentSvSlotSave")}</p>
+      <div class="dialog-process-list">${blockers.map((blocker) => `<div><span><strong>${escapeHtml(blocker.name)}</strong><small>${escapeHtml(blocker.reason)}</small></span><code>${blocker.pid ? `PID ${blocker.pid}` : t("accountUi.pidUnavailable")}</code></div>`).join("")}</div>
+      <p class="dialog-choice-note">${canRunConcurrent ? t("accountUi.isReady", { p0: escapeHtml(provider?.name ?? "Sandboxie"), p1: slot?.concurrent.ready ? t("accountUi.theIsolatedInstanceWillLaunchDirectly") : t("accountUi.theIsolatedEnvironmentWillBePreparedBeforeLaunchingThe") }) : concurrentRunning ? t("accountUi.aConcurrentInstanceOfThisSlotIsAlreadyRunning") : t("accountUi.concurrentModeUnavailable", { p0: escapeHtml(provider?.detail ?? t("accountUi.noIsolationProviderDetected")) })}</p>
+      <div class="dialog-actions"><button class="secondary" data-cancel-profile-switch>${t("accountUi.cancel")}</button><button class="secondary" data-run-blocked-concurrent ${canRunConcurrent ? "" : "disabled"}>${concurrentLabel}</button><button class="danger-action" data-force-profile-switch>${t("accountUi.forceSwitchAndLaunch")}</button></div>
     </section>
   </div>`;
 }
@@ -1022,17 +1022,17 @@ function renderSvpRouteDialog(): string {
   const fileName = plan.projectPath.split(/[\\/]/).pop() || plan.projectPath;
   const requirements = plan.requiredVoices.length
     ? plan.requiredVoices.map((voice) => `<span title="${escapeHtml([voice.backendType, voice.version].filter(Boolean).join(" · "))}">${icon("audio", 14)} ${escapeHtml(voice.name)}${voice.version ? ` <small>v${voice.version}</small>` : ""}</span>`).join("")
-    : '<span class="muted">工程中没有可识别的演唱声库要求</span>';
+    : `<span class="muted">${t("accountUi.noRecognizableVoiceRequirementsWereFoundInThisProject")}</span>`;
   const candidates = plan.candidates.map((candidate) => renderSvpRouteCandidate(candidate, plan)).join("");
   return `<div class="dialog-backdrop" role="presentation">
     <section class="fluent-dialog svp-route-dialog" role="dialog" aria-modal="true" aria-labelledby="svp-route-title">
       <span class="dialog-icon route">${icon("file", 24)}</span>
-      <div><span class="eyebrow">SMART SVP ROUTING</span><h2 id="svp-route-title">选择用于打开工程的账号</h2><p class="dialog-subtitle" title="${escapeHtml(plan.projectPath)}">${escapeHtml(fileName)}</p></div>
+      <div><span class="eyebrow">${t("settings.smartRoute")}</span><h2 id="svp-route-title">${t("accountUi.chooseAnAccountToOpenTheProject")}</h2><p class="dialog-subtitle" title="${escapeHtml(plan.projectPath)}">${escapeHtml(fileName)}</p></div>
       <div class="svp-route-summary"><strong>${escapeHtml(plan.summary)}</strong><p>${escapeHtml(plan.detail)}</p></div>
-      <div class="svp-route-requirements"><span>工程所需声库</span><div>${requirements}</div></div>
-      ${plan.requiresConfirmation ? `<div class="route-confirmation-note">${icon("shield", 17)}<span><strong>需要你的确认</strong><small>账号占用或授权仍有未知项时，工具箱不会静默选择账号。最终结果仍由 SV2 官方服务验证。</small></span></div>` : ""}
-      <div class="svp-route-candidates">${candidates || '<div class="empty-inline">没有可用账号。请关闭正在运行的 SV2，或先准备隔离槽位。</div>'}</div>
-      <div class="dialog-actions"><button class="secondary" data-cancel-svp-route>取消打开</button></div>
+      <div class="svp-route-requirements"><span>${t("accountUi.voicesRequiredByTheProject")}</span><div>${requirements}</div></div>
+      ${plan.requiresConfirmation ? `<div class="route-confirmation-note">${icon("shield", 17)}<span><strong>${t("accountUi.yourConfirmationIsRequired")}</strong><small>${t("accountUi.toolboxWillNotSilentlyChooseAnAccountWhenAccount")}</small></span></div>` : ""}
+      <div class="svp-route-candidates">${candidates || `<div class="empty-inline">${t("accountUi.noAccountsAreAvailableCloseRunningSvInstancesOr")}</div>`}</div>
+      <div class="dialog-actions"><button class="secondary" data-cancel-svp-route>${t("accountUi.cancelOpening")}</button></div>
     </section>
   </div>`;
 }
@@ -1040,42 +1040,42 @@ function renderSvpRouteDialog(): string {
 function renderSvpRouteCandidate(candidate: SvpRouteCandidate, plan: SvpRoutePlan): string {
   const selectable = candidate.idle && candidate.remoteUse !== "detected" && Boolean(candidate.launchMode);
   const selected = candidate.slotId === plan.selectedSlotId && candidate.launchMode === plan.selectedLaunchMode;
-  const modeLabel = candidate.launchMode === "concurrent" ? "Sandboxie 并发" : candidate.launchMode === "normal" ? "普通切换" : "不可启动";
+  const modeLabel = candidate.launchMode === "concurrent" ? t("accountUi.sandboxieConcurrent") : candidate.launchMode === "normal" ? t("accountUi.standardSwitch") : t("accountUi.cannotLaunch");
   const sessionLabel = candidate.remoteUse === "detected"
-    ? "账号服务报告正在使用"
+    ? t("accountUi.theAccountServiceReportsThisAccountIsInUse")
     : candidate.remoteUse === "clear" && candidate.sessionStatus === "ready"
-      ? "账号服务未报告远端占用"
+      ? t("accountUi.theAccountServiceReportsNoRemoteUsage")
       : candidate.sessionStatus === "inUse"
-        ? "缓存会话正由本机使用"
-        : `${accountProbeSessionLabel(candidate.sessionStatus)} · 占用未知`;
-  const authorizationLabel = candidate.authorizationSource === "session" ? "官方授权" : "授权未知";
+        ? t("accountUi.cachedSessionIsInUseOnThisComputer")
+        : t("accountUi.usageUnknown", { p0: accountProbeSessionLabel(candidate.sessionStatus) });
+  const authorizationLabel = candidate.authorizationSource === "session" ? t("accountUi.officialAuthorization") : t("accountUi.authorizationUnknown");
   const matchLabel = candidate.exactAuthorizationMatch
-    ? `${icon("check", 14)} ${authorizationLabel}已匹配全部声库`
+    ? t("accountUi.matchesAllRequiredVoices", { p0: icon("check", 14), p1: authorizationLabel })
     : candidate.matchedVoices.length
-      ? `${authorizationLabel}已匹配 ${candidate.matchedVoices.length}，另有 ${candidate.missingOrUnknownVoices.length} 个未知`
-      : "授权未知，需人工确认";
+      ? t("accountUi.matchedUnknown", { p0: authorizationLabel, p1: candidate.matchedVoices.length, p2: candidate.missingOrUnknownVoices.length })
+      : t("accountUi.authorizationUnknownManualConfirmationRequired");
   const needsConfirmation = candidate.remoteUse === "unknown" || candidate.sessionStatus !== "ready" || !candidate.exactAuthorizationMatch;
-  const actionLabel = plan.requiresConfirmation || needsConfirmation ? "确认使用此账号" : "使用此账号打开";
+  const actionLabel = plan.requiresConfirmation || needsConfirmation ? t("accountUi.confirmThisAccount") : t("accountUi.openWithThisAccount");
   return `<article class="svp-route-candidate ${selected ? "recommended" : ""} ${selectable ? "" : "disabled"}">
-    <div class="route-candidate-heading"><span class="profile-avatar compact">${escapeHtml(Array.from(candidate.displayName)[0] ?? "S")}</span><div><strong>${escapeHtml(candidate.displayName)}</strong><small>${escapeHtml(modeLabel)} · ${escapeHtml(sessionLabel)}${selected ? " · 推荐" : ""}</small></div><span class="route-match ${candidate.exactAuthorizationMatch ? "exact" : "unknown"}">${matchLabel}</span></div>
+    <div class="route-candidate-heading"><span class="profile-avatar compact">${escapeHtml(Array.from(candidate.displayName)[0] ?? "S")}</span><div><strong>${escapeHtml(candidate.displayName)}</strong><small>${escapeHtml(modeLabel)} · ${escapeHtml(sessionLabel)}${selected ? t("accountUi.recommended") : ""}</small></div><span class="route-match ${candidate.exactAuthorizationMatch ? "exact" : "unknown"}">${matchLabel}</span></div>
     <p>${escapeHtml(candidate.reason)}</p>
-    ${candidate.missingOrUnknownVoices.length ? `<div class="route-missing" title="未匹配或未知">${candidate.missingOrUnknownVoices.map((voice) => `<span>${escapeHtml(voice)}</span>`).join("")}</div>` : ""}
+    ${candidate.missingOrUnknownVoices.length ? `<div class="route-missing" title="${t("accountUi.unmatchedOrUnknown")}">${candidate.missingOrUnknownVoices.map((voice) => `<span>${escapeHtml(voice)}</span>`).join("")}</div>` : ""}
     <button class="${selected ? "primary" : "secondary"}" data-launch-svp-route="${escapeHtml(candidate.slotId)}" data-svp-route-mode="${escapeHtml(candidate.launchMode ?? "normal")}" ${selectable ? "" : "disabled"}>${candidate.launchMode === "concurrent" ? icon("boxes", 16) : icon("play", 16)} ${actionLabel}</button>
   </article>`;
 }
 
 function accountProbeSessionLabel(status: SvpRouteCandidate["sessionStatus"]): string {
   const labels: Record<SvpRouteCandidate["sessionStatus"], string> = {
-    ready: "缓存会话可用",
-    missing: "需要登录",
-    inUse: "缓存会话正由本机使用",
-    expired: "访问凭据已过期，等待续期",
-    loginRequired: "账号需要登录",
-    invalid: "缓存会话无效",
-    syncFailed: "会话同步失败，需要修复",
-    accountMismatch: "账号副本不一致",
-    unsupported: "暂不支持此会话格式",
-    offline: "账号服务离线",
+    ready: t("accountUi.cachedSessionAvailable"),
+    missing: t("accountUi.signInRequired"),
+    inUse: t("accountUi.cachedSessionIsInUseOnThisComputer"),
+    expired: t("accountUi.accessCredentialsExpiredAwaitingRenewal"),
+    loginRequired: t("accountUi.accountSignInRequired"),
+    invalid: t("accountUi.cachedSessionInvalid"),
+    syncFailed: t("accountUi.sessionSynchronizationFailedRepairRequired"),
+    accountMismatch: t("accountUi.accountCopiesDoNotMatch"),
+    unsupported: t("accountUi.sessionFormatNotSupportedYet"),
+    offline: t("accountUi.accountServiceOffline"),
   };
   return labels[status];
 }
@@ -1087,75 +1087,77 @@ interface AccountProbeIssuePresentation {
   attention: boolean;
 }
 
-const accountProbeIssueRules: Array<[
+function accountProbeIssueRules(): Array<[
   Sv2AccountProbe["sessionStatus"],
   AccountProbeIssuePresentation,
-]> = [
-  ["syncFailed", {
-    cardLabel: "会话同步失败，需要修复",
-    authorizationLabel: "会话同步失败，未读取该槽位授权",
-    title: "账号凭据刷新或设备身份写回后未能安全同步；该槽位已被隔离，不能当作尚未预检。",
-    attention: true,
-  }],
-  ["accountMismatch", {
-    cardLabel: "账号副本不一致",
-    authorizationLabel: "账号主体不一致，未读取该槽位授权",
-    title: "账号槽位读取到的账号主体不一致；工具箱没有覆盖账号缓存。",
-    attention: true,
-  }],
-  ["inUse", {
-    cardLabel: "账号正在本机使用",
-    authorizationLabel: "账号正在使用，本次未读取授权",
-    title: "会话正在被客户端使用；姓名与邮箱可沿用上次脱敏结果，授权与占用结论不会沿用。",
-    attention: false,
-  }],
-  ["loginRequired", {
-    cardLabel: "账号需要重新登录",
-    authorizationLabel: "没有可用登录凭据，未读取授权",
-    title: "请在 SynthV 中登录此账号，再刷新授权状态。",
-    attention: true,
-  }],
-  ["expired", {
-    cardLabel: "会话已过期，等待续期",
-    authorizationLabel: "刷新账号后重新读取授权",
-    title: "点击刷新账号状态，工具箱会先续期，再查询授权。",
-    attention: true,
-  }],
-  ["invalid", {
-    cardLabel: "登录缓存无效",
-    authorizationLabel: "登录缓存无效，未读取授权",
-    title: "本地登录缓存无法安全验证。",
-    attention: true,
-  }],
-  ["offline", {
-    cardLabel: "账号服务暂时离线",
-    authorizationLabel: "账号服务暂时离线，授权当前不可用",
-    title: "本地会话已读取，但账号服务暂时不可达；不要把它解释为尚未预检或需要重新登录。",
-    attention: false,
-  }],
-  ["unsupported", {
-    cardLabel: "暂不支持此会话格式",
-    authorizationLabel: "会话格式暂不支持，未读取授权",
-    title: "当前版本无法安全解析此登录缓存。",
-    attention: false,
-  }],
-  ["missing", {
-    cardLabel: "尚未登录",
-    authorizationLabel: "尚无登录缓存，未读取授权",
-    title: "未发现登录缓存；请先在 SV2 中完成登录。",
-    attention: false,
-  }],
-];
+]> {
+  return [
+    ["syncFailed", {
+      cardLabel: t("accountUi.sessionSynchronizationFailedRepairRequired"),
+      authorizationLabel: t("accountUi.sessionSynchronizationFailedSlotAuthorizationsWereNotRead"),
+      title: t("accountUi.accountCredentialsOrDeviceIdentityCouldNotBeSafely"),
+      attention: true,
+    }],
+    ["accountMismatch", {
+      cardLabel: t("accountUi.accountCopiesDoNotMatch"),
+      authorizationLabel: t("accountUi.accountIdentitiesDoNotMatchSlotAuthorizationsWereNot"),
+      title: t("accountUi.theAccountIdentitiesReadFromThisSlotDoNot"),
+      attention: true,
+    }],
+    ["inUse", {
+      cardLabel: t("accountUi.accountInUseOnThisComputer"),
+      authorizationLabel: t("accountUi.accountInUseAuthorizationsWereNotReadThisTime"),
+      title: t("accountUi.theClientIsUsingThisSessionTheLastRedacted"),
+      attention: false,
+    }],
+    ["loginRequired", {
+      cardLabel: t("accountUi.accountNeedsToSignInAgain"),
+      authorizationLabel: t("accountUi.noUsableSignInCredentialsAuthorizationsWereNotRead"),
+      title: t("accountUi.signInToThisAccountInSynthvThenRefresh"),
+      attention: true,
+    }],
+    ["expired", {
+      cardLabel: t("accountUi.sessionExpiredAwaitingRenewal"),
+      authorizationLabel: t("accountUi.refreshTheAccountToReadAuthorizationsAgain"),
+      title: t("accountUi.refreshTheAccountStatusToolboxWillRenewTheSession"),
+      attention: true,
+    }],
+    ["invalid", {
+      cardLabel: t("accountUi.signInCacheInvalid"),
+      authorizationLabel: t("accountUi.signInCacheInvalidAuthorizationsWereNotRead"),
+      title: t("accountUi.theLocalSignInCacheCannotBeSafelyVerified"),
+      attention: true,
+    }],
+    ["offline", {
+      cardLabel: t("accountUi.accountServiceTemporarilyOffline"),
+      authorizationLabel: t("accountUi.accountServiceTemporarilyOfflineAuthorizationsUnavailable"),
+      title: t("accountUi.theLocalSessionWasReadButTheAccountService"),
+      attention: false,
+    }],
+    ["unsupported", {
+      cardLabel: t("accountUi.sessionFormatNotSupportedYet"),
+      authorizationLabel: t("accountUi.sessionFormatUnsupportedAuthorizationsWereNotRead"),
+      title: t("accountUi.thisVersionCannotSafelyParseTheSignInCache"),
+      attention: false,
+    }],
+    ["missing", {
+      cardLabel: t("accountUi.notSignedInYet"),
+      authorizationLabel: t("accountUi.noSignInCacheAuthorizationsWereNotRead"),
+      title: t("accountUi.noSignInCacheFoundSignInToSv"),
+      attention: false,
+    }],
+  ];
+}
 
 function accountProbeIssue(probes: Sv2AccountProbe[]): AccountProbeIssuePresentation | undefined {
-  for (const [status, presentation] of accountProbeIssueRules) {
+  for (const [status, presentation] of accountProbeIssueRules()) {
     if (probes.some((probe) => probe.sessionStatus === status)) return presentation;
   }
   return undefined;
 }
 
 interface AccountProbeEnvironmentState {
-  label: "普通" | "隔离";
+  label: string;
   probe: Sv2AccountProbe;
   launchEnabled: boolean;
   localBlocked: boolean;
@@ -1168,11 +1170,11 @@ function accountProbeEnvironments(slot: Sv2ProfileSlot): AccountProbeEnvironment
   const normalRecovery = slot.sessionProtection.status === "recoveryPending";
   const normalProcessBlocked = !slot.isActive && Boolean(profiles?.blockers.length);
   const environments: AccountProbeEnvironmentState[] = [{
-    label: "普通",
+    label: t("accountUi.standard"),
     probe: slot.accountProbe,
     launchEnabled: true,
     localBlocked: normalRecovery || normalProcessBlocked,
-    localBlockLabel: normalRecovery ? "登录缓存等待恢复" : normalProcessBlocked ? "切换账号路径前需要关闭普通实例" : "",
+    localBlockLabel: normalRecovery ? t("accountUi.signInCacheAwaitingRecovery") : normalProcessBlocked ? t("accountUi.closeStandardInstancesBeforeSwitchingTheAccountPath") : "",
     usable: false,
     busy: false,
   }];
@@ -1180,11 +1182,11 @@ function accountProbeEnvironments(slot: Sv2ProfileSlot): AccountProbeEnvironment
   if (slot.concurrent.ready) {
     const concurrentRecovery = slot.concurrentSessionProtection.status === "recoveryPending";
     environments.push({
-      label: "隔离",
+      label: t("accountUi.isolated"),
       probe: slot.concurrentAccountProbe,
       launchEnabled: Boolean(app?.sv2ConcurrentEnabled && profiles?.concurrentProvider.available),
       localBlocked: concurrentRecovery,
-      localBlockLabel: concurrentRecovery ? "登录缓存等待恢复" : "",
+      localBlockLabel: concurrentRecovery ? t("accountUi.signInCacheAwaitingRecovery") : "",
       usable: false,
       busy: false,
     });
@@ -1205,19 +1207,19 @@ function accountProbeEnvironments(slot: Sv2ProfileSlot): AccountProbeEnvironment
 }
 
 function accountProbeEnvironmentSummary(environment: AccountProbeEnvironmentState): string {
-  if (!environment.launchEnabled) return "当前不可启动（隔离功能或提供方不可用）";
+  if (!environment.launchEnabled) return t("accountUi.cannotLaunchNowIsolationOrProviderUnavailable");
   if (environment.localBlocked) return environment.localBlockLabel;
   const probe = environment.probe;
   const session = probe.remoteUse === "detected"
-    ? "远端占用"
+    ? t("accountUi.inUseRemotely")
     : probe.sessionStatus === "inUse"
-      ? "本机使用中"
+      ? t("accountUi.inUseLocally")
     : probe.sessionStatus === "ready" && probe.authorizationStatus === "verified"
-        ? "可启动"
+        ? t("accountUi.readyToLaunch")
         : probe.sessionStatus === "ready" && probe.remoteUse === "unknown"
-          ? "账号信息待刷新"
+          ? t("accountUi.accountInformationNeedsRefresh")
           : accountProbeSessionLabel(probe.sessionStatus);
-  const authorization = probe.authorizationStatus === "verified" ? "官方授权已确认" : "官方授权未知";
+  const authorization = probe.authorizationStatus === "verified" ? t("accountUi.officialAuthorizationsConfirmed") : t("accountUi.officialAuthorizationsUnknown");
   return `${session}；${authorization}`;
 }
 
@@ -1231,9 +1233,9 @@ function environmentDefinitelyUnavailable(environment: AccountProbeEnvironmentSt
 }
 
 function accountProbeBadge(slot: Sv2ProfileSlot): string {
-  if (profiles === cachedAccountProfiles) return `<span class="session-protection">${icon("refresh", 14)} 已显示本地缓存</span>`;
+  if (profiles === cachedAccountProfiles) return `<span class="session-protection">${icon("refresh", 14)} ${t("accountUi.showingLocalCache")}</span>`;
   if (!app?.sv2AccountIndicatorEnabled) {
-    return `<span class="session-protection" title="账号登录指示器已关闭；未读取或解密此槽位的登录缓存。">${icon("shield", 14)} 登录指示器已关闭</span>`;
+    return `<span class="session-protection" title="${t("accountUi.theSignInIndicatorIsOffThisSlotS")}">${icon("shield", 14)} ${t("accountUi.signInIndicatorOff")}</span>`;
   }
   const environments = accountProbeEnvironments(slot);
   const launchable = environments.filter((environment) => environment.launchEnabled);
@@ -1247,24 +1249,24 @@ function accountProbeBadge(slot: Sv2ProfileSlot): string {
       ? accountProbeIssue(probes)
       : undefined);
 
-  let label = "账号状态尚未确认";
+  let label = t("accountUi.accountStatusUnconfirmed");
   let emphasis = "";
   let iconName: "refresh" | "check" | "plug" = "refresh";
   if (hasUsableEnvironment) {
-    label = probes.some((probe) => probe.sessionStatus === "inUse") ? "账号可用（本机使用中）" : "账号可用";
+    label = probes.some((probe) => probe.sessionStatus === "inUse") ? t("accountUi.accountAvailableInUseLocally") : t("accountUi.accountAvailable");
     iconName = "check";
   } else if (reportedIssue) {
     label = reportedIssue.cardLabel;
     emphasis = reportedIssue.attention ? " attention" : "";
   } else if (hasBusyEnvironment && allUnavailable) {
-    label = "账号当前无空闲启动环境";
+    label = t("accountUi.noIdleLaunchEnvironmentForThisAccount");
     emphasis = " attention";
     iconName = "plug";
   } else if (probes.some((probe) => probe.authorizationStatus === "verified")) {
-    label = "授权已确认";
+    label = t("accountUi.authorizationsConfirmed");
     iconName = "check";
   } else if (notYetChecked) {
-    label = "账号状态尚未预检";
+    label = t("accountUi.accountStatusNotCheckedYet");
   }
 
   const tooltip = [
@@ -1285,13 +1287,13 @@ function officialAuthorizationBadge(slot: Sv2ProfileSlot): string {
   const reportedIssue = verifiedCounts.length ? undefined : accountProbeIssue(probes);
   const unresolvedOfficial = reportedIssue
     ? { label: reportedIssue.authorizationLabel, title: reportedIssue.title }
-    : { label: "官方授权尚未预检/未知", title: "尚无账号服务返回的授权结果。" };
+    : { label: t("accountUi.officialAuthorizationsUncheckedOrUnknown"), title: t("accountUi.theAccountServiceHasNotReturnedAnyAuthorizationResults") };
   const official = !app?.sv2AccountIndicatorEnabled
-    ? `<span class="voice-inventory unknown" title="账号登录指示器已关闭；官方授权摘要不会继续显示。">${icon("shield", 13)} 官方授权探测已关闭</span>`
+    ? `<span class="voice-inventory unknown" title="${t("accountUi.theSignInIndicatorIsOffOfficialAuthorizationSummaries")}">${icon("shield", 13)} ${t("accountUi.officialAuthorizationChecksOff")}</span>`
     : reportedIssue
       ? `<span class="voice-inventory unknown" title="${escapeHtml(unresolvedOfficial.title)}">${icon("audio", 13)} ${escapeHtml(unresolvedOfficial.label)}</span>`
       : verifiedCounts.length
-      ? `<span class="voice-inventory confirmed" title="账号服务已确认声库授权。">${icon("check", 13)} 官方授权 ${Math.max(...verifiedCounts)} 个</span>`
+      ? `<span class="voice-inventory confirmed" title="${t("accountUi.theAccountServiceHasConfirmedVoiceAuthorizations")}">${icon("check", 13)} ${t("accountUi.officialAuthorizationCount", { count: Math.max(...verifiedCounts) })}</span>`
       : `<span class="voice-inventory unknown" title="${escapeHtml(unresolvedOfficial.title)}">${icon("audio", 13)} ${escapeHtml(unresolvedOfficial.label)}</span>`;
   return official;
 }
@@ -1320,13 +1322,13 @@ function officialAccountIdentity(slot: Sv2ProfileSlot): { name?: string; email?:
 type AccountUseTone = "clear" | "unknown" | "in-use";
 
 function accountUseStateForSlot(slot: Sv2ProfileSlot): { tone: AccountUseTone; label: string } {
-  if (profiles === cachedAccountProfiles) return { tone: "unknown", label: "账号状态待更新" };
+  if (profiles === cachedAccountProfiles) return { tone: "unknown", label: t("accountUi.accountStatusNeedsUpdating") };
   const environments = accountProbeEnvironments(slot).filter((environment) => environment.launchEnabled);
   const allLocallyBlocked = environments.length > 0 && environments.every((environment) => environment.localBlocked);
   if (!app?.sv2AccountIndicatorEnabled) {
     return allLocallyBlocked
-      ? { tone: "in-use", label: "所有可启动环境当前均被本机占用" }
-      : { tone: "unknown", label: "账号登录指示器已关闭" };
+      ? { tone: "in-use", label: t("accountUi.allLaunchEnvironmentsAreCurrentlyOccupiedLocally") }
+      : { tone: "unknown", label: t("accountUi.accountSignInIndicatorOff") };
   }
 
   const probes = environments.map((environment) => environment.probe);
@@ -1336,7 +1338,7 @@ function accountUseStateForSlot(slot: Sv2ProfileSlot): { tone: AccountUseTone; l
       : undefined);
   const hasBusyEnvironment = environments.some((environment) => environment.busy);
   if (environments.some((environment) => environment.usable)) {
-    return { tone: "clear", label: probes.some((probe) => probe.sessionStatus === "inUse") ? "账号可用（本机使用中）" : "账号可用" };
+    return { tone: "clear", label: probes.some((probe) => probe.sessionStatus === "inUse") ? t("accountUi.accountAvailableInUseLocally") : t("accountUi.accountAvailable") };
   }
 
   if (reportedIssue) {
@@ -1348,9 +1350,9 @@ function accountUseStateForSlot(slot: Sv2ProfileSlot): { tone: AccountUseTone; l
 
   const allUnavailable = environments.length > 0 && environments.every(environmentDefinitelyUnavailable);
   if (hasBusyEnvironment && allUnavailable) {
-    return { tone: "in-use", label: "所有可启动环境当前均不可用" };
+    return { tone: "in-use", label: t("accountUi.allLaunchEnvironmentsAreCurrentlyUnavailable") };
   }
-  return { tone: "unknown", label: "账号服务占用状态未知" };
+  return { tone: "unknown", label: t("accountUi.accountServiceUsageStatusUnknown") };
 }
 
 function accountUseDot(state: { tone: AccountUseTone; label: string }): string {
@@ -1440,9 +1442,9 @@ function renderAccounts(): string {
   }
   const windowsExtensions = supportsWindowsSv2Extensions();
   const blockerCount = profiles.blockers.length;
-  const blockerPanel = profiles.blockers.length ? `<div class="warning-card profile-blockers"><span>${icon("plug", 23)}</span><div><strong>${t("accounts.blocked")}</strong><p>${windowsExtensions ? "切换普通账号路径前，请先关闭下列进程；当前账号仍可再次普通启动，隔离实例也可继续多开。" : "切换普通账号路径前，请先保存并关闭下列进程；当前账号可以再次启动。"}<br />${profiles.blockers.map((blocker) => `${escapeHtml(blocker.name)}${blocker.pid ? ` (PID ${blocker.pid})` : ""}：${escapeHtml(blocker.reason)}`).join("<br />")}</p></div></div>` : "";
+  const blockerPanel = profiles.blockers.length ? `<div class="warning-card profile-blockers"><span>${icon("plug", 23)}</span><div><strong>${t("accounts.blocked")}</strong><p>${windowsExtensions ? t("accountUi.closeTheseProcessesBeforeSwitchingTheStandardAccountPath") : t("accountUi.saveYourWorkAndCloseTheseProcessesBeforeSwitching")}<br />${profiles.blockers.map((blocker) => `${escapeHtml(blocker.name)}${blocker.pid ? ` (PID ${blocker.pid})` : ""}：${escapeHtml(blocker.reason)}`).join("<br />")}</p></div></div>` : "";
   if (profiles.recoveryRequired) {
-    return `${blockerPanel}<div class="warning-card recovery-card"><span>${icon("sync", 23)}</span><div><strong>${t("accounts.recovery")}</strong><p>${escapeHtml(profiles.recoveryDetail)}</p><p>工具箱没有删除或覆盖任何目录。请先备份下方路径，再检查目录实况。</p></div><button class="secondary" data-profile-refresh>${icon("sync", 16)} ${t("accounts.recheck")}</button></div>
+    return `${blockerPanel}<div class="warning-card recovery-card"><span>${icon("sync", 23)}</span><div><strong>${t("accounts.recovery")}</strong><p>${escapeHtml(profiles.recoveryDetail)}</p><p>${t("accountUi.toolboxHasNotDeletedOrOverwrittenAnyDirectoriesBack")}</p></div><button class="secondary" data-profile-refresh>${icon("sync", 16)} ${t("accounts.recheck")}</button></div>
       <section class="panel"><dl class="detail-list"><div><dt>${t("accounts.officialPath")}</dt><dd><code>${escapeHtml(profiles.canonicalPath)}</code></dd></div><div><dt>${t("accounts.vault")}</dt><dd><code>${escapeHtml(profiles.vaultPath)}</code></dd></div></dl></section>`;
   }
   const concurrentProviderAvailable = windowsExtensions && profiles.concurrentProvider.available;
@@ -1462,27 +1464,27 @@ function renderAccounts(): string {
     const useState = windowsExtensions
       ? accountUseStateForSlot(slot)
       : blockerCount
-        ? { tone: "in-use" as const, label: "当前 SV2 环境正在本机使用" }
-        : { tone: "unknown" as const, label: "仅管理本地数据槽位" };
+        ? { tone: "in-use" as const, label: t("accountUi.theCurrentSvEnvironmentIsInUseLocally") }
+        : { tone: "unknown" as const, label: t("accountUi.localDataSlotManagementOnly") };
     const concurrentRunning = windowsExtensions && slot.concurrent.runningPids.length > 0;
-    const isolatedLabel = concurrentRunning ? "再开一个实例" : slot.concurrent.ready ? "隔离启动" : "准备隔离";
+    const isolatedLabel = concurrentRunning ? t("accountUi.openAnotherInstance") : slot.concurrent.ready ? t("accountUi.launchIsolated") : t("accountUi.prepareIsolation");
     const concurrentEnabled = windowsExtensions && Boolean(app?.sv2ConcurrentEnabled);
     const isolatedDisabled = !concurrentProviderAvailable || !concurrentEnabled;
     const isolatedTitle = concurrentRunning
-      ? "已有隔离实例运行中，仍可继续启动同账号实例"
+      ? t("accountUi.anIsolatedInstanceIsAlreadyRunningMoreInstancesOf")
       : !concurrentEnabled
-        ? "隔离功能已在全局设置中关闭"
+        ? t("accountUi.isolationIsTurnedOffInGlobalSettings")
         : providerDetail;
-    const localVoiceFact = `<span class="voice-inventory unknown" title="macOS v1 不读取或解密登录缓存。">${icon("shield", 13)} 未读取账号授权</span>`;
+    const localVoiceFact = `<span class="voice-inventory unknown" title="${t("accountUi.macosVDoesNotReadOrDecryptSignIn")}">${icon("shield", 13)} ${t("accountUi.accountAuthorizationsNotRead")}</span>`;
     const windowsLaunchActions = concurrentEnabled && slot.concurrent.ready
-      ? `<button class="primary" data-profile-concurrent-launch="${slot.id}" ${isolatedDisabled ? `disabled title="${escapeHtml(isolatedTitle)}"` : ""}>${icon("boxes", 16)} ${isolatedLabel}</button><button class="secondary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button>`
-      : `<button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button><button class="secondary" data-profile-concurrent-prepare="${slot.id}" ${isolatedDisabled ? `disabled title="${escapeHtml(isolatedTitle)}"` : ""}>${icon("download", 16)} ${isolatedLabel}</button>`;
+      ? `<button class="primary" data-profile-concurrent-launch="${slot.id}" ${isolatedDisabled ? `disabled title="${escapeHtml(isolatedTitle)}"` : ""}>${icon("boxes", 16)} ${isolatedLabel}</button><button class="secondary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? t("accountUi.launchNormally") : t("accountUi.switchAndLaunch")}</button>`
+      : `<button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? t("accountUi.launchNormally") : t("accountUi.switchAndLaunch")}</button><button class="secondary" data-profile-concurrent-prepare="${slot.id}" ${isolatedDisabled ? `disabled title="${escapeHtml(isolatedTitle)}"` : ""}>${icon("download", 16)} ${isolatedLabel}</button>`;
     const launchActions = windowsExtensions
       ? windowsLaunchActions
-      : `<button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? "普通启动" : "切换并启动"}</button>`;
+      : `<button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? t("accountUi.launchNormally") : t("accountUi.switchAndLaunch")}</button>`;
     return `<article class="account-launch-card ${slot.isActive ? "active" : ""}" style="--profile-color:${color}">
       <div class="account-card-main"><span class="profile-avatar compact">${escapeHtml(initial)}</span><div class="account-card-identity"><div class="profile-title-line"><h2>${escapeHtml(accountTitle)}</h2>${accountUseDot(useState)}${slot.isActive ? `<span class="profile-active-badge">${t("accounts.default")}</span>` : ""}</div>${accountEmail}${note}</div><div class="account-card-actions">${windowsExtensions ? `<button class="icon-plain" data-profile-refresh-slot="${slot.id}" title="${t("accounts.refresh")}" aria-label="${t("accounts.refresh")}">${icon("refresh", 18)}</button>` : ""}<button class="icon-plain" data-manage-slot="${slot.id}" title="${t("accounts.configure")}" aria-label="${t("accounts.configure")}">${icon("settings", 18)}</button><button class="icon-plain danger" data-delete-profile="${slot.id}" title="${t("accounts.delete")}" aria-label="${t("accounts.delete")}">${icon("trash", 18)}</button><button class="icon-plain" data-profile-activate="${slot.id}" title="${t("accounts.switchDefault")}" aria-label="${t("accounts.switchDefault")}" ${slot.isActive ? "disabled" : ""}>${icon("check", 18)}</button></div></div>
-      <div class="account-card-facts">${windowsExtensions ? `${accountProbeBadge(slot)}${officialAuthorizationBadge(slot)}` : localVoiceFact}<span>${icon("sync", 13)} ${escapeHtml(lastUsed)}</span>${concurrentRunning ? `<span class="running">${icon("plug", 13)} ${slot.concurrent.runningPids.length} 个隔离进程</span>` : ""}</div>
+      <div class="account-card-facts">${windowsExtensions ? `${accountProbeBadge(slot)}${officialAuthorizationBadge(slot)}` : localVoiceFact}<span>${icon("sync", 13)} ${escapeHtml(lastUsed)}</span>${concurrentRunning ? `<span class="running">${icon("plug", 13)} ${t("accountUi.isolatedProcessCount", { count: slot.concurrent.runningPids.length })}</span>` : ""}</div>
       <div class="account-launch-actions">${launchActions}</div>
     </article>`;
   }).join("");
@@ -1514,7 +1516,7 @@ function renderAuthorizedVoice(voice: string, products: Sv2AuthorizedVoiceProduc
   const productIds = products.map((product) => product.id).filter(Boolean);
   const installedIds = new Set((profiles?.slots.find((slot) => slot.id === slotId)?.installedVoiceIds ?? []).map((id) => id.toLowerCase()));
   const installed = productIds.some((id) => installedIds.has(id.toLowerCase()));
-  const installedBadge = installed ? `<span class="voice-installed-badge" role="img" aria-label="已安装" title="此账号已安装">${icon("check", 10)}</span>` : "";
+  const installedBadge = installed ? `<span class="voice-installed-badge" role="img" aria-label="${t("accountUi.installed")}" title="${t("accountUi.installedForThisAccount")}">${icon("check", 10)}</span>` : "";
   const catalogEntry = findVoiceMetadata(voice, productIds, sv2VoiceCatalog ?? []);
   const cover = catalogEntry?.imageDataUrl
     ? `<img class="voice-cover" src="${escapeHtml(catalogEntry.imageDataUrl)}" alt="" />`
@@ -1524,9 +1526,9 @@ function renderAuthorizedVoice(voice: string, products: Sv2AuthorizedVoiceProduc
   const expirations = products.map((product) => product.expiresAtUtc ? Date.parse(product.expiresAtUtc) : NaN);
   const expiresAt = expirations.length > 0 && expirations.every(Number.isFinite) ? Math.max(...expirations) : undefined;
   const expired = expiresAt !== undefined && expiresAt <= Date.now();
-  const label = isTrial ? (expired ? "试用已到期" : "限时试用") : expiresAt !== undefined ? (expired ? "授权已到期" : "限时授权") : "";
+  const label = isTrial ? (expired ? t("accountUi.trialExpired") : t("accountUi.timeLimitedTrial")) : expiresAt !== undefined ? (expired ? t("accountUi.authorizationExpired") : t("accountUi.timeLimitedAuthorization")) : "";
   const badge = label ? `<span class="voice-trial-badge">${label}</span>` : "";
-  const expiry = expiresAt !== undefined ? `<small class="voice-license-expiry">${escapeHtml(new Date(expiresAt).toLocaleString())} 到期</small>` : "";
+  const expiry = expiresAt !== undefined ? `<small class="voice-license-expiry">${t("accountUi.expiresAt", { date: escapeHtml(new Date(expiresAt).toLocaleString(locale())) })}</small>` : "";
   return `<span class="authorized-voice" data-authorized-voice="${escapeHtml(voice)}" data-authorized-products="${escapeHtml(JSON.stringify(products))}" data-voice-slot-id="${escapeHtml(slotId)}"><span class="voice-cover-container">${cover}${installedBadge}</span><span><span class="voice-name">${escapeHtml(voice)}${badge}</span>${vendor}${expiry}</span></span>`;
 }
 
@@ -1557,10 +1559,10 @@ function renderAccountManager(): string {
   if (managedSlot) managedProfileSlotId = managedSlot.id;
   let body = "";
   if (accountManagerSection === "profile" && !supportsWindowsSv2Extensions()) {
-    body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${managedSlot.sessionCached ? "账号信息待刷新" : "未登录"}</h3></div>${managedSlot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
-      <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>备注<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" placeholder="例如：制作账号" /></label><button class="secondary">保存备注</button></form>
-      <div class="manager-action-row">${managedSlot.isActive ? "" : `<button class="secondary" data-profile-activate="${managedSlot.id}">${icon("check", 15)} 设为默认账号</button>`}<button class="secondary" data-profile-folder="${managedSlot.id}">${icon("folder", 15)} 打开账号数据目录</button><button class="secondary component-remove-action" data-delete-profile="${managedSlot.id}">${icon("trash", 15)} 删除账号</button></div>
-      <dl class="profile-storage-list compact"><div><dt>账号数据</dt><dd><code title="${escapeHtml(managedSlot.dataPath)}">${escapeHtml(managedSlot.dataPath)}</code></dd></div></dl></div>` : '<div class="empty-inline">尚无账号，请先添加一个槽位。</div>';
+    body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${managedSlot.sessionCached ? t("accountUi.accountInformationNeedsRefresh") : t("accountUi.signedOut")}</h3></div>${managedSlot.isActive ? `<span class="profile-active-badge">${t("accountUi.currentDefault")}</span>` : ""}</div>
+      <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>${t("accounts.managerNote")}<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" placeholder="${t("accounts.notePlaceholder")}" /></label><button class="secondary">${t("accounts.saveNote")}</button></form>
+      <div class="manager-action-row">${managedSlot.isActive ? "" : `<button class="secondary" data-profile-activate="${managedSlot.id}">${icon("check", 15)} ${t("accounts.setDefault")}</button>`}<button class="secondary" data-profile-folder="${managedSlot.id}">${icon("folder", 15)} ${t("accounts.openData")}</button><button class="secondary component-remove-action" data-delete-profile="${managedSlot.id}">${icon("trash", 15)} ${t("accounts.delete")}</button></div>
+      <dl class="profile-storage-list compact"><div><dt>${t("accounts.data")}</dt><dd><code title="${escapeHtml(managedSlot.dataPath)}">${escapeHtml(managedSlot.dataPath)}</code></dd></div></dl></div>` : `<div class="empty-inline">${t("accounts.noAccounts")}</div>`;
   } else if (accountManagerSection === "profile") {
     const authorizationProbe = managedSlot?.accountProbe.authorizationStatus === "verified"
       ? managedSlot.accountProbe
@@ -1570,30 +1572,30 @@ function renderAccountManager(): string {
     const authorizations = authorizationProbe?.authorizedVoices ?? [];
     const authorizationStatus = authorizationProbe?.authorizationStatus === "verified";
     const officialIdentity = managedSlot ? officialAccountIdentity(managedSlot) : {};
-    const managedUseState = managedSlot ? accountUseStateForSlot(managedSlot) : { tone: "unknown" as const, label: "账号信息待刷新" };
-    const authorizationUnavailable = "授权尚未预检或结果未知";
+    const managedUseState = managedSlot ? accountUseStateForSlot(managedSlot) : { tone: "unknown" as const, label: t("accountUi.accountInformationNeedsRefresh") };
+    const authorizationUnavailable = t("accountUi.authorizationsUncheckedOrUnknown");
     const authorizationSummary = authorizationStatus
-      ? `账号服务已确认 ${authorizations.length} 个声库授权。`
+      ? t("accountUi.theAccountServiceHasConfirmedVoiceAuthorizationsDetail", { p0: authorizations.length })
       : authorizationUnavailable;
     const authorizationList = authorizationStatus
       ? authorizations.length
         ? `<div class="authorization-list">${authorizations.map((voice) => renderAuthorizedVoice(voice, authorizationProbe?.authorizedVoiceProducts.filter((product) => product.name === voice) ?? [], managedSlot?.id)).join("")}</div>`
-        : '<div class="empty-inline">当前账号没有可用声库授权。</div>'
-      : `<div class="empty-inline">${escapeHtml(authorizationUnavailable)}。</div>`;
-    body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(officialIdentity.name ?? (managedSlot.sessionCached ? "账号信息待刷新" : "未登录"))}</h3><p>${escapeHtml(officialIdentity.email ?? "账号信息待刷新")}</p><p>${accountUseDot(managedUseState)} ${escapeHtml(managedUseState.label)}</p></div>${managedSlot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>
-      <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>备注<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" placeholder="例如：制作账号" /></label><button class="secondary">保存备注</button></form>
-      <section class="authorization-panel"><div class="authorization-heading"><div><strong>可用授权</strong><small>${escapeHtml(authorizationSummary)}</small></div><span class="inventory-status ${authorizationStatus ? "verified" : "unknown"}">${authorizationStatus ? `${authorizations.length} 个授权` : "未读取"}</span></div>${authorizationList}</section>
-      <div class="manager-action-row">${managedSlot.isActive ? "" : `<button class="secondary" data-profile-activate="${managedSlot.id}">${icon("check", 15)} 设为默认账号</button>`}<button class="secondary" data-profile-folder="${managedSlot.id}">${icon("folder", 15)} 打开账号数据目录</button><button class="secondary component-remove-action" data-delete-profile="${managedSlot.id}">${icon("trash", 15)} 删除账号</button></div>
-      <dl class="profile-storage-list compact"><div><dt>账号数据</dt><dd><code title="${escapeHtml(managedSlot.dataPath)}">${escapeHtml(managedSlot.dataPath)}</code></dd></div></dl></div>` : '<div class="empty-inline">尚无账号，请先添加一个槽位。</div>';
+        : `<div class="empty-inline">${t("accountUi.thisAccountHasNoAvailableVoiceAuthorizations")}</div>`
+      : `<div class="empty-inline">${escapeHtml(authorizationUnavailable)}</div>`;
+    body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(officialIdentity.name ?? (managedSlot.sessionCached ? t("accountUi.accountInformationNeedsRefresh") : t("accountUi.signedOut")))}</h3><p>${escapeHtml(officialIdentity.email ?? t("accountUi.accountInformationNeedsRefresh"))}</p><p>${accountUseDot(managedUseState)} ${escapeHtml(managedUseState.label)}</p></div>${managedSlot.isActive ? `<span class="profile-active-badge">${t("accountUi.currentDefault")}</span>` : ""}</div>
+      <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>${t("accountUi.note")}<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" placeholder="${t("accountUi.eGProductionAccount")}" /></label><button class="secondary">${t("accountUi.saveNote")}</button></form>
+      <section class="authorization-panel"><div class="authorization-heading"><div><strong>${t("accountUi.availableAuthorizations")}</strong><small>${escapeHtml(authorizationSummary)}</small></div><span class="inventory-status ${authorizationStatus ? "verified" : "unknown"}">${authorizationStatus ? t("accountUi.authorizationsDetail", { p0: authorizations.length }) : t("accountUi.notRead")}</span></div>${authorizationList}</section>
+      <div class="manager-action-row">${managedSlot.isActive ? "" : `<button class="secondary" data-profile-activate="${managedSlot.id}">${icon("check", 15)} ${t("accountUi.makeDefault")}</button>`}<button class="secondary" data-profile-folder="${managedSlot.id}">${icon("folder", 15)} ${t("accountUi.openAccountDataFolder")}</button><button class="secondary component-remove-action" data-delete-profile="${managedSlot.id}">${icon("trash", 15)} ${t("accountUi.deleteAccount")}</button></div>
+      <dl class="profile-storage-list compact"><div><dt>${t("accountUi.accountData")}</dt><dd><code title="${escapeHtml(managedSlot.dataPath)}">${escapeHtml(managedSlot.dataPath)}</code></dd></div></dl></div>` : `<div class="empty-inline">${t("accountUi.noAccountsYetAddASlotFirst")}</div>`;
   } else if (accountManagerSection === "global" && !supportsWindowsSv2Extensions()) {
-    body = `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("shield", 24)}</span><div><h3>macOS 槽位范围</h3><p>当前版本只支持顺序切换数据槽位。账号登录预检、授权读取和并发隔离仍仅在 Windows 提供。</p></div></section>`;
+    body = `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("shield", 24)}</span><div><h3>${t("accountUi.macosSlotScope")}</h3><p>${t("accountUi.thisVersionSupportsSequentialDataSlotSwitchingOnlySign")}</p></div></section>`;
   } else if (accountManagerSection === "global") {
-    body = `<form id="sv2-global-settings-form" class="isolation-defaults-form manager-defaults"><div><strong>全局设置</strong><small>默认只同步设置、脚本等白名单文件；声库按账号独立保存，同账号实例共用槽位数据。</small></div><label class="fluent-switch"><input name="accountProbeEnabled" type="checkbox" ${app?.sv2AccountIndicatorEnabled ? "checked" : ""} /><span></span>启用账号登录指示器</label><label class="fluent-switch"><input name="concurrentEnabled" type="checkbox" ${app?.sv2ConcurrentEnabled ? "checked" : ""} /><span></span>启用隔离功能</label><button class="secondary" type="submit">保存全局设置</button></form>`;
+    body = `<form id="sv2-global-settings-form" class="isolation-defaults-form manager-defaults"><div><strong>${t("accountUi.globalSettings")}</strong><small>${t("accountUi.onlyAllowlistedFilesSuchAsSettingsAndScriptsAre")}</small></div><label class="fluent-switch"><input name="accountProbeEnabled" type="checkbox" ${app?.sv2AccountIndicatorEnabled ? "checked" : ""} /><span></span>${t("accountUi.enableAccountSignInIndicator")}</label><label class="fluent-switch"><input name="concurrentEnabled" type="checkbox" ${app?.sv2ConcurrentEnabled ? "checked" : ""} /><span></span>${t("accountUi.enableIsolation")}</label><button class="secondary" type="submit">${t("accountUi.saveGlobalSettings")}</button></form>`;
   } else {
-    body = `<div class="account-add-grid">${profiles.canImportCurrent ? `<section><span class="feature-icon emerald">${icon("folder", 20)}</span><h3>导入当前环境</h3><p>把现有官方数据目录纳入槽位，不移动账号文件。</p><form id="profile-import-form" class="profile-create-form"><input id="profile-import-name" maxlength="64" placeholder="备注（可留空）" /><button class="primary">导入</button></form></section>` : ""}<section><span class="feature-icon blue">${icon("plus", 20)}</span><h3>创建空槽位</h3><p>首次启动后，在 SV2 官方登录页面完成登录。</p><form id="profile-create-form" class="profile-create-form"><input id="profile-create-name" maxlength="64" placeholder="备注（可留空）" /><button class="secondary">创建</button></form></section></div><div class="manager-safety">${icon("check", 17)}<span><strong>账号数据保持原样</strong><small>工具箱不会伪造登录或绕过联网验证。</small></span></div>`;
+    body = `<div class="account-add-grid">${profiles.canImportCurrent ? `<section><span class="feature-icon emerald">${icon("folder", 20)}</span><h3>${t("accountUi.importCurrentEnvironment")}</h3><p>${t("accountUi.bringTheExistingOfficialDataDirectoryIntoASlot")}</p><form id="profile-import-form" class="profile-create-form"><input id="profile-import-name" maxlength="64" placeholder="${t("accountUi.noteOptional")}" /><button class="primary">${t("accountUi.import")}</button></form></section>` : ""}<section><span class="feature-icon blue">${icon("plus", 20)}</span><h3>${t("accountUi.createEmptySlot")}</h3><p>${t("accountUi.completeSignInOnTheOfficialSvPageAfter")}</p><form id="profile-create-form" class="profile-create-form"><input id="profile-create-name" maxlength="64" placeholder="${t("accountUi.noteOptional")}" /><button class="secondary">${t("accountUi.create")}</button></form></section></div><div class="manager-safety">${icon("check", 17)}<span><strong>${t("accountUi.accountDataStaysUnchanged")}</strong><small>${t("accountUi.toolboxDoesNotFabricateSignInOrBypassOnline")}</small></span></div>`;
   }
   const tabs = "";
-  return `<div class="dialog-backdrop account-manager-backdrop" role="presentation"><section class="account-manager-dialog" role="dialog" aria-modal="true" aria-labelledby="account-manager-title"><header><div><span class="eyebrow">SV2 ACCOUNT MANAGER</span><h2 id="account-manager-title">${accountManagerSection === "profile" ? "账号设置" : "账号管理"}</h2></div><button class="icon-plain" data-close-account-manager title="关闭" aria-label="关闭账号管理">×</button></header>${tabs}<div class="account-manager-body">${body}</div></section></div>`;
+  return `<div class="dialog-backdrop account-manager-backdrop" role="presentation"><section class="account-manager-dialog" role="dialog" aria-modal="true" aria-labelledby="account-manager-title"><header><div><span class="eyebrow">${t("accounts.manager")}</span><h2 id="account-manager-title">${accountManagerSection === "profile" ? t("accounts.profile") : t("accounts.manager")}</h2></div><button class="icon-plain" data-close-account-manager title="${t("accounts.close")}" aria-label="${t("accounts.close")}">×</button></header>${tabs}<div class="account-manager-body">${body}</div></section></div>`;
 }
 
 function renderHome(): string {
@@ -2065,13 +2067,13 @@ function renderToolboxUpdateResult(): string {
   if (!toolboxUpdate) return "";
   const result = toolboxUpdate;
   const sameVersion = result.latestVersion === result.currentVersion;
-  const status = result.updateAvailable ? "发现新版本" : sameVersion ? "已是最新版本" : "当前版本较新";
-  const published = result.publishedAtUtc ? new Date(result.publishedAtUtc).toLocaleString("zh-CN") : "发布时间未知";
-  const checked = new Date(result.checkedAtUtc).toLocaleString("zh-CN");
+  const status = result.updateAvailable ? t("accountUi.updateAvailable") : sameVersion ? t("accountUi.upToDate") : t("accountUi.currentVersionIsNewer");
+  const published = result.publishedAtUtc ? new Date(result.publishedAtUtc).toLocaleString(locale()) : t("accountUi.publicationDateUnknown");
+  const checked = new Date(result.checkedAtUtc).toLocaleString(locale());
   const notes = result.releaseNotes.trim()
     ? `<pre class="update-release-notes">${escapeHtml(result.releaseNotes)}</pre>`
-    : '<div class="empty-inline">这个版本没有提供发布说明。</div>';
-  return `<section class="update-check-result ${result.updateAvailable ? "available" : "current"}"><div class="update-status"><span class="feature-icon ${result.updateAvailable ? "orange" : "emerald"}">${icon(result.updateAvailable ? "download" : "check", 22)}</span><div><span class="availability ${result.updateAvailable ? "warning" : "ready"}">${status}</span><h3>${escapeHtml(result.releaseName)}</h3><small>发布于 ${escapeHtml(published)} · 检查于 ${escapeHtml(checked)}</small></div></div><div class="result-dashboard compact">${resultMetric("当前版本", `v${result.currentVersion}`)}${resultMetric("最新稳定版", `v${result.latestVersion}`, result.updateAvailable ? "warning" : "success")}</div><div class="update-notes-heading"><strong>发布说明</strong><span>内容来自官方 GitHub Release</span></div>${notes}<div class="result-actions"><span>${result.updateAvailable ? "下载安装由你在官方页面中确认" : "也可以查看全部历史版本"}</span><button class="secondary" data-open-toolbox-releases>${icon("arrow", 15)} 打开官方发布页</button></div></section>`;
+    : `<div class="empty-inline">${t("accountUi.noReleaseNotesWereProvidedForThisVersion")}</div>`;
+  return `<section class="update-check-result ${result.updateAvailable ? "available" : "current"}"><div class="update-status"><span class="feature-icon ${result.updateAvailable ? "orange" : "emerald"}">${icon(result.updateAvailable ? "download" : "check", 22)}</span><div><span class="availability ${result.updateAvailable ? "warning" : "ready"}">${status}</span><h3>${escapeHtml(result.releaseName)}</h3><small>${t("accountUi.published")} ${escapeHtml(published)} ${t("accountUi.checked")} ${escapeHtml(checked)}</small></div></div><div class="result-dashboard compact">${resultMetric(t("accountUi.currentVersion"), `v${result.currentVersion}`)}${resultMetric(t("accountUi.latestStableVersion"), `v${result.latestVersion}`, result.updateAvailable ? "warning" : "success")}</div><div class="update-notes-heading"><strong>${t("accountUi.releaseNotes")}</strong><span>${t("accountUi.contentFromTheOfficialGithubRelease")}</span></div>${notes}<div class="result-actions"><span>${result.updateAvailable ? t("accountUi.confirmTheDownloadAndInstallationOnTheOfficialPage") : t("accountUi.youCanAlsoBrowseAllPreviousReleases")}</span><button class="secondary" data-open-toolbox-releases>${icon("arrow", 15)} ${t("accountUi.openOfficialReleases")}</button></div></section>`;
 }
 
 function renderCopilot(): string {
@@ -2229,7 +2231,7 @@ function fallbackAiProviders(): AiProviderSummary[] {
   return [{
     id: "anthropic",
     displayName: "Claude / Anthropic",
-    description: "通过 Claude OAuth 或 Anthropic API Key 连接。",
+    description: t("accountUi.anthropicConnection"),
     active: true,
     connected: false,
     healthyAccounts: 0,
@@ -2248,7 +2250,7 @@ function fallbackAiProviders(): AiProviderSummary[] {
   }, {
     id: "openai-codex",
     displayName: "OpenAI / Codex",
-    description: "通过 ChatGPT OAuth 或 OpenAI API Key 连接。",
+    description: t("accountUi.openaiConnection"),
     active: false,
     connected: false,
     healthyAccounts: 0,
@@ -2267,7 +2269,7 @@ function fallbackAiProviders(): AiProviderSummary[] {
   }, {
     id: "workbuddy",
     displayName: "WorkBuddy",
-    description: "通过 WorkBuddy OAuth 连接 WorkBuddy 助理模型。",
+    description: t("accountUi.workbuddyConnection"),
     active: false,
     connected: false,
     healthyAccounts: 0,
@@ -2286,7 +2288,7 @@ function fallbackAiProviders(): AiProviderSummary[] {
   }, {
     id: "traecode",
     displayName: "TraeCode",
-    description: "通过本机 TraeCode CLI 登录并调用只读 Agent。",
+    description: t("accountUi.traecodeConnection"),
     active: false,
     connected: false,
     healthyAccounts: 0,
@@ -2301,7 +2303,7 @@ function fallbackAiProviders(): AiProviderSummary[] {
     available: false,
     oauthEnabled: true,
     loadStrategy: "round-robin",
-    unavailableReason: "未检测到 TraeCode CLI；请先安装并登录 traecli。",
+    unavailableReason: t("accountUi.traecodeUnavailable"),
   }];
 }
 
@@ -2319,8 +2321,8 @@ function activeAiProvider(): AiProviderSummary | undefined {
 
 function aiConnectionSummary(): string {
   const provider = activeAiProvider();
-  if (!provider) return "请选择模型提供商";
-  if (!provider.accounts.some((account) => account.authorized) && provider.apiKeys.length === 0) return "等待添加连接";
+  if (!provider) return t("accountUi.chooseAModelProvider");
+  if (!provider.accounts.some((account) => account.authorized) && provider.apiKeys.length === 0) return t("accountUi.waitingForAConnection");
   return `${aiProviderDisplayName(provider)} · ${provider.accounts.filter((account) => account.authorized).length} OAuth · ${provider.apiKeys.length} API Key`;
 }
 
@@ -2346,7 +2348,7 @@ function syncModelAuthDialog(): void {
     id: provider.id, name: provider.displayName, description: provider.description, authMethods: provider.authMethods,
     available: provider.available, unavailableReason: provider.unavailableReason, oauthEnabled: provider.oauthEnabled,
     loadStrategy: provider.loadStrategy, mark: aiProviderMark(provider),
-    authorizeLabel: provider.id === "traecode" ? "通过 TraeCode CLI 登录" : "浏览器授权",
+    authorizeLabel: provider.id === "traecode" ? t("accountUi.signInThroughTraecodeCli") : t("accountUi.authorizeInBrowser"),
     models: provider.models, oauthModels: provider.oauthModels, apiKeyModels: provider.apiKeyModels,
     oauthCredentials: provider.accounts.map((account) => ({ id: account.id, label: account.label, account: account.label, healthy: account.healthy, enabled: account.enabled, weight: account.weight, models: provider.oauthModels })),
     apiKeyCredentials: provider.apiKeys.map((key) => ({ id: key.id, label: key.label, healthy: key.healthy, enabled: key.enabled, weight: key.weight, models: key.models, cooldownUntilUtc: key.cooldownUntilUtc })),
@@ -2366,13 +2368,13 @@ async function executeModelAuthAction(action: ModelAuthAction, detail: unknown[]
     case "reconnect-oauth": {
       const [provider, credentialId] = detail as [AiProviderId, string?];
       app = await api.authorizeAiProvider(provider, credentialId, operationId);
-      notice = "官方账号授权已更新。";
+      notice = t("accountUi.officialAccountAuthorizationUpdated");
       break;
     }
     case "add-api-key": {
       const [payload] = detail as [{ providerId: AiProviderId; label: string; apiKey: string }];
       app = await api.addAiApiKey(payload.providerId, payload.label, payload.apiKey);
-      notice = "API Key 已保存并验证。";
+      notice = t("accountUi.apiKeySavedAndVerified");
       break;
     }
     case "remove-oauth":
@@ -2394,7 +2396,7 @@ async function executeModelAuthAction(action: ModelAuthAction, detail: unknown[]
     case "select-model": {
       const [payload] = detail as [{ providerId: AiProviderId; model: string }];
       app = await api.selectAiProvider(payload.providerId, payload.model);
-      notice = "当前 AI 提供商与模型已更新。";
+      notice = t("accountUi.currentAiProviderAndModelUpdated");
       break;
     }
     case "update-provider-strategy": {
@@ -2435,7 +2437,7 @@ function renderSettings(): string {
   return `<div class="settings-layout"><section class="panel language-settings"><div class="section-heading"><div><h2>${t("settings.language")}</h2></div><label><select id="language-select" aria-label="${t("settings.language")}"><option value="zh-CN" ${locale() === "zh-CN" ? "selected" : ""}>${t("settings.chinese")}</option><option value="en" ${locale() === "en" ? "selected" : ""}>${t("settings.english")}</option></select></label></div></section>
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.mode")}</h2><p>${t("settings.modeDescription")}</p></div></div><div class="mode-setting"><button class="setting-choice ${app.mode === "toolbox" ? "active" : ""}" data-set-mode="toolbox"><span class="mode-icon slate">${icon("toolbox", 23)}</span><span><strong>${t("settings.toolbox")}</strong><small>${t("settings.toolboxDescription")}</small></span>${app.mode === "toolbox" ? icon("check", 20) : ""}</button><button class="setting-choice ${app.mode === "ai" ? "active" : ""}" data-set-mode="ai"><span class="mode-icon purple">${icon("sparkles", 23)}</span><span><strong>${t("settings.ai")}</strong><small>${t("settings.aiDescription")}</small></span>${app.mode === "ai" ? icon("check", 20) : ""}</button></div></section>
     ${app.mode === "ai" ? renderAiProviderSettings() : `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("bot", 24)}</span><div><h2>${t("settings.aiDisabled")}</h2><p>${t("settings.aiDisabledDescription")}</p></div></section>`}
-    ${showSvpRouting ? `<section class="panel smart-route-settings"><div class="section-heading"><div><h2>${t("settings.smartRoute")}</h2><p>${t("settings.smartRouteDescription")}</p></div><label class="fluent-switch large"><input id="svp-routing-enabled" type="checkbox" ${app.smartSvpLaunchEnabled ? "checked" : ""} ${association.supported ? "" : "disabled"} aria-label="${t("settings.smartRoute")}" /><span></span>${app.smartSvpLaunchEnabled ? t("settings.enabled") : t("settings.disabled")}</label></div><div class="smart-route-state ${association.isDefault ? "ready" : "pending"}"><span class="feature-icon ${association.isDefault ? "emerald" : "blue"}">${icon("file", 20)}</span><div><strong>${escapeHtml(associationLabel)}</strong><p>${escapeHtml(association.detail)}</p></div><button class="secondary compact" data-open-svp-default-apps ${association.supported ? "" : "disabled"}>${t("settings.openDefaults")}</button></div><div class="smart-route-boundary">${icon("shield", 17)}<span><strong>智能路由只在工具箱已经运行时生效</strong><small>冷启动或关闭此功能时，工具箱会把工程透明转交给原始 .svp 处理程序；不会监控、终止或劫持已经启动的 SV2。路由优先采用账号服务返回的授权摘要，并以你的确认记录作为补充；任何未知结果都必须由你选择账号。</small></span></div></section>` : ""}
+    ${showSvpRouting ? `<section class="panel smart-route-settings"><div class="section-heading"><div><h2>${t("settings.smartRoute")}</h2><p>${t("settings.smartRouteDescription")}</p></div><label class="fluent-switch large"><input id="svp-routing-enabled" type="checkbox" ${app.smartSvpLaunchEnabled ? "checked" : ""} ${association.supported ? "" : "disabled"} aria-label="${t("settings.smartRoute")}" /><span></span>${app.smartSvpLaunchEnabled ? t("settings.enabled") : t("settings.disabled")}</label></div><div class="smart-route-state ${association.isDefault ? "ready" : "pending"}"><span class="feature-icon ${association.isDefault ? "emerald" : "blue"}">${icon("file", 20)}</span><div><strong>${escapeHtml(associationLabel)}</strong><p>${escapeHtml(association.detail)}</p></div><button class="secondary compact" data-open-svp-default-apps ${association.supported ? "" : "disabled"}>${t("settings.openDefaults")}</button></div><div class="smart-route-boundary">${icon("shield", 17)}<span><strong>${t("accountUi.smartRoutingWorksOnlyWhileToolboxIsAlreadyRunning")}</strong><small>${t("accountUi.onAColdStartOrWhenThisFeatureIs")}</small></span></div></section>` : ""}
     <section class="panel app-update-settings"><div class="section-heading"><div><h2>${t("settings.update")}</h2><p>${t("settings.updateDescription")}</p></div></div><div class="update-check-actions"><div><small>${t("settings.currentVersion")}</small><strong>v${escapeHtml(app.appVersion)}</strong></div><button class="secondary" data-check-toolbox-update>${icon("sync", 16)} ${toolboxUpdate ? t("settings.checkAgain") : t("settings.checkUpdate")}</button></div>${renderToolboxUpdateResult()}</section>
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.dataPlatform")}</h2><p>${t("settings.dataPlatformDescription")}</p></div></div><dl class="detail-list"><div><dt>${t("settings.platform")}</dt><dd>${escapeHtml(app.platform)}</dd></div><div><dt>${t("settings.config")}</dt><dd><code>${escapeHtml(app.configPath)}</code></dd></div><div><dt>${t("settings.appVersion")}</dt><dd>${escapeHtml(app.appVersion)}</dd></div></dl></section></div>`;
 }
