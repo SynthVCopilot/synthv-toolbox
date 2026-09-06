@@ -1,4 +1,5 @@
 import "./styles.css";
+import "./i18nCommon";
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { registerModelAuthElement } from "@model-auth/vue/custom-element";
@@ -1388,28 +1389,28 @@ function renderOnboarding(): void {
     <div class="onboarding-glow one"></div><div class="onboarding-glow two"></div>
     <section class="onboarding-card">
       <div class="onboarding-brand"><div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div><span>Synthesizer V Toolbox</span></div>
-      <div class="eyebrow">首次启动 · 选择工作方式</div>
-      <h1>一个工具箱，按你的方式工作。</h1>
-      <p class="lead">随时可以在设置中切换。纯工具箱模式不会显示或启动任何 AI 功能。</p>
+      <div class="eyebrow">${t("onboarding.eyebrow")}</div>
+      <h1>${t("onboarding.title")}</h1>
+      <p class="lead">${t("onboarding.lead")}</p>
       <div class="mode-grid">
         <button class="mode-card" data-onboarding="toolbox">
           <span class="mode-icon slate">${icon("toolbox", 30)}</span>
-          <span class="recommended">轻量 · 本地优先</span>
-          <strong>纯工具箱模式</strong>
-          <p>直接使用音频、MIDI、工程与 Bridge 工具。界面简洁，不需要模型配置。</p>
+          <span class="recommended">${t("onboarding.toolbox.badge")}</span>
+          <strong>${t("onboarding.toolbox.title")}</strong>
+          <p>${t("onboarding.toolbox.description")}</p>
           <ul><li>${icon("check", 16)} 确定性基础处理</li><li>${icon("check", 16)} 不显示 AI / MCP 入口</li><li>${icon("check", 16)} 不启动模型运行时</li></ul>
-          <span class="mode-cta">使用纯工具箱 ${icon("arrow", 17)}</span>
+          <span class="mode-cta">${t("onboarding.toolbox.action")} ${icon("arrow", 17)}</span>
         </button>
         <button class="mode-card featured" data-onboarding="ai">
           <span class="mode-icon purple">${icon("sparkles", 30)}</span>
-          <span class="recommended accent">完整体验</span>
-          <strong>AI 模式</strong>
-          <p>在完整工具箱之上加入 Copilot、智能增强、能力编排与外部 MCP。</p>
+          <span class="recommended accent">${t("onboarding.ai.badge")}</span>
+          <strong>${t("onboarding.ai.title")}</strong>
+          <p>${t("onboarding.ai.description")}</p>
           <ul><li>${icon("check", 16)} 自动纠正与置信度复核</li><li>${icon("check", 16)} 高级参数微调建议</li><li>${icon("check", 16)} 外部 MCP 工具接入</li></ul>
-          <span class="mode-cta">启用 AI 模式 ${icon("arrow", 17)}</span>
+          <span class="mode-cta">${t("onboarding.ai.action")} ${icon("arrow", 17)}</span>
         </button>
       </div>
-      <p class="privacy-note">${icon("plug", 16)} AI 模式只在你通过浏览器授权官方提供商后发起请求；OAuth token 不会显示在界面中。</p>
+      <p class="privacy-note">${icon("plug", 16)} ${t("onboarding.privacy")}</p>
     </section>
   </main>${busy ? '<div class="busy-overlay"><span class="spinner"></span></div>' : ""}`;
 }
