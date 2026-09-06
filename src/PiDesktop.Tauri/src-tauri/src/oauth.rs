@@ -1493,12 +1493,12 @@ fn callback_page(ok: bool) -> String {
     let (title, body) = if ok {
         (
             "已收到授权回调",
-            "SynthV Toolbox 正在完成令牌交换和安全保存；请返回应用等待最终结果。",
+            "Synthesizer V Tool Box 正在完成令牌交换和安全保存；请返回应用等待最终结果。",
         )
     } else {
         (
             "授权失败",
-            "授权没有完成，请返回 SynthV Toolbox 查看详细原因。",
+            "授权没有完成，请返回 Synthesizer V Tool Box 查看详细原因。",
         )
     };
     format!(

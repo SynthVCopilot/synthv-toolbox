@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "SynthV Toolbox",
+  "productName": "Synthesizer V Tool Box",
   "version": "0.1.6",
   "identifier": "com.synthvcopilot.toolbox",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "SynthV Toolbox",
+        "title": "Synthesizer V Tool Box",
         "width": 1280,
         "height": 820,
         "minWidth": 900,

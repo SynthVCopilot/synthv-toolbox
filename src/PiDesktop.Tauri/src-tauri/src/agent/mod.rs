@@ -1,4 +1,4 @@
-//! SynthV Toolbox 内置 Agent 运行时。
+//! Synthesizer V Tool Box 内置 Agent 运行时。
 //!
 //! Agent 循环、Provider、会话历史与组件目录都属于主应用，不再通过外部
 //! workspace 或动态库接入。

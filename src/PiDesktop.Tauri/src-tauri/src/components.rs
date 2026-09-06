@@ -29,7 +29,7 @@ const FFMPEG_ARCHIVE_SHA256: &str =
     "e1cafe80e9fb3e4e4024923a2ed2544bc3a0545af09b6a7861a7193210988c63";
 const FFMPEG_MANIFEST_NAME: &str = "manifest.json";
 const FFMPEG_MANIFEST_SCHEMA: u32 = 1;
-const FFMPEG_MANAGED_BY: &str = "SynthV Toolbox";
+const FFMPEG_MANAGED_BY: &str = "Synthesizer V Tool Box";
 const FFMPEG_ARTIFACT_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 const MAX_FFMPEG_ARTIFACTS_TO_SCAN: usize = 64;
 const MAX_FFMPEG_DOWNLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -370,7 +370,7 @@ fn managed_component_paths(
         "vocal-separation" => ("vocal-separation", "separation", "separate.py"),
         "sandboxie" => {
             return Err(format!(
-                "{} 不是由 SynthV Toolbox 管理安装的组件，不能在这里删除。",
+                "{} 不是由 Synthesizer V Tool Box 管理安装的组件，不能在这里删除。",
                 display_name(id)
             ))
         }
@@ -659,7 +659,7 @@ fn sandboxie_component_info() -> ComponentInfo {
     ComponentInfo {
         id: "sandboxie".to_string(),
         display_name: format!("Sandboxie Plus {SANDBOXIE_VERSION}"),
-        description: "SynthV Toolbox 并发隔离提供方；下载官方安装包后由用户交互安装。".to_string(),
+        description: "Synthesizer V Tool Box 并发隔离提供方；下载官方安装包后由用户交互安装。".to_string(),
         audience: "Windows 并发隔离".to_string(),
         installed,
         removable: false,

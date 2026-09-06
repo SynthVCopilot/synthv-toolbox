@@ -1427,8 +1427,8 @@ pub async fn check_toolbox_update() -> Result<crate::update_checker::ToolboxUpda
 #[tauri::command]
 pub fn open_toolbox_releases() -> OperationResult {
     match crate::update_checker::open_releases_page() {
-        Ok(()) => succeeded("已打开 SynthV Toolbox 官方发布页。", RELEASES_PAGE_DETAIL),
-        Err(error) => failed("无法打开 SynthV Toolbox 官方发布页。", error),
+        Ok(()) => succeeded("已打开 Synthesizer V Tool Box 官方发布页。", RELEASES_PAGE_DETAIL),
+        Err(error) => failed("无法打开 Synthesizer V Tool Box 官方发布页。", error),
     }
 }
 
@@ -1652,7 +1652,7 @@ pub async fn set_svp_launch_routing(
         let mut settings = state.settings.write().await;
         if enabled {
             let executable = std::env::current_exe()
-                .map_err(|error| format!("无法定位 SynthV Toolbox 可执行文件：{error}"))?;
+                .map_err(|error| format!("无法定位 Synthesizer V Tool Box 可执行文件：{error}"))?;
             let view = register_svp_open_with_candidate(
                 &executable,
                 settings.original_svp_prog_id.as_deref(),
@@ -1672,7 +1672,7 @@ pub fn open_svp_default_apps_settings() -> Result<OperationResult, String> {
     open_svp_default_apps_settings_impl()?;
     Ok(succeeded(
         "已打开 Windows 默认应用设置。",
-        "请由你本人把 .svp 的默认应用选择为 SynthV Toolbox；工具箱不会修改 UserChoice。",
+        "请由你本人把 .svp 的默认应用选择为 Synthesizer V Tool Box；工具箱不会修改 UserChoice。",
     ))
 }
 
@@ -3086,7 +3086,7 @@ pub async fn review_workflow(
         let provider = build_ai_provider(&ai_settings, credential_balancer)?;
         let mut messages = vec![ChatMessage {
             role: Role::System,
-            content: "你是 SynthV Toolbox 的工作流复核器。只根据结构化结果判断可靠性、异常和下一步；不得声称已修改文件。用简洁中文输出：结论、风险、建议参数。".to_string(),
+            content: "你是 Synthesizer V Tool Box 的工作流复核器。只根据结构化结果判断可靠性、异常和下一步；不得声称已修改文件。用简洁中文输出：结论、风险、建议参数。".to_string(),
             tool_calls: Vec::new(),
             tool_call_id: None,
         }];
@@ -3558,7 +3558,7 @@ fn ensure_session(session: &mut AgentSession) {
 }
 
 fn apply_agent_work_mode(messages: &mut Vec<ChatMessage>, mode: AgentWorkMode) {
-    const PREFIX: &str = "[SynthV Toolbox work mode]";
+    const PREFIX: &str = "[Synthesizer V Tool Box work mode]";
     messages.retain(|message| {
         !(matches!(message.role, Role::System) && message.content.starts_with(PREFIX))
     });

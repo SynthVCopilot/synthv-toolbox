@@ -13,7 +13,7 @@ const MAX_VOICE_REQUIREMENTS: usize = 128;
 
 pub const TOOLBOX_SVP_PROG_ID: &str = "SynthVToolbox.SVP";
 #[cfg(windows)]
-const TOOLBOX_REGISTERED_APP_NAME: &str = "SynthV Toolbox";
+const TOOLBOX_REGISTERED_APP_NAME: &str = "Synthesizer V Tool Box";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -133,7 +133,7 @@ pub fn svp_association_view(
     }
 }
 
-/// Registers SynthV Toolbox as an Open With candidate. This intentionally does
+/// Registers Synthesizer V Tool Box as an Open With candidate. This intentionally does
 /// not write Explorer's `UserChoice` and therefore never silently becomes the
 /// default `.svp` application.
 pub fn register_svp_open_with_candidate(
@@ -584,7 +584,7 @@ fn validate_original_prog_id(value: &str) -> Result<String, String> {
     let normalized = value.to_ascii_lowercase();
     let toolbox = TOOLBOX_SVP_PROG_ID.to_ascii_lowercase();
     if normalized == toolbox || normalized.starts_with(&(toolbox + "\\")) {
-        return Err("原 .svp 处理器不能指回 SynthV Toolbox。".to_string());
+        return Err("原 .svp 处理器不能指回 Synthesizer V Tool Box。".to_string());
     }
     Ok(value.to_string())
 }
@@ -638,16 +638,16 @@ mod windows_association {
         let is_default = current_prog_id.as_deref().is_some_and(is_toolbox_prog_id);
         let detail = match (registered, is_default, original_prog_id.as_deref()) {
             (true, true, Some(_)) => {
-                "SynthV Toolbox 已是 .svp 默认处理器，并已保存可用于安全透传的原处理器。"
+                "Synthesizer V Tool Box 已是 .svp 默认处理器，并已保存可用于安全透传的原处理器。"
                     .to_string()
             }
             (true, true, None) => {
-                "SynthV Toolbox 已是 .svp 默认处理器，但未找到可安全透传的原处理器。".to_string()
+                "Synthesizer V Tool Box 已是 .svp 默认处理器，但未找到可安全透传的原处理器。".to_string()
             }
             (true, false, _) => {
-                "SynthV Toolbox 已注册为“打开方式”候选；默认应用仍由用户选择。".to_string()
+                "Synthesizer V Tool Box 已注册为“打开方式”候选；默认应用仍由用户选择。".to_string()
             }
-            (false, _, _) => "SynthV Toolbox 尚未注册为 .svp“打开方式”候选。".to_string(),
+            (false, _, _) => "Synthesizer V Tool Box 尚未注册为 .svp“打开方式”候选。".to_string(),
         };
         Ok(SvpAssociationView {
             supported: true,
@@ -674,7 +674,7 @@ mod windows_association {
             .create_subkey(TOOLBOX_CLASS_KEY)
             .map_err(|error| format!("无法注册 .svp 处理器：{error}"))?;
         class
-            .set_value("", &"SynthV Toolbox project router")
+            .set_value("", &"Synthesizer V Tool Box project router")
             .map_err(|error| format!("无法写入 .svp 处理器描述：{error}"))?;
         let (default_icon, _) = class
             .create_subkey("DefaultIcon")
@@ -743,7 +743,7 @@ mod windows_association {
 
     pub(super) fn passthrough(project_path: &Path, original_prog_id: &str) -> Result<(), String> {
         if handler_points_to_toolbox(original_prog_id) {
-            return Err("原 .svp 处理器会再次启动 SynthV Toolbox，已阻止递归透传。".to_string());
+            return Err("原 .svp 处理器会再次启动 Synthesizer V Tool Box，已阻止递归透传。".to_string());
         }
         let verb = to_wide("open");
         let project = project_path

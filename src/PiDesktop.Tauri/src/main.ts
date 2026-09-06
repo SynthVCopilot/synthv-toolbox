@@ -750,8 +750,8 @@ function navItem(target: Page, label: string, glyph: Parameters<typeof icon>[0])
 function renderSidebar(): string {
   if (!app) return "";
   return `<div class="brand" data-page="home" title="返回概览">
-      <div class="brand-mark small"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="SynthV Toolbox" /></div>
-      <div><strong>SynthV Toolbox</strong><span>Creative utility suite</span></div>
+      <div class="brand-mark small"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="Synthesizer V Tool Box" /></div>
+      <div><strong>Synthesizer V Tool Box</strong><span>Creative utility suite</span></div>
     </div>
     <nav class="nav" aria-label="主导航">
       <span class="nav-label">工作区</span>
@@ -778,13 +778,13 @@ function render(): void {
   if (!app) return;
   if (app.settingsLoadError) {
     root.innerHTML = `<main class="fatal settings-recovery" role="alert">
-      <div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="SynthV Toolbox" /></div>
+      <div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="Synthesizer V Tool Box" /></div>
       <span class="eyebrow">设置恢复保护模式</span>
       <h1>配置需要修复，原文件尚未被覆盖</h1>
       <p>工具箱检测到设置文件无法安全读取，因此已停用所有设置写入。OAuth 凭据和账号映射不会被默认配置替换。</p>
       <pre>${escapeHtml(app.settingsLoadError)}</pre>
       <div class="settings-recovery-path"><strong>配置文件</strong><code>${escapeHtml(app.configPath)}</code></div>
-      <p>请修复 JSON 与 <code>schemaVersion</code>，或从备份恢复此文件，然后重新启动 SynthV Toolbox。</p>
+      <p>请修复 JSON 与 <code>schemaVersion</code>，或从备份恢复此文件，然后重新启动 Synthesizer V Tool Box。</p>
     </main>`;
     return;
   }
@@ -920,7 +920,7 @@ function renderComponentRemovalDialog(): string {
     <section class="fluent-dialog component-removal-dialog" role="alertdialog" aria-modal="true" aria-labelledby="component-removal-title">
       <span class="dialog-icon danger">${icon("trash", 24)}</span>
       <div><span class="eyebrow">本地组件管理</span><h2 id="component-removal-title">${cleanupOnly ? "清理" : "删除"}“${escapeHtml(component.displayName)}”？</h2></div>
-      <p>此操作会删除 SynthV Toolbox 管理的本地运行环境与对应配置。依赖此组件的工作流在重新安装前将不可用。</p>
+      <p>此操作会删除 Synthesizer V Tool Box 管理的本地运行环境与对应配置。依赖此组件的工作流在重新安装前将不可用。</p>
       <p class="dialog-choice-note">用户工程、输入素材以及已导出的输出文件不会被删除；之后仍可从组件中心重新安装。</p>
       <div class="dialog-actions"><button class="secondary" data-cancel-component-removal>取消</button><button class="danger-action" data-confirm-component-removal>${icon("trash", 16)} ${actionLabel}</button></div>
     </section>
@@ -1326,7 +1326,7 @@ function renderOnboarding(): void {
   root.innerHTML = `<main class="onboarding">
     <div class="onboarding-glow one"></div><div class="onboarding-glow two"></div>
     <section class="onboarding-card">
-      <div class="onboarding-brand"><div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="SynthV Toolbox" /></div><span>SynthV Toolbox</span></div>
+      <div class="onboarding-brand"><div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="Synthesizer V Tool Box" /></div><span>Synthesizer V Tool Box</span></div>
       <div class="eyebrow">首次启动 · 选择工作方式</div>
       <h1>一个工具箱，按你的方式工作。</h1>
       <p class="lead">随时可以在设置中切换。纯工具箱模式不会显示或启动任何 AI 功能。</p>
@@ -1541,7 +1541,7 @@ function renderHome(): string {
         <p>${app.mode === "ai" ? "从音频分析到 SynthV 工程操作，AI 只通过你启用的能力和 MCP 工具工作。" : "无需模型配置即可进行确定性的音频、MIDI、工程和 Bridge 操作。"}</p>
         <div class="hero-actions"><button class="primary" data-page="${app.mode === "ai" ? "copilot" : "import"}">${icon(app.mode === "ai" ? "bot" : "pipeline", 18)} ${app.mode === "ai" ? "打开 Copilot" : "打开导入与转换"}</button><button class="secondary" data-page="bridge">检查 Bridge</button></div>
       </div>
-      <div class="hero-orb"><div><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="SynthV Toolbox" /></div><span>${app.mode === "ai" ? "COPILOT READY" : "LOCAL FIRST"}</span></div>
+      <div class="hero-orb"><div><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="Synthesizer V Tool Box" /></div><span>${app.mode === "ai" ? "COPILOT READY" : "LOCAL FIRST"}</span></div>
     </div>
     <div class="stats-grid">
       <article class="stat-card"><span>运行模式</span><strong>${app.mode === "ai" ? "AI 增强" : "纯工具箱"}</strong><small>${app.mode === "ai" ? aiConnectionSummary() : "模型运行时已停用"}</small></article>
@@ -2670,7 +2670,7 @@ function wireForms(): void {
     void run(async () => {
       app = await api.setSvpLaunchRouting(enabled);
       notice = enabled
-        ? "智能 .svp 启动已开启。请确认 Windows 已将 SynthV Toolbox 设为 .svp 默认应用。"
+        ? "智能 .svp 启动已开启。请确认 Windows 已将 Synthesizer V Tool Box 设为 .svp 默认应用。"
         : "智能 .svp 启动已关闭；工程会透明转交给原始处理程序。";
     });
   });
@@ -3647,6 +3647,6 @@ void (async () => {
     render();
     refreshAiCatalogLive();
   } catch (reason) {
-    root.innerHTML = `<div class="fatal"><div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="SynthV Toolbox" /></div><h1>无法启动 SynthV Toolbox</h1><pre>${escapeHtml(formatError(reason))}</pre><p>请确认应用由 Tauri 运行，而不是直接打开前端页面。</p></div>`;
+    root.innerHTML = `<div class="fatal"><div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="Synthesizer V Tool Box" /></div><h1>无法启动 Synthesizer V Tool Box</h1><pre>${escapeHtml(formatError(reason))}</pre><p>请确认应用由 Tauri 运行，而不是直接打开前端页面。</p></div>`;
   }
 })();

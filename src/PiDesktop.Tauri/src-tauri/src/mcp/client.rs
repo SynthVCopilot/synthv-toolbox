@@ -1,4 +1,4 @@
-//! SynthV Toolbox 的极简 MCP (Model Context Protocol) stdio 客户端。
+//! Synthesizer V Tool Box 的极简 MCP (Model Context Protocol) stdio 客户端。
 //!
 //! 以子进程方式拉起本地 stdio MCP server（如 synthv-agent-bridge 的
 //! `node dist/src/cli.js`），用换行分隔的 JSON-RPC 2.0 做 initialize /

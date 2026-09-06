@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
   <key>NSAudioCaptureUsageDescription</key>
-  <string>SynthV Toolbox captures audio only from the Synthesizer V process you select so it can compare short rendered clips and improve tuning.</string>
+  <string>Synthesizer V Tool Box captures audio only from the Synthesizer V process you select so it can compare short rendered clips and improve tuning.</string>
 </dict>
 </plist>

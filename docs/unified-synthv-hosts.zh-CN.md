@@ -1,6 +1,6 @@
 # 统一 SynthV 宿主接口
 
-SynthV Toolbox 将官方 Synthesizer V Studio Pro、Synthesizer V Flat 和官方 Synthesizer V Studio 2 Pro 收敛为同一套内置 Agent 工具。Agent 不需要判断底层使用脚本 Bridge 还是本机 MCP，也不会看到宿主的原始工具列表。
+Synthesizer V Tool Box 将官方 Synthesizer V Studio Pro、Synthesizer V Flat 和官方 Synthesizer V Studio 2 Pro 收敛为同一套内置 Agent 工具。Agent 不需要判断底层使用脚本 Bridge 还是本机 MCP，也不会看到宿主的原始工具列表。
 
 ## 标准工具
 
