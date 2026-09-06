@@ -398,7 +398,8 @@ mod platform {
             .output()
             .map_err(|error| format!("无法聚焦 SynthV：{error}"))?;
         output.status.success().then_some(()).ok_or_else(|| {
-            "无法聚焦 SynthV。请在 macOS“辅助功能”中允许 Synthesizer V Toolbox 控制电脑。".to_string()
+            "无法聚焦 SynthV。请在 macOS“辅助功能”中允许 Synthesizer V Toolbox 控制电脑。"
+                .to_string()
         })
     }
 
