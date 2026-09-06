@@ -95,7 +95,7 @@ export interface SynthVInstallation {
   executablePath?: string;
   scriptsPath?: string;
   source: string;
-  bridgeProfile?: "sv2" | "sv1" | "flat" | "unsupported";
+  bridgeProfile: "sv2" | "sv1" | "flat" | "unsupported";
 }
 
 export interface Sv2ProcessBlocker {

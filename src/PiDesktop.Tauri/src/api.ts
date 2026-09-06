@@ -82,6 +82,7 @@ let previewHttpApiStatus: HttpApiStatus = {
   lastError: null,
 };
 let previewBridgeConnected = true;
+const previewBridgeTargets = new Set<string>();
 let previewSynthvPid = 4203;
 let previewSynthvProcesses: SynthVProcess[] = [
   { processId: 4201, processIdentity: "preview-4201", productName: "SVStudio2 Pro", version: "2.3.0", name: "Synthesizer V Studio 2 Pro", command: "/Applications/Synthesizer V Studio 2 Pro.app/Contents/MacOS/synthv-studio", windowTitle: "Project A.svp - Synthesizer V Studio 2 Pro", isSv2: true, sandboxed: false },
@@ -383,6 +384,18 @@ const previewState = (): BootstrapState => ({
     scriptsPath: "/Library/Application Support/Dreamtonics/Synthesizer V Studio 2/scripts",
     source: "macOS 用户脚本目录",
     bridgeProfile: "sv2",
+  }, {
+    displayName: "Synthesizer V Studio Pro",
+    installPath: "/Applications/Synthesizer V Studio Pro.app",
+    scriptsPath: "/Library/Application Support/Dreamtonics/Synthesizer V Studio/scripts",
+    source: "Preview",
+    bridgeProfile: "sv1",
+  }, {
+    displayName: "Synthesizer V Studio Flat",
+    installPath: "/Applications/Synthesizer V Studio Flat.app",
+    scriptsPath: "/Library/Application Support/Dreamtonics/Synthesizer V Studio/scripts",
+    source: "Preview",
+    bridgeProfile: "flat",
   }],
   components: [
     { id: "ffmpeg", displayName: "FFmpeg", description: "音视频转码与抽取；所有音频流程的基础。", audience: "AI 与人工", installed: true, downloaded: false, installable: true, removable: false, status: "已就绪" },
@@ -685,6 +698,15 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     return previewState() as T;
   }
   if (command === "scan_synthv") return previewState().installations as T;
+  if (command === "install_bridge" || command === "diagnose_bridge") {
+    const targets = (args?.targets ?? []) as { scriptsPath: string; bridgeProfile: SynthVInstallation["bridgeProfile"] }[];
+    return targets.map((target) => {
+      const key = `${target.bridgeProfile === "sv1" ? "sv1" : "modern"}:${target.scriptsPath}`;
+      if (command === "install_bridge") previewBridgeTargets.add(key);
+      const installed = previewBridgeTargets.has(key);
+      return { ...target, result: { succeeded: installed, summary: installed ? "Preview: Bridge installed." : "Preview: Bridge is not installed.", detail: target.scriptsPath } };
+    }) as T;
+  }
   if (command === "connect_bridge") {
     previewBridgeConnected = true;
     return { succeeded: true, summary: "SynthV Bridge 已连接。", detail: "预览模式" } as T;

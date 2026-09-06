@@ -812,7 +812,7 @@ function renderSidebar(): string {
       <div class="brand-mark small"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div>
       <div><strong>Synthesizer V Toolbox</strong><span>Creative utility suite</span></div>
     </div>
-    <nav class="nav" aria-label="主导航">
+    <nav class="nav" aria-label="${t("onboardingDetails.navigation")}">
       <span class="nav-label">${t("nav.workspace")}</span>
       ${navItem("home", t("nav.home"), "home")}
       ${app.platform === "windows" || app.platform === "macos" || app.platform === "preview" ? navItem("accounts", t("nav.accounts"), "users") : ""}
@@ -1398,7 +1398,7 @@ function renderOnboarding(): void {
           <span class="recommended">${t("onboarding.toolbox.badge")}</span>
           <strong>${t("onboarding.toolbox.title")}</strong>
           <p>${t("onboarding.toolbox.description")}</p>
-          <ul><li>${icon("check", 16)} 确定性基础处理</li><li>${icon("check", 16)} 不显示 AI / MCP 入口</li><li>${icon("check", 16)} 不启动模型运行时</li></ul>
+          <ul><li>${icon("check", 16)} ${t("onboardingDetails.deterministic")}</li><li>${icon("check", 16)} ${t("onboardingDetails.noAi")}</li><li>${icon("check", 16)} ${t("onboardingDetails.runtimeOff")}</li></ul>
           <span class="mode-cta">${t("onboarding.toolbox.action")} ${icon("arrow", 17)}</span>
         </button>
         <button class="mode-card featured" data-onboarding="ai">
@@ -1406,7 +1406,7 @@ function renderOnboarding(): void {
           <span class="recommended accent">${t("onboarding.ai.badge")}</span>
           <strong>${t("onboarding.ai.title")}</strong>
           <p>${t("onboarding.ai.description")}</p>
-          <ul><li>${icon("check", 16)} 自动纠正与置信度复核</li><li>${icon("check", 16)} 高级参数微调建议</li><li>${icon("check", 16)} 外部 MCP 工具接入</li></ul>
+          <ul><li>${icon("check", 16)} ${t("onboardingDetails.correction")}</li><li>${icon("check", 16)} ${t("onboardingDetails.parameters")}</li><li>${icon("check", 16)} ${t("onboardingDetails.externalMcp")}</li></ul>
           <span class="mode-cta">${t("onboarding.ai.action")} ${icon("arrow", 17)}</span>
         </button>
       </div>

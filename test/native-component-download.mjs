@@ -14,6 +14,7 @@ const downloads = readFileSync(
 );
 const api = readFileSync(join(repositoryRoot, "src", "PiDesktop.Tauri", "src", "api.ts"), "utf8");
 const main = readFileSync(join(repositoryRoot, "src", "PiDesktop.Tauri", "src", "main.ts"), "utf8");
+const messages = readFileSync(join(repositoryRoot, "src", "PiDesktop.Tauri", "src", "i18nCommon.ts"), "utf8");
 const guide = readFileSync(join(repositoryRoot, "docs", "lyric-and-audio-workflow-guide.zh-CN.md"), "utf8");
 
 assert.match(components, /ureq::AgentBuilder::new\(\)[\s\S]*\.get\(url\)/);
@@ -32,6 +33,7 @@ assert.doesNotMatch(downloads, /aria2/i);
 assert.doesNotMatch(api, /aria2/i);
 assert.doesNotMatch(main, /aria2/i);
 assert.doesNotMatch(guide, /aria2/i);
-assert.match(main, /内置下载器只获取固定版本/);
+assert.match(main, /t\("components.queueDescription"\)/);
+assert.match(messages, /内置下载器只获取固定版本/);
 
 console.log("Native component download contracts passed.");
