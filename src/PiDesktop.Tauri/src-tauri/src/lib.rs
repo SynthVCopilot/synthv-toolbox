@@ -70,6 +70,9 @@ pub fn run() {
         .flatten();
     let passthrough_only = initial_activation.is_some();
 
+    let mut context = tauri::generate_context!();
+    context.set_default_window_icon(Some(tauri::include_image!("./icons/128x128@2x.png")));
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
@@ -324,7 +327,7 @@ pub fn run() {
             commands::get_http_api_status,
             commands::configure_http_api,
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("failed to run Synthesizer V Toolbox");
 }
 
