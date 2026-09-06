@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
+import { JSDOM } from "../src/PiDesktop.Tauri/node_modules/jsdom/lib/api.js";
 
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const desktopRoot = join(repositoryRoot, "src", "PiDesktop.Tauri");
@@ -86,13 +87,18 @@ function collectAudioImplementation(source) {
     const openBrace = source.indexOf("{", start);
     return source.slice(start, endOfBlock(openBrace));
   };
+  const eventHandlers = [...source.matchAll(/^document\.addEventListener\("(?:input|change)",/gm)]
+    .map((match) => source.slice(match.index, endOfStatement(match.index)))
+    .filter((handler) => handler.includes("syncAudioPreparationFormsFromDom"));
+  assert.equal(eventHandlers.length, 2, "audio drafts must be wired to both input and change events");
   return {
     variables: [...wantedVariables].map(statement).join("\n"),
     functions: [...wantedFunctions].map(functionBody).join("\n"),
+    eventHandlers: eventHandlers.join("\n"),
   };
 }
 
-function createHarness(audioApi, document = { querySelector: () => undefined }) {
+function createHarness(audioApi, document = { querySelector: () => undefined, addEventListener() {} }) {
   const source = readFileSync(mainPath, "utf8");
   const extracted = collectAudioImplementation(source);
   const harnessSource = `// @ts-nocheck
@@ -105,6 +111,7 @@ module.exports = (function (__audioApi, __window) {
   const render = () => {};
   ${extracted.variables}
   ${extracted.functions}
+  ${extracted.eventHandlers}
   return {
     isTerminalAudioJob, mergeAudioJobSnapshot, scheduleAudioJobPoll, refreshAudioRuntimeStatus, syncAudioPreparationFormsFromDom, requestAudioPlan, startPlannedAudioJob, selectAudioPreparationInput,
     state: () => ({ audioProbe, audioRuntime, audioPrepareForm, audioNormalizeForm, pendingAudioPlan, audioJob,
@@ -229,7 +236,7 @@ module.exports = (function (__audioApi, __window) {
   } finally { harness.cleanup(); }
 }
 
-{
+for (const staleOutcome of ["success", "failure"]) {
   const statuses = [deferred(), deferred()];
   let calls = 0;
   const harness = createHarness({
@@ -240,25 +247,48 @@ module.exports = (function (__audioApi, __window) {
     harness.refreshAudioRuntimeStatus();
     statuses[1].resolve({ available: true, detail: "current" });
     await settle();
-    statuses[0].resolve({ available: false, detail: "stale success" });
+    if (staleOutcome === "success") statuses[0].resolve({ available: false, detail: "stale success" });
+    else statuses[0].reject(new Error("stale failure"));
     await settle();
-    assert.equal(harness.state().audioRuntime.available, true, "a stale status failure must not overwrite the current runtime");
+    assert.equal(harness.state().audioRuntime.available, true, `a stale status ${staleOutcome} must not overwrite the current runtime`);
     assert.equal(harness.state().audioRuntimeRequestGeneration, 2);
   } finally { harness.cleanup(); }
 }
 
 {
-  const fields = new Map([
-    ["#audio-prep-rate", { value: "96000" }], ["#audio-prep-channels", { value: "1" }],
-    ["#audio-prep-format", { value: "f32" }], ["#audio-prep-start", { value: "2.5" }],
-    ["#audio-prep-duration", { value: "12" }], ["#audio-normalize-lufs", { value: "-14" }],
-    ["#audio-normalize-peak", { value: "-2" }], ["#audio-normalize-lra", { value: "8" }],
-  ]);
-  const harness = createHarness({}, { querySelector: (selector) => fields.get(selector) });
-  harness.setForms({ inputPath: "C:/audio/source.wav", sampleFormat: "s24" }, { inputPath: "C:/audio/source.wav", integratedLufs: -16, truePeakDbtp: -1.5, loudnessRange: 11 });
-  harness.syncAudioPreparationFormsFromDom();
-  assert.equal(JSON.stringify(harness.state().audioPrepareForm), JSON.stringify({ inputPath: "C:/audio/source.wav", sampleFormat: "f32", sampleRate: 96000, channels: 1, startSeconds: 2.5, durationSeconds: 12 }));
-  assert.equal(JSON.stringify(harness.state().audioNormalizeForm), JSON.stringify({ inputPath: "C:/audio/source.wav", integratedLufs: -14, truePeakDbtp: -2, loudnessRange: 8 }));
+  const dom = new JSDOM(`<section class="audio-preparation">
+    <input id="audio-prep-rate" type="number" value="48000">
+    <select id="audio-prep-channels"><option value="2">stereo</option><option value="1">mono</option></select>
+    <select id="audio-prep-format"><option value="s24">24-bit</option><option value="f32">float</option></select>
+    <input id="audio-prep-start" type="number" value="2.5">
+    <input id="audio-prep-duration" type="number" value="12">
+    <input id="audio-normalize-lufs" type="number" value="-14">
+    <input id="audio-normalize-peak" type="number" value="-2">
+    <input id="audio-normalize-lra" type="number" value="8">
+  </section>`);
+  const requests = [];
+  const harness = createHarness({
+    planAudioPrepare(request) { requests.push(request); return Promise.resolve({ token: "draft-token" }); },
+  }, dom.window.document);
+  try {
+    harness.setForms({ inputPath: "C:/audio/source.wav", sampleFormat: "s24" }, { inputPath: "C:/audio/source.wav", integratedLufs: -16, truePeakDbtp: -1.5, loudnessRange: 11 });
+    const edit = (id, value, event) => {
+      const field = dom.window.document.getElementById(id);
+      field.value = value;
+      field.dispatchEvent(new dom.window.Event(event, { bubbles: true }));
+    };
+    edit("audio-prep-rate", "96000", "input");
+    assert.equal(harness.state().audioPrepareForm.sampleRate, 96000, "input events must persist numeric edits");
+    edit("audio-prep-channels", "1", "change");
+    edit("audio-prep-format", "f32", "change");
+    const expected = { inputPath: "C:/audio/source.wav", sampleFormat: "f32", sampleRate: 96000, channels: 1, startSeconds: 2.5, durationSeconds: 12 };
+    assert.equal(JSON.stringify(harness.state().audioPrepareForm), JSON.stringify(expected));
+    assert.equal(JSON.stringify(harness.state().audioNormalizeForm), JSON.stringify({ inputPath: "C:/audio/source.wav", integratedLufs: -14, truePeakDbtp: -2, loudnessRange: 8 }));
+    dom.window.document.body.replaceChildren();
+    harness.requestAudioPlan("prepare");
+    await settle();
+    assert.equal(JSON.stringify(requests), JSON.stringify([expected]), "the confirmed request must retain edits after the form leaves the DOM");
+  } finally { harness.cleanup(); dom.window.close(); }
 }
 
 console.log("Audio preparation behavior tests passed.");
