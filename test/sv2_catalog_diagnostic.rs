@@ -11,8 +11,9 @@ fn inspect_local_product_catalog() {
         .iter()
         .filter(|voice| voice.image_data_url.is_some())
         .count();
+    let names = catalog.iter().filter(|voice| voice.name.is_some()).count();
     eprintln!(
-        "SV2 local catalog: names={}, images={images}",
+        "SV2 local catalog: products={}, names={names}, images={images}",
         catalog.len()
     );
     assert!(!catalog.is_empty());

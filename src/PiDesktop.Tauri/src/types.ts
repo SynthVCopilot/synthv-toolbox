@@ -153,6 +153,7 @@ export interface Sv2AccountProbe {
   authorizationStatus: Sv2AuthorizationStatus;
   authorizedVoiceCount: number;
   authorizedVoices: string[];
+  authorizedVoiceProducts: { id: string; name: string }[];
   accountDisplayName?: string;
   accountEmail?: string;
   checkedAtUtc: string;
@@ -204,7 +205,7 @@ export type Sv2RemoteUseStatus = "clear" | "detected" | "unknown";
 
 export interface Sv2CachedVoice {
   id: string;
-  name: string;
+  name?: string | null;
   vendor?: string;
   imageDataUrl?: string;
 }

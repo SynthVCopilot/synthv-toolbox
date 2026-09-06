@@ -223,6 +223,7 @@ function previewAccountProbe(overrides: Partial<Sv2AccountProbe> = {}): Sv2Accou
     authorizationStatus: "unknown",
     authorizedVoiceCount: 0,
     authorizedVoices: [],
+    authorizedVoiceProducts: [],
     checkedAtUtc: new Date().toISOString(),
     detail: "当前没有可用于账号预检的登录缓存。",
     ...overrides,
@@ -323,6 +324,7 @@ let previewProfiles: Sv2ProfilesState = {
       authorizationStatus: "verified",
       authorizedVoiceCount: 2,
       authorizedVoices: ["Mai 2", "SOLARIA"],
+      authorizedVoiceProducts: [{ id: "00000000-0000-4000-8000-000000000002", name: "SOLARIA" }],
       accountDisplayName: "Vocal Editor",
       accountEmail: "editor@example.com",
       detail: "官方服务已接受无踢出设备登录事件，并返回 2 个可匹配的官方声库授权。",
@@ -333,6 +335,7 @@ let previewProfiles: Sv2ProfilesState = {
       authorizationStatus: "verified",
       authorizedVoiceCount: 2,
       authorizedVoices: ["Mai 2", "SOLARIA"],
+      authorizedVoiceProducts: [{ id: "00000000-0000-4000-8000-000000000002", name: "SOLARIA" }],
       detail: "官方服务已接受隔离副本的无踢出设备登录事件，并返回 2 个可匹配的官方声库授权。",
     }),
     voiceInventory: {
@@ -358,7 +361,7 @@ let previewProfiles: Sv2ProfilesState = {
 
 const previewSv2VoiceCatalog = [
   { id: "preview-mai-2", name: "Mai 2", vendor: "Dreamtonics", imageDataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E%3Crect width='48' height='48' fill='%236d5ce7'/%3E%3C/svg%3E" },
-  { id: "preview-solaria", name: "SOLARIA", vendor: "Eclipsed Sounds" },
+  { id: "00000000-0000-4000-8000-000000000002", name: null, imageDataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E%3Crect width='48' height='48' fill='%230ea5e9'/%3E%3C/svg%3E" },
 ];
 
 const previewState = (): BootstrapState => ({

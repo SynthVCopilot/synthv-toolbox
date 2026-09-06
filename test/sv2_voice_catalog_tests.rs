@@ -54,8 +54,8 @@ fn catalog_joins_local_product_metadata_and_images_without_using_remote_urls() {
     .unwrap();
 
     let catalog = read_catalog(&[first, second]);
-    assert_eq!(catalog.len(), 1);
-    assert_eq!(catalog[0].name, "Fixture Voice");
+    assert_eq!(catalog.len(), 2);
+    assert_eq!(catalog[0].name.as_deref(), Some("Fixture Voice"));
     assert_eq!(catalog[0].vendor.as_deref(), Some("Fixture Vendor"));
     assert_eq!(
         catalog[0].image_data_url,
@@ -65,6 +65,9 @@ fn catalog_joins_local_product_metadata_and_images_without_using_remote_urls() {
     assert!(!public.contains("invalid.example"));
     assert!(!public.contains("authorized"));
     assert_eq!(fs::read(metadata_path).unwrap(), metadata);
+    let image_only = catalog.iter().find(|voice| voice.id == SECOND_ID).unwrap();
+    assert!(image_only.name.is_none());
+    assert!(image_only.image_data_url.is_some());
 }
 
 #[test]
@@ -122,9 +125,9 @@ fn catalog_deduplicates_product_ids_and_sorts_names() {
     assert_eq!(
         catalog
             .iter()
-            .map(|voice| voice.name.as_str())
+            .map(|voice| voice.name.as_deref())
             .collect::<Vec<_>>(),
-        ["Alpha Voice", "Beta Voice"]
+        [Some("Alpha Voice"), Some("Beta Voice")]
     );
 }
 

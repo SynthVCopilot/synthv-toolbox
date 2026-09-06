@@ -5,6 +5,7 @@ import { registerModelAuthElement } from "@model-auth/vue/custom-element";
 import { api } from "./api";
 import { evaluateAccountEnvironment } from "./accountStatus";
 import { instanceAccount, instanceProjectTitle } from "./sv2Instances";
+import { findVoiceMetadata } from "./voiceCatalog";
 import { icon } from "./icons";
 import { featureCatalog, toolGroups, type FeatureCatalogItem, type ToolGroup } from "./featureCatalog";
 import { mountShell, type ShellController } from "./vue/shell";
@@ -1173,13 +1174,13 @@ function supportsWindowsSv2Extensions(): boolean {
   return app?.platform === "windows" || app?.platform === "preview";
 }
 
-function renderAuthorizedVoice(voice: string): string {
-  const catalogEntry = sv2VoiceCatalog?.find((item) => item.name === voice);
+function renderAuthorizedVoice(voice: string, productIds: string[] = []): string {
+  const catalogEntry = findVoiceMetadata(voice, productIds, sv2VoiceCatalog ?? []);
   const cover = catalogEntry?.imageDataUrl
     ? `<img class="voice-cover" src="${escapeHtml(catalogEntry.imageDataUrl)}" alt="" />`
     : `<span class="voice-cover placeholder">${icon("audio", 14)}</span>`;
   const vendor = catalogEntry?.vendor ? `<small>${escapeHtml(catalogEntry.vendor)}</small>` : "";
-  return `<span class="authorized-voice" data-authorized-voice="${escapeHtml(voice)}">${cover}<span>${escapeHtml(voice)}${vendor}</span></span>`;
+  return `<span class="authorized-voice" data-authorized-voice="${escapeHtml(voice)}" data-authorized-product-ids="${escapeHtml(productIds.join(","))}">${cover}<span>${escapeHtml(voice)}${vendor}</span></span>`;
 }
 
 function loadSv2VoiceCatalog(force = false): void {
@@ -1191,7 +1192,7 @@ function loadSv2VoiceCatalog(force = false): void {
     .finally(() => {
       sv2VoiceCatalogLoading = false;
       document.querySelectorAll<HTMLElement>("[data-authorized-voice]").forEach((entry) => {
-        entry.outerHTML = renderAuthorizedVoice(entry.dataset.authorizedVoice ?? "");
+        entry.outerHTML = renderAuthorizedVoice(entry.dataset.authorizedVoice ?? "", entry.dataset.authorizedProductIds?.split(",").filter(Boolean) ?? []);
       });
     });
 }
@@ -1225,7 +1226,7 @@ function renderAccountManager(): string {
       : authorizationUnavailable;
     const authorizationList = authorizationStatus
       ? authorizations.length
-        ? `<div class="authorization-list">${authorizations.map(renderAuthorizedVoice).join("")}</div>`
+        ? `<div class="authorization-list">${authorizations.map((voice) => renderAuthorizedVoice(voice, authorizationProbe?.authorizedVoiceProducts.filter((product) => product.name === voice).map((product) => product.id) ?? [])).join("")}</div>`
         : '<div class="empty-inline">当前账号没有可用声库授权。</div>'
       : `<div class="empty-inline">${escapeHtml(authorizationUnavailable)}。</div>`;
     body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(officialIdentity.name ?? (managedSlot.sessionCached ? "账号信息待刷新" : "未登录"))}</h3><p>${escapeHtml(officialIdentity.email ?? "账号信息待刷新")}</p><p>${accountUseDot(managedUseState)} ${escapeHtml(managedUseState.label)}</p></div>${managedSlot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>

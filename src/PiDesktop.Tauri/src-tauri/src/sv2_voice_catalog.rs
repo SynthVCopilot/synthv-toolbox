@@ -20,7 +20,7 @@ const MAX_CATALOG_IMAGE_BYTES: usize = 16 * 1024 * 1024;
 #[serde(rename_all = "camelCase")]
 pub struct Sv2CachedVoice {
     pub id: String,
-    pub name: String,
+    pub name: Option<String>,
     pub vendor: Option<String>,
     pub image_data_url: Option<String>,
 }
@@ -49,7 +49,7 @@ pub fn read_catalog(roots: &[PathBuf]) -> Vec<Sv2CachedVoice> {
             .map(|entry| entry.path())
             .filter(|path| {
                 path.extension()
-                    .is_some_and(|extension| extension == "json")
+                    .is_some_and(|extension| extension == "json" || extension == "png")
             })
             .collect::<Vec<_>>();
         files.sort();
@@ -62,7 +62,19 @@ pub fn read_catalog(roots: &[PathBuf]) -> Vec<Sv2CachedVoice> {
             else {
                 continue;
             };
-            if voices.contains_key(&id) || voices.len() >= MAX_VOICES {
+            if voices.len() >= MAX_VOICES && !voices.contains_key(&id) {
+                continue;
+            }
+            if path.extension().is_some_and(|extension| extension == "png") {
+                voices.entry(id.clone()).or_insert(Sv2CachedVoice {
+                    id,
+                    name: None,
+                    vendor: None,
+                    image_data_url: None,
+                });
+                continue;
+            }
+            if voices.get(&id).is_some_and(|voice| voice.name.is_some()) {
                 continue;
             }
             let Some(metadata) = read_bounded_file(&path, MAX_METADATA_BYTES)
@@ -77,7 +89,7 @@ pub fn read_catalog(roots: &[PathBuf]) -> Vec<Sv2CachedVoice> {
                 id.clone(),
                 Sv2CachedVoice {
                     id,
-                    name,
+                    name: Some(name),
                     vendor: metadata.vendor.and_then(normalize_text),
                     image_data_url: None,
                 },
@@ -85,7 +97,13 @@ pub fn read_catalog(roots: &[PathBuf]) -> Vec<Sv2CachedVoice> {
         }
     }
     let mut voices = voices.into_values().collect::<Vec<_>>();
-    voices.sort_by_cached_key(|voice| (voice.name.to_lowercase(), voice.id.clone()));
+    voices.sort_by_cached_key(|voice| {
+        (
+            voice.name.is_none(),
+            voice.name.as_deref().unwrap_or_default().to_lowercase(),
+            voice.id.clone(),
+        )
+    });
     let mut image_bytes = 0;
     for voice in &mut voices {
         for directory in &directories {
@@ -104,6 +122,7 @@ pub fn read_catalog(roots: &[PathBuf]) -> Vec<Sv2CachedVoice> {
             break;
         }
     }
+    voices.retain(|voice| voice.name.is_some() || voice.image_data_url.is_some());
     voices
 }
 
