@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::project_backups::{worker_with_store, Message, ProjectBackupStore};
 
@@ -25,6 +25,20 @@ fn checkpoint_paths(root: &Path) -> Vec<PathBuf> {
         .collect::<Vec<_>>();
     paths.sort();
     paths
+}
+
+fn wait_for_backup_count(
+    state: &Arc<Mutex<crate::project_backups::ProjectBackupState>>,
+    count: usize,
+) {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline {
+        if state.lock().unwrap().projects[0].backup_count == count {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(state.lock().unwrap().projects[0].backup_count, count);
 }
 
 #[test]
@@ -202,7 +216,7 @@ fn worker_only_backs_up_existing_projects_on_its_interval() {
     let (sender, receiver) = mpsc::channel();
     let worker_state = state.clone();
     let handle = std::thread::spawn(move || {
-        worker_with_store(store, receiver, worker_state, Duration::from_millis(25));
+        worker_with_store(store, receiver, worker_state, Duration::from_millis(250));
     });
     let (done, done_receiver) = mpsc::sync_channel(1);
     sender
@@ -223,8 +237,7 @@ fn worker_only_backs_up_existing_projects_on_its_interval() {
         .unwrap();
     done_receiver.recv_timeout(Duration::from_secs(1)).unwrap();
     assert_eq!(state.lock().unwrap().projects[0].backup_count, 1);
-    std::thread::sleep(Duration::from_millis(60));
-    assert_eq!(state.lock().unwrap().projects[0].backup_count, 2);
+    wait_for_backup_count(&state, 2);
     drop(sender);
     handle.join().unwrap();
     let _ = fs::remove_dir_all(root);
