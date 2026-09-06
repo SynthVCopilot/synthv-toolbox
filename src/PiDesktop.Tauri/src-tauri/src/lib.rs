@@ -21,6 +21,10 @@ mod media_tasks;
 mod oauth;
 pub mod opencode_catalog;
 mod process_tree;
+pub mod project_backups;
+#[cfg(test)]
+#[path = "../../../../test/project_backups.rs"]
+mod project_backups_tests;
 mod solo_tuning;
 mod state;
 mod sv2_account_probe;
