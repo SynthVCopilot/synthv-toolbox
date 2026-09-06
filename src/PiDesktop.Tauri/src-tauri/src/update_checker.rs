@@ -80,7 +80,7 @@ fn build_update_check(
     let release_name = release
         .name
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| format!("SynthV Toolbox v{latest}"));
+        .unwrap_or_else(|| format!("Synthesizer V Toolbox v{latest}"));
     let release_notes = truncate_notes(release.body.as_deref().unwrap_or(""));
 
     Ok(ToolboxUpdateCheck {

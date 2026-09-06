@@ -178,7 +178,7 @@ impl AgentProvider for EchoProvider {
         let last_user = conversation.iter().rev().find(|m| m.role == Role::User);
         let text = match last_user {
             Some(m) => format!("（占位后端）收到：{}", m.content),
-            None => "（占位后端）你好，我是 SynthV Toolbox 的回显后端。".to_string(),
+            None => "（占位后端）你好，我是 Synthesizer V Toolbox 的回显后端。".to_string(),
         };
         Ok(AgentStep {
             assistant_text: Some(text),

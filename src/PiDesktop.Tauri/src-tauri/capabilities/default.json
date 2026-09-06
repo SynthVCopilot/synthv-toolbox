@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capability for the SynthV Toolbox main window",
+  "description": "Default capability for the Synthesizer V Toolbox main window",
   "windows": ["main"],
   "permissions": ["core:default", "dialog:allow-open", "dialog:allow-save"]
 }

@@ -1,6 +1,6 @@
-# SynthV Toolbox
+# Synthesizer V Toolbox
 
-SynthV Toolbox 是面向 Synthesizer V 创作流程的桌面工具箱，支持 Windows 和 macOS。它把常用的音频、MIDI、工程文件和 Bridge 工具集中在一个应用中；需要时也可启用 AI 辅助功能。
+Synthesizer V Toolbox 是面向 Synthesizer V 创作流程的桌面工具箱，支持 Windows 和 macOS。它把常用的音频、MIDI、工程文件和 Bridge 工具集中在一个应用中；需要时也可启用 AI 辅助功能。
 
 ## 主要功能
 
@@ -24,6 +24,12 @@ Windows 和 macOS 都提供可选的 SV2 本地数据槽位，可在 SV2 完全�
 - 外部工具和账号相关功能均需由用户主动配置或确认。
 - 工程处理会保留原文件，导出结果写入独立位置。
 - 使用任何第三方服务时，请遵守其适用的服务条款与账号政策。
+
+## Trademark and affiliation
+
+*This project is not affiliated with or endorsed by Dreamtonics.*
+
+“Synthesizer V” is used solely as nominative fair use to identify compatible software.
 
 ## 开发与发布
 

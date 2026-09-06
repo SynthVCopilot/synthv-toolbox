@@ -376,7 +376,7 @@ mod platform {
         } else {
             let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
             Err(format!(
-                "无法向 SynthV 发送 {}。请在 macOS“辅助功能”中允许 SynthV Toolbox 控制电脑。{}",
+                "无法向 SynthV 发送 {}。请在 macOS“辅助功能”中允许 Synthesizer V Toolbox 控制电脑。{}",
                 action.label(),
                 if detail.is_empty() {
                     String::new()
@@ -398,7 +398,7 @@ mod platform {
             .output()
             .map_err(|error| format!("无法聚焦 SynthV：{error}"))?;
         output.status.success().then_some(()).ok_or_else(|| {
-            "无法聚焦 SynthV。请在 macOS“辅助功能”中允许 SynthV Toolbox 控制电脑。".to_string()
+            "无法聚焦 SynthV。请在 macOS“辅助功能”中允许 Synthesizer V Toolbox 控制电脑。".to_string()
         })
     }
 

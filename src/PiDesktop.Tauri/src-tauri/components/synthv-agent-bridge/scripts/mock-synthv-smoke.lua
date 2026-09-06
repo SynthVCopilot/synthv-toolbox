@@ -2210,7 +2210,7 @@ call("convert_editor_coordinates",'{"view":"mainEditor","time":352800000,"value"
 callWrite("script_data",'{"operation":"set","objectType":"project","key":"synthv-agent-bridge.test","value":{"ok":true}}')
 call("script_data",'{"operation":"get","objectType":"project","key":"synthv-agent-bridge.test"}')
 call("get_script_data",'{"operation":"get","objectType":"project","key":"synthv-agent-bridge.test"}')
-callWrite("record_ai_usage",'{"trackIndex":1,"trackFingerprint":"'..track1Fingerprint..'","usage":"assisted","agent":"SynthV Toolbox","model":"configured-model"}')
+callWrite("record_ai_usage",'{"trackIndex":1,"trackFingerprint":"'..track1Fingerprint..'","usage":"assisted","agent":"Synthesizer V Toolbox","model":"configured-model"}')
 local aiUsageDisclosure=call("get_script_data",'{"operation":"get","objectType":"track","trackIndex":1,"key":"synthv-agent-bridge.aiUsageDisclosure.v1"}')
 assert(aiUsageDisclosure:find('"usage":"assisted"',1,true),"AI usage disclosure was not retained")
 callWrite("script_data",'{"operation":"remove","objectType":"track","trackIndex":1,"trackFingerprint":"'..track1Fingerprint..'","key":"synthv-agent-bridge.aiUsageDisclosure.v1"}')
