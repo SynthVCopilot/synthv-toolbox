@@ -145,6 +145,31 @@ jobs:
           ffmpeg -hide_banner -loglevel error -f lavfi -i "sine=frequency=440:duration=0.25" -c:a pcm_s24le "$RUNNER_TEMP/fixture.wav"
           ffprobe -v error -show_entries stream=codec_name,sample_rate,channels,bits_per_sample -of json "$RUNNER_TEMP/fixture.wav" | grep -q 'pcm_s24le'
 
+      - name: Clear previous Windows bundle output
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $targetRoot = [System.IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE "src/PiDesktop.Tauri/src-tauri/target"))
+          $bundlePath = [System.IO.Path]::GetFullPath((Join-Path $targetRoot "${{ matrix.target }}/release/bundle"))
+          if (-not $bundlePath.StartsWith("$targetRoot$([System.IO.Path]::DirectorySeparatorChar)", [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Bundle path must remain inside the desktop target directory: $bundlePath"
+          }
+          if (Test-Path -LiteralPath $bundlePath) {
+            Remove-Item -LiteralPath $bundlePath -Recurse -Force
+          }
+
+      - name: Clear previous macOS bundle output
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          target_root="$GITHUB_WORKSPACE/src/PiDesktop.Tauri/src-tauri/target"
+          mkdir -p "$target_root"
+          target_root="$(cd "$target_root" && pwd -P)"
+          bundle_path="$target_root/${{ matrix.target }}/release/bundle"
+          case "$bundle_path" in "$target_root"/*) ;; *) exit 1 ;; esac
+          rm -rf "$bundle_path"
+
       - name: Build desktop bundle without publishing
         working-directory: src/PiDesktop.Tauri
         run: npm run tauri build -- --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
@@ -154,8 +179,9 @@ jobs:
         shell: pwsh
         run: |
           $bundle = "src/PiDesktop.Tauri/src-tauri/target/${{ matrix.target }}/release/bundle/nsis"
-          $installer = Get-ChildItem -Path $bundle -Filter *.exe -File | Select-Object -First 1
-          if ($null -eq $installer) { throw "NSIS bundle was not produced" }
+          $installers = @(Get-ChildItem -Path $bundle -Filter *.exe -File)
+          if ($installers.Count -ne 1) { throw "Expected one NSIS bundle, found $($installers.Count)" }
+          $installer = $installers[0]
           $artifactRoot = Join-Path $env:RUNNER_TEMP "synthv-toolbox-artifacts/${{ matrix.target }}"
           New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
           Copy-Item -LiteralPath $installer.FullName -Destination (Join-Path $artifactRoot "synthv-toolbox-${{ steps.version.outputs.version }}-${{ matrix.target }}-nsis.exe")
@@ -166,10 +192,16 @@ jobs:
         run: |
           set -euo pipefail
           bundle_root="src/PiDesktop.Tauri/src-tauri/target/${{ matrix.target }}/release/bundle"
+          dmg_count="$(find "$bundle_root/dmg" -maxdepth 1 -name '*.dmg' -print | wc -l | tr -d ' ')"
+          test "$dmg_count" -eq 1
           dmg_path="$(find "$bundle_root/dmg" -maxdepth 1 -name '*.dmg' -print -quit)"
           test -n "$dmg_path"
+          app_count="$(find "$bundle_root/macos" -maxdepth 1 -name '*.app' -print | wc -l | tr -d ' ')"
+          test "$app_count" -eq 1
           app_path="$(find "$bundle_root/macos" -maxdepth 1 -name '*.app' -print -quit)"
           test -n "$app_path"
+          app_version="$(plutil -extract CFBundleShortVersionString raw "$app_path/Contents/Info.plist")"
+          test "$app_version" = "${{ steps.version.outputs.version }}"
           executable="$(find "$app_path/Contents/MacOS" -maxdepth 1 -type f -print -quit)"
           archs="$(lipo -archs "$executable")"
           test "$archs" = "x86_64 arm64" || test "$archs" = "arm64 x86_64"
