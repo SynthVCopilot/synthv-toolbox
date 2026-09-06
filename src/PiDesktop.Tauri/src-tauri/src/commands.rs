@@ -68,8 +68,8 @@ use crate::svp_launch_router::{
     SvpRoutePlan,
 };
 use crate::synthv::{
-    bridge_is_bundled, diagnose_bridge as diagnose_bridge_impl, failed, find_node,
-    install_bridge as install_bridge_impl, normalized_path_string, scan_installations, succeeded,
+    bridge_is_bundled, diagnose_bridge_many, failed, find_node, install_bridge_many,
+    normalized_path_string, scan_installations, succeeded, BridgeTarget, BridgeTargetResult,
     OperationResult, SynthVInstallation,
 };
 use crate::synthv_control::{self, BridgeShortcutAction, SynthVProcess, SynthVShortcutProfile};
@@ -1844,22 +1844,20 @@ pub async fn save_scripts_path(
 
 #[tauri::command]
 pub async fn install_bridge(
-    scripts_path: String,
+    targets: Vec<BridgeTarget>,
     state: State<'_, AppState>,
-) -> Result<OperationResult, String> {
+) -> Result<Vec<BridgeTargetResult>, String> {
     let bridge_dir = state.bridge_dir.clone();
-    tauri::async_runtime::spawn_blocking(move || install_bridge_impl(&bridge_dir, &scripts_path))
+    tauri::async_runtime::spawn_blocking(move || install_bridge_many(&bridge_dir, targets))
         .await
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 pub async fn diagnose_bridge(
-    scripts_path: String,
-    state: State<'_, AppState>,
-) -> Result<OperationResult, String> {
-    let bridge_dir = state.bridge_dir.clone();
-    tauri::async_runtime::spawn_blocking(move || diagnose_bridge_impl(&bridge_dir, &scripts_path))
+    targets: Vec<BridgeTarget>,
+) -> Result<Vec<BridgeTargetResult>, String> {
+    tauri::async_runtime::spawn_blocking(move || diagnose_bridge_many(targets))
         .await
         .map_err(|error| error.to_string())
 }

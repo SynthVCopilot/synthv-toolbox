@@ -1,7 +1,16 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BridgeProfile {
+    Sv2,
+    Sv1,
+    Flat,
+    Unsupported,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -11,6 +20,7 @@ pub struct SynthVInstallation {
     pub executable_path: Option<String>,
     pub scripts_path: Option<String>,
     pub source: String,
+    pub bridge_profile: BridgeProfile,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -19,6 +29,21 @@ pub struct OperationResult {
     pub succeeded: bool,
     pub summary: String,
     pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BridgeTargetResult {
+    pub scripts_path: String,
+    pub bridge_profile: BridgeProfile,
+    pub result: OperationResult,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BridgeTarget {
+    pub scripts_path: String,
+    pub bridge_profile: BridgeProfile,
 }
 
 pub fn scan_installations() -> Vec<SynthVInstallation> {
@@ -98,6 +123,15 @@ pub fn scan_installations() -> Vec<SynthVInstallation> {
                 "Windows 文档脚本目录",
             );
         }
+        for scripts_path in windows_flat_script_candidates() {
+            add_installation(
+                &mut found,
+                "Synthesizer V Studio Flat",
+                None,
+                Some(scripts_path),
+                "Windows Flat 脚本目录",
+            );
+        }
         for variable in ["ProgramFiles", "ProgramFiles(x86)"] {
             if let Some(program_files) = std::env::var_os(variable).map(PathBuf::from) {
                 for folder in [
@@ -142,6 +176,9 @@ fn add_installation(
         .as_deref()
         .and_then(find_executable_in)
         .map(|path| normalized_path_string(&path));
+    if install_exists && executable_path.is_none() {
+        return;
+    }
     found.push(SynthVInstallation {
         display_name: name.to_string(),
         install_path: install_path
@@ -152,7 +189,23 @@ fn add_installation(
             .filter(|_| scripts_exists)
             .map(|path| normalized_path_string(&path)),
         source: source.to_string(),
+        bridge_profile: bridge_profile(name),
     });
+}
+
+fn bridge_profile(name: &str) -> BridgeProfile {
+    let name = name.to_ascii_lowercase();
+    if name.contains("flat") {
+        BridgeProfile::Flat
+    } else if name.contains("studio 2") {
+        BridgeProfile::Sv2
+    } else if name.contains("studio basic") {
+        BridgeProfile::Unsupported
+    } else if name.contains("studio pro") || name.contains("synthesizer v studio") {
+        BridgeProfile::Sv1
+    } else {
+        BridgeProfile::Unsupported
+    }
 }
 
 pub fn normalized_path_string(path: &Path) -> String {
@@ -177,6 +230,8 @@ fn find_executable_in(install_path: &Path) -> Option<PathBuf> {
         install_path.join("Synthesizer V Studio 2 Pro.exe"),
         install_path.join("Synthesizer V Studio Pro.exe"),
         install_path.join("Synthesizer V Studio.exe"),
+        install_path.join("Synthesizer V Flat.exe"),
+        install_path.join("synthesizer-v-flat.exe"),
     ];
     #[cfg(target_os = "macos")]
     let candidates = [
@@ -212,7 +267,7 @@ fn scan_windows_registry(found: &mut Vec<SynthVInstallation>) {
                 let Ok(display_name) = entry.get_value::<String, _>("DisplayName") else {
                     continue;
                 };
-                if !display_name.to_ascii_lowercase().contains("synthesizer v") {
+                if !is_synthv_host_display_name(&display_name) {
                     continue;
                 }
                 let install_path = entry
@@ -235,6 +290,31 @@ fn scan_windows_registry(found: &mut Vec<SynthVInstallation>) {
             }
         }
     }
+}
+
+#[cfg(windows)]
+fn is_synthv_host_display_name(display_name: &str) -> bool {
+    let name = display_name.to_ascii_lowercase();
+    name.contains("synthesizer v flat")
+        || name.contains("synthesizer v studio flat")
+        || name.contains("synthesizer v studio 2")
+        || name.contains("synthesizer v studio pro")
+        || name.contains("synthesizer v studio basic")
+}
+
+#[cfg(windows)]
+fn windows_flat_script_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(root) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
+        candidates.push(root.join("Documents/Dreamtonics/Synthesizer V Studio/scripts"));
+        candidates.push(root.join("Documents/Anthronics/Synthesizer V Studio/scripts"));
+    }
+    for variable in ["APPDATA", "LOCALAPPDATA"] {
+        if let Some(root) = std::env::var_os(variable).map(PathBuf::from) {
+            candidates.push(root.join("Anthronics/Synthesizer V Studio/scripts"));
+        }
+    }
+    candidates
 }
 
 #[cfg(windows)]
@@ -267,6 +347,9 @@ pub fn bridge_is_bundled(bridge_dir: &Path) -> bool {
         && bridge_dir
             .join("scripts/install-synthv-bridge.mjs")
             .is_file()
+        && bridge_dir
+            .join("scripts/install-sv1-legacy-bridge.mjs")
+            .is_file()
 }
 
 pub fn install_bridge(bridge_dir: &Path, scripts_path: &str) -> OperationResult {
@@ -277,8 +360,93 @@ pub fn install_bridge(bridge_dir: &Path, scripts_path: &str) -> OperationResult 
     )
 }
 
-pub fn diagnose_bridge(bridge_dir: &Path, scripts_path: &str) -> OperationResult {
-    run_bridge_script(bridge_dir, "scripts/doctor.mjs", scripts_path)
+pub fn install_bridge_many(bridge_dir: &Path, targets: Vec<BridgeTarget>) -> Vec<BridgeTargetResult> {
+    unique_bridge_targets(targets)
+        .into_iter()
+        .map(|target| {
+            let result = match target.bridge_profile {
+                BridgeProfile::Sv2 => install_bridge(bridge_dir, &target.scripts_path),
+                BridgeProfile::Sv1 => run_bridge_script(
+                    bridge_dir,
+                    "scripts/install-sv1-legacy-bridge.mjs",
+                    &target.scripts_path,
+                ),
+                BridgeProfile::Flat => install_bridge(bridge_dir, &target.scripts_path),
+                BridgeProfile::Unsupported => failed("此 SynthV 版本不支持安装 Bridge 脚本。", "请使用已支持的 SV1 或 SV2 scripts 目录。"),
+            };
+            BridgeTargetResult {
+                scripts_path: target.scripts_path,
+                bridge_profile: target.bridge_profile,
+                result,
+            }
+        })
+        .collect()
+}
+
+pub fn diagnose_bridge_many(targets: Vec<BridgeTarget>) -> Vec<BridgeTargetResult> {
+    unique_bridge_targets(targets)
+        .into_iter()
+        .map(|target| {
+            let required_file = match target.bridge_profile {
+                BridgeProfile::Sv2 | BridgeProfile::Flat => Some("SynthV Agent Bridge"),
+                BridgeProfile::Sv1 => Some("SynthV Agent Bridge SV1 Legacy/SynthVAgentBridgeSV1Legacy.lua"),
+                BridgeProfile::Unsupported => None,
+            };
+            let result = match required_file {
+                Some(file) if bridge_script_bundle_is_valid(Path::new(&target.scripts_path).join(file).as_path(), target.bridge_profile) => {
+                    succeeded("Bridge 脚本已安装。", "已验证 Bridge、停止和侧栏脚本。")
+                }
+                Some(file) => failed("Bridge 脚本尚未安装。", format!("缺少 {file}")),
+                None => failed("此 SynthV 版本不支持 Bridge 脚本。", "请选择 SV1 或 SV2 scripts 目录。"),
+            };
+            BridgeTargetResult {
+                scripts_path: target.scripts_path,
+                bridge_profile: target.bridge_profile,
+                result,
+            }
+        })
+        .collect()
+}
+
+fn bridge_script_bundle_is_valid(directory: &Path, profile: BridgeProfile) -> bool {
+    let required = match profile {
+        BridgeProfile::Sv1 => ["SynthVAgentBridgeSV1Legacy.lua"].as_slice(),
+        BridgeProfile::Sv2 | BridgeProfile::Flat => ["SynthVAgentBridge.lua", "StopSynthVAgentBridge.lua", "SynthVAgentSidebar.lua"].as_slice(),
+        BridgeProfile::Unsupported => return false,
+    };
+    required.iter().all(|file| {
+        let Ok(content) = std::fs::read_to_string(directory.join(file)) else {
+            return false;
+        };
+        content.len() > 512
+    }) && std::fs::read_to_string(directory.join(required[0]))
+        .is_ok_and(|content| content.contains("BRIDGE_VERSION"))
+}
+
+pub fn unique_bridge_targets(targets: Vec<BridgeTarget>) -> Vec<BridgeTarget> {
+    let mut unique = std::collections::HashSet::new();
+    targets
+        .into_iter()
+        .filter_map(|target| {
+            let scripts_path = target.scripts_path.trim();
+            (!scripts_path.is_empty()).then(|| BridgeTarget {
+                scripts_path: normalized_path_string(Path::new(scripts_path)),
+                bridge_profile: target.bridge_profile,
+            })
+        })
+        .filter(|target| unique.insert(target_key(&target.scripts_path)))
+        .collect()
+}
+
+fn target_key(path: &str) -> String {
+    #[cfg(windows)]
+    {
+        path.to_ascii_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_string()
+    }
 }
 
 fn run_bridge_script(bridge_dir: &Path, script: &str, scripts_path: &str) -> OperationResult {
