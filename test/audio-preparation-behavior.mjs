@@ -27,15 +27,16 @@ async function settle() {
 
 function collectAudioImplementation(source) {
   const wantedVariables = new Set([
-    "audioProbe", "audioPrepareForm", "audioNormalizeForm", "pendingAudioPlan", "audioJob",
+    "audioRuntime", "audioProbe", "audioPrepareForm", "audioNormalizeForm", "pendingAudioPlan", "audioJob",
     "audioJobPollTimer", "audioJobPollGeneration", "audioInputGeneration", "audioPlanRequestGeneration",
+    "audioRuntimeRequestGeneration",
     "audioPlanRequestInFlight", "audioStartInFlight", "audioLoudnessAnalysisInFlight",
     "audioLoudnessAnalysisGeneration", "audioUiError", "audioUiNotice", "audioPreviewUrl",
     "audioSourcePreviewUrl",
   ]);
   const wantedFunctions = new Set([
     "formatError", "isTerminalAudioJob", "mergeAudioJobSnapshot", "clearAudioJobPoll",
-    "scheduleAudioJobPoll", "requestAudioPlan", "startPlannedAudioJob", "selectAudioPreparationInput",
+    "scheduleAudioJobPoll", "refreshAudioRuntimeStatus", "requestAudioPlan", "startPlannedAudioJob", "selectAudioPreparationInput",
   ]);
   assert.doesNotMatch(source, /^(?:<<<<<<<|=======|>>>>>>>)/m, "main.ts must be conflict-free before behavior tests run");
 
@@ -104,9 +105,10 @@ module.exports = (function (__audioApi, __window) {
   ${extracted.variables}
   ${extracted.functions}
   return {
-    isTerminalAudioJob, mergeAudioJobSnapshot, scheduleAudioJobPoll, requestAudioPlan, startPlannedAudioJob, selectAudioPreparationInput,
-    state: () => ({ audioProbe, audioPrepareForm, audioNormalizeForm, pendingAudioPlan, audioJob,
+    isTerminalAudioJob, mergeAudioJobSnapshot, scheduleAudioJobPoll, refreshAudioRuntimeStatus, requestAudioPlan, startPlannedAudioJob, selectAudioPreparationInput,
+    state: () => ({ audioProbe, audioRuntime, audioPrepareForm, audioNormalizeForm, pendingAudioPlan, audioJob,
       audioJobPollTimer, audioJobPollGeneration, audioInputGeneration, audioPlanRequestGeneration,
+      audioRuntimeRequestGeneration,
       audioPlanRequestInFlight, audioStartInFlight, audioLoudnessAnalysisInFlight, audioUiError, audioUiNotice }),
     setForms: (prepare, normalize = prepare) => { audioPrepareForm = prepare; audioNormalizeForm = normalize; },
     setAudioJob: (value) => { audioJob = value; },
@@ -223,6 +225,24 @@ module.exports = (function (__audioApi, __window) {
     snapshot.resolve({ id: "job-1", status: "running" });
     await settle();
     assert.equal(harness.state().audioJob, cancelled, "late poll must not resurrect a terminal cancellation");
+  } finally { harness.cleanup(); }
+}
+
+{
+  const statuses = [deferred(), deferred()];
+  let calls = 0;
+  const harness = createHarness({
+    ffmpegStatus() { return statuses[calls++].promise; },
+  });
+  try {
+    harness.refreshAudioRuntimeStatus();
+    harness.refreshAudioRuntimeStatus();
+    statuses[1].resolve({ available: true, detail: "current" });
+    await settle();
+    statuses[0].reject(new Error("stale failure"));
+    await settle();
+    assert.equal(harness.state().audioRuntime.available, true, "a stale status failure must not overwrite the current runtime");
+    assert.equal(harness.state().audioRuntimeRequestGeneration, 2);
   } finally { harness.cleanup(); }
 }
 
