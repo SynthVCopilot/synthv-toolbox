@@ -679,6 +679,20 @@ export interface ProjectCheckpoint {
   createdAtUtc: string;
 }
 
+export interface ProjectBackupProject {
+  sourcePath: string;
+  lastSeenAtUtc: string;
+  lastBackupAtUtc: string | null;
+  lastError: string | null;
+  backupCount: number;
+}
+
+export interface ProjectBackupState {
+  intervalSeconds: number;
+  projects: ProjectBackupProject[];
+  lastError: string | null;
+}
+
 export interface BatchWorkflowItem {
   inputPath: string;
   status: "completed" | "failed";

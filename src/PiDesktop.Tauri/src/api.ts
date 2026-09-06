@@ -39,6 +39,7 @@ import type {
   HttpApiStatus,
   OperationResult,
   ProjectCheckpoint,
+  ProjectBackupState,
   Sv2AccountProbe,
   Sv2AccountPrecheck,
   Sv2AccountUsageSnapshot,
@@ -962,9 +963,10 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     { id: "lyric-template", title: "作词", description: "歌词草稿、歌曲结构与可选韵脚辅助。", kind: "lyric-template", inputKind: "lyrics", supportsBatch: false, requiresBridge: false, requiresAi: false, defaultParameters: { language: "zh-CN", rhymeMode: "family" } },
   ] as T;
   if (command === "list_creative_history" || command === "list_project_checkpoints") return [] as T;
-  if (command === "create_project_checkpoint") return {
-    id: crypto.randomUUID(), label: String(args?.label ?? "检查点"), sourcePath: String(args?.projectPath ?? ""),
-    snapshotPath: "~/.SynthVcopilot/project-checkpoints/preview/project.svp", sourceSha256: "preview", sourceSize: 0, createdAtUtc: new Date().toISOString(),
+  if (command === "get_project_backup_state") return {
+    intervalSeconds: 60,
+    projects: [{ sourcePath: "C:\\Projects\\demo.svp", lastSeenAtUtc: new Date().toISOString(), lastBackupAtUtc: new Date(Date.now() - 120000).toISOString(), lastError: null, backupCount: 2 }],
+    lastError: null,
   } as T;
   if (command === "restore_project_checkpoint") return { succeeded: true, summary: "检查点已恢复为新副本。", detail: "预览模式" } as T;
   if (command === "export_workflow_report") return {
@@ -1304,9 +1306,8 @@ export const api = {
   removeLocalComponent: (id: string) => call<OperationResult>("remove_local_component", { id }),
   listWorkflowRecipes: () => call<WorkflowRecipe[]>("list_workflow_recipes"),
   listCreativeHistory: (limit = 50) => call<CreativeHistoryEntry[]>("list_creative_history", { limit }),
-  createProjectCheckpoint: (projectPath: string, label: string) =>
-    call<ProjectCheckpoint>("create_project_checkpoint", { projectPath, label }),
   listProjectCheckpoints: (limit = 50) => call<ProjectCheckpoint[]>("list_project_checkpoints", { limit }),
+  projectBackupState: () => call<ProjectBackupState>("get_project_backup_state"),
   restoreProjectCheckpoint: (id: string, outputName: string) =>
     call<OperationResult>("restore_project_checkpoint", { id, outputName }),
   exportWorkflowReport: (kind: string, summary: string, data: Record<string, unknown>, format: "markdown" | "json") =>

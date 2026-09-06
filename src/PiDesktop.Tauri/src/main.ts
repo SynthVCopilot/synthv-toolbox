@@ -43,6 +43,7 @@ import type {
   HttpApiStatus,
   OperationResult,
   ProjectCheckpoint,
+  ProjectBackupState,
   RhymeMatchMode,
   Sv2AccountProbe,
   Sv2AuthorizedVoiceProduct,
@@ -124,6 +125,9 @@ let toolboxUpdate: ToolboxUpdateCheck | undefined;
 let workflowRecipes: WorkflowRecipe[] = [];
 let creativeHistory: CreativeHistoryEntry[] = [];
 let projectCheckpoints: ProjectCheckpoint[] = [];
+let projectBackupState: ProjectBackupState | undefined;
+let historyRefreshTimer: number | undefined;
+let historyRefreshGeneration = 0;
 let syncCategories: Sv2SyncCategory[] = [];
 let syncManifest: Sv2SyncManifest | undefined;
 let syncSourceSlotId = "";
@@ -345,7 +349,7 @@ const pageMeta: Record<Page, { title: string; subtitle: string }> = {
   import: { title: "导入与转换", subtitle: "把曲谱或演唱音频变成可继续编辑的 MIDI 与 SynthV 音符" },
   quality: { title: "分析与质检", subtitle: "集中完成音频分析、工程诊断、发音检查与交付复检" },
   lyrics: { title: "作词", subtitle: "专注写下歌词，需要时再调用结构、韵脚与 AI 辅助" },
-  history: { title: "历史与检查点", subtitle: "回看自动保存的工作流记录，并管理工程检查点" },
+  history: { title: "历史", subtitle: "查看工作流记录与工程自动备份" },
   copilot: { title: "Copilot", subtitle: "让 AI 在受控工具边界内协助工作" },
   components: { title: "组件中心", subtitle: "管理本地模型与运行组件" },
   bridge: { title: "SynthV Bridge", subtitle: "探测、安装、诊断并连接 Synthesizer V" },
@@ -750,7 +754,7 @@ function renderSidebar(): string {
       ${navItem("import", "导入与转换", "pipeline")}
       ${navItem("quality", "分析与质检", "doctor")}
       ${navItem("lyrics", "作词", "lyrics")}
-      ${navItem("history", "历史与检查点", "history")}
+      ${navItem("history", "历史", "history")}
       ${app.mode === "ai" ? navItem("copilot", "Copilot", "bot") : ""}
       <span class="nav-label">系统</span>
       ${navItem("components", "组件中心", "boxes")}
@@ -1549,6 +1553,40 @@ function renderHome(): string {
     </section>`;
 }
 
+function stopHistoryRefresh(): void {
+  historyRefreshGeneration += 1;
+  if (historyRefreshTimer !== undefined) {
+    window.clearTimeout(historyRefreshTimer);
+    historyRefreshTimer = undefined;
+  }
+}
+
+function scheduleHistoryRefresh(): void {
+  stopHistoryRefresh();
+  const generation = historyRefreshGeneration;
+  const refresh = async () => {
+    if (generation !== historyRefreshGeneration || page !== "history") return;
+    try {
+      const [backup, workflow, checkpoints] = await Promise.all([api.projectBackupState(), api.listCreativeHistory(), api.listProjectCheckpoints()]);
+      if (generation !== historyRefreshGeneration || page !== "history") return;
+      projectBackupState = backup;
+      creativeHistory = workflow;
+      projectCheckpoints = checkpoints;
+      render();
+    } catch (reason) {
+      if (generation !== historyRefreshGeneration || page !== "history") return;
+      error = formatError(reason);
+      render();
+    }
+    if (generation === historyRefreshGeneration && page === "history") historyRefreshTimer = window.setTimeout(() => void refresh(), 5000);
+  };
+  void refresh();
+}
+
+function formatHistoryTime(value: string | null | undefined): string {
+  return value ? new Date(value).toLocaleString("zh-CN") : "等待首次备份";
+}
+
 function renderHistoryPage(): string {
   const history = creativeHistory.length
     ? creativeHistory.map((item) => `<article class="timeline-item"><span class="status-dot online"></span><div><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.summary)}</small><code>${escapeHtml(new Date(item.createdAtUtc).toLocaleString("zh-CN"))}${item.outputPath ? ` · ${escapeHtml(item.outputPath)}` : ""}</code></div></article>`).join("")
@@ -1556,9 +1594,13 @@ function renderHistoryPage(): string {
   const checkpoints = projectCheckpoints.length
     ? projectCheckpoints.map((item) => `<article class="checkpoint-item"><span class="feature-icon blue">${icon("shield", 17)}</span><div><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.sourcePath)}</small><code>SHA-256 ${escapeHtml(item.sourceSha256.slice(0, 16))}… · ${new Date(item.createdAtUtc).toLocaleString("zh-CN")}</code></div><button class="secondary compact" data-restore-checkpoint="${escapeHtml(item.id)}">恢复副本</button></article>`).join("")
     : '<div class="empty-inline">还没有工程检查点。</div>';
-  return `<section class="panel history-intro"><span class="feature-icon blue">${icon("history", 22)}</span><div><span class="eyebrow">LOCAL HISTORY</span><h2>工作流记录默认开启</h2><p>本地保存参数摘要、执行结果和输出位置，方便回看；工程检查点需要你主动创建，恢复时只生成新副本。</p></div><span class="availability ready">默认记录</span></section>
-    <div class="workflow-split history-checkpoint-grid"><section class="panel"><div class="section-heading"><div><h2>创建工程检查点</h2><p>为已保存的 .svp 建立带 SHA-256 的只读快照。</p></div></div><form id="checkpoint-form" class="workflow-form workflow-wide"><label>.svp 工程路径<input id="checkpoint-project" required /></label><label>检查点名称<input id="checkpoint-label" required maxlength="100" value="调声前" /></label><button class="primary">${icon("shield", 16)} 创建检查点</button></form></section><section class="panel"><div class="section-heading"><div><h2>工程检查点</h2><p>${projectCheckpoints.length} 个可恢复快照</p></div></div><div class="checkpoint-list">${checkpoints}</div></section></div>
-    <section class="panel workflow-history"><div class="section-heading"><div><h2>工作流历史</h2><p>按时间保留工具输入摘要、组件结果和输出位置；较大的结果会自动截断历史副本。</p></div><button class="secondary compact" data-refresh-history>${icon("sync", 15)} 刷新</button></div><div class="timeline-list">${history}</div></section>`;
+  const backup = projectBackupState;
+  const backupStatus = backup?.lastError ? "需要处理" : backup ? "自动跟踪中" : "正在读取";
+  const tracked = backup?.projects.length ? backup.projects.map((item) => `<article class="checkpoint-item"><span class="feature-icon blue">${icon("history", 17)}</span><div><strong>${escapeHtml(item.sourcePath)}</strong><small>上次检测：${escapeHtml(formatHistoryTime(item.lastSeenAtUtc))} · 备份 ${item.backupCount} 次</small><code>${item.lastError ? `失败：${escapeHtml(item.lastError)}` : `上次备份：${escapeHtml(formatHistoryTime(item.lastBackupAtUtc))}`}</code></div></article>`).join("") : '<div class="empty-inline">尚未追踪到 .svp 工程。打开并保存工程后，后台会自动开始检测。</div>';
+  return `<section class="panel history-intro"><span class="feature-icon blue">${icon("history", 22)}</span><div><span class="eyebrow">AUTOMATIC HISTORY</span><h2>工程历史自动保存</h2><p>每分钟检测已追踪的 .svp 工程变化，应用运行或托盘驻留时持续工作。未保存内容需要先由 SynthV 正常保存。</p></div><span class="availability ${backup?.lastError ? "warning" : "ready"}">${backupStatus}</span></section>
+    <section class="panel history-checkpoint-grid"><div class="section-heading"><div><h2>自动备份状态</h2><p>检测间隔：${backup?.intervalSeconds ?? 60} 秒${backup?.lastError ? ` · ${escapeHtml(backup.lastError)}` : ""}</p></div></div><div class="checkpoint-list">${tracked}</div></section>
+    <section class="panel"><div class="section-heading"><div><h2>已有快照</h2><p>可恢复快照会生成新的工程副本。</p></div></div><div class="checkpoint-list">${checkpoints}</div></section>
+    <section class="panel workflow-history"><div class="section-heading"><div><h2>工作流记录</h2><p>按时间保留工具输入摘要、执行结果和输出位置。</p></div></div><div class="timeline-list">${history}</div></section>`;
 }
 
 interface FeatureAvailability {
@@ -1605,17 +1647,17 @@ function renderToolCategory(groupId: ToolGroup["id"]): string {
   const current = app;
   const group = toolGroups.find((item) => item.id === groupId);
   if (!group) return "";
-  if (activeWorkflow && group.featureIds.includes(activeWorkflow)) return renderWorkflowPanel(activeWorkflow);
-  const cards = groupFeatures(group).map((feature) => {
+  const groupFeatureList = groupFeatures(group);
+  const selected = activeWorkflow && group.featureIds.includes(activeWorkflow)
+    ? groupFeatureList.find((feature) => feature.id === activeWorkflow)
+    : groupFeatureList.find((feature) => featureAvailability(feature, current).tone === "ready") ?? groupFeatureList[0];
+  const tabs = groupFeatureList.map((feature) => {
     const availability = featureAvailability(feature, current);
-    return `<article class="tool-card ${availability.tone}">
-      <div class="tool-card-head"><span class="feature-icon ${feature.accent}">${icon(feature.icon, 25)}</span><span class="availability ${availability.tone}">${escapeHtml(availability.label)}</span></div>
-      <h2>${escapeHtml(feature.title)}</h2><p>${escapeHtml(feature.description)}</p>
-      <ul class="tool-card-capabilities">${feature.base.map((capability) => `<li>${escapeHtml(capability)}</li>`).join("")}</ul>
-      <button class="card-action ${availability.tone !== "ready" ? "restricted" : ""}" aria-label="${escapeHtml(availability.route ? `${availability.actionLabel}：${feature.title}` : `打开${feature.title}`)}" ${featureTarget(feature, availability)} ${availability.disabled ? "disabled" : ""}>${escapeHtml(availability.actionLabel)} ${icon("arrow", 17)}</button>
-    </article>`;
+    return `<button class="tool-tab ${selected?.id === feature.id ? "active" : ""} ${availability.tone}" data-feature="${escapeHtml(feature.id)}"><span>${escapeHtml(feature.title)}</span><small>${escapeHtml(availability.label)}</small></button>`;
   }).join("");
-  return `<section class="tool-category"><div class="tool-catalog-grid">${cards}</div></section>`;
+  const selectedAvailability = selected ? featureAvailability(selected, current) : undefined;
+  const blocked = selected && selectedAvailability?.tone !== "ready" ? `<section class="panel tool-unavailable"><span class="feature-icon orange">${icon(selected.icon, 22)}</span><div><h2>${escapeHtml(selected.title)}</h2><p>${escapeHtml(selected.description)}</p><p>${escapeHtml(selectedAvailability?.label ?? "当前工具不可用")}。请处理依赖后再开始。</p></div>${selectedAvailability?.route ? `<button class="secondary" data-page="${selectedAvailability.route}">${escapeHtml(selectedAvailability.actionLabel)} ${icon("arrow", 16)}</button>` : ""}</section>` : selected ? renderWorkflowPanel(selected.id) : '<div class="empty-inline">当前分类没有可用工具。</div>';
+  return `<section class="tool-category"><div class="tool-tabs" role="tablist" aria-label="工具选择">${tabs}</div>${blocked}</section>`;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -2432,16 +2474,6 @@ function wireForms(): void {
     const projectPath = document.querySelector<HTMLInputElement>("#doctor-project")?.value.trim() ?? "";
     void run(async () => { workflowResult = await api.runProjectDoctor(projectPath); notice = workflowResult.summary; });
   });
-  document.querySelector<HTMLFormElement>("#checkpoint-form")?.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const projectPath = document.querySelector<HTMLInputElement>("#checkpoint-project")?.value.trim() ?? "";
-    const label = document.querySelector<HTMLInputElement>("#checkpoint-label")?.value.trim() ?? "";
-    void run(async () => {
-      const checkpoint = await api.createProjectCheckpoint(projectPath, label);
-      projectCheckpoints = await api.listProjectCheckpoints();
-      notice = `已创建检查点“${checkpoint.label}”。`;
-    });
-  });
   document.querySelector<HTMLFormElement>("#batch-workflow-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const recipeId = document.querySelector<HTMLSelectElement>("#batch-recipe")?.value ?? "project-doctor";
@@ -3246,27 +3278,37 @@ document.addEventListener("click", (event) => {
   }
   const targetPage = target.dataset.page as Page | undefined;
   if (targetPage) {
+    const leavingHistory = page === "history" && targetPage !== "history";
     const enteringAccounts = targetPage === "accounts" && page !== "accounts";
     const enteringToolCategory = targetPage === "import" || targetPage === "quality";
     const activeFeatureId = activeWorkflow;
     const activeGroup = activeFeatureId ? toolGroups.find((group) => group.featureIds.includes(activeFeatureId)) : undefined;
     instanceRefreshGeneration += 1;
     page = targetPage;
+    if (leavingHistory) stopHistoryRefresh();
     if (enteringToolCategory && (activeGroup?.id !== targetPage || workflowResult?.kind === "lyric-template")) {
       activeWorkflow = undefined;
       workflowResult = undefined;
+    }
+    if (enteringToolCategory && !activeWorkflow) {
+      const group = toolGroups.find((item) => item.id === targetPage);
+      const groupFeaturesList = group ? groupFeatures(group) : [];
+      activeWorkflow = groupFeaturesList.find((feature) => featureAvailability(feature, app!).tone === "ready")?.id ?? groupFeaturesList[0]?.id;
     }
     if (page === "lyrics" && workflowResult?.kind !== "lyric-template") workflowResult = undefined;
     accountManagerOpen = false;
     notice = "";
     error = "";
     if (page === "copilot") void run(async () => { [conversations, fileApprovals] = await Promise.all([api.listConversations(), api.agentFileApprovals()]); });
-    else if (page === "history") void run(async () => { [creativeHistory, projectCheckpoints] = await Promise.all([api.listCreativeHistory(), api.listProjectCheckpoints()]); });
+    else if (page === "history") scheduleHistoryRefresh();
     else if (enteringAccounts && (app?.platform === "windows" || app?.platform === "macos" || app?.platform === "preview")) void run(async () => {
       if (supportsWindowsSv2Extensions() && app?.sv2AccountIndicatorEnabled) await refreshAccountUsage();
       else profiles = await api.sv2ProfileState();
     });
-    else render();
+    else {
+      render();
+      if (page === "import" && activeWorkflow === "audio-preparation") refreshAudioRuntimeStatus();
+    }
     resetContentScroll();
     return;
   }
@@ -3339,10 +3381,6 @@ document.addEventListener("click", (event) => {
       const exported = await api.exportWorkflowReport(currentResult.kind, currentResult.summary, currentResult.data, exportFormat);
       notice = `${exported.summary} ${exported.detail}`;
     });
-    return;
-  }
-  if (target.hasAttribute("data-refresh-history")) {
-    void run(async () => { [creativeHistory, projectCheckpoints] = await Promise.all([api.listCreativeHistory(), api.listProjectCheckpoints()]); notice = "工作流历史与工程检查点已刷新。"; });
     return;
   }
   if (target.dataset.restoreCheckpoint) {

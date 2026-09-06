@@ -286,7 +286,7 @@ button.full { width: 100%; }
 .hero-orb span { color: var(--subtle); font-size: 10px; font-weight: 600; letter-spacing: .12em; }
 
 .stats-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; margin: 14px 0 28px; }
-.stat-card, .panel, .tool-card, .component-row { border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow-card); }
+.stat-card, .panel, .component-row { border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow-card); }
 .stat-card { min-width: 0; padding: 17px 18px; border-radius: 8px; }
 .stat-card span, .stat-card small { display: block; color: var(--muted); font-size: 12px; }
 .stat-card strong { display: block; margin: 7px 0 4px; font-size: 20px; font-weight: 600; letter-spacing: -.02em; }
@@ -571,16 +571,19 @@ button.full { width: 100%; }
 .segmented button:hover { background: var(--control-pressed); }
 .segmented button.active { color: inherit; background: var(--control); box-shadow: var(--shadow-card); font-weight: 600; }
 .tool-category { min-width: 0; }
-.tool-catalog-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; }
-.tool-card { display: flex; min-width: 0; flex-direction: column; padding: 20px; border-radius: 8px; transition: border-color 120ms ease, background-color 120ms ease; }
-.tool-card:focus-within { border-color: var(--primary); }
-.tool-card.blocked { background: var(--surface-subtle); }
-.tool-card-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
-.tool-card h2 { margin: 14px 0 7px; font-size: 17px; font-weight: 600; line-height: 1.4; }
-.tool-card > p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
-.tool-card-capabilities { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 18px; padding: 0; list-style: none; }
-.tool-card-capabilities li { padding: 4px 7px; border-radius: 4px; color: var(--muted); background: var(--surface-subtle); font-size: 11px; line-height: 1.5; }
-.tool-card .card-action { justify-content: space-between; margin-top: auto; text-align: left; }
+.tool-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.tool-tab { display: inline-flex; min-width: 150px; flex: 1 1 150px; flex-direction: column; align-items: flex-start; gap: 3px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: var(--surface-subtle); text-align: left; cursor: pointer; }
+.tool-tab:hover, .tool-tab:focus-visible { border-color: var(--primary); color: var(--text); }
+.tool-tab.active { border-color: var(--primary); color: var(--text); background: var(--surface); box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent); }
+.tool-tab.ready small { color: var(--success); }
+.tool-tab.warning small { color: var(--warning); }
+.tool-tab.blocked small { color: var(--danger); }
+.tool-tab span { font-size: 13px; font-weight: 600; }
+.tool-tab small { font-size: 10px; }
+.tool-unavailable { display: flex; align-items: center; gap: 14px; }
+.tool-unavailable > div { flex: 1; min-width: 0; }
+.tool-unavailable h2 { margin: 0 0 5px; font-size: 17px; }
+.tool-unavailable p { margin: 3px 0; color: var(--muted); font-size: 12px; }
 .availability { width: fit-content; padding: 4px 8px; border-radius: 999px; color: var(--success); background: rgba(15,123,69,.1); font-size: 11px; font-weight: 600; }
 .availability.warning { color: var(--warning); background: color-mix(in srgb,var(--warning) 12%,transparent); }
 .availability.blocked { color: var(--muted); background: var(--surface-subtle); }
@@ -1290,7 +1293,7 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
   .synthv-process-row { align-items: stretch; flex-direction: column; }
   .brand > div:last-child, .nav-item span, .nav-label, .version { display: none; }
   .nav-item { justify-content: center; padding: 0; }
-  .tool-catalog-grid, .quick-grid, .mode-grid { grid-template-columns: 1fr; }
+  .quick-grid, .mode-grid { grid-template-columns: 1fr; }
   .content { padding-inline: 20px; }
   .topbar { padding-inline: 22px; }
   .topbar h1 { font-size: 25px; }
