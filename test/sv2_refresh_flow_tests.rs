@@ -128,7 +128,10 @@ fn expired_active_and_idle_sessions_refresh_write_then_read_with_new_token() {
                 let current = fixture.current();
                 assert!(access == current.access_token());
                 assert!(current.refresh_token() != fixture.original.refresh_token());
-                RemoteOutcome::Authorized(vec!["Fixture Voice".to_string()])
+                RemoteOutcome::Authorized {
+                    voices: vec!["Fixture Voice".to_string()],
+                    products: Vec::new(),
+                }
             },
         );
         assert_eq!(*events.borrow(), ["refresh", "licenses"]);
@@ -171,7 +174,10 @@ fn fresh_rejected_access_refreshes_once_and_never_loops_on_second_rejection() {
                         if reject_again {
                             RemoteOutcome::Unauthorized
                         } else {
-                            RemoteOutcome::Authorized(Vec::new())
+                            RemoteOutcome::Authorized {
+                                voices: Vec::new(),
+                                products: Vec::new(),
+                            }
                         }
                     }
                 },

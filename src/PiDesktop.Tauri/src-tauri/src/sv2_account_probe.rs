@@ -397,19 +397,16 @@ fn cached_active_session_view(
 ) -> Sv2AccountProbeView {
     let root = probe_root_key_for_identity(data_root, logical_identity);
     let cached = root.as_ref().and_then(|root| {
-        if let Some(view) = sync_quarantine_get(&root.quarantine_key()) {
-            return Some(view);
-        }
         inspect_session_fingerprint(data_root)
             .ok()
             .flatten()
-            .and_then(|fingerprint| cache_get(&fingerprint, root))
+            .and_then(|fingerprint| cached_view_for_fingerprint(&fingerprint, root))
     });
-    if matches!(
-        cached.as_ref().map(|view| view.session_status),
-        Some(Sv2SessionInspectionStatus::SyncFailed)
-    ) {
-        return cached.expect("sync quarantine view is present");
+    if let Some(view) = cached.as_ref().filter(|view| {
+        view.session_status != Sv2SessionInspectionStatus::Ready
+            || view.remote_use == Sv2RemoteUseStatus::Detected
+    }) {
+        return view.clone();
     }
     let mut view = Sv2AccountProbeView::in_use_with_cached_authorization(cached.as_ref());
     if view.account_display_name.is_none() && view.account_email.is_none() {
@@ -622,8 +619,7 @@ where
 
 #[derive(Clone)]
 enum RemoteOutcome {
-    Authorized(Vec<String>),
-    AuthorizedProducts {
+    Authorized {
         voices: Vec<String>,
         products: Vec<Sv2AuthorizedVoiceProduct>,
     },
@@ -666,8 +662,7 @@ fn view_from_remote(licenses: RemoteOutcome, enroll: EnrollOutcome) -> Sv2Accoun
             Sv2RemoteUseStatus::Unknown
         };
     let (authorization_status, voices, products) = match licenses {
-        RemoteOutcome::Authorized(voices) => (Sv2AuthorizationStatus::Verified, voices, Vec::new()),
-        RemoteOutcome::AuthorizedProducts { voices, products } => {
+        RemoteOutcome::Authorized { voices, products } => {
             (Sv2AuthorizationStatus::Verified, voices, products)
         }
         _ => (Sv2AuthorizationStatus::Unknown, Vec::new(), Vec::new()),
@@ -1464,7 +1459,7 @@ fn interpret_license_response(status: u16, body: Zeroizing<Vec<u8>>) -> RemoteOu
     let Some((voices, products)) = extract_authorized_voice_products(&body) else {
         return RemoteOutcome::Unknown;
     };
-    RemoteOutcome::AuthorizedProducts { voices, products }
+    RemoteOutcome::Authorized { voices, products }
 }
 
 fn contains_json_string(body: &[u8], needle: &[u8]) -> bool {
@@ -1648,6 +1643,7 @@ impl Hash for SessionCacheKey {
 struct CacheEntry {
     stored_at: Instant,
     ttl: Duration,
+    access_expires_at: Option<DateTime<Utc>>,
     view: Sv2AccountProbeView,
 }
 
@@ -1765,8 +1761,42 @@ fn cache_get(fingerprint: &SessionCacheKey, root: &ProbeRootKey) -> Option<Sv2Ac
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     cache
         .get(&ProbeCacheKey::new(fingerprint, root))
-        .filter(|entry| now.saturating_duration_since(entry.stored_at) <= entry.ttl)
+        .filter(|entry| {
+            now.saturating_duration_since(entry.stored_at) <= entry.ttl
+                && entry
+                    .access_expires_at
+                    .is_none_or(|expires_at| expires_at > Utc::now())
+        })
         .map(|entry| entry.view.clone())
+}
+
+#[cfg(windows)]
+fn cached_expired_view(
+    fingerprint: &SessionCacheKey,
+    root: &ProbeRootKey,
+) -> Option<Sv2AccountProbeView> {
+    let cache = probe_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let entry = cache.get(&ProbeCacheKey::new(fingerprint, root))?;
+    if entry.view.authorization_status != Sv2AuthorizationStatus::Verified
+        || entry
+            .access_expires_at
+            .is_none_or(|expires_at| expires_at > Utc::now())
+    {
+        return None;
+    }
+    let mut view = Sv2AccountProbeView::new(
+        Sv2SessionInspectionStatus::Expired,
+        Sv2RemoteUseStatus::Unknown,
+        Sv2AuthorizationStatus::Unknown,
+        Vec::new(),
+        "本地登录缓存的 access token 已到期；请刷新账号状态。",
+    );
+    view.account_display_name
+        .clone_from(&entry.view.account_display_name);
+    view.account_email.clone_from(&entry.view.account_email);
+    Some(view)
 }
 
 #[cfg(windows)]
@@ -1790,6 +1820,9 @@ fn cached_view_for_fingerprint(
         return Some(view);
     }
     if let Some(view) = cache_get(fingerprint, root) {
+        return Some(view);
+    }
+    if let Some(view) = cached_expired_view(fingerprint, root) {
         return Some(view);
     }
     cached_identity_for_fingerprint(fingerprint, root).map(|(name, email)| {
@@ -1902,6 +1935,8 @@ fn cache_put(
         CacheEntry {
             stored_at: now,
             ttl,
+            access_expires_at: access_expires_at
+                .filter(|_| view.authorization_status == Sv2AuthorizationStatus::Verified),
             view: view.clone(),
         },
     );

@@ -4,6 +4,13 @@ use chrono::TimeZone;
 
 pub(super) static PROBE_TEST_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+fn authorized(voices: Vec<String>) -> RemoteOutcome {
+    RemoteOutcome::Authorized {
+        voices,
+        products: Vec::new(),
+    }
+}
+
 fn make_jwt(exp: Option<i64>, iat: i64) -> String {
     let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256","typ":"JWT"}"#);
     let payload = URL_SAFE_NO_PAD
@@ -897,7 +904,7 @@ fn public_views_never_echo_secret_or_response_sentinels() {
 #[test]
 fn read_only_authorization_does_not_claim_a_device_check_failed() {
     let view = view_from_remote(
-        RemoteOutcome::Authorized(vec!["Synthetic Voice".to_string()]),
+        authorized(vec!["Synthetic Voice".to_string()]),
         EnrollOutcome::Unknown,
     );
 
@@ -1076,8 +1083,7 @@ fn diagnostic_real_session_root_is_read_only() {
             .redirects(0)
             .build();
         match query_license_snapshot_with_agent(&agent, credentials.access_token()) {
-            RemoteOutcome::Authorized(voices) => format!("authorized:{}", voices.len()),
-            RemoteOutcome::AuthorizedProducts { voices, .. } => {
+            RemoteOutcome::Authorized { voices, .. } => {
                 format!("authorized:{}", voices.len())
             }
             RemoteOutcome::ConcurrentUse => "concurrent".to_string(),
@@ -1202,7 +1208,7 @@ fn read_only_authorization_recovers_only_an_unchanged_single_session() {
         &fingerprint,
         &credentials,
         true,
-        |_| RemoteOutcome::Authorized(vec!["Fixture Voice".to_string()]),
+        |_| authorized(vec!["Fixture Voice".to_string()]),
     )
     .unwrap();
     assert_eq!(active.session_status, Sv2SessionInspectionStatus::InUse);
@@ -1224,7 +1230,7 @@ fn read_only_authorization_recovers_only_an_unchanged_single_session() {
         &fingerprint,
         &credentials,
         false,
-        |_| RemoteOutcome::Authorized(vec!["Fixture Voice".to_string()]),
+        |_| authorized(vec!["Fixture Voice".to_string()]),
     )
     .unwrap();
     assert_eq!(idle.session_status, Sv2SessionInspectionStatus::Ready);
@@ -1239,7 +1245,7 @@ fn read_only_authorization_recovers_only_an_unchanged_single_session() {
         false,
         |_| {
             fs::write(&session, b"changed-session").unwrap();
-            RemoteOutcome::Authorized(vec!["Fixture Voice".to_string()])
+            authorized(vec!["Fixture Voice".to_string()])
         },
     )
     .is_none());
@@ -1265,9 +1271,7 @@ fn read_only_authorization_recovers_only_an_unchanged_single_session() {
 #[test]
 fn active_license_decision_is_network_free_and_preserves_failures() {
     let _guard = PROBE_TEST_GATE.lock().unwrap();
-    let authorized = view_from_active_license(RemoteOutcome::Authorized(vec![
-        "Synthetic Voice".to_string()
-    ]));
+    let authorized = view_from_active_license(authorized(vec!["Synthetic Voice".to_string()]));
     assert_eq!(authorized.session_status, Sv2SessionInspectionStatus::InUse);
     assert_eq!(
         authorized.authorization_status,
@@ -1432,5 +1436,52 @@ fn same_session_content_survives_an_atomic_metadata_rewrite() {
         Sv2AuthorizationStatus::Verified
     );
     assert_eq!(cached.authorized_voices, vec!["Synthetic Voice"]);
+    clear_sv2_account_probe_cache();
+}
+
+#[cfg(windows)]
+#[test]
+fn expired_verified_cache_keeps_identity_without_reusing_authorization() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
+    clear_sv2_account_probe_cache();
+    let root = ProbeRootKey::AccountEnvironment {
+        slot_id: "slot-expired-cache".to_string(),
+        concurrent: false,
+    };
+    let fingerprint = SessionCacheKey {
+        canonical_root: PathBuf::from("C:/synthetic/slot-expired-cache"),
+        session_len: 8,
+        last_write_time: 1,
+        content_hash: [0; 32],
+    };
+    let mut verified = Sv2AccountProbeView::new(
+        Sv2SessionInspectionStatus::Ready,
+        Sv2RemoteUseStatus::Unknown,
+        Sv2AuthorizationStatus::Verified,
+        vec!["Synthetic Voice".to_string()],
+        "verified",
+    );
+    verified.account_display_name = Some("Synthetic Account".to_string());
+    probe_cache().lock().unwrap().insert(
+        ProbeCacheKey::new(&fingerprint, &root),
+        CacheEntry {
+            stored_at: Instant::now(),
+            ttl: Duration::MAX,
+            access_expires_at: Some(Utc::now() - ChronoDuration::seconds(1)),
+            view: verified,
+        },
+    );
+
+    let expired = cached_view_for_fingerprint(&fingerprint, &root).unwrap();
+    assert_eq!(expired.session_status, Sv2SessionInspectionStatus::Expired);
+    assert_eq!(
+        expired.authorization_status,
+        Sv2AuthorizationStatus::Unknown
+    );
+    assert!(expired.authorized_voices.is_empty());
+    assert_eq!(
+        expired.account_display_name.as_deref(),
+        Some("Synthetic Account")
+    );
     clear_sv2_account_probe_cache();
 }
