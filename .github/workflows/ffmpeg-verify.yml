@@ -258,7 +258,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.target }}-cargo-tests-
             ${{ runner.os }}-${{ matrix.target }}-cargo-
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-
 
       - name: Build bundled SynthV Bridge
         working-directory: src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge
