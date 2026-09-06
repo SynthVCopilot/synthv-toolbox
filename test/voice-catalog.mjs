@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import "./voice-license-ui.mjs";
 import fs from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 

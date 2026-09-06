@@ -44,6 +44,7 @@ fn account_probe(
         authorized_voice_products: Vec::new(),
         account_display_name: None,
         account_email: None,
+        account_key: None,
     }
 }
 

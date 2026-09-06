@@ -147,25 +147,23 @@ export interface Sv2SessionProtection {
 export type Sv2AccountProbeSessionStatus = "ready" | "missing" | "inUse" | "expired" | "loginRequired" | "invalid" | "syncFailed" | "accountMismatch" | "unsupported" | "offline";
 export type Sv2AuthorizationStatus = "verified" | "unknown";
 
+export interface Sv2AuthorizedVoiceProduct {
+  id: string;
+  name: string;
+  isTrial: boolean;
+  expiresAtUtc?: string | null;
+}
+
 export interface Sv2AccountProbe {
   sessionStatus: Sv2AccountProbeSessionStatus;
   remoteUse: Sv2RemoteUseStatus;
   authorizationStatus: Sv2AuthorizationStatus;
   authorizedVoiceCount: number;
   authorizedVoices: string[];
-  authorizedVoiceProducts: { id: string; name: string }[];
+  authorizedVoiceProducts: Sv2AuthorizedVoiceProduct[];
   accountDisplayName?: string;
   accountEmail?: string;
   checkedAtUtc: string;
-  detail: string;
-}
-
-export type Sv2VoiceInventoryStatus = "verified" | "manual" | "unknown";
-
-export interface Sv2VoiceInventory {
-  status: Sv2VoiceInventoryStatus;
-  manuallyConfirmedVoices: string[];
-  verifiedAuthorizedVoiceCount: number;
   detail: string;
 }
 
@@ -183,7 +181,6 @@ export interface Sv2ProfileSlot {
   accountProbe: Sv2AccountProbe;
   concurrentAccountProbe: Sv2AccountProbe;
   concurrent: Sv2ConcurrentSlot;
-  voiceInventory: Sv2VoiceInventory;
 }
 
 export interface Sv2ProfilesState {
@@ -234,7 +231,7 @@ export interface Sv2AccountUsageSnapshot {
 }
 
 export type SvpLaunchMode = "normal" | "concurrent";
-export type SvpAuthorizationSource = "session" | "mixed" | "manual" | "unknown";
+export type SvpAuthorizationSource = "session" | "unknown";
 
 export interface SvpVoiceRequirement {
   name: string;

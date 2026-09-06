@@ -282,12 +282,6 @@ let previewProfiles: Sv2ProfilesState = {
       sessionStatus: "ready",
       detail: "隔离副本中的缓存会话可读取；尚未取得账号服务占用或授权摘要。",
     }),
-    voiceInventory: {
-      status: "manual",
-      manuallyConfirmedVoices: ["Mai 2", "SOLARIA"],
-      verifiedAuthorizedVoiceCount: 0,
-      detail: "已手工确认 2 个声库；这些记录只用于工程路由，不替代 Dreamtonics 官方授权预检。",
-    },
     concurrent: {
       ready: true,
       dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\slots\\11111111-1111-4111-8111-111111111111",
@@ -324,7 +318,7 @@ let previewProfiles: Sv2ProfilesState = {
       authorizationStatus: "verified",
       authorizedVoiceCount: 2,
       authorizedVoices: ["Mai 2", "SOLARIA"],
-      authorizedVoiceProducts: [{ id: "00000000-0000-4000-8000-000000000002", name: "SOLARIA" }],
+      authorizedVoiceProducts: [{ id: "00000000-0000-4000-8000-000000000002", name: "SOLARIA", isTrial: true, expiresAtUtc: "2099-12-31T23:59:59Z" }],
       accountDisplayName: "Vocal Editor",
       accountEmail: "editor@example.com",
       detail: "官方服务已接受无踢出设备登录事件，并返回 2 个可匹配的官方声库授权。",
@@ -335,15 +329,9 @@ let previewProfiles: Sv2ProfilesState = {
       authorizationStatus: "verified",
       authorizedVoiceCount: 2,
       authorizedVoices: ["Mai 2", "SOLARIA"],
-      authorizedVoiceProducts: [{ id: "00000000-0000-4000-8000-000000000002", name: "SOLARIA" }],
+      authorizedVoiceProducts: [{ id: "00000000-0000-4000-8000-000000000002", name: "SOLARIA", isTrial: true, expiresAtUtc: "2099-12-31T23:59:59Z" }],
       detail: "官方服务已接受隔离副本的无踢出设备登录事件，并返回 2 个可匹配的官方声库授权。",
     }),
-    voiceInventory: {
-      status: "verified",
-      manuallyConfirmedVoices: [],
-      verifiedAuthorizedVoiceCount: 2,
-      detail: "账号服务已返回 2 个官方声库授权。",
-    },
     concurrent: {
       ready: true,
       dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\slots\\22222222-2222-4222-8222-222222222222",
@@ -701,15 +689,9 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       },
       accountProbe: previewAccountProbe(),
       concurrentAccountProbe: previewAccountProbe(),
-      voiceInventory: {
-        status: "unknown",
-        manuallyConfirmedVoices: [],
-        verifiedAuthorizedVoiceCount: 0,
-        detail: "尚无官方账号授权结果或用户手工确认记录。",
-      },
       concurrent: {
         ready: false,
-        dataPath: `${previewProfiles.vaultPath}\\concurrent\\${id}\\box\\user\\current\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2`,
+        dataPath: `${previewProfiles.vaultPath}\\slots\\${id}`,
         runningPids: [],
         detail: "尚未准备隔离副本。",
         content: {
@@ -735,22 +717,6 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     if (wasActive) {
       previewProfiles.activeSlotId = previewProfiles.slots[0]?.id;
       previewProfiles.slots.forEach((slot) => { slot.isActive = slot.id === previewProfiles.activeSlotId; });
-    }
-    return previewProfiles as T;
-  }
-  if (command === "update_sv2_profile_voice_licenses") {
-    const slot = previewProfiles.slots.find((item) => item.id === args?.slotId);
-    if (slot) {
-      const voices = ((args?.voices as string[] | undefined) ?? []).map((voice) => voice.trim()).filter(Boolean);
-      slot.voiceInventory.manuallyConfirmedVoices = [...new Set(voices)];
-      slot.voiceInventory.status = slot.voiceInventory.verifiedAuthorizedVoiceCount
-        ? "verified"
-        : voices.length ? "manual" : "unknown";
-      slot.voiceInventory.detail = slot.voiceInventory.verifiedAuthorizedVoiceCount
-        ? `账号服务已返回 ${slot.voiceInventory.verifiedAuthorizedVoiceCount} 个官方声库授权；另有 ${voices.length} 个手工确认条目。`
-        : voices.length
-          ? `已手工确认 ${voices.length} 个声库；这些记录只用于工程路由，不替代 Dreamtonics 官方授权预检。`
-          : "尚无官方账号授权结果或用户手工确认记录。";
     }
     return previewProfiles as T;
   }
@@ -823,21 +789,25 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
         { name: "Mai 2", version: 104, backendType: "sv2" },
         { name: "SOLARIA", version: 101, backendType: "sv2" },
       ],
-      candidates: previewProfiles.slots.map((slot, index) => ({
-        slotId: slot.id,
-        displayName: slot.displayName,
-        idle: index > 0,
-        launchMode: index > 0 ? "concurrent" as const : undefined,
-        remoteUse: (index > 0 ? slot.concurrentAccountProbe : slot.accountProbe).remoteUse,
-        sessionStatus: (index > 0 ? slot.concurrentAccountProbe : slot.accountProbe).sessionStatus,
-        authorizationSource: slot.voiceInventory.status === "verified" ? "session" as const : slot.voiceInventory.manuallyConfirmedVoices.length ? "manual" as const : "unknown" as const,
-        matchedVoices: slot.voiceInventory.status === "verified"
-          ? requiredVoiceNames
-          : slot.voiceInventory.manuallyConfirmedVoices.filter((voice) => requiredVoiceNames.includes(voice)),
-        missingOrUnknownVoices: slot.voiceInventory.status === "verified" || slot.voiceInventory.manuallyConfirmedVoices.length === requiredVoiceNames.length ? [] : requiredVoiceNames,
-        exactAuthorizationMatch: slot.voiceInventory.status === "verified" || slot.voiceInventory.manuallyConfirmedVoices.length === requiredVoiceNames.length,
-        reason: index > 0 ? "官方服务已接受无踢出设备登录事件，并匹配工程所需的 2 个官方声库授权。" : "账号当前正在本机使用，且服务端占用状态未知。",
-      })),
+      candidates: previewProfiles.slots.map((slot, index) => {
+        const probe = index > 0 ? slot.concurrentAccountProbe : slot.accountProbe;
+        const verified = probe.authorizationStatus === "verified";
+        const matchedVoices = verified ? requiredVoiceNames.filter((voice) => probe.authorizedVoices.includes(voice)) : [];
+        const missingOrUnknownVoices = requiredVoiceNames.filter((voice) => !matchedVoices.includes(voice));
+        return {
+          slotId: slot.id,
+          displayName: slot.displayName,
+          idle: index > 0,
+          launchMode: index > 0 ? "concurrent" as const : undefined,
+          remoteUse: probe.remoteUse,
+          sessionStatus: probe.sessionStatus,
+          authorizationSource: verified ? "session" as const : "unknown" as const,
+          matchedVoices,
+          missingOrUnknownVoices,
+          exactAuthorizationMatch: verified && missingOrUnknownVoices.length === 0,
+          reason: verified ? "已根据官方授权匹配工程声库。" : "账号授权未知，需要确认后启动。",
+        };
+      }),
       selectedSlotId: previewProfiles.slots[1]?.id,
       selectedLaunchMode: "concurrent",
       requiresConfirmation: false,
@@ -1186,8 +1156,6 @@ export const api = {
     call<Sv2ProfilesState>("create_sv2_profile", { displayName }),
   renameSv2Profile: (slotId: string, displayName: string) =>
     call<Sv2ProfilesState>("rename_sv2_profile", { slotId, displayName }),
-  updateSv2ProfileVoiceLicenses: (slotId: string, voices: string[]) =>
-    call<Sv2ProfilesState>("update_sv2_profile_voice_licenses", { slotId, voices }),
   deleteSv2Profile: (slotId: string) =>
     call<Sv2ProfilesState>("delete_sv2_profile", { slotId }),
   setSv2ConcurrentEnabled: (enabled: boolean) =>
@@ -1218,8 +1186,6 @@ export const api = {
     call<OperationResult>("open_svp_default_apps_settings"),
   acceptSv2ConcurrentDisclaimer: () =>
     call<BootstrapState>("accept_sv2_concurrent_disclaimer"),
-  openSv2ConcurrentFolder: (slotId: string) =>
-    call<OperationResult>("open_sv2_concurrent_folder", { slotId }),
   saveScriptsPath: (scriptsPath: string) => call<BootstrapState>("save_scripts_path", { scriptsPath }),
   installBridge: (scriptsPath: string) => call<OperationResult>("install_bridge", { scriptsPath }),
   diagnoseBridge: (scriptsPath: string) => call<OperationResult>("diagnose_bridge", { scriptsPath }),

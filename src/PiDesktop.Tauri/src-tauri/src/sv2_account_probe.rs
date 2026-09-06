@@ -129,6 +129,8 @@ pub struct Sv2AccountProbeView {
     pub authorized_voice_products: Vec<Sv2AuthorizedVoiceProduct>,
     pub account_display_name: Option<String>,
     pub account_email: Option<String>,
+    #[serde(skip)]
+    pub(crate) account_key: Option<[u8; 32]>,
     pub checked_at_utc: String,
     pub detail: String,
 }
@@ -138,6 +140,8 @@ pub struct Sv2AccountProbeView {
 pub struct Sv2AuthorizedVoiceProduct {
     pub id: String,
     pub name: String,
+    pub is_trial: bool,
+    pub expires_at_utc: Option<DateTime<Utc>>,
 }
 
 impl Sv2AccountProbeView {
@@ -182,10 +186,12 @@ impl Sv2AccountProbeView {
             authorized_voice_products: Vec::new(),
             account_display_name: None,
             account_email: None,
+            account_key: None,
         }
     }
 
     fn with_account_identity(mut self, access_token: &str) -> Self {
+        self.account_key = account_group_key(access_token);
         if let Some(identity) = account_identity(access_token) {
             self.account_display_name = identity.display_name;
             self.account_email = identity.email;
@@ -216,10 +222,10 @@ impl Sv2AccountProbeView {
         view.account_display_name
             .clone_from(&cached.account_display_name);
         view.account_email.clone_from(&cached.account_email);
+        view.account_key = cached.account_key;
         if cached.authorization_status == Sv2AuthorizationStatus::Verified {
-            view.detail =
-                "账号环境正在本机使用；显示本次运行前已安全缓存的声库授权，未读取或轮换会话。"
-                    .to_string();
+            view.detail = "账号环境正在本机使用；显示同一账号仍有效的已缓存声库授权，未轮换会话。"
+                .to_string();
         }
         view
     }
@@ -351,9 +357,7 @@ pub fn refresh_sv2_account_probe(data_root: &Path, source_in_use: bool) -> Sv2Ac
         .unwrap_or_else(Sv2AccountProbeView::invalid)
 }
 
-/// Returns a same-process, sanitized precheck result when its session
-/// fingerprint still matches.  It never decrypts a session or accesses the
-/// network.
+/// Reuses valid authorization after confirming the local session still belongs to the same account.
 #[allow(dead_code)]
 pub fn cached_sv2_account_probe(data_root: &Path, source_in_use: bool) -> Sv2AccountProbeView {
     cached_sv2_account_probe_with_identity(data_root, source_in_use, None)
@@ -384,47 +388,83 @@ fn cached_sv2_account_probe_with_identity(
 
     #[cfg(windows)]
     {
-        if source_in_use {
-            return cached_active_session_view(data_root, logical_identity);
-        }
-        match inspect_session_fingerprint(data_root) {
-            Ok(Some(key)) => {
-                let root_key = probe_root_key(logical_identity, &key.canonical_root);
-                cached_view_for_fingerprint(&key, &root_key)
-                    .unwrap_or_else(|| Sv2AccountProbeView::not_checked(true))
+        let view = match read_stable_session(data_root) {
+            Ok(Some((ciphertext, fingerprint))) => {
+                let root = probe_root_key(logical_identity, &fingerprint.canonical_root);
+                cached_view_for_fingerprint(&fingerprint, &root).unwrap_or_else(|| {
+                    let Ok(machine_key) = read_machine_key() else {
+                        return Sv2AccountProbeView::unsupported();
+                    };
+                    let view = cached_view_for_rewritten_session(ciphertext, &machine_key, &root);
+                    if inspect_session_fingerprint(data_root)
+                        .ok()
+                        .flatten()
+                        .as_ref()
+                        == Some(&fingerprint)
+                    {
+                        view
+                    } else {
+                        Sv2AccountProbeView::not_checked(true)
+                    }
+                })
             }
             Ok(None) => Sv2AccountProbeView::not_checked(false),
             Err(()) => probe_root_key_for_identity(data_root, logical_identity)
                 .and_then(|root| sync_quarantine_get(&root.quarantine_key()))
                 .unwrap_or_else(Sv2AccountProbeView::invalid),
+        };
+        if source_in_use
+            && view.session_status == Sv2SessionInspectionStatus::Ready
+            && view.remote_use != Sv2RemoteUseStatus::Detected
+        {
+            Sv2AccountProbeView::in_use_with_cached_authorization(Some(&view))
+        } else {
+            view
         }
     }
 }
 
 #[cfg(windows)]
-fn cached_active_session_view(
-    data_root: &Path,
-    logical_identity: Option<(&str, bool)>,
+fn cached_view_for_rewritten_session(
+    ciphertext: Zeroizing<Vec<u8>>,
+    machine_key: &[u8; 8],
+    root: &ProbeRootKey,
 ) -> Sv2AccountProbeView {
-    let root = probe_root_key_for_identity(data_root, logical_identity);
-    let cached = root.as_ref().and_then(|root| {
-        inspect_session_fingerprint(data_root)
-            .ok()
-            .flatten()
-            .and_then(|fingerprint| cached_view_for_fingerprint(&fingerprint, root))
-    });
-    if let Some(view) = cached.as_ref().filter(|view| {
-        view.session_status != Sv2SessionInspectionStatus::Ready
-            || view.remote_use == Sv2RemoteUseStatus::Detected
-    }) {
-        return view.clone();
+    let credentials = match decode_session_credentials(ciphertext, machine_key) {
+        SessionDecode::Credentials(credentials) => credentials,
+        SessionDecode::LoginRequired => return Sv2AccountProbeView::login_required(),
+        SessionDecode::Invalid => return Sv2AccountProbeView::invalid(),
+    };
+    let mut view =
+        Sv2AccountProbeView::not_checked(true).with_account_identity(credentials.access_token());
+    if credentials.access_expires_at <= Utc::now() {
+        view.session_status = Sv2SessionInspectionStatus::Expired;
+        view.detail = "本地登录缓存的 access token 已到期；请刷新账号状态。".to_string();
+        return view;
     }
-    let mut view = Sv2AccountProbeView::in_use_with_cached_authorization(cached.as_ref());
-    if view.account_display_name.is_none() && view.account_email.is_none() {
-        if let Some((name, email)) = root.as_ref().and_then(cached_identity_for_root) {
-            view.account_display_name = name;
-            view.account_email = email;
-        }
+    let Some(account_key) = view.account_key else {
+        return view;
+    };
+    let cache = probe_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let entry = cache
+        .iter()
+        .filter(|(key, entry)| key.root == *root && entry.view.account_key == Some(account_key))
+        .max_by_key(|(_, entry)| entry.stored_at)
+        .map(|(_, entry)| entry);
+    if let Some(entry) = entry.filter(|entry| {
+        entry.view.authorization_status == Sv2AuthorizationStatus::Verified
+            && Instant::now().saturating_duration_since(entry.stored_at) <= entry.ttl
+            && entry
+                .access_expires_at
+                .is_some_and(|expiry| expiry > Utc::now())
+    }) {
+        view = entry
+            .view
+            .clone()
+            .with_account_identity(credentials.access_token());
+        remove_expired_authorizations(&mut view, Utc::now());
     }
     view
 }
@@ -1487,6 +1527,10 @@ struct LicenseItem {
     #[serde(default)]
     status: Option<String>,
     #[serde(default)]
+    license_type: Option<String>,
+    #[serde(default)]
+    valid_to: Option<i64>,
+    #[serde(default)]
     product: Option<LicenseProduct>,
 }
 
@@ -1533,6 +1577,13 @@ fn contains_json_string(body: &[u8], needle: &[u8]) -> bool {
 fn extract_authorized_voice_products(
     body: &[u8],
 ) -> Option<(Vec<String>, Vec<Sv2AuthorizedVoiceProduct>)> {
+    extract_authorized_voice_products_at(body, Utc::now())
+}
+
+fn extract_authorized_voice_products_at(
+    body: &[u8],
+    now: DateTime<Utc>,
+) -> Option<(Vec<String>, Vec<Sv2AuthorizedVoiceProduct>)> {
     let envelope: LicenseEnvelope = serde_json::from_slice(body).ok()?;
     let licenses = envelope.data?;
     if licenses.len() > MAX_LICENSE_ITEMS {
@@ -1540,11 +1591,18 @@ fn extract_authorized_voice_products(
     }
 
     let mut names = BTreeMap::<String, String>::new();
-    let mut products = BTreeMap::<String, Sv2AuthorizedVoiceProduct>::new();
+    let mut products = BTreeMap::<String, (bool, Sv2AuthorizedVoiceProduct)>::new();
     for license in licenses {
         if license.status.as_deref() != Some("active") {
             continue;
         }
+        let expires_at_utc = match license.valid_to {
+            Some(timestamp) => match DateTime::from_timestamp(timestamp, 0) {
+                Some(date) if date > now => Some(date),
+                _ => continue,
+            },
+            None => None,
+        };
         let Some(product) = license.product else {
             continue;
         };
@@ -1555,15 +1613,34 @@ fn extract_authorized_voice_products(
             continue;
         };
         let name = names.entry(name.to_lowercase()).or_insert(name).clone();
-        if let Some(id) = product
+        let id = product
             .id
             .as_deref()
             .and_then(|value| uuid::Uuid::parse_str(value).ok())
             .map(|value| value.to_string())
-        {
-            products
-                .entry(id.clone())
-                .or_insert(Sv2AuthorizedVoiceProduct { id, name });
+            .unwrap_or_default();
+        let key = if id.is_empty() {
+            name.to_lowercase()
+        } else {
+            id.clone()
+        };
+        let permanent = license.license_type.as_deref() == Some("permanent");
+        let candidate = Sv2AuthorizedVoiceProduct {
+            id,
+            name,
+            is_trial: license.license_type.as_deref() == Some("trial"),
+            expires_at_utc,
+        };
+        let replace = products
+            .get(&key)
+            .is_none_or(|(existing_permanent, existing)| {
+                permanent && !existing_permanent
+                    || permanent == *existing_permanent
+                        && candidate.expires_at_utc.unwrap_or(DateTime::<Utc>::MAX_UTC)
+                            > existing.expires_at_utc.unwrap_or(DateTime::<Utc>::MAX_UTC)
+            });
+        if replace {
+            products.insert(key, (permanent, candidate));
         }
     }
 
@@ -1574,8 +1651,31 @@ fn extract_authorized_voice_products(
             .then_with(|| left.cmp(right))
     });
     voices.truncate(MAX_AUTHORIZED_VOICES);
-    let products = products.into_values().take(MAX_AUTHORIZED_VOICES).collect();
+    let products = products
+        .into_values()
+        .map(|(_, product)| product)
+        .filter(|product| voices.contains(&product.name))
+        .collect();
     Some((voices, products))
+}
+
+fn remove_expired_authorizations(view: &mut Sv2AccountProbeView, now: DateTime<Utc>) {
+    let expired_names = view
+        .authorized_voice_products
+        .iter()
+        .filter(|product| product.expires_at_utc.is_some_and(|expiry| expiry <= now))
+        .map(|product| product.name.to_lowercase())
+        .collect::<Vec<_>>();
+    view.authorized_voice_products
+        .retain(|product| product.expires_at_utc.is_none_or(|expiry| expiry > now));
+    view.authorized_voices.retain(|name| {
+        !expired_names.contains(&name.to_lowercase())
+            || view
+                .authorized_voice_products
+                .iter()
+                .any(|product| product.name.eq_ignore_ascii_case(name))
+    });
+    view.authorized_voice_count = view.authorized_voices.len();
 }
 
 fn is_voice_product(product: &LicenseProduct) -> bool {
@@ -1826,7 +1926,11 @@ fn cache_get(fingerprint: &SessionCacheKey, root: &ProbeRootKey) -> Option<Sv2Ac
                     .access_expires_at
                     .is_none_or(|expires_at| expires_at > Utc::now())
         })
-        .map(|entry| entry.view.clone())
+        .map(|entry| {
+            let mut view = entry.view.clone();
+            remove_expired_authorizations(&mut view, Utc::now());
+            view
+        })
 }
 
 #[cfg(windows)]
@@ -1905,22 +2009,6 @@ fn cached_identity_for_fingerprint(
         .get(&ProbeCacheKey::new(fingerprint, root))
         .filter(|entry| entry.view.session_status != Sv2SessionInspectionStatus::AccountMismatch)
         .and_then(|entry| cached_identity(&entry.view))
-}
-
-#[cfg(windows)]
-fn cached_identity_for_root(root: &ProbeRootKey) -> Option<(Option<String>, Option<String>)> {
-    let cache = probe_cache()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    cache
-        .iter()
-        .filter(|(key, entry)| {
-            key.root == *root
-                && entry.view.session_status != Sv2SessionInspectionStatus::AccountMismatch
-                && cached_identity(&entry.view).is_some()
-        })
-        .max_by_key(|(_, entry)| entry.stored_at)
-        .and_then(|(_, entry)| cached_identity(&entry.view))
 }
 
 #[cfg(windows)]
