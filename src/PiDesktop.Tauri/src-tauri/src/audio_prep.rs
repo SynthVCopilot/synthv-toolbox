@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,6 +20,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use tauri::{http, AppHandle, Runtime as TauriRuntime};
+use tauri_plugin_dialog::DialogExt;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 use tokio::process::Command;
 use uuid::Uuid;
@@ -34,6 +37,8 @@ const DEFAULT_LRA: f64 = 11.0;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 const LOUDNESS_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 const CAPTURE_LIMIT: usize = 8 * 1024 * 1024;
+const MAX_PROTOCOL_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_PROTOCOL_FULL_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,6 +55,8 @@ pub struct FfmpegRuntimeStatus {
 #[serde(rename_all = "camelCase")]
 pub struct MediaProbe {
     pub path: String,
+    pub source_artifact_id: Option<String>,
+    pub source_mime_type: Option<String>,
     pub container: Option<String>,
     pub codec: Option<String>,
     pub duration_seconds: Option<f64>,
@@ -131,6 +138,27 @@ pub struct AudioJobSnapshot {
     pub completed_at: Option<String>,
 }
 
+/// A capability-style reference to a completed Toolbox audio result.  The
+/// source pathname deliberately never crosses the IPC boundary; callers use
+/// the opaque `artifact_id` for playback, reveal, and safe export instead.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioArtifactInfo {
+    pub artifact_id: String,
+    pub operation: String,
+    pub file_name: String,
+    pub byte_length: u64,
+    pub mime_type: Option<String>,
+    pub media_url: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioArtifactSaveResult {
+    pub saved: bool,
+    pub file_name: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoudnessReport {
@@ -183,6 +211,28 @@ struct JobRecord {
     cancelled: Arc<AtomicBool>,
 }
 
+#[derive(Debug, Clone)]
+struct AudioArtifact {
+    path: PathBuf,
+    location: AudioArtifactLocation,
+    operation: String,
+    mime_type: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+enum AudioArtifactLocation {
+    Generated {
+        canonical_output_root: PathBuf,
+        byte_length: u64,
+        modified_at: Option<SystemTime>,
+    },
+    Source {
+        canonical_source: PathBuf,
+        byte_length: u64,
+        modified_at: Option<SystemTime>,
+    },
+}
+
 /// Shared state for plans and jobs.  Construct it once per application.
 pub struct AudioPreparationService {
     resource_dir: PathBuf,
@@ -191,6 +241,7 @@ pub struct AudioPreparationService {
     runtime_override: Option<Runtime>,
     plans: Mutex<HashMap<String, StoredPlan>>,
     jobs: Mutex<HashMap<String, JobRecord>>,
+    artifacts: Mutex<HashMap<String, AudioArtifact>>,
     write_active: AtomicBool,
 }
 
@@ -203,6 +254,7 @@ impl AudioPreparationService {
             runtime_override: None,
             plans: Mutex::new(HashMap::new()),
             jobs: Mutex::new(HashMap::new()),
+            artifacts: Mutex::new(HashMap::new()),
             write_active: AtomicBool::new(false),
         })
     }
@@ -221,6 +273,7 @@ impl AudioPreparationService {
             }),
             plans: Mutex::new(HashMap::new()),
             jobs: Mutex::new(HashMap::new()),
+            artifacts: Mutex::new(HashMap::new()),
             write_active: AtomicBool::new(false),
         })
     }
@@ -241,7 +294,12 @@ impl AudioPreparationService {
 
     pub async fn probe_media(&self, path: String) -> Result<MediaProbe, String> {
         let _usage_guard = component_usage_guard()?;
-        probe_media_with_runtime(&self.runtime()?, path).await
+        let mut probe = probe_media_with_runtime(&self.runtime()?, path).await?;
+        let mime_type = audio_mime_for_probe(&probe).map(str::to_string);
+        probe.source_artifact_id =
+            Some(self.register_source_artifact(Path::new(&probe.path), mime_type.clone())?);
+        probe.source_mime_type = mime_type;
+        Ok(probe)
     }
 
     pub async fn analyze_loudness(&self, path: String) -> Result<LoudnessReport, String> {
@@ -263,9 +321,10 @@ impl AudioPreparationService {
     ) -> Result<AudioWritePlan, String> {
         validate_prepare(&request)?;
         let input = canonical_input(&request.input_path)?;
-        let probe = self
-            .probe_media(input.to_string_lossy().into_owned())
-            .await?;
+        let _usage_guard = component_usage_guard()?;
+        let probe =
+            probe_media_with_runtime(&self.runtime()?, input.to_string_lossy().into_owned())
+                .await?;
         let output = self.new_output(&input, "prepared")?;
         let mut effective = request;
         effective.input_path = input.to_string_lossy().into_owned();
@@ -367,6 +426,76 @@ impl AudioPreparationService {
             record.snapshot.status = "cancelling".to_string();
         }
         Ok(record.snapshot.clone())
+    }
+
+    pub fn audio_artifact_info(&self, artifact_id: &str) -> Result<AudioArtifactInfo, String> {
+        let (id, artifact, metadata) = self.validated_artifact(artifact_id)?;
+        let media_url = artifact_media_url(&id);
+        Ok(AudioArtifactInfo {
+            artifact_id: id,
+            operation: artifact.operation,
+            file_name: artifact_file_name(&artifact.path)?,
+            byte_length: metadata.len(),
+            media_url,
+            mime_type: artifact.mime_type,
+        })
+    }
+
+    pub fn reveal_audio_artifact(&self, artifact_id: &str) -> Result<(), String> {
+        let (_, artifact, _) = self.validated_generated_artifact(artifact_id)?;
+        let (program, args) = reveal_command_for_path(&artifact.path)?;
+        std::process::Command::new(program)
+            .args(args)
+            .spawn()
+            .map_err(|error| format!("Unable to reveal the audio result: {error}"))?;
+        Ok(())
+    }
+
+    pub async fn save_audio_artifact<R: TauriRuntime>(
+        &self,
+        artifact_id: &str,
+        app: AppHandle<R>,
+    ) -> Result<AudioArtifactSaveResult, String> {
+        let (_, artifact, _) = self.validated_generated_artifact(artifact_id)?;
+        let suggested_name = artifact_file_name(&artifact.path)?;
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        app.dialog()
+            .file()
+            .set_file_name(&suggested_name)
+            .add_filter("WAV audio", &["wav"])
+            .save_file(move |selection| {
+                let _ = sender.send(selection);
+            });
+        let Some(destination) = receiver
+            .await
+            .map_err(|_| "The save dialog did not return a result.".to_string())?
+        else {
+            return Ok(AudioArtifactSaveResult {
+                saved: false,
+                file_name: None,
+            });
+        };
+        // The operating-system dialog is the only source of this path.  Do
+        // not add an IPC parameter for a save destination.
+        self.validated_generated_artifact(artifact_id)?;
+        let destination = destination.as_path().ok_or_else(|| {
+            "The selected save location is not a local filesystem path.".to_string()
+        })?;
+        safe_copy_artifact(&artifact.path, destination)?;
+        Ok(AudioArtifactSaveResult {
+            saved: true,
+            file_name: destination
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_string),
+        })
+    }
+
+    pub fn serve_audio_artifact_request(
+        &self,
+        request: &http::Request<Vec<u8>>,
+    ) -> http::Response<Vec<u8>> {
+        serve_audio_artifact_request(self, request)
     }
 
     fn store_plan(
@@ -532,6 +661,17 @@ impl AudioPreparationService {
         }
         .await;
         let was_cancelled = cancelled.load(Ordering::SeqCst);
+        let result = match result {
+            Ok(report) if !was_cancelled => self
+                .register_completed_artifact(
+                    &plan.output_path,
+                    &canonical_output_root,
+                    &plan.operation,
+                )
+                .map(|artifact_id| (report, artifact_id)),
+            Ok(_) => Err("Audio operation was cancelled.".to_string()),
+            Err(error) => Err(error),
+        };
         if was_cancelled || result.is_err() {
             let _ = remove_generated_output(&self.output_root, Path::new(&plan.output_path));
         }
@@ -546,10 +686,10 @@ impl AudioPreparationService {
                         snapshot.status = "failed".to_string();
                         snapshot.error = Some(error);
                     }
-                    Ok(report) => {
+                    Ok((report, artifact_id)) => {
                         snapshot.status = "completed".to_string();
                         snapshot.progress_percent = Some(100.0);
-                        snapshot.artifact_id = Some(id.clone());
+                        snapshot.artifact_id = Some(artifact_id);
                         snapshot.loudness_report = report;
                     }
                 }
@@ -775,6 +915,146 @@ impl AudioPreparationService {
         }
     }
 
+    fn register_completed_artifact(
+        &self,
+        output: &str,
+        canonical_output_root: &Path,
+        operation: &str,
+    ) -> Result<String, String> {
+        let output = Path::new(output);
+        validate_completed_output(&self.output_root, output)?;
+        let metadata = fs::metadata(output)
+            .map_err(|error| format!("Unable to inspect the completed audio output: {error}"))?;
+        let current_root = fs::canonicalize(&self.output_root).map_err(|error| {
+            format!("Unable to validate the completed output directory: {error}")
+        })?;
+        if current_root != canonical_output_root {
+            return Err(
+                "The audio output directory changed before result registration.".to_string(),
+            );
+        }
+        let id = Uuid::new_v4().to_string();
+        self.artifacts
+            .lock()
+            .map_err(|_| "Audio artifact state is unavailable.".to_string())?
+            .insert(
+                id.clone(),
+                AudioArtifact {
+                    path: output.to_path_buf(),
+                    location: AudioArtifactLocation::Generated {
+                        canonical_output_root: current_root,
+                        byte_length: metadata.len(),
+                        modified_at: metadata.modified().ok(),
+                    },
+                    operation: operation.to_string(),
+                    mime_type: Some("audio/wav".to_string()),
+                },
+            );
+        Ok(id)
+    }
+
+    fn validated_artifact(
+        &self,
+        artifact_id: &str,
+    ) -> Result<(String, AudioArtifact, fs::Metadata), String> {
+        let id = parse_artifact_id(artifact_id)?;
+        let artifact = self
+            .artifacts
+            .lock()
+            .map_err(|_| "Audio artifact state is unavailable.".to_string())?
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| "Audio result was not found or is no longer available.".to_string())?;
+        match &artifact.location {
+            AudioArtifactLocation::Generated {
+                canonical_output_root,
+                byte_length,
+                modified_at,
+            } => {
+                validate_completed_output(&self.output_root, &artifact.path)?;
+                let current_root = fs::canonicalize(&self.output_root).map_err(|error| {
+                    format!("Unable to validate the audio output directory: {error}")
+                })?;
+                if current_root != *canonical_output_root {
+                    return Err(
+                        "Audio result is no longer available because its output directory changed."
+                            .to_string(),
+                    );
+                }
+                let metadata = fs::metadata(&artifact.path)
+                    .map_err(|_| "Audio result is no longer available.".to_string())?;
+                if metadata.len() != *byte_length || metadata.modified().ok() != *modified_at {
+                    return Err("Audio result changed after it was completed.".to_string());
+                }
+            }
+            AudioArtifactLocation::Source {
+                canonical_source,
+                byte_length,
+                modified_at,
+            } => {
+                let current_source = canonical_input(&artifact.path.to_string_lossy())?;
+                let metadata = fs::metadata(&current_source)
+                    .map_err(|_| "Source audio is no longer available.".to_string())?;
+                if current_source != *canonical_source
+                    || metadata.len() != *byte_length
+                    || metadata.modified().ok() != *modified_at
+                {
+                    return Err("Source audio changed after it was inspected.".to_string());
+                }
+            }
+        }
+        let metadata = fs::metadata(&artifact.path)
+            .map_err(|_| "Audio result is no longer available.".to_string())?;
+        if !metadata.is_file() {
+            return Err("Audio result is no longer a regular file.".to_string());
+        }
+        Ok((id, artifact, metadata))
+    }
+
+    fn validated_generated_artifact(
+        &self,
+        artifact_id: &str,
+    ) -> Result<(String, AudioArtifact, fs::Metadata), String> {
+        let validated = self.validated_artifact(artifact_id)?;
+        if !matches!(
+            &validated.1.location,
+            AudioArtifactLocation::Generated { .. }
+        ) {
+            return Err(
+                "Only completed Toolbox audio results can be revealed or saved.".to_string(),
+            );
+        }
+        Ok(validated)
+    }
+
+    fn register_source_artifact(
+        &self,
+        path: &Path,
+        mime_type: Option<String>,
+    ) -> Result<String, String> {
+        let canonical_source = canonical_input(&path.to_string_lossy())?;
+        let metadata = fs::metadata(&canonical_source)
+            .map_err(|_| "Source audio is no longer available.".to_string())?;
+        let id = Uuid::new_v4().to_string();
+        self.artifacts
+            .lock()
+            .map_err(|_| "Audio artifact state is unavailable.".to_string())?
+            .insert(
+                id.clone(),
+                AudioArtifact {
+                    path: canonical_source.clone(),
+                    location: AudioArtifactLocation::Source {
+                        canonical_source,
+                        byte_length: metadata.len(),
+                        modified_at: metadata.modified().ok(),
+                    },
+                    operation: "source-media".to_string(),
+                    mime_type,
+                },
+            );
+        Ok(id)
+    }
+
     fn new_output(&self, input: &Path, suffix: &str) -> Result<PathBuf, String> {
         ensure_output_root(&self.output_root)?;
         let stem = input
@@ -795,6 +1075,421 @@ impl AudioPreparationService {
         validate_generated_output(&self.output_root, &output, input)?;
         Ok(output)
     }
+}
+
+fn parse_artifact_id(value: &str) -> Result<String, String> {
+    let id = Uuid::parse_str(value).map_err(|_| "Invalid audio result identifier.".to_string())?;
+    let canonical = id.to_string();
+    if value != canonical {
+        return Err("Invalid audio result identifier.".to_string());
+    }
+    Ok(canonical)
+}
+
+fn artifact_file_name(path: &Path) -> Result<String, String> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| "Audio result does not have a safe file name.".to_string())
+}
+
+fn artifact_media_url(artifact_id: &str) -> String {
+    #[cfg(windows)]
+    {
+        // WebView2 custom protocols are exposed through Wry's localhost HTTP
+        // workaround for subresources such as <audio>.
+        format!("http://toolbox-audio.localhost/{artifact_id}")
+    }
+    #[cfg(not(windows))]
+    {
+        format!("toolbox-audio://localhost/{artifact_id}")
+    }
+}
+
+/// MIME values intentionally remain a small reviewed allowlist.  Unknown
+/// containers stay registered (so their opaque capability remains valid) but
+/// are not exposed to a browser audio element.
+fn audio_mime_for_probe(probe: &MediaProbe) -> Option<&'static str> {
+    match probe
+        .path
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("wav" | "wave") => Some("audio/wav"),
+        Some("mp3") => Some("audio/mpeg"),
+        Some("flac") => Some("audio/flac"),
+        Some("ogg" | "oga" | "opus") => Some("audio/ogg"),
+        Some("aac") => Some("audio/aac"),
+        Some("m4a" | "mp4") => Some("audio/mp4"),
+        Some("aif" | "aiff") => Some("audio/aiff"),
+        _ => match probe.codec.as_deref() {
+            Some("mp3") => Some("audio/mpeg"),
+            Some("flac") => Some("audio/flac"),
+            Some("opus" | "vorbis") => Some("audio/ogg"),
+            Some("aac") => Some("audio/aac"),
+            _ => None,
+        },
+    }
+}
+
+fn reveal_command_for_path(path: &Path) -> Result<(&'static OsStr, Vec<OsString>), String> {
+    if !path.is_absolute() {
+        return Err("Audio result path is not absolute.".to_string());
+    }
+    #[cfg(windows)]
+    {
+        Ok((
+            OsStr::new("explorer.exe"),
+            vec![OsString::from("/select,"), path.as_os_str().to_os_string()],
+        ))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Ok((
+            OsStr::new("/usr/bin/open"),
+            vec![OsString::from("-R"), path.as_os_str().to_os_string()],
+        ))
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = path;
+        Err("Revealing audio results is supported on Windows and macOS only.".to_string())
+    }
+}
+
+#[cfg(windows)]
+fn commit_temporary_no_replace(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::MoveFileW;
+
+    let temporary = temporary
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let destination = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    // Unlike std::fs::rename on Windows, MoveFileW fails if the destination
+    // already exists.  The temporary file shares its destination directory,
+    // so this remains a same-volume, no-replacement commit.
+    if unsafe { MoveFileW(temporary.as_ptr(), destination.as_ptr()) } == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn commit_temporary_copy_new(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    // This is deliberately a no-overwrite fallback, not an atomic publish:
+    // `create_new` claims the selected name before writing, so an existing
+    // user file is never replaced even on filesystems without no-replace
+    // rename support.  If copying fails, leave the claimed destination in
+    // place rather than deleting by pathname and risking a TOCTOU deletion.
+    let mut input = fs::File::open(temporary)?;
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)?;
+    let copy_result = std::io::copy(&mut input, &mut output)
+        .and_then(|_| output.flush())
+        .and_then(|_| output.sync_all());
+    if let Err(error) = copy_result {
+        return Err(std::io::Error::new(
+            error.kind(),
+            format!(
+                "The destination was created but may be incomplete; remove it before retrying: {error}"
+            ),
+        ));
+    }
+    drop(output);
+    let _ = fs::remove_file(temporary);
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn commit_temporary_no_replace(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let temporary_c = CString::new(temporary.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Temporary audio path contains an unexpected NUL byte.",
+        )
+    })?;
+    let destination_c = CString::new(destination.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Selected audio path contains an unexpected NUL byte.",
+        )
+    })?;
+    if unsafe {
+        libc::renamex_np(
+            temporary_c.as_ptr(),
+            destination_c.as_ptr(),
+            libc::RENAME_EXCL,
+        )
+    } == 0
+    {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if matches!(error.raw_os_error(), Some(code) if code == libc::ENOTSUP || code == libc::EOPNOTSUPP || code == libc::EINVAL || code == libc::ENOSYS)
+    {
+        commit_temporary_copy_new(temporary, destination)
+    } else {
+        Err(error)
+    }
+}
+
+#[cfg(all(not(windows), not(target_os = "macos")))]
+fn commit_temporary_no_replace(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    commit_temporary_copy_new(temporary, destination)
+}
+
+fn safe_copy_artifact(source: &Path, destination: &Path) -> Result<(), String> {
+    if !destination.is_absolute()
+        || destination
+            .components()
+            .any(|part| matches!(part, Component::ParentDir))
+    {
+        return Err("The selected save location is unsafe.".to_string());
+    }
+    if source == destination {
+        return Err("The selected save location is the same as the source audio.".to_string());
+    }
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "The selected save location has no parent directory.".to_string())?;
+    if !parent.is_dir() {
+        return Err("The selected save directory is unavailable or unsafe.".to_string());
+    }
+    reject_linked_ancestors(parent, "Selected save directory")?;
+    let file_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| "The selected save location has no safe file name.".to_string())?;
+    let temporary = parent.join(format!(".{file_name}.{}.tmp", Uuid::new_v4()));
+    let mut input = fs::File::open(source)
+        .map_err(|error| format!("Unable to read the audio result: {error}"))?;
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|error| format!("Unable to create a temporary audio file: {error}"))?;
+    let copy_result = std::io::copy(&mut input, &mut output)
+        .and_then(|_| output.flush())
+        .and_then(|_| output.sync_all())
+        .map_err(|error| format!("Unable to save the audio result: {error}"));
+    if let Err(error) = copy_result {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    drop(output);
+    let commit = commit_temporary_no_replace(&temporary, destination);
+    if let Err(error) = commit {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!(
+            "Unable to save without overwriting an existing file: {error}"
+        ));
+    }
+    Ok(())
+}
+
+fn serve_audio_artifact_request(
+    service: &AudioPreparationService,
+    request: &http::Request<Vec<u8>>,
+) -> http::Response<Vec<u8>> {
+    let bad_request = || {
+        protocol_response(
+            http::StatusCode::BAD_REQUEST,
+            Vec::new(),
+            None,
+            None,
+            "text/plain",
+        )
+    };
+    let not_found = || {
+        protocol_response(
+            http::StatusCode::NOT_FOUND,
+            Vec::new(),
+            None,
+            None,
+            "text/plain",
+        )
+    };
+    if !matches!(request.method(), &http::Method::GET | &http::Method::HEAD) {
+        return protocol_response(
+            http::StatusCode::METHOD_NOT_ALLOWED,
+            Vec::new(),
+            Some(("allow", "GET, HEAD".to_string())),
+            None,
+            "text/plain",
+        );
+    }
+    let uri = request.uri();
+    if uri.query().is_some()
+        || !matches!(
+            uri.authority().map(|value| value.as_str()),
+            Some("localhost" | "toolbox-audio.localhost")
+        )
+    {
+        return bad_request();
+    }
+    let Some(id) = uri.path().strip_prefix('/') else {
+        return bad_request();
+    };
+    if id.is_empty() || id.contains('/') || parse_artifact_id(id).is_err() {
+        return bad_request();
+    }
+    let (_, artifact, metadata) = match service.validated_artifact(id) {
+        Ok(value) => value,
+        Err(_) => return not_found(),
+    };
+    let Some(mime_type) = artifact.mime_type.as_deref() else {
+        return protocol_response(
+            http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Vec::new(),
+            None,
+            None,
+            "text/plain",
+        );
+    };
+    let length = metadata.len();
+    let requested_range = request.headers().get(http::header::RANGE);
+    if requested_range.is_none() && length > MAX_PROTOCOL_FULL_RESPONSE_BYTES {
+        return protocol_response(
+            http::StatusCode::PAYLOAD_TOO_LARGE,
+            Vec::new(),
+            Some(("x-toolbox-audio-size", length.to_string())),
+            Some((
+                "x-toolbox-audio-limit",
+                MAX_PROTOCOL_FULL_RESPONSE_BYTES.to_string(),
+            )),
+            "text/plain",
+        );
+    }
+    let range = match requested_range {
+        Some(value) => match value
+            .to_str()
+            .ok()
+            .and_then(|value| parse_single_range(value, length))
+        {
+            Some(range) => range,
+            None => {
+                return protocol_response(
+                    http::StatusCode::RANGE_NOT_SATISFIABLE,
+                    Vec::new(),
+                    Some(("content-range", format!("bytes */{length}"))),
+                    None,
+                    "text/plain",
+                )
+            }
+        },
+        // A normal GET is a request for the whole representation.  Returning
+        // a capped 206 here would be an unsolicited partial response and can
+        // make media clients treat the file as truncated.  The response-size
+        // cap applies only to an explicitly requested byte range.
+        None => 0..length,
+    };
+    let byte_count = range.end.saturating_sub(range.start);
+    let status = if requested_range.is_none() {
+        http::StatusCode::OK
+    } else {
+        http::StatusCode::PARTIAL_CONTENT
+    };
+    let body = if request.method() == http::Method::HEAD {
+        Vec::new()
+    } else {
+        let mut file = match fs::File::open(&artifact.path) {
+            Ok(file) => file,
+            Err(_) => return not_found(),
+        };
+        if file.seek(SeekFrom::Start(range.start)).is_err() {
+            return not_found();
+        }
+        let mut body = vec![0_u8; byte_count as usize];
+        if file.read_exact(&mut body).is_err() {
+            return not_found();
+        }
+        body
+    };
+    let content_range = (status == http::StatusCode::PARTIAL_CONTENT).then(|| {
+        format!(
+            "bytes {}-{}/{}",
+            range.start,
+            range.end.saturating_sub(1),
+            length
+        )
+    });
+    protocol_response(
+        status,
+        body,
+        Some(("content-length", byte_count.to_string())),
+        content_range.map(|value| ("content-range", value)),
+        mime_type,
+    )
+}
+
+fn parse_single_range(value: &str, length: u64) -> Option<std::ops::Range<u64>> {
+    let value = value.strip_prefix("bytes=")?;
+    if value.contains(',') || value.is_empty() || length == 0 {
+        return None;
+    }
+    let (start, end) = value.split_once('-')?;
+    let (start, mut end) = if start.is_empty() {
+        let suffix = end.parse::<u64>().ok()?;
+        if suffix == 0 {
+            return None;
+        }
+        (length.saturating_sub(suffix.min(length)), length)
+    } else {
+        let start = start.parse::<u64>().ok()?;
+        if start >= length {
+            return None;
+        }
+        let end = if end.is_empty() {
+            length
+        } else {
+            end.parse::<u64>().ok()?.checked_add(1)?.min(length)
+        };
+        (start, end)
+    };
+    if end <= start {
+        return None;
+    }
+    end = end.min(start.saturating_add(MAX_PROTOCOL_RESPONSE_BYTES));
+    Some(start..end)
+}
+
+fn protocol_response(
+    status: http::StatusCode,
+    body: Vec<u8>,
+    first_header: Option<(&str, String)>,
+    second_header: Option<(&str, String)>,
+    mime_type: &str,
+) -> http::Response<Vec<u8>> {
+    let mut builder = http::Response::builder()
+        .status(status)
+        .header(http::header::CONTENT_TYPE, mime_type)
+        .header(http::header::ACCEPT_RANGES, "bytes")
+        .header(http::header::CACHE_CONTROL, "no-store");
+    if let Some((name, value)) = first_header {
+        builder = builder.header(name, value);
+    }
+    if let Some((name, value)) = second_header {
+        builder = builder.header(name, value);
+    }
+    builder
+        .body(body)
+        .unwrap_or_else(|_| http::Response::new(Vec::new()))
 }
 
 async fn ffmpeg_status(runtime: Result<Runtime, String>) -> FfmpegRuntimeStatus {
@@ -927,6 +1622,8 @@ fn media_probe_from_json(path: String, value: &Value) -> Result<MediaProbe, Stri
     let format = value.get("format").unwrap_or(&Value::Null);
     Ok(MediaProbe {
         path,
+        source_artifact_id: None,
+        source_mime_type: None,
         container: format
             .get("format_name")
             .and_then(Value::as_str)
@@ -1533,800 +2230,5 @@ fn loudnorm_measurements(value: &Value) -> Result<LoudnormMeasurements, String> 
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::OnceLock;
-
-    fn temporary_test_base() -> PathBuf {
-        let root = std::env::temp_dir();
-        #[cfg(target_os = "macos")]
-        {
-            fs::canonicalize(root).expect("macOS test temp root must be canonicalizable")
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            root
-        }
-    }
-
-    fn fake_runtime_root() -> &'static PathBuf {
-        static ROOT: OnceLock<PathBuf> = OnceLock::new();
-        ROOT.get_or_init(|| {
-            let root = temporary_test_base().join(format!(
-                "synthv-toolbox-fake-ffmpeg-{}",
-                Uuid::new_v4()
-            ));
-            let bin = root.join("ffmpeg");
-            fs::create_dir_all(&bin).unwrap();
-            let source = root.join("fake_ffmpeg.rs");
-            fs::write(
-                &source,
-                r###"
-use std::{env, fs, process::Command, thread, time::Duration};
-
-fn main() {
-    let args = env::args().skip(1).collect::<Vec<_>>();
-    if args.first().map(String::as_str) == Some("--descendant") {
-        thread::sleep(Duration::from_secs(60));
-        return;
-    }
-    if args.iter().any(|arg| arg == "-version") {
-        if env::current_exe().unwrap().parent().unwrap().join("fail-version").exists() {
-            eprintln!("intentional version failure");
-            std::process::exit(19);
-        }
-        println!("ffmpeg version fake-1.0 LGPL");
-        return;
-    }
-    let is_probe = args.iter().any(|arg| arg == "-show_format");
-    let input = args
-        .iter()
-        .position(|arg| arg == "-i")
-        .and_then(|index| args.get(index + 1))
-        .or_else(|| is_probe.then(|| args.last()).flatten());
-    if let Some(input) = input {
-        let is_analysis = args.iter().any(|arg| arg.contains("print_format=json"));
-        let slow_probe = input.contains("slow-probe") && is_probe;
-        let probe_marker = format!("{input}.probe-seen");
-        let should_wait = (slow_probe && fs::metadata(&probe_marker).is_ok())
-            || (input.contains("slow-analysis") && is_analysis);
-        if slow_probe && fs::metadata(&probe_marker).is_err() {
-            fs::write(&probe_marker, b"seen").unwrap();
-        }
-        if should_wait {
-            thread::sleep(Duration::from_millis(250));
-            let child = Command::new(env::current_exe().unwrap()).arg("--descendant").spawn().unwrap();
-            fs::write(format!("{input}.childpid"), child.id().to_string()).unwrap();
-            thread::sleep(Duration::from_secs(60));
-        }
-    }
-    if args.iter().any(|arg| arg == "-show_format") {
-        println!("{}", r#"{"format":{"format_name":"wav","duration":"2.0","bit_rate":"2304000"},"streams":[{"codec_type":"audio","codec_name":"pcm_s24le","sample_rate":"48000","channels":2,"channel_layout":"stereo","bits_per_sample":24}]}"#);
-        return;
-    }
-    if let Some(input) = input {
-        if input.contains("fail") {
-            eprintln!("intentional fake FFmpeg failure");
-            std::process::exit(23);
-        }
-    }
-    if args.iter().any(|arg| arg.contains("print_format=json")) {
-        eprintln!("{}", r#"{"input_i":"-21.0","input_tp":"-3.0","input_lra":"4.0","input_thresh":"-31.0","target_offset":"0.2"}"#);
-        return;
-    }
-    if let Some(input) = input {
-        if input.contains("slow") {
-            thread::sleep(Duration::from_millis(250));
-            let child = Command::new(env::current_exe().unwrap()).arg("--descendant").spawn().unwrap();
-            fs::write(format!("{input}.childpid"), child.id().to_string()).unwrap();
-            thread::sleep(Duration::from_secs(60));
-        }
-    }
-    if args.iter().any(|arg| arg == "-progress") {
-        if let Some(input) = input {
-            fs::write(format!("{input}.args"), args.join("\n")).unwrap();
-        }
-        let output = args.last().unwrap();
-        fs::write(output, b"RIFF-fake-pcm").unwrap();
-        println!("out_time_ms=1000000");
-        println!("progress=continue");
-        println!("out_time_ms=2000000");
-        println!("progress=end");
-    }
-}
-"###,
-            )
-            .unwrap();
-            let ffmpeg_name = if cfg!(windows) {
-                "ffmpeg.exe"
-            } else {
-                "ffmpeg"
-            };
-            let ffprobe_name = if cfg!(windows) {
-                "ffprobe.exe"
-            } else {
-                "ffprobe"
-            };
-            let ffmpeg = bin.join(ffmpeg_name);
-            let compiled = std::process::Command::new("rustc")
-                .arg(&source)
-                .args(["--edition", "2021", "-O", "-o"])
-                .arg(&ffmpeg)
-                .status()
-                .unwrap();
-            assert!(compiled.success());
-            fs::copy(&ffmpeg, bin.join(ffprobe_name)).unwrap();
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(&ffmpeg, fs::Permissions::from_mode(0o755)).unwrap();
-                fs::set_permissions(bin.join(ffprobe_name), fs::Permissions::from_mode(0o755))
-                    .unwrap();
-            }
-            root
-        })
-    }
-
-    fn fake_service(label: &str) -> (Arc<AudioPreparationService>, PathBuf) {
-        let case_root = temporary_test_base().join(format!(
-            "synthv-toolbox-audio-case-{label}-{}",
-            Uuid::new_v4()
-        ));
-        fs::create_dir_all(&case_root).unwrap();
-        let output = case_root.join("output");
-        (
-            AudioPreparationService::new_for_test(fake_runtime_root().clone(), output),
-            case_root,
-        )
-    }
-
-    fn copy_fake_pair(destination: &Path) -> (PathBuf, PathBuf) {
-        fs::create_dir_all(destination).unwrap();
-        let source = fake_runtime_root().join("ffmpeg");
-        let ffmpeg_name = if cfg!(windows) {
-            "ffmpeg.exe"
-        } else {
-            "ffmpeg"
-        };
-        let ffprobe_name = if cfg!(windows) {
-            "ffprobe.exe"
-        } else {
-            "ffprobe"
-        };
-        let ffmpeg = destination.join(ffmpeg_name);
-        let ffprobe = destination.join(ffprobe_name);
-        fs::copy(source.join(ffmpeg_name), &ffmpeg).unwrap();
-        fs::copy(source.join(ffprobe_name), &ffprobe).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&ffmpeg, fs::Permissions::from_mode(0o755)).unwrap();
-            fs::set_permissions(&ffprobe, fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        (ffmpeg, ffprobe)
-    }
-
-    async fn wait_for_terminal(service: &AudioPreparationService, id: &str) -> AudioJobSnapshot {
-        tokio::time::timeout(Duration::from_secs(8), async {
-            loop {
-                let snapshot = service.audio_job_snapshot(id).unwrap();
-                if matches!(
-                    snapshot.status.as_str(),
-                    "completed" | "failed" | "cancelled"
-                ) {
-                    return snapshot;
-                }
-                tokio::time::sleep(Duration::from_millis(40)).await;
-            }
-        })
-        .await
-        .expect("fake FFmpeg job timed out")
-    }
-
-    fn is_process_alive(pid: u32) -> bool {
-        #[cfg(windows)]
-        {
-            use std::mem::MaybeUninit;
-            use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-            use windows_sys::Win32::System::Threading::{
-                GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-            };
-
-            let process: HANDLE = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-            if process.is_null() {
-                return false;
-            }
-            let mut exit_code = MaybeUninit::uninit();
-            let queried = unsafe { GetExitCodeProcess(process, exit_code.as_mut_ptr()) != 0 };
-            // `STILL_ACTIVE` is the Win32 process exit code constant. It is
-            // not exposed by every windows-sys feature set.
-            let alive = queried && unsafe { exit_code.assume_init() == 259 };
-            unsafe {
-                CloseHandle(process);
-            }
-            alive
-        }
-        #[cfg(unix)]
-        {
-            // kill(pid, 0) only probes process existence; it never signals or
-            // modifies the descendant. EPERM still means the process exists.
-            let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
-            result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-        }
-        #[cfg(not(any(windows, unix)))]
-        {
-            let _ = pid;
-            false
-        }
-    }
-
-    async fn wait_for_process_exit(pid: u32) {
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                if !is_process_alive(pid) {
-                    return;
-                }
-                tokio::time::sleep(Duration::from_millis(40)).await;
-            }
-        })
-        .await
-        .expect("fake FFmpeg descendant process remained after cancellation");
-    }
-
-    async fn cancel_after_descendant_starts(
-        service: &AudioPreparationService,
-        job_id: &str,
-        input: &Path,
-    ) -> AudioJobSnapshot {
-        let child_pid_path = PathBuf::from(format!("{}.childpid", input.to_string_lossy()));
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while !child_pid_path.is_file() {
-                tokio::time::sleep(Duration::from_millis(40)).await;
-            }
-        })
-        .await
-        .expect("fake FFmpeg did not create its descendant");
-        let descendant_pid: u32 = fs::read_to_string(&child_pid_path)
-            .unwrap()
-            .trim()
-            .parse()
-            .expect("fake FFmpeg wrote an invalid descendant PID");
-        assert!(is_process_alive(descendant_pid));
-        service.cancel_audio_job(job_id).unwrap();
-        let cancelled = wait_for_terminal(service, job_id).await;
-        assert_eq!(cancelled.status, "cancelled");
-        wait_for_process_exit(descendant_pid).await;
-        assert!(!is_process_alive(descendant_pid));
-        cancelled
-    }
-    #[test]
-    fn pcm_formats_are_closed() {
-        assert_eq!(sample_codec("s24").unwrap(), "pcm_s24le");
-        assert!(sample_codec("flac").is_err());
-    }
-    #[test]
-    fn rejects_unsafe_trim_and_rate() {
-        let mut request = AudioPrepareRequest {
-            input_path: "a.wav".to_string(),
-            sample_rate: Some(4_000),
-            channels: None,
-            sample_format: "s24".to_string(),
-            start_seconds: None,
-            duration_seconds: None,
-        };
-        assert!(validate_prepare(&request).is_err());
-        request.sample_rate = None;
-        request.duration_seconds = Some(0.0);
-        assert!(validate_prepare(&request).is_err());
-    }
-    #[test]
-    fn parses_loudnorm_json_at_end_of_stderr() {
-        let raw = extract_last_json("noise\n{\"input_i\":\"-21.3\",\"input_tp\":\"-2.0\",\"input_lra\":\"4.0\",\"input_thresh\":\"-31\",\"target_offset\":\"0.4\"}\n").unwrap();
-        assert_eq!(loudnorm_measurements(&raw).unwrap().i, -21.3);
-    }
-    #[test]
-    fn accepts_fake_ffprobe_fixture() {
-        let fixture: Value = serde_json::json!({
-            "format": {"format_name": "wav", "duration": "12.5", "bit_rate": "2304000"},
-            "streams": [{"codec_type": "audio", "codec_name": "pcm_s24le", "sample_rate": "48000", "channels": 2, "bits_per_sample": 24}]
-        });
-        let probe = media_probe_from_json("fake.wav".to_string(), &fixture).unwrap();
-        assert_eq!(probe.codec.as_deref(), Some("pcm_s24le"));
-        assert_eq!(probe.sample_rate, Some(48_000));
-        assert_eq!(probe.bit_depth, Some(24));
-    }
-    #[test]
-    fn request_digest_changes_with_request() {
-        let a = AudioPrepareRequest {
-            input_path: "a.wav".to_string(),
-            sample_rate: None,
-            channels: None,
-            sample_format: "s24".to_string(),
-            start_seconds: None,
-            duration_seconds: None,
-        };
-        let mut b = a.clone();
-        b.channels = Some(1);
-        assert_ne!(digest_request(&a).unwrap(), digest_request(&b).unwrap());
-    }
-    fn stored_plan(request: AudioPrepareRequest, expires_at: SystemTime) -> StoredPlan {
-        StoredPlan {
-            plan: AudioWritePlan {
-                plan_id: "plan".to_string(),
-                token: "token".to_string(),
-                expires_at: String::new(),
-                request_digest: digest_request(&request).unwrap(),
-                operation: "prepare".to_string(),
-                input_path: request.input_path.clone(),
-                output_path: "out.wav".to_string(),
-                parameters: vec![],
-                warnings: vec![],
-            },
-            request: PlannedRequest::Prepare(request),
-            canonical_output_root: PathBuf::from("output-root"),
-            expires_at,
-            used: false,
-        }
-    }
-    #[test]
-    fn token_is_one_time_and_request_bound() {
-        let request = AudioPrepareRequest {
-            input_path: "input.wav".to_string(),
-            sample_rate: None,
-            channels: None,
-            sample_format: "s24".to_string(),
-            start_seconds: None,
-            duration_seconds: None,
-        };
-        let mut plans = HashMap::from([(
-            "plan".to_string(),
-            stored_plan(request.clone(), SystemTime::now() + Duration::from_secs(1)),
-        )]);
-        let digest = digest_request(&request).unwrap();
-        assert!(consume_plan(
-            &mut plans,
-            "missing-token",
-            &PlannedRequest::Prepare(request.clone()),
-            &digest,
-            SystemTime::now()
-        )
-        .unwrap_err()
-        .contains("missing or invalid"));
-        assert!(consume_plan(
-            &mut plans,
-            "token",
-            &PlannedRequest::Prepare(request.clone()),
-            &digest,
-            SystemTime::now()
-        )
-        .is_ok());
-        assert!(consume_plan(
-            &mut plans,
-            "token",
-            &PlannedRequest::Prepare(request.clone()),
-            &digest,
-            SystemTime::now()
-        )
-        .unwrap_err()
-        .contains("already"));
-        let altered = AudioPrepareRequest {
-            channels: Some(1),
-            ..request
-        };
-        let mut plans = HashMap::from([(
-            "plan".to_string(),
-            stored_plan(altered.clone(), SystemTime::now() + Duration::from_secs(1)),
-        )]);
-        assert!(consume_plan(
-            &mut plans,
-            "token",
-            &PlannedRequest::Prepare(altered),
-            &digest,
-            SystemTime::now()
-        )
-        .unwrap_err()
-        .contains("changed"));
-    }
-    #[test]
-    fn expired_token_is_refused() {
-        let request = AudioPrepareRequest {
-            input_path: "input.wav".to_string(),
-            sample_rate: None,
-            channels: None,
-            sample_format: "s24".to_string(),
-            start_seconds: None,
-            duration_seconds: None,
-        };
-        let digest = digest_request(&request).unwrap();
-        let mut plans = HashMap::from([(
-            "plan".to_string(),
-            stored_plan(request.clone(), SystemTime::now() - Duration::from_secs(1)),
-        )]);
-        assert!(consume_plan(
-            &mut plans,
-            "token",
-            &PlannedRequest::Prepare(request),
-            &digest,
-            SystemTime::now()
-        )
-        .unwrap_err()
-        .contains("expired"));
-    }
-    #[test]
-    fn path_parent_components_are_rejected() {
-        assert!(canonical_input("one/../two.wav")
-            .unwrap_err()
-            .contains(".."));
-    }
-
-    #[test]
-    fn generated_outputs_reject_source_identity_and_conflicts() {
-        let root =
-            temporary_test_base().join(format!("synthv-toolbox-output-safety-{}", Uuid::new_v4()));
-        fs::create_dir_all(&root).unwrap();
-        let source = root.join("source.wav");
-        fs::write(&source, b"source").unwrap();
-        assert!(validate_generated_output(&root, &source, &source).is_err());
-        let conflict = root.join("existing.wav");
-        fs::write(&conflict, b"existing").unwrap();
-        assert!(validate_generated_output(&root, &conflict, &source).is_err());
-        let traversal = root.join("..").join("escaped.wav");
-        assert!(validate_generated_output(&root, &traversal, &source).is_err());
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn symbolic_link_output_roots_are_rejected_before_creation() {
-        use std::os::unix::fs::symlink;
-
-        let base =
-            temporary_test_base().join(format!("synthv-toolbox-output-link-{}", Uuid::new_v4()));
-        let external = base.join("external");
-        let linked = base.join("linked-output");
-        fs::create_dir_all(&external).unwrap();
-        symlink(&external, &linked).unwrap();
-        assert!(ensure_output_root(&linked).is_err());
-        fs::remove_dir_all(base).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn symbolic_link_inputs_are_rejected() {
-        use std::os::unix::fs::symlink;
-
-        let root =
-            temporary_test_base().join(format!("synthv-toolbox-input-link-{}", Uuid::new_v4()));
-        fs::create_dir_all(&root).unwrap();
-        let source = root.join("source.wav");
-        let linked = root.join("linked.wav");
-        fs::write(&source, b"source").unwrap();
-        symlink(&source, &linked).unwrap();
-        assert!(canonical_input(linked.to_string_lossy().as_ref())
-            .unwrap_err()
-            .contains("symbolic link"));
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn reparse_point_inputs_are_rejected_when_links_are_available() {
-        use std::os::windows::fs::symlink_file;
-
-        let root =
-            temporary_test_base().join(format!("synthv-toolbox-input-link-{}", Uuid::new_v4()));
-        fs::create_dir_all(&root).unwrap();
-        let source = root.join("source.wav");
-        let linked = root.join("linked.wav");
-        fs::write(&source, b"source").unwrap();
-        if symlink_file(&source, &linked).is_ok() {
-            assert!(canonical_input(linked.to_string_lossy().as_ref()).is_err());
-        }
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[tokio::test]
-    async fn fake_runtime_status_checks_both_binaries_and_parses_version() {
-        let (service, case_root) = fake_service("status");
-        let status = service.status().await;
-        assert!(status.available, "{}", status.detail);
-        assert_eq!(status.source.as_deref(), Some("bundled"));
-        assert_eq!(
-            status.version.as_deref(),
-            Some("ffmpeg version fake-1.0 LGPL")
-        );
-        fs::remove_dir_all(case_root).unwrap();
-    }
-
-    #[tokio::test]
-    async fn runtime_status_is_unavailable_when_version_execution_fails() {
-        let case_root =
-            temporary_test_base().join(format!("synthv-toolbox-status-failure-{}", Uuid::new_v4()));
-        let resource = case_root.join("resource");
-        let bin = resource.join("ffmpeg");
-        copy_fake_pair(&bin);
-        fs::write(bin.join("fail-version"), b"fail").unwrap();
-        let service = AudioPreparationService::new_for_test(resource, case_root.join("output"));
-        let status = service.status().await;
-        assert!(!status.available);
-        assert!(status.version.is_none());
-        assert!(status.detail.contains("version check exited"));
-        fs::remove_dir_all(case_root).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn replacing_output_root_with_a_link_after_plan_never_writes_externally() {
-        use std::os::unix::fs::symlink;
-
-        let (service, case_root) = fake_service("output-swap");
-        let input = case_root.join("input.wav");
-        let external = case_root.join("external");
-        fs::write(&input, b"input").unwrap();
-        let request = AudioPrepareRequest {
-            input_path: input.to_string_lossy().into_owned(),
-            sample_rate: None,
-            channels: None,
-            sample_format: "s24".to_string(),
-            start_seconds: None,
-            duration_seconds: None,
-        };
-        let plan = service.plan_audio_prepare(request.clone()).await.unwrap();
-        fs::remove_dir_all(&service.output_root).unwrap();
-        fs::create_dir_all(&external).unwrap();
-        symlink(&external, &service.output_root).unwrap();
-        let started = service.start_audio_prepare(request, plan.token).unwrap();
-        let failed = wait_for_terminal(&service, &started.id).await;
-        assert_eq!(failed.status, "failed");
-        assert!(fs::read_dir(&external).unwrap().next().is_none());
-        fs::remove_file(&service.output_root).unwrap();
-        fs::remove_dir_all(case_root).unwrap();
-    }
-
-    #[cfg(windows)]
-    #[tokio::test]
-    async fn replacing_output_root_with_a_reparse_point_is_rejected_when_available() {
-        use std::os::windows::fs::symlink_dir;
-
-        let (service, case_root) = fake_service("output-swap");
-        let input = case_root.join("input.wav");
-        let external = case_root.join("external");
-        fs::write(&input, b"input").unwrap();
-        let request = AudioPrepareRequest {
-            input_path: input.to_string_lossy().into_owned(),
-            sample_rate: None,
-            channels: None,
-            sample_format: "s24".to_string(),
-            start_seconds: None,
-            duration_seconds: None,
-        };
-        let plan = service.plan_audio_prepare(request.clone()).await.unwrap();
-        fs::remove_dir_all(&service.output_root).unwrap();
-        fs::create_dir_all(&external).unwrap();
-        if symlink_dir(&external, &service.output_root).is_ok() {
-            let started = service.start_audio_prepare(request, plan.token).unwrap();
-            let failed = wait_for_terminal(&service, &started.id).await;
-            assert_eq!(failed.status, "failed");
-            assert!(fs::read_dir(&external).unwrap().next().is_none());
-            fs::remove_dir(&service.output_root).unwrap();
-        }
-        fs::remove_dir_all(case_root).unwrap();
-    }
-
-    #[test]
-    fn runtime_source_priority_is_explicit_managed_bundled_then_path() {
-        let root = temporary_test_base().join(format!(
-            "synthv-toolbox-runtime-priority-{}",
-            Uuid::new_v4()
-        ));
-        let explicit = root.join("explicit");
-        let managed_dir = root.join("managed");
-        let bundled = root.join("bundled");
-        let path = root.join("path");
-        copy_fake_pair(&explicit);
-        let managed = copy_fake_pair(&managed_dir);
-        copy_fake_pair(&bundled);
-        copy_fake_pair(&path);
-
-        let runtime = resolve_runtime_from_candidates(
-            Some(explicit.clone()),
-            Some(managed.clone()),
-            bundled.clone(),
-            vec![path.clone()],
-        )
-        .unwrap();
-        assert_eq!(runtime.source, "explicit");
-
-        let runtime = resolve_runtime_from_candidates(
-            Some(root.join("missing")),
-            Some(managed),
-            bundled.clone(),
-            vec![path.clone()],
-        )
-        .unwrap();
-        assert_eq!(runtime.source, "managed");
-
-        let runtime =
-            resolve_runtime_from_candidates(None, None, bundled, vec![path.clone()]).unwrap();
-        assert_eq!(runtime.source, "bundled");
-
-        let runtime =
-            resolve_runtime_from_candidates(None, None, root.join("missing-bundle"), vec![path])
-                .unwrap();
-        assert_eq!(runtime.source, "path");
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[tokio::test]
-    async fn fake_ffmpeg_probes_prepares_and_reports_progress() {
-        let (service, case_root) = fake_service("prepare");
-        let input = case_root.join("input.wav");
-        fs::write(&input, b"input").unwrap();
-        let request = AudioPrepareRequest {
-            input_path: input.to_string_lossy().into_owned(),
-            sample_rate: Some(44_100),
-            channels: Some(1),
-            sample_format: "s24".to_string(),
-            start_seconds: Some(0.25),
-            duration_seconds: Some(1.0),
-        };
-        let probe = service
-            .probe_media(request.input_path.clone())
-            .await
-            .unwrap();
-        assert_eq!(probe.codec.as_deref(), Some("pcm_s24le"));
-        let plan = service.plan_audio_prepare(request.clone()).await.unwrap();
-        let started = service
-            .start_audio_prepare(request, plan.token.clone())
-            .unwrap();
-        let completed = wait_for_terminal(&service, &started.id).await;
-        assert_eq!(completed.status, "completed", "{:?}", completed.error);
-        assert_eq!(completed.progress_percent, Some(100.0));
-        assert!(completed.artifact_id.is_some());
-        assert!(Path::new(completed.output_path.as_deref().unwrap()).is_file());
-        assert_eq!(fs::read(&input).unwrap(), b"input");
-        let invocation = fs::read_to_string(format!("{}.args", input.to_string_lossy())).unwrap();
-        assert!(invocation.contains("-ar\n44100"));
-        assert!(invocation.contains("-ac\n1"));
-        assert!(invocation.contains("pcm_s24le"));
-        assert!(service
-            .start_audio_prepare(
-                AudioPrepareRequest {
-                    input_path: input.to_string_lossy().into_owned(),
-                    sample_rate: Some(44_100),
-                    channels: Some(1),
-                    sample_format: "s24".to_string(),
-                    start_seconds: Some(0.25),
-                    duration_seconds: Some(1.0),
-                },
-                plan.token,
-            )
-            .is_err());
-        fs::remove_dir_all(case_root).unwrap();
-    }
-
-    #[tokio::test]
-    async fn fake_ffmpeg_normalizes_and_keeps_post_measurement() {
-        let (service, case_root) = fake_service("normalize");
-        let input = case_root.join("input.wav");
-        fs::write(&input, b"input").unwrap();
-        let request = LoudnessNormalizeRequest {
-            input_path: input.to_string_lossy().into_owned(),
-            integrated_lufs: DEFAULT_LUFS,
-            true_peak_dbtp: DEFAULT_TRUE_PEAK,
-            loudness_range: DEFAULT_LRA,
-        };
-        let before = service
-            .analyze_loudness(request.input_path.clone())
-            .await
-            .unwrap();
-        assert_eq!(before.integrated_lufs, Some(-21.0));
-        let plan = service.plan_loudness_normalize(request.clone()).unwrap();
-        let started = service
-            .start_loudness_normalize(request, plan.token)
-            .unwrap();
-        let completed = wait_for_terminal(&service, &started.id).await;
-        assert_eq!(completed.status, "completed", "{:?}", completed.error);
-        assert_eq!(
-            completed
-                .loudness_report
-                .as_ref()
-                .and_then(|report| report.integrated_lufs),
-            Some(-21.0)
-        );
-        assert_eq!(fs::read(&input).unwrap(), b"input");
-        let invocation = fs::read_to_string(format!("{}.args", input.to_string_lossy())).unwrap();
-        assert!(invocation.contains("loudnorm=I=-16:TP=-1.5:LRA=11"));
-        assert!(invocation.contains("-ar\n48000"));
-        assert!(invocation.contains("-ac\n2"));
-        fs::remove_dir_all(case_root).unwrap();
-    }
-
-    #[tokio::test]
-    async fn fake_ffmpeg_failure_is_structured_and_never_changes_source() {
-        let (service, case_root) = fake_service("failure");
-        let input = case_root.join("fail.wav");
-        fs::write(&input, b"untouched source").unwrap();
-        let request = AudioPrepareRequest {
-            input_path: input.to_string_lossy().into_owned(),
-            sample_rate: None,
-            channels: None,
-            sample_format: "s24".to_string(),
-            start_seconds: None,
-            duration_seconds: None,
-        };
-        let plan = service.plan_audio_prepare(request.clone()).await.unwrap();
-        let started = service.start_audio_prepare(request, plan.token).unwrap();
-        let failed = wait_for_terminal(&service, &started.id).await;
-        assert_eq!(failed.status, "failed");
-        assert!(failed
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("intentional fake FFmpeg failure")));
-        assert_eq!(fs::read(&input).unwrap(), b"untouched source");
-        assert!(!Path::new(failed.output_path.as_deref().unwrap()).exists());
-        fs::remove_dir_all(case_root).unwrap();
-    }
-
-    #[tokio::test]
-    async fn cancellation_removes_partial_output_and_reaches_terminal_state() {
-        let (service, case_root) = fake_service("cancel");
-        let input = case_root.join("slow.wav");
-        fs::write(&input, b"input").unwrap();
-        let request = AudioPrepareRequest {
-            input_path: input.to_string_lossy().into_owned(),
-            sample_rate: None,
-            channels: None,
-            sample_format: "s24".to_string(),
-            start_seconds: None,
-            duration_seconds: None,
-        };
-        let plan = service.plan_audio_prepare(request.clone()).await.unwrap();
-        let started = service.start_audio_prepare(request, plan.token).unwrap();
-        let cancelled = cancel_after_descendant_starts(&service, &started.id, &input).await;
-        assert!(!Path::new(cancelled.output_path.as_deref().unwrap()).exists());
-        fs::remove_dir_all(case_root).unwrap();
-    }
-
-    #[tokio::test]
-    async fn cancellation_interrupts_job_probe_and_cleans_its_process_tree() {
-        let (service, case_root) = fake_service("cancel-probe");
-        let input = case_root.join("slow-probe.wav");
-        fs::write(&input, b"input").unwrap();
-        let request = AudioPrepareRequest {
-            input_path: input.to_string_lossy().into_owned(),
-            sample_rate: None,
-            channels: None,
-            sample_format: "s24".to_string(),
-            start_seconds: None,
-            duration_seconds: None,
-        };
-        let plan = service.plan_audio_prepare(request.clone()).await.unwrap();
-        let started = service.start_audio_prepare(request, plan.token).unwrap();
-        let cancelled = cancel_after_descendant_starts(&service, &started.id, &input).await;
-        assert!(!Path::new(cancelled.output_path.as_deref().unwrap()).exists());
-        assert_eq!(fs::read(&input).unwrap(), b"input");
-        fs::remove_dir_all(case_root).unwrap();
-    }
-
-    #[tokio::test]
-    async fn cancellation_interrupts_loudness_analysis_and_cleans_its_process_tree() {
-        let (service, case_root) = fake_service("cancel-analysis");
-        let input = case_root.join("slow-analysis.wav");
-        fs::write(&input, b"input").unwrap();
-        let request = LoudnessNormalizeRequest {
-            input_path: input.to_string_lossy().into_owned(),
-            integrated_lufs: DEFAULT_LUFS,
-            true_peak_dbtp: DEFAULT_TRUE_PEAK,
-            loudness_range: DEFAULT_LRA,
-        };
-        let plan = service.plan_loudness_normalize(request.clone()).unwrap();
-        let started = service
-            .start_loudness_normalize(request, plan.token)
-            .unwrap();
-        let cancelled = cancel_after_descendant_starts(&service, &started.id, &input).await;
-        assert!(!Path::new(cancelled.output_path.as_deref().unwrap()).exists());
-        assert_eq!(fs::read(&input).unwrap(), b"input");
-        fs::remove_dir_all(case_root).unwrap();
-    }
-}
+#[path = "../../../../test/audio_preparation.rs"]
+mod tests;
