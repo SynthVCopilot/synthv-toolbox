@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::agent::{data_root, default_catalog, ComponentSpec};
-use crate::config::{model_config_mutation_guard, model_config_path};
+use crate::config::{load_settings, model_config_mutation_guard, model_config_path};
 use crate::sv2_concurrent::detect_provider as detect_sandboxie;
 use crate::synthv::{failed, quiet_command, succeeded, OperationResult};
 
@@ -30,6 +30,7 @@ const FFMPEG_ARCHIVE_SHA256: &str =
 const FFMPEG_MANIFEST_NAME: &str = "manifest.json";
 const FFMPEG_MANIFEST_SCHEMA: u32 = 1;
 const FFMPEG_MANAGED_BY: &str = "Synthesizer V Toolbox";
+const FFMPEG_DOWNLOAD_PAGE: &str = "https://ffmpeg.org/download.html";
 const FFMPEG_ARTIFACT_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 const MAX_FFMPEG_ARTIFACTS_TO_SCAN: usize = 64;
 const MAX_FFMPEG_DOWNLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -713,20 +714,18 @@ pub(crate) fn managed_ffmpeg_runtime() -> Option<(PathBuf, PathBuf)> {
     })
 }
 
-fn configured_ffmpeg_directory() -> Option<PathBuf> {
-    std::env::var_os("SYNTHV_TOOLBOX_FFMPEG_DIR")
+pub(crate) fn configured_ffmpeg_directory() -> Option<PathBuf> {
+    load_settings()
+        .ok()
+        .and_then(|settings| settings.ffmpeg_directory)
+        .map(|directory| directory.trim().to_string())
+        .filter(|directory| !directory.is_empty())
         .map(PathBuf::from)
-        .filter(|path| path.is_dir())
 }
 
 fn resolve_ffmpeg_binary(resource_root: &Path, managed_data_root: &Path) -> Option<PathBuf> {
-    let configured = configured_ffmpeg_directory();
-    if let Some(path) = configured
-        .as_ref()
-        .and_then(|root| find_ffmpeg_pair(root))
-        .map(|(ffmpeg, _)| ffmpeg)
-    {
-        return Some(path);
+    if let Some(configured) = configured_ffmpeg_directory() {
+        return find_ffmpeg_pair(&configured).map(|(ffmpeg, _)| ffmpeg);
     }
     if managed_ffmpeg_directory_exists(managed_data_root) {
         return Some(managed_ffmpeg_directory(managed_data_root).join("bin/ffmpeg.exe"));
@@ -737,9 +736,18 @@ fn resolve_ffmpeg_binary(resource_root: &Path, managed_data_root: &Path) -> Opti
     system_ffmpeg_pair().map(|(ffmpeg, _)| ffmpeg)
 }
 
-pub(crate) fn resolved_ffmpeg_directory(resource_root: &Path) -> Option<PathBuf> {
-    resolve_ffmpeg_binary(resource_root, &data_root())
-        .and_then(|binary| binary.parent().map(Path::to_path_buf))
+pub(crate) fn resolved_ffmpeg_directory(resource_root: &Path) -> Result<Option<PathBuf>, String> {
+    if let Some(configured) = configured_ffmpeg_directory() {
+        return find_ffmpeg_pair(&configured)
+            .and_then(|(ffmpeg, _)| ffmpeg.parent().map(Path::to_path_buf))
+            .map(Some)
+            .ok_or_else(|| {
+                "已选择的 FFmpeg 目录不再包含可用的 ffmpeg 和 ffprobe。请重新选择或清除该目录。"
+                    .to_string()
+            });
+    }
+    Ok(resolve_ffmpeg_binary(resource_root, &data_root())
+        .and_then(|binary| binary.parent().map(Path::to_path_buf)))
 }
 
 pub(crate) fn find_ffmpeg_pair(root: &Path) -> Option<(PathBuf, PathBuf)> {
@@ -771,12 +779,12 @@ fn system_ffmpeg_pair() -> Option<(PathBuf, PathBuf)> {
 }
 
 fn ffmpeg_status_label(resource_root: &Path, managed_data_root: &Path, fallback: &str) -> String {
-    if configured_ffmpeg_directory()
-        .as_ref()
-        .and_then(|root| find_ffmpeg_pair(root))
-        .is_some()
-    {
-        "已就绪（显式目录）".to_string()
+    if let Some(configured) = configured_ffmpeg_directory() {
+        if find_ffmpeg_pair(&configured).is_some() {
+            "已就绪（所选目录）".to_string()
+        } else {
+            "所选 FFmpeg 目录不可用".to_string()
+        }
     } else if managed_ffmpeg_directory_exists(managed_data_root) {
         format!("已就绪（Toolbox 私有 {FFMPEG_VERSION}）")
     } else if find_ffmpeg_pair(&resource_root.join("ffmpeg")).is_some() {
@@ -1372,6 +1380,45 @@ pub fn open_component_download(id: &str) -> OperationResult {
         "已打开 Sandboxie 安装包位置。",
         "请由你确认并完成交互安装；工具箱不会静默安装内核驱动。",
     )
+}
+
+pub fn open_ffmpeg_download_page() -> OperationResult {
+    #[cfg(windows)]
+    {
+        if let Err(error) = quiet_command("explorer.exe")
+            .arg(FFMPEG_DOWNLOAD_PAGE)
+            .spawn()
+        {
+            return failed("无法打开 FFmpeg 下载页面。", error.to_string());
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Err(error) = quiet_command("open").arg(FFMPEG_DOWNLOAD_PAGE).spawn() {
+            return failed("无法打开 FFmpeg 下载页面。", error.to_string());
+        }
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        return failed(
+            "当前平台无法自动打开 FFmpeg 下载页面。",
+            FFMPEG_DOWNLOAD_PAGE,
+        );
+    }
+    succeeded("已打开 FFmpeg 官方下载页面。", FFMPEG_DOWNLOAD_PAGE)
+}
+
+pub async fn validate_ffmpeg_directory(directory: &str) -> Result<PathBuf, String> {
+    let directory = directory.trim();
+    if directory.is_empty() {
+        return Err("FFmpeg 目录不能为空。".to_string());
+    }
+    let root = PathBuf::from(directory);
+    let (ffmpeg, ffprobe) = find_ffmpeg_pair(&root).ok_or_else(|| {
+        "目录必须是包含 ffmpeg 和 ffprobe 的解压根目录，或其 bin 目录。".to_string()
+    })?;
+    crate::audio_prep::validate_ffmpeg_binaries(&ffmpeg, &ffprobe).await?;
+    fs::canonicalize(root).map_err(|error| format!("无法规范化 FFmpeg 目录：{error}"))
 }
 
 fn sandboxie_download_directory() -> PathBuf {

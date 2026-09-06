@@ -372,6 +372,10 @@ export interface FfmpegRuntimeStatus {
   detail: string;
 }
 
+export interface FfmpegConfiguration {
+  directory: string | null;
+}
+
 export interface MediaProbe {
   path: string;
   sourceArtifactId?: string;
