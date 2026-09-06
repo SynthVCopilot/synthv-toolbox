@@ -92,6 +92,8 @@ pub struct ToolboxSettings {
     #[serde(default)]
     pub scripts_path: Option<String>,
     #[serde(default)]
+    pub ffmpeg_directory: Option<String>,
+    #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
     #[serde(default)]
     pub concurrent_disclaimer_accepted: bool,
@@ -225,6 +227,7 @@ impl Default for ToolboxSettings {
             mode: AppMode::Toolbox,
             agent_work_mode: AgentWorkMode::Edit,
             scripts_path: None,
+            ffmpeg_directory: None,
             mcp_servers: Vec::new(),
             concurrent_disclaimer_accepted: false,
             sv2_concurrent_enabled: true,

@@ -10,7 +10,13 @@ permissions:
   contents: read
 
 jobs:
+  prepare:
+    uses: ./.github/workflows/prepare-desktop.yml
+    with:
+      release: false
+
   verify:
+    needs: prepare
     name: ${{ matrix.name }}
     strategy:
       fail-fast: false
@@ -28,13 +34,15 @@ jobs:
             rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
             bundles: app,dmg
             artifact_suffix: .dmg
-
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-
+      - uses: actions/download-artifact@v5
+        with:
+          name: prepared-desktop
+          path: src/PiDesktop.Tauri
       - uses: actions/setup-node@v6
         with:
           node-version: "22.19.0"
@@ -42,22 +50,14 @@ jobs:
           cache-dependency-path: |
             src/PiDesktop.Tauri/package-lock.json
             src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/package-lock.json
-
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust_targets }}
-          components: rustfmt,clippy
-
-      - name: Apply development version from source commit
-        id: version
-        run: node .github/scripts/set-dev-version.mjs "${{ github.sha }}"
-
-      - name: Cache Rust build
-        uses: actions/cache@v5
+          components: clippy
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -67,35 +67,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.target }}-cargo-
             ${{ runner.os }}-cargo-
-
-      - name: Check Python component sources
-        run: python -m py_compile src/PiDesktop.Tauri/src-tauri/components/pi-audio/pi_audio.py src/PiDesktop.Tauri/src-tauri/components/cvrs/cvrs.py src/PiDesktop.Tauri/src-tauri/components/vocal-separation/separate.py
-
-      - name: Build bundled SynthV Bridge
-        working-directory: src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge
-        run: |
-          npm ci --no-audit --no-fund
-          npm run build
-          npm prune --omit=dev --no-audit --no-fund
-
-      - name: Install desktop dependencies
+      - name: Install platform dependencies
         working-directory: src/PiDesktop.Tauri
         run: npm ci --no-audit --no-fund
-
-      - name: Check frontend production build
-        working-directory: src/PiDesktop.Tauri
-        run: npm run build
-
-      - name: Test desktop contracts
-        working-directory: src/PiDesktop.Tauri
-        run: npm run test:contracts
-
-      - name: Check Rust formatting
-        run: cargo fmt --manifest-path src/PiDesktop.Tauri/src-tauri/Cargo.toml -- --check
-
+      - name: Install Bridge production dependencies
+        working-directory: src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge
+        run: npm ci --omit=dev --no-audit --no-fund
       - name: Lint Rust core
         run: cargo clippy --manifest-path src/PiDesktop.Tauri/src-tauri/Cargo.toml --lib --bins -- -D warnings
-
       - name: Download and smoke-test fixed BtbN LGPL FFmpeg
         if: runner.os == 'Windows'
         shell: pwsh
@@ -108,48 +87,32 @@ jobs:
           $archive = Join-Path $smokeRoot "ffmpeg.zip"
           Invoke-WebRequest -Uri $env:FFMPEG_URL -OutFile $archive
           $actual = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLowerInvariant()
-          if ($actual -ne $env:FFMPEG_SHA256) {
-            throw "FFmpeg SHA-256 mismatch: expected $env:FFMPEG_SHA256, got $actual"
-          }
+          if ($actual -ne $env:FFMPEG_SHA256) { throw "FFmpeg SHA-256 mismatch: expected $env:FFMPEG_SHA256, got $actual" }
           Expand-Archive -Path $archive -DestinationPath $smokeRoot -Force
           $ffmpeg = Get-ChildItem -Path $smokeRoot -Recurse -Filter ffmpeg.exe | Select-Object -First 1
           $ffprobe = Get-ChildItem -Path $smokeRoot -Recurse -Filter ffprobe.exe | Select-Object -First 1
-          if ($null -eq $ffmpeg -or $null -eq $ffprobe) {
-            throw "The verified archive did not contain ffmpeg.exe and ffprobe.exe"
-          }
+          if ($null -eq $ffmpeg -or $null -eq $ffprobe) { throw "The verified archive did not contain ffmpeg.exe and ffprobe.exe" }
           $fixture = Join-Path $smokeRoot "fixture.wav"
           & $ffmpeg.FullName -hide_banner -loglevel error -f lavfi -i "sine=frequency=440:duration=0.25" -c:a pcm_s24le $fixture
           if ($LASTEXITCODE -ne 0) { throw "Verified FFmpeg failed to create a PCM WAV" }
           $probe = & $ffprobe.FullName -v error -show_entries stream=codec_name,sample_rate,channels,bits_per_sample -of json $fixture | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $probe.streams[0].codec_name -ne "pcm_s24le") {
-            throw "Verified FFprobe did not report the expected 24-bit PCM stream"
-          }
-
+          if ($LASTEXITCODE -ne 0 -or $probe.streams[0].codec_name -ne "pcm_s24le") { throw "Verified FFprobe did not report the expected 24-bit PCM stream" }
       - name: Smoke-test macOS system FFmpeg when available
         if: runner.os == 'macOS'
         shell: bash
         run: |
           set -euo pipefail
-          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
-            echo "The runner has no system FFmpeg; skipping the system FFmpeg smoke test."
-            exit 0
-          fi
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then exit 0; fi
           ffmpeg -hide_banner -loglevel error -f lavfi -i "sine=frequency=440:duration=0.25" -c:a pcm_s24le "$RUNNER_TEMP/fixture.wav"
           ffprobe -v error -show_entries stream=codec_name,sample_rate,channels,bits_per_sample -of json "$RUNNER_TEMP/fixture.wav" | grep -q 'pcm_s24le'
-
       - name: Clear previous Windows bundle output
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $targetRoot = [System.IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE "src/PiDesktop.Tauri/src-tauri/target"))
           $bundlePath = [System.IO.Path]::GetFullPath((Join-Path $targetRoot "${{ matrix.target }}/release/bundle"))
-          if (-not $bundlePath.StartsWith("$targetRoot$([System.IO.Path]::DirectorySeparatorChar)", [System.StringComparison]::OrdinalIgnoreCase)) {
-            throw "Bundle path must remain inside the desktop target directory: $bundlePath"
-          }
-          if (Test-Path -LiteralPath $bundlePath) {
-            Remove-Item -LiteralPath $bundlePath -Recurse -Force
-          }
-
+          if (-not $bundlePath.StartsWith("$targetRoot$([System.IO.Path]::DirectorySeparatorChar)", [System.StringComparison]::OrdinalIgnoreCase)) { throw "Bundle path must remain inside the desktop target directory: $bundlePath" }
+          if (Test-Path -LiteralPath $bundlePath) { Remove-Item -LiteralPath $bundlePath -Recurse -Force }
       - name: Clear previous macOS bundle output
         if: runner.os == 'macOS'
         shell: bash
@@ -161,11 +124,9 @@ jobs:
           bundle_path="$target_root/${{ matrix.target }}/release/bundle"
           case "$bundle_path" in "$target_root"/*) ;; *) exit 1 ;; esac
           rm -rf "$bundle_path"
-
-      - name: Build desktop bundle without publishing
+      - name: Build desktop bundle from prepared frontend
         working-directory: src/PiDesktop.Tauri
-        run: npm run tauri build -- --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
-
+        run: npm run tauri build -- --config ../../.github/tauri-ci.conf.json --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
       - name: Verify Windows NSIS output
         if: runner.os == 'Windows'
         shell: pwsh
@@ -173,11 +134,9 @@ jobs:
           $bundle = "src/PiDesktop.Tauri/src-tauri/target/${{ matrix.target }}/release/bundle/nsis"
           $installers = @(Get-ChildItem -Path $bundle -Filter *.exe -File)
           if ($installers.Count -ne 1) { throw "Expected one NSIS bundle, found $($installers.Count)" }
-          $installer = $installers[0]
           $artifactRoot = Join-Path $env:RUNNER_TEMP "synthv-toolbox-artifacts/${{ matrix.target }}"
           New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
-          Copy-Item -LiteralPath $installer.FullName -Destination (Join-Path $artifactRoot "synthv-toolbox-${{ steps.version.outputs.version }}-${{ matrix.target }}-nsis.exe")
-
+          Copy-Item -LiteralPath $installers[0].FullName -Destination (Join-Path $artifactRoot "synthv-toolbox-${{ needs.prepare.outputs.version }}-${{ matrix.target }}-nsis.exe")
       - name: Verify macOS universal app and DMG output
         if: runner.os == 'macOS'
         shell: bash
@@ -187,29 +146,26 @@ jobs:
           dmg_count="$(find "$bundle_root/dmg" -maxdepth 1 -name '*.dmg' -print | wc -l | tr -d ' ')"
           test "$dmg_count" -eq 1
           dmg_path="$(find "$bundle_root/dmg" -maxdepth 1 -name '*.dmg' -print -quit)"
-          test -n "$dmg_path"
           app_count="$(find "$bundle_root/macos" -maxdepth 1 -name '*.app' -print | wc -l | tr -d ' ')"
           test "$app_count" -eq 1
           app_path="$(find "$bundle_root/macos" -maxdepth 1 -name '*.app' -print -quit)"
-          test -n "$app_path"
-          app_version="$(plutil -extract CFBundleShortVersionString raw "$app_path/Contents/Info.plist")"
-          test "$app_version" = "${{ steps.version.outputs.version }}"
-          executable="$(find "$app_path/Contents/MacOS" -maxdepth 1 -type f -print -quit)"
-          archs="$(lipo -archs "$executable")"
+          test -n "$dmg_path" && test -n "$app_path"
+          test "$(plutil -extract CFBundleShortVersionString raw "$app_path/Contents/Info.plist")" = "${{ needs.prepare.outputs.version }}"
+          archs="$(lipo -archs "$(find "$app_path/Contents/MacOS" -maxdepth 1 -type f -print -quit)")"
           test "$archs" = "x86_64 arm64" || test "$archs" = "arm64 x86_64"
           artifact_root="$RUNNER_TEMP/synthv-toolbox-artifacts/${{ matrix.target }}"
           mkdir -p "$artifact_root"
-          cp "$dmg_path" "$artifact_root/synthv-toolbox-${{ steps.version.outputs.version }}-${{ matrix.target }}.dmg"
-
+          cp "$dmg_path" "$artifact_root/synthv-toolbox-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.dmg"
       - name: Upload development build artifact
         uses: actions/upload-artifact@v7
         with:
-          path: ${{ runner.temp }}/synthv-toolbox-artifacts/${{ matrix.target }}/synthv-toolbox-${{ steps.version.outputs.version }}-${{ matrix.target }}${{ matrix.artifact_suffix }}
+          path: ${{ runner.temp }}/synthv-toolbox-artifacts/${{ matrix.target }}/synthv-toolbox-${{ needs.prepare.outputs.version }}-${{ matrix.target }}${{ matrix.artifact_suffix }}
           archive: false
           if-no-files-found: error
           retention-days: 14
 
   rust_tests:
+    needs: prepare
     name: Rust tests (${{ matrix.name }})
     strategy:
       fail-fast: false
@@ -221,13 +177,15 @@ jobs:
           - name: macOS native
             os: macos-14
             target: aarch64-apple-darwin
-
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-
+      - uses: actions/download-artifact@v5
+        with:
+          name: prepared-desktop
+          path: src/PiDesktop.Tauri
       - uses: actions/setup-node@v6
         with:
           node-version: "22.19.0"
@@ -235,17 +193,13 @@ jobs:
           cache-dependency-path: |
             src/PiDesktop.Tauri/package-lock.json
             src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/package-lock.json
-
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
-      - name: Cache Rust test build
-        uses: actions/cache@v5
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -255,25 +209,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.target }}-cargo-tests-
             ${{ runner.os }}-${{ matrix.target }}-cargo-
-            ${{ runner.os }}-
-
-      - name: Build bundled SynthV Bridge
-        working-directory: src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge
-        run: |
-          npm ci --no-audit --no-fund
-          npm run build
-          npm prune --omit=dev --no-audit --no-fund
-
-      - name: Install desktop dependencies
+      - name: Install platform dependencies
         working-directory: src/PiDesktop.Tauri
         run: npm ci --no-audit --no-fund
-
-      - name: Check frontend production build
-        working-directory: src/PiDesktop.Tauri
-        run: npm run build
-
+      - name: Install Bridge production dependencies
+        working-directory: src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge
+        run: npm ci --omit=dev --no-audit --no-fund
       - name: Test Rust core and FFmpeg fixtures
         run: cargo test --manifest-path src/PiDesktop.Tauri/src-tauri/Cargo.toml --all-targets -- --test-threads=1
-
       - name: Test precise SynthV instance controls
         run: cargo test --manifest-path test/synthv-control-regression/Cargo.toml

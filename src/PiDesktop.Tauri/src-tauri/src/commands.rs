@@ -30,7 +30,9 @@ use crate::audio_prep::{
 };
 use crate::bridge_workflows;
 use crate::components::{
-    component_list, open_component_download, remove_local_component as remove_local_component_impl,
+    component_list, open_component_download,
+    open_ffmpeg_download_page as open_ffmpeg_download_page_impl,
+    remove_local_component as remove_local_component_impl, validate_ffmpeg_directory,
     ComponentInfo,
 };
 use crate::config::{
@@ -72,10 +74,17 @@ use crate::synthv::{
     normalized_path_string, scan_installations, succeeded, BridgeTarget, BridgeTargetResult,
     OperationResult, SynthVInstallation,
 };
+
 use crate::synthv_control::{self, BridgeShortcutAction, SynthVProcess, SynthVShortcutProfile};
 use crate::tuning_profiles::{self, TuningParameters, TuningProfile};
 use crate::workbuddy_store;
 use crate::workflows::{self, WorkflowResult};
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FfmpegConfiguration {
+    pub directory: Option<String>,
+}
 
 static AUTHORIZATIONS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
 
@@ -1997,6 +2006,48 @@ pub async fn auto_connect_synthv_bridge(
 #[tauri::command]
 pub async fn ffmpeg_status(state: State<'_, AppState>) -> Result<FfmpegRuntimeStatus, String> {
     Ok(state.audio_preparation.status().await)
+}
+
+#[tauri::command]
+pub async fn get_ffmpeg_configuration(
+    state: State<'_, AppState>,
+) -> Result<FfmpegConfiguration, String> {
+    Ok(FfmpegConfiguration {
+        directory: state.settings.read().await.ffmpeg_directory.clone(),
+    })
+}
+
+#[tauri::command]
+pub async fn set_ffmpeg_directory(
+    directory: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<OperationResult, String> {
+    let directory = match directory {
+        Some(directory) => Some(
+            validate_ffmpeg_directory(&directory)
+                .await?
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        None => None,
+    };
+    let mut settings = state.settings.write().await;
+    let mut next = settings.clone();
+    next.ffmpeg_directory = directory.clone();
+    save_settings(&next)?;
+    *settings = next;
+    Ok(match directory {
+        Some(directory) => succeeded("已保存 FFmpeg 目录。", directory),
+        None => succeeded(
+            "已清除 FFmpeg 目录。",
+            "将自动使用受管、应用包内或系统 PATH 的 FFmpeg。",
+        ),
+    })
+}
+
+#[tauri::command]
+pub fn open_ffmpeg_download_page() -> OperationResult {
+    open_ffmpeg_download_page_impl()
 }
 
 #[tauri::command]

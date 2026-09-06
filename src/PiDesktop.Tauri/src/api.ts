@@ -12,6 +12,7 @@ import type {
   AudioPrepareRequest,
   AudioWritePlan,
   FfmpegRuntimeStatus,
+  FfmpegConfiguration,
   LoudnessNormalizeRequest,
   LoudnessReport,
   MediaProbe,
@@ -90,20 +91,20 @@ let previewSynthvProcesses: SynthVProcess[] = [
   { processId: 4203, processIdentity: "preview-4203", productName: "Synthesizer V Flat", version: "1.4.3", name: "Synthesizer V Flat", command: "C:\\Apps\\Synthesizer V Flat.exe", windowTitle: "", isSv2: false, sandboxed: false },
 ];
 let previewDownloads: ComponentDownload[] = [];
+let previewFfmpegDirectory: string | null = null;
 let previewMediaTasks: MediaTaskSnapshot[] = [];
 let previewLyricProjects: LyricProject[] = [];
 const previewManagedComponentIds = new Set(["pi-audio", "cvrs", "media-fetcher", "vocal-separation"]);
 const previewInstalledManagedComponentIds = new Set(["cvrs"]);
 let previewActiveAiProvider: AiProviderId = "anthropic";
-let previewAiAccountSequence = 2;
 let previewAiProviders: AiProviderSummary[] = [{
   id: "anthropic",
   displayName: "Claude / Anthropic",
   description: "可通过 Claude 账号 OAuth 或 Anthropic API Key 连接。",
   active: true,
-  connected: true,
-  healthyAccounts: 1,
-  totalAccounts: 1,
+  connected: false,
+  healthyAccounts: 0,
+  totalAccounts: 0,
   model: "claude-sonnet-4-6",
   oauthModels: [
     "claude-sonnet-4-6",
@@ -113,15 +114,7 @@ let previewAiProviders: AiProviderSummary[] = [{
     "claude-opus-5",
   ],
   apiKeyModels: ["claude-sonnet-4-6", "claude-haiku-4-5", "claude-opus-4-8"],
-  accounts: [{
-    id: "preview-anthropic-1",
-    label: "Claude official account",
-    expiresAt: Date.now() + 55 * 60_000,
-    authorized: true,
-    healthy: true,
-    enabled: true,
-    weight: 1,
-  }],
+  accounts: [],
   models: [
     "claude-sonnet-4-6",
     "claude-sonnet-5",
@@ -464,6 +457,13 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     return previewState() as T;
   }
   if (command === "get_http_api_status") return { ...previewHttpApiStatus } as T;
+  if (command === "get_ffmpeg_configuration") return { directory: previewFfmpegDirectory } as T;
+  if (command === "set_ffmpeg_directory") {
+    const directory = args?.directory;
+    previewFfmpegDirectory = typeof directory === "string" && directory.trim() ? directory.trim() : null;
+    return { succeeded: true, summary: previewFfmpegDirectory ? "FFmpeg 路径已保存。" : "已清除自定义 FFmpeg 路径。", detail: "预览模式" } as T;
+  }
+  if (command === "open_ffmpeg_download_page") return { succeeded: true, summary: "已打开 FFmpeg 官方下载页。", detail: "预览模式" } as T;
   if (command === "focus_sv2_instance" || command === "terminate_sv2_instance") {
     const instance = previewSynthvProcesses.find((item) => item.processId === Number(args?.processId));
     if (!instance?.processIdentity || instance.processIdentity !== args?.processIdentity) throw new Error("目标实例已变化，请刷新后重试。");
@@ -501,34 +501,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     return { succeeded: true, summary: "已打开 Windows 默认应用设置。", detail: "请为 .svp 选择 Synthesizer V Toolbox。" } as T;
   }
   if (command === "authorize_ai_provider") {
-    const provider = previewAiProvider(args?.provider);
-    if (!provider) throw new Error("未知的 AI 提供商。");
-    const accountNumber = previewAiAccountSequence++;
-    const credentialId = String(args?.credentialId ?? "").trim();
-    const account = {
-      id: credentialId || `preview-${provider.id}-${accountNumber}`,
-      label: `${provider.displayName} 预览账号 ${accountNumber}`,
-      expiresAt: Date.now() + 55 * 60_000,
-      authorized: true,
-      healthy: true,
-      enabled: true,
-      weight: 1,
-    };
-    if (credentialId) {
-      const index = provider.accounts.findIndex((item) => item.id === credentialId);
-      if (index < 0) throw new Error("没有找到要重新授权的账号。");
-      provider.accounts.splice(index, 1, account);
-    } else provider.accounts.push(account);
-    if (provider.id === "openai-codex" && !provider.oauthModels.includes("gpt-5.3-codex-spark")) {
-      provider.oauthModels.push("gpt-5.3-codex-spark");
-    }
-    refreshPreviewAiProvider(provider);
-    previewActiveAiProvider = provider.id;
-    previewAiProviders = previewAiProviders.map((item) => ({
-      ...item,
-      active: item.id === provider.id,
-    }));
-    return previewState() as T;
+    throw new Error("浏览器预览不执行 OAuth 授权。请在桌面应用中连接提供商，完成真实浏览器授权；此处不会创建模拟账号。");
   }
   if (command === "select_ai_provider") {
     const provider = previewAiProvider(args?.provider);
@@ -1404,7 +1377,16 @@ export const api = {
     if (Array.isArray(selected)) return selected[0];
     return typeof selected === "string" ? selected : undefined;
   },
+  pickDirectory: async (): Promise<string | undefined> => {
+    if (preview) return undefined;
+    const selected = await open({ multiple: false, directory: true });
+    if (Array.isArray(selected)) return selected[0];
+    return typeof selected === "string" ? selected : undefined;
+  },
   ffmpegStatus: () => call<FfmpegRuntimeStatus>("ffmpeg_status"),
+  getFfmpegConfiguration: () => call<FfmpegConfiguration>("get_ffmpeg_configuration"),
+  setFfmpegDirectory: (directory: string | null) => call<OperationResult>("set_ffmpeg_directory", { directory }),
+  openFfmpegDownloadPage: () => call<OperationResult>("open_ffmpeg_download_page"),
   probeMedia: (path: string) => call<MediaProbe>("probe_media", { path }),
   planAudioPrepare: (request: AudioPrepareRequest) =>
     call<AudioWritePlan>("plan_audio_prepare", { request }),

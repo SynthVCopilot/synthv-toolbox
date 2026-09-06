@@ -1,6 +1,7 @@
 import { addMessages } from "./i18n";
 
 addMessages("zh-CN", { system: {
+  ffmpegLocalDirectory: "本地目录", ffmpegChooseDirectory: "选择包含 FFmpeg 的目录", chooseDirectory: "选择目录", savePath: "保存路径", clearSelection: "清除选择", manualDownload: "手动下载", ffmpegSource: "FFmpeg 来源", ffmpegSourceHelp: "选择包含 ffmpeg 和 ffprobe 的目录；清除后自动检测受管版本、内置版本或系统 PATH。",
   recovery: "设置恢复保护模式", recoveryTitle: "配置需要修复，原文件尚未被覆盖",
   recoveryDescription: "工具箱检测到设置文件无法安全读取，因此已停用所有设置写入。OAuth 凭据和账号映射不会被默认配置替换。",
   configFile: "配置文件", recoveryHelp: "请修复 JSON 与 schemaVersion，或从备份恢复此文件，然后重新启动 Synthesizer V Toolbox。",
@@ -14,6 +15,7 @@ addMessages("zh-CN", { system: {
 } });
 
 addMessages("en", { system: {
+  ffmpegLocalDirectory: "Local directory", ffmpegChooseDirectory: "Choose a directory containing FFmpeg", chooseDirectory: "Choose directory", savePath: "Save path", clearSelection: "Clear selection", manualDownload: "Manual download", ffmpegSource: "FFmpeg source", ffmpegSourceHelp: "Choose a directory containing ffmpeg and ffprobe. Clearing it restores detection of managed, bundled, or system PATH versions.",
   recovery: "Settings recovery protection", recoveryTitle: "Settings need repair; the original file has been preserved",
   recoveryDescription: "The toolbox could not safely read its settings and has disabled settings writes. Default settings will not replace OAuth credentials or account mappings.",
   configFile: "Configuration file", recoveryHelp: "Repair the JSON and schemaVersion, or restore this file from a backup, then restart Synthesizer V Toolbox.",
