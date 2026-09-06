@@ -894,7 +894,8 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .account-instance-row details code { display: block; margin-top: 6px; overflow-wrap: anywhere; white-space: normal; }
 .progress-track { height: 3px; overflow: hidden; margin-top: 8px; border-radius: 999px; background: var(--line); }
 .progress-track span { display: block; height: 100%; border-radius: inherit; background: var(--primary); transition: width 180ms ease; }
-.bridge-grid, .mcp-layout, .settings-layout { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); align-items: start; gap: 12px; }
+  .bridge-grid, .mcp-layout, .settings-layout { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); align-items: start; gap: 12px; }
+  .connections-layout { display: grid; gap: 16px; }
 .panel { padding: 20px; border-radius: 8px; }
 .panel-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 17px; }
 .account-instances-panel .panel-heading, .bridge-instances-panel .panel-heading { flex-wrap: wrap; }
