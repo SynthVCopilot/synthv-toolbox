@@ -3534,6 +3534,10 @@ mod tests;
 mod refresh_diagnostic;
 
 #[cfg(all(test, windows))]
+#[path = "../../../../test/sv2_session_format_diagnostic.rs"]
+mod session_format_diagnostic;
+
+#[cfg(all(test, windows))]
 #[path = "../../../../test/sv2_refresh_failure_tests.rs"]
 mod refresh_failure_tests;
 
