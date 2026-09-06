@@ -37,6 +37,8 @@ pub struct AppState {
     pub audio_preparation: Arc<AudioPreparationService>,
     pub sv2_profiles: Arc<Sv2ProfileService>,
     pub svp_passthrough_only: AtomicBool,
+    pub autostart_enabled: AtomicBool,
+    pub autostart_error: Arc<RwLock<Option<String>>>,
     pub http_api: Arc<HttpApiManager>,
     pub credential_balancer: Arc<Mutex<CredentialBalancer>>,
 }
@@ -72,6 +74,8 @@ impl AppState {
             audio_preparation,
             sv2_profiles: Arc::new(Sv2ProfileService::new()),
             svp_passthrough_only: AtomicBool::new(svp_passthrough_only),
+            autostart_enabled: AtomicBool::new(false),
+            autostart_error: Arc::new(RwLock::new(None)),
             http_api: Arc::new(HttpApiManager::default()),
             credential_balancer,
         }

@@ -317,6 +317,8 @@ export interface BootstrapState {
   sv2ConcurrentEnabled: boolean;
   sv2AccountIndicatorEnabled: boolean;
   smartSvpLaunchEnabled: boolean;
+  autostartEnabled: boolean;
+  autostartError?: string | null;
   svpAssociation: SvpAssociationState;
 }
 

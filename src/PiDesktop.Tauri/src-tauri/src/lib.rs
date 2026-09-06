@@ -57,6 +57,8 @@ use svp_launch_router::{
 use tauri::menu::MenuBuilder;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
+#[cfg(desktop)]
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt as AutostartManagerExt};
 
 const TRAY_ID: &str = "main-tray";
 const TRAY_SHOW_ID: &str = "tray-show";
@@ -72,12 +74,14 @@ pub fn run() {
         .ok()
         .flatten();
     let passthrough_only = initial_activation.is_some();
+    let autostart_launch = initial_args.iter().any(|arg| arg == "--autostart");
 
     let mut context = tauri::generate_context!();
     context.set_default_window_icon(Some(tauri::include_image!("./icons/128x128@2x.png")));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--autostart"])))
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             handle_svp_activation(app.clone(), args, Some(cwd));
         }))
@@ -120,6 +124,13 @@ pub fn run() {
                 passthrough_only,
                 settings,
             ));
+            #[cfg(desktop)]
+            match app.autolaunch().is_enabled() {
+                Ok(enabled) => app.state::<AppState>().autostart_enabled.store(enabled, Ordering::Release),
+                Err(error) => {
+                    *app.state::<AppState>().autostart_error.blocking_write() = Some(error.to_string());
+                }
+            }
             crate::project_backups::start();
             tauri::async_runtime::spawn(async {
                 let _ = tauri::async_runtime::spawn_blocking(|| {
@@ -184,6 +195,11 @@ pub fn run() {
                         let _ = app.emit("svp-route-error", error);
                     }
                 }
+            } else if autostart_launch {
+                if let Err(error) = setup_tray(app.handle()) {
+                    eprintln!("failed to create Synthesizer V Toolbox tray icon: {error}");
+                    show_main_window(app.handle());
+                }
             } else {
                 promote_to_interactive(app.handle());
             }
@@ -199,6 +215,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
+            commands::set_autostart,
             commands::complete_onboarding,
             commands::set_mode,
             commands::set_agent_work_mode,
@@ -388,6 +405,9 @@ fn promote_to_interactive(app: &tauri::AppHandle) {
 }
 
 fn handle_svp_activation(app: tauri::AppHandle, args: Vec<String>, cwd: Option<String>) {
+    if args.iter().any(|arg| arg == "--autostart") {
+        return;
+    }
     let activation = match parse_svp_activation(&args, cwd.as_deref()) {
         Ok(Some(activation)) => activation,
         Ok(None) => {
