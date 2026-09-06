@@ -571,15 +571,15 @@ button.full { width: 100%; }
 .segmented button:hover { background: var(--control-pressed); }
 .segmented button.active { color: inherit; background: var(--control); box-shadow: var(--shadow-card); font-weight: 600; }
 .tool-category { min-width: 0; }
-.tool-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
-.tool-tab { display: inline-flex; min-width: 150px; flex: 1 1 150px; flex-direction: column; align-items: flex-start; gap: 3px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: var(--surface-subtle); text-align: left; cursor: pointer; }
-.tool-tab:hover, .tool-tab:focus-visible { border-color: var(--primary); color: var(--text); }
-.tool-tab.active { border-color: var(--primary); color: var(--text); background: var(--surface); box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent); }
+.tool-tabs { display: flex; gap: 18px; overflow-x: auto; margin-bottom: 16px; border-bottom: 1px solid var(--line); scrollbar-width: thin; }
+.tool-tab { display: inline-flex; flex: 0 0 auto; flex-direction: column; align-items: flex-start; gap: 3px; padding: 8px 1px 9px; border: 0; border-bottom: 2px solid transparent; color: var(--muted); background: transparent; text-align: left; cursor: pointer; }
+.tool-tab:hover, .tool-tab:focus-visible { color: var(--text); }
+.tool-tab.active { border-bottom-color: var(--primary); color: var(--text); }
 .tool-tab.ready small { color: var(--success); }
 .tool-tab.warning small { color: var(--warning); }
 .tool-tab.blocked small { color: var(--danger); }
-.tool-tab span { font-size: 13px; font-weight: 600; }
-.tool-tab small { font-size: 10px; }
+.tool-tab span { font-size: 13px; font-weight: 600; white-space: nowrap; }
+.tool-tab small { font-size: 10px; white-space: nowrap; }
 .tool-unavailable { display: flex; align-items: center; gap: 14px; }
 .tool-unavailable > div { flex: 1; min-width: 0; }
 .tool-unavailable h2 { margin: 0 0 5px; font-size: 17px; }
@@ -595,18 +595,11 @@ button.full { width: 100%; }
 .card-action:hover { background: rgba(0,103,192,.14); }
 .card-action.restricted { color: var(--muted); background: var(--surface-subtle); }
 
-.workflow-panel { margin-bottom: 20px; border-color: rgba(0,103,192,.22); box-shadow: 0 4px 14px rgba(0,75,130,.08); }
+.workflow-panel { margin-bottom: 20px; }
 .workflow-heading { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 13px; padding-bottom: 17px; border-bottom: 1px solid var(--line); }
 .workflow-heading h2 { margin: 4px 0 5px; font-size: 20px; }
 .workflow-heading p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
 .workflow-heading > button { align-self: start; font-size: 24px; line-height: 1; }
-.workflow-tool-tabs { display: flex; gap: 6px; overflow-x: auto; margin-top: 14px; padding-bottom: 2px; }
-.workflow-tool-tab { flex: 1 0 150px; display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: var(--surface-subtle); text-align: left; cursor: pointer; }
-.workflow-tool-tab:hover { color: inherit; border-color: var(--line-strong); background: var(--control-hover); }
-.workflow-tool-tab.active { color: var(--primary); border-color: color-mix(in srgb,var(--primary) 35%,var(--line)); background: var(--primary-soft); }
-.workflow-tool-tab.warning:not(.active) small { color: var(--warning); }
-.workflow-tool-tab > span { display: inline-flex; min-width: 0; align-items: center; gap: 5px; overflow: hidden; font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.workflow-tool-tab small { flex: 0 0 auto; font-size: 9px; font-weight: 400; }
 .history-intro { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 13px; margin-bottom: 18px; padding: 17px; }
 .history-intro h2 { margin: 3px 0 5px; font-size: 17px; }
 .history-intro p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
