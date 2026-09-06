@@ -115,20 +115,25 @@ pub fn run() {
                 settings,
             ));
             crate::project_backups::start();
-            if let Ok(checkpoints) = crate::creative_history::list_checkpoints(200) {
-                for checkpoint in checkpoints {
-                    crate::project_backups::observe_path(&checkpoint.source_path);
-                }
-            }
-            if let Ok(history) = crate::creative_history::list(200) {
-                for entry in history {
-                    crate::project_backups::observe_value(&entry.parameters);
-                    crate::project_backups::observe_value(&entry.result);
-                    if let Some(path) = entry.output_path.as_deref() {
-                        crate::project_backups::observe_path(path);
+            tauri::async_runtime::spawn(async {
+                let _ = tauri::async_runtime::spawn_blocking(|| {
+                    if let Ok(checkpoints) = crate::creative_history::list_checkpoints(200) {
+                        for checkpoint in checkpoints {
+                            crate::project_backups::observe_path(&checkpoint.source_path);
+                        }
                     }
-                }
-            }
+                    if let Ok(history) = crate::creative_history::list(200) {
+                        for entry in history {
+                            crate::project_backups::observe_value(&entry.parameters);
+                            crate::project_backups::observe_value(&entry.result);
+                            if let Some(path) = entry.output_path.as_deref() {
+                                crate::project_backups::observe_path(path);
+                            }
+                        }
+                    }
+                })
+                .await;
+            });
             let connected_hosts = app.state::<AppState>().mcp.clone();
             tauri::async_runtime::spawn(async move {
                 loop {
@@ -150,7 +155,7 @@ pub fn run() {
                 let _ = http_api.start_if_enabled(http_context).await;
             });
             if let Some(activation) = initial_activation.clone() {
-                crate::project_backups::observe_path(&activation.project_path);
+                crate::project_backups::observe_path_and_wait(&activation.project_path);
                 match open_original_svp_project(
                     &activation.project_path,
                     original_svp_prog_id.as_deref(),

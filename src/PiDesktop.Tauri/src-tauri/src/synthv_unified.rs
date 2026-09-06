@@ -240,9 +240,30 @@ async fn discovered_with_connections(
 }
 
 pub async fn observe_connected_project_paths(manager: &McpManager) {
-    for host_id in manager.connected_synthv_hosts().await.into_keys() {
+    let hosts = manager.connected_synthv_hosts().await;
+    for host_id in hosts.keys() {
         if let Ok(project) = read_value(manager, &host_id, "project", json!({})).await {
             crate::project_backups::observe_value(&project);
+        }
+    }
+    if hosts.is_empty() && manager.is_connected("synthv").await {
+        if let Ok(response) = tokio::time::timeout(
+            TOOL_TIMEOUT,
+            manager.call_bridge_tool(
+                "sv_query",
+                json!({
+                    "action": "get_project_info",
+                    "args": {},
+                    "contextMode": "readOnly",
+                    "dense": "never"
+                }),
+            ),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        {
+            crate::project_backups::observe_value(&response);
         }
     }
 }
