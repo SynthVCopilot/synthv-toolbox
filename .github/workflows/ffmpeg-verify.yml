@@ -177,6 +177,9 @@ jobs:
           if ($installers.Count -ne 1) { throw "Expected one NSIS bundle, found $($installers.Count)" }
           $installer = $installers[0]
           $artifactRoot = Join-Path $env:RUNNER_TEMP "synthv-toolbox-artifacts/${{ matrix.target }}"
+          if (Test-Path -LiteralPath $artifactRoot) {
+            Remove-Item -LiteralPath $artifactRoot -Recurse -Force
+          }
           New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
           Copy-Item -LiteralPath $installer.FullName -Destination (Join-Path $artifactRoot "synthv-toolbox-${{ steps.version.outputs.version }}-${{ matrix.target }}-nsis.exe")
 
@@ -200,15 +203,16 @@ jobs:
           archs="$(lipo -archs "$executable")"
           test "$archs" = "x86_64 arm64" || test "$archs" = "arm64 x86_64"
           artifact_root="$RUNNER_TEMP/synthv-toolbox-artifacts/${{ matrix.target }}"
+          rm -rf "$artifact_root"
           mkdir -p "$artifact_root"
-          ditto -c -k --sequesterRsrc --keepParent "$app_path" "$artifact_root/synthv-toolbox-${{ steps.version.outputs.version }}-${{ matrix.target }}.app.zip"
           cp "$dmg_path" "$artifact_root/synthv-toolbox-${{ steps.version.outputs.version }}-${{ matrix.target }}.dmg"
 
       - name: Upload development build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: synthv-toolbox-${{ steps.version.outputs.version }}-${{ matrix.target }}
           path: ${{ runner.temp }}/synthv-toolbox-artifacts/${{ matrix.target }}
+          archive: false
           if-no-files-found: error
           retention-days: 14
 
