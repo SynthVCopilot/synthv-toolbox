@@ -444,6 +444,19 @@ function refreshAudioRuntimeStatus(): void {
   });
 }
 
+function syncAudioPreparationFormsFromDom(): void {
+  const rate = optionalFinite(document.querySelector<HTMLInputElement>("#audio-prep-rate")?.value ?? "");
+  const channels = optionalFinite(document.querySelector<HTMLSelectElement>("#audio-prep-channels")?.value ?? "");
+  const format = document.querySelector<HTMLSelectElement>("#audio-prep-format")?.value;
+  const start = optionalFinite(document.querySelector<HTMLInputElement>("#audio-prep-start")?.value ?? "");
+  const duration = optionalFinite(document.querySelector<HTMLInputElement>("#audio-prep-duration")?.value ?? "");
+  audioPrepareForm = { ...audioPrepareForm, sampleRate: rate, channels, sampleFormat: (format ?? audioPrepareForm.sampleFormat) as AudioSampleFormat, startSeconds: start, durationSeconds: duration };
+  const lufs = optionalFinite(document.querySelector<HTMLInputElement>("#audio-normalize-lufs")?.value ?? "");
+  const peak = optionalFinite(document.querySelector<HTMLInputElement>("#audio-normalize-peak")?.value ?? "");
+  const lra = optionalFinite(document.querySelector<HTMLInputElement>("#audio-normalize-lra")?.value ?? "");
+  audioNormalizeForm = { ...audioNormalizeForm, integratedLufs: lufs ?? audioNormalizeForm.integratedLufs, truePeakDbtp: peak ?? audioNormalizeForm.truePeakDbtp, loudnessRange: lra ?? audioNormalizeForm.loudnessRange };
+}
+
 function requestAudioPlan(kind: AudioJobKind): void {
   const request = kind === "prepare"
     ? { ...audioPrepareForm }
@@ -2241,14 +2254,7 @@ function wireForms(): void {
       form.reportValidity();
       return;
     }
-    audioPrepareForm = {
-      inputPath: audioPrepareForm.inputPath,
-      sampleRate: optionalFinite(document.querySelector<HTMLInputElement>("#audio-prep-rate")?.value ?? ""),
-      channels: optionalFinite(document.querySelector<HTMLSelectElement>("#audio-prep-channels")?.value ?? ""),
-      sampleFormat: (document.querySelector<HTMLSelectElement>("#audio-prep-format")?.value ?? "s24") as AudioSampleFormat,
-      startSeconds: optionalFinite(document.querySelector<HTMLInputElement>("#audio-prep-start")?.value ?? ""),
-      durationSeconds: optionalFinite(document.querySelector<HTMLInputElement>("#audio-prep-duration")?.value ?? ""),
-    };
+    syncAudioPreparationFormsFromDom();
     requestAudioPlan("prepare");
   });
   document.querySelector<HTMLFormElement>("#audio-normalize-form")?.addEventListener("submit", (event) => {
@@ -2258,12 +2264,7 @@ function wireForms(): void {
       form.reportValidity();
       return;
     }
-    audioNormalizeForm = {
-      inputPath: audioPrepareForm.inputPath,
-      integratedLufs: Number(document.querySelector<HTMLInputElement>("#audio-normalize-lufs")?.value ?? "-16"),
-      truePeakDbtp: Number(document.querySelector<HTMLInputElement>("#audio-normalize-peak")?.value ?? "-1.5"),
-      loudnessRange: Number(document.querySelector<HTMLInputElement>("#audio-normalize-lra")?.value ?? "11"),
-    };
+    syncAudioPreparationFormsFromDom();
     requestAudioPlan("normalize");
   });
   document.querySelector<HTMLFormElement>("#tuning-learn-form")?.addEventListener("submit", (event) => {
@@ -2718,12 +2719,20 @@ async function withAiProviderStateRefresh<T>(action: () => Promise<T>): Promise<
 
 document.addEventListener("input", (event) => {
   const target = event.target as HTMLElement;
+  if (target.closest(".audio-preparation")) {
+    syncAudioPreparationFormsFromDom();
+    return;
+  }
   if (!target.closest(".lyric-workbench-grid")) return;
   if (lyricPersistTimer !== undefined) window.clearTimeout(lyricPersistTimer);
   lyricPersistTimer = window.setTimeout(() => {
     lyricPersistTimer = undefined;
     syncLyricDraftFromDom();
   }, 250);
+});
+document.addEventListener("change", (event) => {
+  const target = event.target as HTMLElement;
+  if (target.closest(".audio-preparation")) syncAudioPreparationFormsFromDom();
 });
 
 // Media loading happens outside the promise that resolves the opaque artifact

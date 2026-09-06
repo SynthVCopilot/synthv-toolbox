@@ -35,8 +35,8 @@ function collectAudioImplementation(source) {
     "audioSourcePreviewUrl",
   ]);
   const wantedFunctions = new Set([
-    "formatError", "isTerminalAudioJob", "mergeAudioJobSnapshot", "clearAudioJobPoll",
-    "scheduleAudioJobPoll", "refreshAudioRuntimeStatus", "requestAudioPlan", "startPlannedAudioJob", "selectAudioPreparationInput",
+    "formatError", "optionalFinite", "isTerminalAudioJob", "mergeAudioJobSnapshot", "clearAudioJobPoll",
+    "scheduleAudioJobPoll", "refreshAudioRuntimeStatus", "syncAudioPreparationFormsFromDom", "requestAudioPlan", "startPlannedAudioJob", "selectAudioPreparationInput",
   ]);
   assert.doesNotMatch(source, /^(?:<<<<<<<|=======|>>>>>>>)/m, "main.ts must be conflict-free before behavior tests run");
 
@@ -92,7 +92,7 @@ function collectAudioImplementation(source) {
   };
 }
 
-function createHarness(audioApi) {
+function createHarness(audioApi, document = { querySelector: () => undefined }) {
   const source = readFileSync(mainPath, "utf8");
   const extracted = collectAudioImplementation(source);
   const harnessSource = `// @ts-nocheck
@@ -101,11 +101,12 @@ module.exports = (function (__audioApi, __window) {
   const window = __window;
   const page = "toolbox";
   const activeWorkflow = "audio-preparation";
+  const document = __document;
   const render = () => {};
   ${extracted.variables}
   ${extracted.functions}
   return {
-    isTerminalAudioJob, mergeAudioJobSnapshot, scheduleAudioJobPoll, refreshAudioRuntimeStatus, requestAudioPlan, startPlannedAudioJob, selectAudioPreparationInput,
+    isTerminalAudioJob, mergeAudioJobSnapshot, scheduleAudioJobPoll, refreshAudioRuntimeStatus, syncAudioPreparationFormsFromDom, requestAudioPlan, startPlannedAudioJob, selectAudioPreparationInput,
     state: () => ({ audioProbe, audioRuntime, audioPrepareForm, audioNormalizeForm, pendingAudioPlan, audioJob,
       audioJobPollTimer, audioJobPollGeneration, audioInputGeneration, audioPlanRequestGeneration,
       audioRuntimeRequestGeneration,
@@ -122,7 +123,7 @@ module.exports = (function (__audioApi, __window) {
     clearTimeout(timer) { timers[timer] = undefined; },
   };
   const module = { exports: {} };
-  vm.runInNewContext(output, { module, exports: module.exports, __audioApi: audioApi, __window: window, console });
+  vm.runInNewContext(output, { module, exports: module.exports, __audioApi: audioApi, __window: window, __document: document, console });
   return {
     ...module.exports,
     fireNextTimer() { const callback = timers.find(Boolean); assert.ok(callback, "expected a pending audio poll"); callback(); },
@@ -239,11 +240,25 @@ module.exports = (function (__audioApi, __window) {
     harness.refreshAudioRuntimeStatus();
     statuses[1].resolve({ available: true, detail: "current" });
     await settle();
-    statuses[0].reject(new Error("stale failure"));
+    statuses[0].resolve({ available: false, detail: "stale success" });
     await settle();
     assert.equal(harness.state().audioRuntime.available, true, "a stale status failure must not overwrite the current runtime");
     assert.equal(harness.state().audioRuntimeRequestGeneration, 2);
   } finally { harness.cleanup(); }
+}
+
+{
+  const fields = new Map([
+    ["#audio-prep-rate", { value: "96000" }], ["#audio-prep-channels", { value: "1" }],
+    ["#audio-prep-format", { value: "f32" }], ["#audio-prep-start", { value: "2.5" }],
+    ["#audio-prep-duration", { value: "12" }], ["#audio-normalize-lufs", { value: "-14" }],
+    ["#audio-normalize-peak", { value: "-2" }], ["#audio-normalize-lra", { value: "8" }],
+  ]);
+  const harness = createHarness({}, { querySelector: (selector) => fields.get(selector) });
+  harness.setForms({ inputPath: "C:/audio/source.wav", sampleFormat: "s24" }, { inputPath: "C:/audio/source.wav", integratedLufs: -16, truePeakDbtp: -1.5, loudnessRange: 11 });
+  harness.syncAudioPreparationFormsFromDom();
+  assert.equal(JSON.stringify(harness.state().audioPrepareForm), JSON.stringify({ inputPath: "C:/audio/source.wav", sampleFormat: "f32", sampleRate: 96000, channels: 1, startSeconds: 2.5, durationSeconds: 12 }));
+  assert.equal(JSON.stringify(harness.state().audioNormalizeForm), JSON.stringify({ inputPath: "C:/audio/source.wav", integratedLufs: -14, truePeakDbtp: -2, loudnessRange: 8 }));
 }
 
 console.log("Audio preparation behavior tests passed.");
