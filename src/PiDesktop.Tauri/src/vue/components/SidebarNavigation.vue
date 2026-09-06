@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 const props = defineProps<{ html: string }>();
 
@@ -35,6 +35,24 @@ function updateIndicator(): void {
   });
 }
 
+function preserveNavigationPosition(): void {
+  const previousScrollTop = sidebar.value?.querySelector<HTMLElement>(".nav")?.scrollTop ?? 0;
+  void nextTick(() => {
+    const navigation = sidebar.value?.querySelector<HTMLElement>(".nav");
+    const selected = navigation?.querySelector<HTMLElement>(".nav-item.active");
+    if (!navigation || !selected) {
+      updateIndicator();
+      return;
+    }
+    navigation.scrollTop = Math.min(previousScrollTop, Math.max(0, navigation.scrollHeight - navigation.clientHeight));
+    const navigationBounds = navigation.getBoundingClientRect();
+    const selectedBounds = selected.getBoundingClientRect();
+    if (selectedBounds.top < navigationBounds.top) navigation.scrollTop += selectedBounds.top - navigationBounds.top;
+    else if (selectedBounds.bottom > navigationBounds.bottom) navigation.scrollTop += selectedBounds.bottom - navigationBounds.bottom;
+    updateIndicator();
+  });
+}
+
 onMounted(() => {
   resizeObserver = new ResizeObserver(updateIndicator);
   if (sidebar.value) resizeObserver.observe(sidebar.value);
@@ -42,7 +60,7 @@ onMounted(() => {
   updateIndicator();
 });
 
-watch(() => props.html, updateIndicator, { flush: "post" });
+watch(() => props.html, preserveNavigationPosition, { flush: "pre" });
 
 onBeforeUnmount(() => {
   if (frame !== undefined) cancelAnimationFrame(frame);
