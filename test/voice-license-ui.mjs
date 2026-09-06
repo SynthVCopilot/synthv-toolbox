@@ -3,13 +3,16 @@ import fs from "node:fs";
 import vm from "node:vm";
 import { createRequire, stripTypeScriptTypes } from "node:module";
 
-const { JSDOM } = createRequire(new URL("../src/PiDesktop.Tauri/package.json", import.meta.url))("jsdom");
+const require = createRequire(new URL("../src/PiDesktop.Tauri/package.json", import.meta.url));
+const { JSDOM } = require("jsdom");
+const { createI18n } = require("vue-i18n");
 const source = fs.readFileSync(new URL("../src/PiDesktop.Tauri/src/main.ts", import.meta.url), "utf8");
 const start = source.indexOf("function renderAuthorizedVoice(");
 const end = source.indexOf("function renderAccountManager(", start);
 const document = new JSDOM("<main></main>").window.document;
 const context = vm.createContext({
-  document, Date, JSON, Number, Math,
+  document, Date, JSON, Number, Math, createI18n,
+  localStorage: { getItem: () => "zh-CN", setItem() {} },
   profiles: { slots: [{ id: "fixture-slot", installedVoiceIds: ["fixture-product"] }, { id: "other-slot", installedVoiceIds: [] }] },
   sv2VoiceCatalog: undefined, sv2VoiceCatalogLoading: false,
   api: { sv2VoiceCatalog: async () => [{ imageDataUrl: "data:image/png;base64,fixture", vendor: "Fixture" }] },
@@ -17,6 +20,10 @@ const context = vm.createContext({
   icon: () => "",
   escapeHtml: value => String(value).replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
 });
+for (const name of ["i18n", "i18nAccounts"]) {
+  const text = fs.readFileSync(new URL(`../src/PiDesktop.Tauri/src/${name}.ts`, import.meta.url), "utf8");
+  vm.runInContext(stripTypeScriptTypes(text.replace(/^import .*;\r?\n/gm, "").replace(/^export /gm, "")), context);
+}
 vm.runInContext(stripTypeScriptTypes(source.slice(start, end)), context);
 const trial = { id: "fixture-product", name: "Fixture Voice", isTrial: true, expiresAtUtc: "2099-12-31T23:59:59Z" };
 document.body.innerHTML = context.renderAuthorizedVoice(trial.name, [trial], "fixture-slot");
