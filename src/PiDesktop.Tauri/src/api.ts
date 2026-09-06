@@ -746,6 +746,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     detail: "预览模式不会启动外部浏览器。",
   } as T;
   if (command === "sv2_profile_state") return previewProfiles as T;
+  if (command === "sv2_cached_profile_state") return structuredClone(previewProfiles) as T;
   if (command === "sv2_voice_catalog") return previewSv2VoiceCatalog as T;
   if (command === "sv2_account_usage_snapshot" || command === "sv2_account_usage_snapshot_for_slot") {
     if (!previewSv2AccountIndicatorEnabled) {

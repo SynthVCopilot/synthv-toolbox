@@ -73,4 +73,38 @@ context.profiles = { version: "complete-from-instance-refresh" };
 resolveCachedProfiles({ version: "late-lightweight-cache" });
 await new Promise((resolve) => setImmediate(resolve));
 assert.equal(context.profiles.version, "complete-from-instance-refresh", "a late lightweight cache cannot overwrite a complete account snapshot");
+pending.shift().resolve({ profiles: { version: "fresh-after-instance-refresh" } });
+await new Promise((resolve) => setImmediate(resolve));
+
+context.profiles = undefined;
+context.accountPageGeneration += 1;
+context.loadCachedAccountPage(context.accountPageGeneration);
+assert.equal(pending.length, 0, "cold entry reads local cache before starting a remote refresh");
+resolveCachedProfiles({ version: "cold-start-cache" });
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(context.profiles.version, "cold-start-cache", "cached cards are visible while the remote refresh remains pending");
+assert.equal(pending.length, 1);
+pending.shift().reject(new Error("refresh unavailable"));
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(context.profiles.version, "cold-start-cache", "refresh failure keeps the cached cards visible");
+assert.match(context.error, /refresh unavailable/);
+
+context.profiles = undefined;
+context.accountPageGeneration += 1;
+context.loadCachedAccountPage(context.accountPageGeneration);
+context.page = "home";
+context.accountPageGeneration += 1;
+resolveCachedProfiles({ version: "abandoned-cache" });
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(context.profiles, undefined);
+assert.equal(pending.length, 0, "leaving before the cache resolves does not start a remote refresh");
+
+context.page = "accounts";
+context.app.sv2AccountIndicatorEnabled = false;
+context.accountPageGeneration += 1;
+context.loadCachedAccountPage(context.accountPageGeneration);
+resolveCachedProfiles({ version: "local-cache" });
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(pending.length, 0, "disabling the account indicator does not send account requests");
+assert.equal(context.profiles.version, "state", "local state still refreshes when account requests are disabled");
 console.log("Account cache-first refresh behavior passed.");

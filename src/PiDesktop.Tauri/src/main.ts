@@ -1239,7 +1239,7 @@ function environmentDefinitelyUnavailable(environment: AccountProbeEnvironmentSt
 }
 
 function accountProbeBadge(slot: Sv2ProfileSlot): string {
-  if (profiles === cachedAccountProfiles) return `<span class="session-protection">${icon("refresh", 14)} 正在更新账号状态</span>`;
+  if (profiles === cachedAccountProfiles) return `<span class="session-protection">${icon("refresh", 14)} 已显示本地缓存</span>`;
   if (!app?.sv2AccountIndicatorEnabled) {
     return `<span class="session-protection" title="账号登录指示器已关闭；未读取或解密此槽位的登录缓存。">${icon("shield", 14)} 登录指示器已关闭</span>`;
   }
@@ -1328,6 +1328,7 @@ function officialAccountIdentity(slot: Sv2ProfileSlot): { name?: string; email?:
 type AccountUseTone = "clear" | "unknown" | "in-use";
 
 function accountUseStateForSlot(slot: Sv2ProfileSlot): { tone: AccountUseTone; label: string } {
+  if (profiles === cachedAccountProfiles) return { tone: "unknown", label: "账号状态待更新" };
   const environments = accountProbeEnvironments(slot).filter((environment) => environment.launchEnabled);
   const allLocallyBlocked = environments.length > 0 && environments.every((environment) => environment.localBlocked);
   if (!app?.sv2AccountIndicatorEnabled) {
