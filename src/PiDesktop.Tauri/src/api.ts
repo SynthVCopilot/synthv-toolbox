@@ -275,6 +275,7 @@ let previewProfiles: Sv2ProfilesState = {
     lastActivatedAtUtc: new Date().toISOString(),
     isActive: true,
     sessionCached: true,
+    installedVoiceIds: [],
     dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\slots\\11111111-1111-4111-8111-111111111111",
     sessionProtection: {
       status: "monitoring",
@@ -313,6 +314,7 @@ let previewProfiles: Sv2ProfilesState = {
     createdAtUtc: new Date().toISOString(),
     isActive: false,
     sessionCached: true,
+    installedVoiceIds: ["00000000-0000-4000-8000-000000000002"],
     dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\slots\\22222222-2222-4222-8222-222222222222",
     sessionProtection: {
       status: "ready",
@@ -767,6 +769,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       createdAtUtc: new Date().toISOString(),
       isActive: false,
       sessionCached: false,
+      installedVoiceIds: [],
       dataPath: `${previewProfiles.vaultPath}\\slots\\${id}`,
       sessionProtection: {
         status: "signInRequired",

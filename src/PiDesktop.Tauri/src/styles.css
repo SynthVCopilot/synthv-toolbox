@@ -511,6 +511,9 @@ button.full { width: 100%; }
 .voice-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .voice-trial-badge { padding: 1px 5px; border-radius: 4px; background: var(--primary-soft); color: var(--primary); font-size: 10px; font-weight: 600; white-space: nowrap; }
 .authorized-voice .voice-license-expiry { color: var(--muted); }
+.voice-cover-container { position: relative; display: inline-flex; width: 28px; height: 28px; flex: 0 0 28px; }
+.voice-installed-badge { position: absolute; right: -3px; bottom: -3px; display: grid; place-items: center; width: 14px; height: 14px; border: 2px solid var(--surface-solid); border-radius: 50%; background: var(--success); color: var(--surface-solid); }
+.voice-installed-badge .icon { stroke-width: 3; }
 .voice-cover { width: 28px; height: 28px; flex: 0 0 28px; border-radius: 4px; object-fit: cover; }
 .voice-cover.placeholder { display: grid; place-items: center; color: var(--muted); background: var(--surface-subtle); }
 .authorization-panel { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: end; gap: 9px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }

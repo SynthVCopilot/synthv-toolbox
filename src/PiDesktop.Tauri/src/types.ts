@@ -175,6 +175,7 @@ export interface Sv2ProfileSlot {
   lastActivatedAtUtc?: string;
   isActive: boolean;
   sessionCached: boolean;
+  installedVoiceIds: string[];
   dataPath: string;
   sessionProtection: Sv2SessionProtection;
   concurrentSessionProtection: Sv2SessionProtection;

@@ -71,11 +71,13 @@ const poll = stripTypeScriptTypes(source.slice(start, end));
 let resolveProcesses;
 let resolveProfiles;
 let calls = 0;
+let voiceRefreshCalls = 0;
 const list = new JSDOM('<div id="instances">old rows</div>').window.document.querySelector('#instances');
 const context = vm.createContext({
   busy: false, page: 'accounts', instanceRefreshInFlight: false, instanceRefreshGeneration: 0,
   synthvProcesses: [{ processId: 30 }], profiles: { activeSlotId: 'first' },
   document: { hidden: false, querySelector: () => list },
+  refreshAuthorizedVoiceEntries: () => { voiceRefreshCalls++; },
   api: {
     listSynthvProcesses() { calls++; return new Promise(resolve => { resolveProcesses = resolve; }); },
     sv2ProfileState() { return new Promise(resolve => { resolveProfiles = resolve; }); },
@@ -87,11 +89,13 @@ await context.refreshVisibleSynthvInstances();
 assert.equal(calls, 1);
 resolveProcesses([{ processId: 30 }]); resolveProfiles({ activeSlotId: 'second' }); await request;
 assert.equal(list.innerHTML, 'second', 'account changes update rows even when PIDs do not change');
+assert.equal(voiceRefreshCalls, 1, 'a fresh slot snapshot also updates visible voice installation badges');
 request = context.refreshVisibleSynthvInstances();
 context.instanceRefreshGeneration++;
 resolveProcesses([{ processId: 99 }]); resolveProfiles({ activeSlotId: 'stale' }); await request;
 assert.equal(list.innerHTML, 'second');
 assert.equal(context.synthvProcesses[0].processId, 30);
+assert.equal(voiceRefreshCalls, 1, 'a superseded snapshot does not update installation badges');
 context.document.hidden = true;
 await context.refreshVisibleSynthvInstances();
 assert.equal(calls, 2);

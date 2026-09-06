@@ -90,6 +90,39 @@ fn account_summary_prefers_a_usable_environment_over_a_stale_copy() {
     assert!(account_probe_rank(&available) > account_probe_rank(&busy));
 }
 
+#[test]
+fn state_reports_each_slots_installed_voice_ids() {
+    let (root, paths) = fixture();
+    let mut manifest = import_fixture(&paths, "A");
+    let active_id = manifest.active_slot_id.clone().unwrap();
+    let other_id = add_parked(&paths, &mut manifest, "B");
+    let installed = "00000000-0000-4000-8000-000000000007";
+    let version =
+        slot_data_root(&paths, &manifest, &active_id).join(format!("databases/{installed}/101"));
+    fs::create_dir_all(&version).unwrap();
+    fs::write(version.join("m"), b"manifest").unwrap();
+    fs::write(version.join("model.dnni"), b"model").unwrap();
+
+    let state = build_state(&paths, &manifest, false, String::new()).unwrap();
+    assert_eq!(
+        state
+            .slots
+            .iter()
+            .find(|slot| slot.id == active_id)
+            .unwrap()
+            .installed_voice_ids,
+        vec![installed]
+    );
+    assert!(state
+        .slots
+        .iter()
+        .find(|slot| slot.id == other_id)
+        .unwrap()
+        .installed_voice_ids
+        .is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn import_fixture(paths: &SlotPaths, name: &str) -> SlotManifest {
     fs::create_dir_all(paths.canonical.join("license")).unwrap();
     fs::write(paths.canonical.join("license/session"), b"session").unwrap();

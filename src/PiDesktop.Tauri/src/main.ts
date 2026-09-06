@@ -691,7 +691,10 @@ async function refreshVisibleSynthvInstances(): Promise<void> {
     if (busy || page !== refreshPage || generation !== instanceRefreshGeneration) return;
     const previousRows = refreshPage === "accounts" ? renderSv2InstanceRows() : renderBridgeProcessRows();
     synthvProcesses = nextProcesses;
-    if (nextProfiles) profiles = nextProfiles;
+    if (nextProfiles) {
+      profiles = nextProfiles;
+      refreshAuthorizedVoiceEntries();
+    }
     const nextRows = refreshPage === "accounts" ? renderSv2InstanceRows() : renderBridgeProcessRows();
     if (previousRows !== nextRows) {
       const list = document.querySelector<HTMLElement>(refreshPage === "accounts"
@@ -1453,8 +1456,11 @@ function supportsWindowsSv2Extensions(): boolean {
   return app?.platform === "windows" || app?.platform === "preview";
 }
 
-function renderAuthorizedVoice(voice: string, products: Sv2AuthorizedVoiceProduct[] = []): string {
+function renderAuthorizedVoice(voice: string, products: Sv2AuthorizedVoiceProduct[] = [], slotId = ""): string {
   const productIds = products.map((product) => product.id).filter(Boolean);
+  const installedIds = new Set((profiles?.slots.find((slot) => slot.id === slotId)?.installedVoiceIds ?? []).map((id) => id.toLowerCase()));
+  const installed = productIds.some((id) => installedIds.has(id.toLowerCase()));
+  const installedBadge = installed ? `<span class="voice-installed-badge" role="img" aria-label="已安装" title="此账号已安装">${icon("check", 10)}</span>` : "";
   const catalogEntry = findVoiceMetadata(voice, productIds, sv2VoiceCatalog ?? []);
   const cover = catalogEntry?.imageDataUrl
     ? `<img class="voice-cover" src="${escapeHtml(catalogEntry.imageDataUrl)}" alt="" />`
@@ -1467,7 +1473,14 @@ function renderAuthorizedVoice(voice: string, products: Sv2AuthorizedVoiceProduc
   const label = isTrial ? (expired ? "试用已到期" : "限时试用") : expiresAt !== undefined ? (expired ? "授权已到期" : "限时授权") : "";
   const badge = label ? `<span class="voice-trial-badge">${label}</span>` : "";
   const expiry = expiresAt !== undefined ? `<small class="voice-license-expiry">${escapeHtml(new Date(expiresAt).toLocaleString())} 到期</small>` : "";
-  return `<span class="authorized-voice" data-authorized-voice="${escapeHtml(voice)}" data-authorized-products="${escapeHtml(JSON.stringify(products))}">${cover}<span><span class="voice-name">${escapeHtml(voice)}${badge}</span>${vendor}${expiry}</span></span>`;
+  return `<span class="authorized-voice" data-authorized-voice="${escapeHtml(voice)}" data-authorized-products="${escapeHtml(JSON.stringify(products))}" data-voice-slot-id="${escapeHtml(slotId)}"><span class="voice-cover-container">${cover}${installedBadge}</span><span><span class="voice-name">${escapeHtml(voice)}${badge}</span>${vendor}${expiry}</span></span>`;
+}
+
+function refreshAuthorizedVoiceEntries(): void {
+  document.querySelectorAll<HTMLElement>("[data-authorized-voice]").forEach((entry) => {
+    const updated = renderAuthorizedVoice(entry.dataset.authorizedVoice ?? "", JSON.parse(entry.dataset.authorizedProducts ?? "[]") as Sv2AuthorizedVoiceProduct[], entry.dataset.voiceSlotId);
+    if (entry.outerHTML !== updated) entry.outerHTML = updated;
+  });
 }
 
 function loadSv2VoiceCatalog(force = false): void {
@@ -1478,9 +1491,7 @@ function loadSv2VoiceCatalog(force = false): void {
     .catch(() => undefined)
     .finally(() => {
       sv2VoiceCatalogLoading = false;
-      document.querySelectorAll<HTMLElement>("[data-authorized-voice]").forEach((entry) => {
-        entry.outerHTML = renderAuthorizedVoice(entry.dataset.authorizedVoice ?? "", JSON.parse(entry.dataset.authorizedProducts ?? "[]") as Sv2AuthorizedVoiceProduct[]);
-      });
+      refreshAuthorizedVoiceEntries();
     });
 }
 
@@ -1512,7 +1523,7 @@ function renderAccountManager(): string {
       : authorizationUnavailable;
     const authorizationList = authorizationStatus
       ? authorizations.length
-        ? `<div class="authorization-list">${authorizations.map((voice) => renderAuthorizedVoice(voice, authorizationProbe?.authorizedVoiceProducts.filter((product) => product.name === voice) ?? [])).join("")}</div>`
+        ? `<div class="authorization-list">${authorizations.map((voice) => renderAuthorizedVoice(voice, authorizationProbe?.authorizedVoiceProducts.filter((product) => product.name === voice) ?? [], managedSlot?.id)).join("")}</div>`
         : '<div class="empty-inline">当前账号没有可用声库授权。</div>'
       : `<div class="empty-inline">${escapeHtml(authorizationUnavailable)}。</div>`;
     body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(officialIdentity.name ?? (managedSlot.sessionCached ? "账号信息待刷新" : "未登录"))}</h3><p>${escapeHtml(officialIdentity.email ?? "账号信息待刷新")}</p><p>${accountUseDot(managedUseState)} ${escapeHtml(managedUseState.label)}</p></div>${managedSlot.isActive ? '<span class="profile-active-badge">当前默认</span>' : ""}</div>

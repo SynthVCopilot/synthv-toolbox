@@ -111,6 +111,7 @@ pub struct Sv2ProfileSlotView {
     pub last_activated_at_utc: Option<String>,
     pub is_active: bool,
     pub session_cached: bool,
+    pub installed_voice_ids: Vec<String>,
     pub data_path: String,
     pub session_protection: Sv2SessionProtectionView,
     pub concurrent_session_protection: Sv2SessionProtectionView,
@@ -1345,6 +1346,8 @@ fn build_state(
             let concurrent_session_protection = session_protection.clone();
             let session_cached = data_path.join("license/session").is_file();
             let concurrent_session_cached = session_cached;
+            let installed_voice_ids =
+                crate::sv2_voice_catalog::read_installed_voice_ids(&data_path);
             Sv2ProfileSlotView {
                 id: slot.id.clone(),
                 display_name: slot.display_name.clone(),
@@ -1353,6 +1356,7 @@ fn build_state(
                 last_activated_at_utc: slot.last_activated_at_utc.clone(),
                 is_active,
                 session_cached,
+                installed_voice_ids,
                 data_path: data_path.to_string_lossy().into_owned(),
                 session_protection,
                 concurrent_session_protection,
