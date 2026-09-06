@@ -477,13 +477,6 @@ function scheduleMediaTaskPoll(): void {
   }, 700);
 }
 
-function modePill(): string {
-  if (!app) return "";
-  return app.mode === "ai"
-    ? `<span class="mode-pill ai">${icon("sparkles", 15)} AI 模式</span>`
-    : `<span class="mode-pill">${icon("toolbox", 15)} 纯工具箱</span>`;
-}
-
 function navItem(target: Page, label: string, glyph: Parameters<typeof icon>[0]): string {
   return `<button class="nav-item ${page === target ? "active" : ""}" data-page="${target}" title="${label}" aria-label="${label}" ${page === target ? 'aria-current="page"' : ""}>
     ${icon(glyph, 19)}<span>${label}</span>
@@ -510,10 +503,9 @@ function renderSidebar(): string {
       ${app.mode === "ai" ? navItem("mcp", "外部 MCP", "server") : ""}
     </nav>
     <div class="sidebar-footer">
-      ${modePill()}
-      ${navItem("settings", "设置", "settings")}
-      <button class="nav-item sidebar-toggle" data-toggle-sidebar title="${sidebarCollapsed ? "展开侧栏" : "收起侧栏"}" aria-label="${sidebarCollapsed ? "展开侧栏" : "收起侧栏"}" aria-expanded="${!sidebarCollapsed}">${icon("arrow", 18)}<span>${sidebarCollapsed ? "展开侧栏" : "收起侧栏"}</span></button>
       <span class="version">v${escapeHtml(app.appVersion)} · ${escapeHtml(app.platform)}</span>
+      <button class="nav-item sidebar-toggle" data-toggle-sidebar title="${sidebarCollapsed ? "展开侧栏" : "收起侧栏"}" aria-label="${sidebarCollapsed ? "展开侧栏" : "收起侧栏"}" aria-expanded="${!sidebarCollapsed}">${icon("arrow", 18)}<span>${sidebarCollapsed ? "展开侧栏" : "收起侧栏"}</span></button>
+      ${navItem("settings", "设置", "settings")}
     </div>`;
 }
 
