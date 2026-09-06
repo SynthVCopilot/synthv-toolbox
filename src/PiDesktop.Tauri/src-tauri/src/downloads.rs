@@ -2,7 +2,9 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -10,6 +12,61 @@ use uuid::Uuid;
 
 use crate::agent::data_root;
 use crate::components::install_component;
+
+pub(crate) fn shared_downloads() -> Arc<ComponentDownloadManager> {
+    static DOWNLOADS: OnceLock<Arc<ComponentDownloadManager>> = OnceLock::new();
+    Arc::clone(DOWNLOADS.get_or_init(|| Arc::new(ComponentDownloadManager::persistent())))
+}
+
+pub(crate) async fn ensure_ffmpeg(
+    resource_dir: PathBuf,
+    cancelled: Option<Arc<AtomicBool>>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        ensure_ffmpeg_blocking(&resource_dir, cancelled.as_deref())
+    })
+    .await
+    .map_err(|error| format!("FFmpeg preparation failed: {error}"))?
+}
+
+pub(crate) fn ensure_ffmpeg_blocking(
+    resource_dir: &Path,
+    cancelled: Option<&AtomicBool>,
+) -> Result<(), String> {
+    if cancelled.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+        return Err("FFmpeg preparation was cancelled.".to_string());
+    }
+    if crate::audio_prep::ffmpeg_runtime_available(resource_dir) {
+        return Ok(());
+    }
+    if !cfg!(all(windows, target_arch = "x86_64")) {
+        return Err("Automatic FFmpeg installation is available on Windows x64 only. Configure an existing FFmpeg and ffprobe pair on this platform.".to_string());
+    }
+    let manager = shared_downloads();
+    let components_dir = manager
+        .worker_components_dir
+        .get()
+        .ok_or_else(|| "The component worker has not been initialized.".to_string())?
+        .clone();
+    let (items, start_worker) = manager.enqueue("ffmpeg")?;
+    let task_id = items
+        .iter()
+        .find(|item| item.component_id == "ffmpeg" && item.status.active())
+        .ok_or_else(|| "FFmpeg installation task was not found.".to_string())?
+        .id
+        .clone();
+    if start_worker {
+        let worker = Arc::clone(&manager);
+        let resources = resource_dir.to_path_buf();
+        tauri::async_runtime::spawn(async move {
+            worker.run_worker(components_dir, resources).await;
+        });
+    }
+    manager.wait_for_installation(&task_id, cancelled)?;
+    crate::audio_prep::ffmpeg_runtime_available(resource_dir)
+        .then_some(())
+        .ok_or_else(|| "FFmpeg installation completed but the runtime is unavailable.".to_string())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -50,6 +107,7 @@ struct QueueState {
 pub struct ComponentDownloadManager {
     inner: Mutex<QueueState>,
     store_path: Option<PathBuf>,
+    worker_components_dir: OnceLock<PathBuf>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -64,6 +122,7 @@ impl Default for ComponentDownloadManager {
         Self {
             inner: Mutex::new(QueueState::default()),
             store_path: None,
+            worker_components_dir: OnceLock::new(),
         }
     }
 }
@@ -82,6 +141,10 @@ impl Drop for ComponentRemovalReservation {
 }
 
 impl ComponentDownloadManager {
+    pub(crate) fn configure_worker(&self, components_dir: PathBuf) {
+        let _ = self.worker_components_dir.set(components_dir);
+    }
+
     pub fn persistent() -> Self {
         Self::from_store_path(data_root().join("tasks/component-downloads.json"))
     }
@@ -109,6 +172,7 @@ impl ComponentDownloadManager {
                 ..QueueState::default()
             }),
             store_path: Some(store_path),
+            worker_components_dir: OnceLock::new(),
         };
         if changed {
             if let Ok(queue) = manager.inner.lock() {
@@ -125,6 +189,41 @@ impl ComponentDownloadManager {
             .lock()
             .map(|queue| queue.items.clone())
             .unwrap_or_default()
+    }
+
+    fn wait_for_installation(
+        &self,
+        task_id: &str,
+        cancelled: Option<&AtomicBool>,
+    ) -> Result<(), String> {
+        loop {
+            if cancelled.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+                return Err("FFmpeg preparation was cancelled.".to_string());
+            }
+            if let Some(result) = self.installation_result(task_id)? {
+                return result;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    fn installation_result(&self, task_id: &str) -> Result<Option<Result<(), String>>, String> {
+        let queue = self
+            .inner
+            .lock()
+            .map_err(|_| "Component download state is unavailable.".to_string())?;
+        let item = queue
+            .items
+            .iter()
+            .find(|item| item.id == task_id)
+            .ok_or_else(|| "The awaited component task is no longer available.".to_string())?;
+        Ok(match item.status {
+            ComponentDownloadStatus::Completed => Some(Ok(())),
+            ComponentDownloadStatus::Failed | ComponentDownloadStatus::Cancelled => {
+                Some(Err(item.detail.clone()))
+            }
+            _ => None,
+        })
     }
 
     #[cfg(test)]
@@ -586,3 +685,7 @@ mod tests {
         assert!(next_start);
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../test/automatic_ffmpeg_tests.rs"]
+mod automatic_ffmpeg_tests;

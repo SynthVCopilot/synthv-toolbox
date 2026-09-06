@@ -37,7 +37,7 @@ async function settle() {
 
 function collectAudioImplementation(source) {
   const wantedVariables = new Set([
-    "audioRuntime", "audioProbe", "audioPrepareForm", "audioNormalizeForm", "pendingAudioPlan", "audioJob",
+    "audioRuntime", "audioProbe", "audioProbeInFlight", "audioPrepareForm", "audioNormalizeForm", "pendingAudioPlan", "audioJob",
     "audioJobPollTimer", "audioJobPollGeneration", "audioInputGeneration", "audioPlanRequestGeneration",
     "audioRuntimeRequestGeneration",
     "audioPlanRequestInFlight", "audioStartInFlight", "audioLoudnessAnalysisInFlight",
@@ -112,7 +112,7 @@ function createHarness(audioApi, document = { querySelector: () => undefined, ad
   const extracted = collectAudioImplementation(source);
   const harnessSource = `// @ts-nocheck
 module.exports = (function (__audioApi, __window) {
-  const audioApi = __audioApi;
+  const audioApi = { ffmpegStatus: async () => ({ available: true }), ...__audioApi };
   const window = __window;
   const page = "import";
   const activeWorkflow = "audio-preparation";

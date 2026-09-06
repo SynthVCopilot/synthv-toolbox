@@ -2,6 +2,8 @@ import { addMessages } from "./i18n";
 
 addMessages("zh-CN", {
   "workflowCopy": {
+    "ffmpegAutomatic": "按需自动下载",
+    "ffmpegAutomaticDescription": "首次使用音频功能时会自动下载并安装 FFmpeg，然后继续当前操作；进度可在组件队列中查看。写入音频文件仍需确认计划。",
     "unknown": "未知",
     "audioTaskCompleted": "音频任务已完成。",
     "audioTaskEnded": "音频任务已结束。",
@@ -386,6 +388,8 @@ addMessages("zh-CN", {
 
 addMessages("en", {
   "workflowCopy": {
+    "ffmpegAutomatic": "Downloads when needed",
+    "ffmpegAutomaticDescription": "The first audio operation automatically downloads and installs FFmpeg, then continues. Progress appears in the component queue. Writing audio files still requires plan confirmation.",
     "unknown": "Unknown",
     "audioTaskCompleted": "Audio task completed.",
     "audioTaskEnded": "Audio task ended.",

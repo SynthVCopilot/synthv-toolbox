@@ -30,6 +30,7 @@ pub fn audio_probe(
     resource_dir: &Path,
 ) -> Result<WorkflowResult, String> {
     let audio = validate_input(&audio_path, "音频", AUDIO_EXTENSIONS)?;
+    crate::downloads::ensure_ffmpeg_blocking(resource_dir, None)?;
     let runtime = python_component("audio", None)?;
     let mut args = vec!["probe".to_string(), audio.to_string_lossy().into_owned()];
     if advanced {
@@ -54,6 +55,7 @@ pub fn source_style(
     resource_dir: &Path,
 ) -> Result<SourceStyleFeatures, String> {
     let audio = validate_input(&audio_path, "参考人声", AUDIO_EXTENSIONS)?;
+    crate::downloads::ensure_ffmpeg_blocking(resource_dir, None)?;
     let runtime = python_component("audio", None)?;
     let args = vec![
         "source-style".to_string(),
@@ -71,6 +73,7 @@ pub async fn separate_audio_cancellable(
 ) -> Result<WorkflowResult, String> {
     Uuid::parse_str(&output_id).map_err(|_| "分离任务 ID 无效。".to_string())?;
     let audio = validate_input(&audio_path, "待分离音频", AUDIO_EXTENSIONS)?;
+    crate::downloads::ensure_ffmpeg(resource_dir.clone(), Some(Arc::clone(&cancelled))).await?;
     let runtime = python_component("separation", None)?;
     let args = vec![
         runtime.script.to_string_lossy().into_owned(),
@@ -146,6 +149,7 @@ pub fn game_to_midi(
     if !(0.02..=0.25).contains(&tolerance) {
         return Err("匹配容差必须在 0.02–0.25 秒之间。".to_string());
     }
+    crate::downloads::ensure_ffmpeg_blocking(resource_dir, None)?;
     let runtime = python_component("audio", None)?;
     let mut args = vec![
         "pair-diff".to_string(),
@@ -197,6 +201,11 @@ pub async fn game_to_midi_cancellable(
     fs::create_dir_all(&output_directory)
         .map_err(|error| format!("无法创建 Cover 输出目录：{error}"))?;
     let midi_path = output_directory.join("cover.mid");
+    crate::downloads::ensure_ffmpeg(
+        request.resource_dir.clone(),
+        Some(Arc::clone(&request.cancelled)),
+    )
+    .await?;
     let runtime = python_component("audio", None)?;
     let mut args = vec![
         runtime.script.to_string_lossy().into_owned(),

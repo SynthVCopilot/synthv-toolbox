@@ -49,6 +49,8 @@ impl AppState {
         svp_passthrough_only: bool,
         settings: ToolboxSettings,
     ) -> Self {
+        let downloads = crate::downloads::shared_downloads();
+        downloads.configure_worker(components_dir.clone());
         let audio_preparation = AudioPreparationService::new(resource_dir.clone());
         let mcp = Arc::new(McpManager::default());
         let media_tasks =
@@ -65,7 +67,7 @@ impl AppState {
             resource_dir,
             bridge_dir,
             components_dir,
-            downloads: Arc::new(ComponentDownloadManager::persistent()),
+            downloads,
             media_tasks,
             audio_preparation,
             sv2_profiles: Arc::new(Sv2ProfileService::new()),
