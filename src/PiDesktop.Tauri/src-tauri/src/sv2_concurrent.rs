@@ -369,10 +369,12 @@ fn reusable_instance(
         let expected = sandbox_directory_rule(slot)?;
         if !output.status.success()
             || !decode_output(&output.stdout).lines().any(|line| {
-                line.trim()
-                    .strip_prefix("OpenFilePath=")
-                    .unwrap_or(line.trim())
-                    .eq_ignore_ascii_case(&expected)
+                sandbox_directory_rule_matches(
+                    line.trim()
+                        .strip_prefix("OpenFilePath=")
+                        .unwrap_or(line.trim()),
+                    &expected,
+                )
             })
         {
             return Err(
@@ -575,6 +577,18 @@ fn sandbox_directory_rule(path: &Path) -> Result<String, String> {
         value.push(std::path::MAIN_SEPARATOR);
     }
     Ok(value)
+}
+
+fn sandbox_directory_rule_matches(value: &str, expected: &str) -> bool {
+    let normalize = |value: &str| {
+        value
+            .trim()
+            .trim_start_matches(r"\\?\")
+            .trim_end_matches(['\\', '/'])
+            .replace('/', "\\")
+            .to_lowercase()
+    };
+    normalize(value) == normalize(expected)
 }
 
 fn list_pids(provider: &SandboxieProvider, box_name: &str) -> Result<Vec<u32>, String> {
