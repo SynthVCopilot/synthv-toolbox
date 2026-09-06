@@ -1310,7 +1310,31 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
   .lyric-project-toolbar, .lyric-project-actions { align-items: stretch; flex-direction: column; }
   .lyric-project-actions select { width: 100%; }
   .synthv-process-row { align-items: stretch; flex-direction: column; }
-  .brand > div:last-child, .nav-item span, .nav-label { display: none; }
+  .brand > div:last-child, .nav-item span { display: none; }
+  .sidebar .nav-label {
+    position: relative;
+    display: block;
+    flex: 0 0 16px;
+    width: 16px;
+    height: 16px;
+    margin: 17px auto 6px;
+    overflow: hidden;
+    color: transparent;
+    font-size: 0;
+    line-height: 16px;
+  }
+  .sidebar .nav-label::after {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 16px;
+    height: 1px;
+    border-radius: 1px;
+    background: var(--line-strong);
+    content: "";
+    transform: translate(-50%, -50%);
+  }
+  .sidebar .version { visibility: hidden; }
   .nav-item { justify-content: center; padding: 0; }
   .quick-grid, .mode-grid { grid-template-columns: 1fr; }
   .content { padding-inline: 20px; }
