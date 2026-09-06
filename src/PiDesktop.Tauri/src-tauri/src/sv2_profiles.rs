@@ -26,10 +26,7 @@ use crate::sv2_session_guard::{
     SessionLaunchPreparation, Sv2SessionGuardStore, Sv2SessionProtectionView,
 };
 use crate::sv2_sync::{self, Sv2SyncCategory, Sv2SyncCategoryId, Sv2SyncManifest, Sv2SyncResult};
-use crate::svp_launch_router::{
-    build_route_plan, inspect_voice_inventory, validate_confirmed_voice_names,
-    Sv2VoiceInventoryView, SvpLaunchMode, SvpRoutePlan,
-};
+use crate::svp_launch_router::{build_route_plan, SvpLaunchMode, SvpRoutePlan};
 use crate::synthv::{find_sv2_executable, succeeded, OperationResult};
 
 const SCHEMA_VERSION: u32 = 1;
@@ -46,8 +43,6 @@ const SLOT_COLORS: [&str; 6] = [
 struct SlotRecord {
     id: String,
     display_name: String,
-    #[serde(default)]
-    manually_confirmed_voices: Vec<String>,
     color: String,
     created_at_utc: String,
     #[serde(default)]
@@ -120,7 +115,6 @@ pub struct Sv2ProfileSlotView {
     pub session_protection: Sv2SessionProtectionView,
     pub concurrent_session_protection: Sv2SessionProtectionView,
     pub concurrent: Sv2ConcurrentSlotView,
-    pub voice_inventory: Sv2VoiceInventoryView,
     pub account_probe: Sv2AccountProbeView,
     pub concurrent_account_probe: Sv2AccountProbeView,
 }
@@ -464,7 +458,6 @@ impl Sv2ProfileService {
         manifest.slots.push(SlotRecord {
             id: id.clone(),
             display_name,
-            manually_confirmed_voices: Vec::new(),
             color: SLOT_COLORS[0].to_string(),
             created_at_utc: now.clone(),
             last_activated_at_utc: Some(now),
@@ -538,7 +531,6 @@ impl Sv2ProfileService {
         let record = SlotRecord {
             id: id.clone(),
             display_name,
-            manually_confirmed_voices: Vec::new(),
             color: SLOT_COLORS[manifest.slots.len() % SLOT_COLORS.len()].to_string(),
             created_at_utc: Utc::now().to_rfc3339(),
             last_activated_at_utc: None,
@@ -574,31 +566,6 @@ impl Sv2ProfileService {
             .find(|slot| slot.id == slot_id)
             .ok_or_else(|| "找不到该 SV2 槽位。".to_string())?;
         slot.display_name = display_name;
-        save_manifest(paths, &manifest)?;
-        build_state(paths, &manifest, false, String::new())
-    }
-
-    pub fn update_voice_licenses(
-        &self,
-        slot_id: String,
-        voices: Vec<String>,
-    ) -> Result<Sv2ProfilesState, String> {
-        validate_slot_id(&slot_id)?;
-        let voices = validate_confirmed_voice_names(voices)?;
-        let _gate = self
-            .gate
-            .lock()
-            .map_err(|_| "SV2 槽位状态锁已损坏。".to_string())?;
-        let paths = self.paths.as_ref().map_err(Clone::clone)?;
-        let _file_lock = acquire_switch_lock(paths)?;
-        recover_if_needed(paths)?;
-        let mut manifest = load_manifest(paths)?;
-        let slot = manifest
-            .slots
-            .iter_mut()
-            .find(|slot| slot.id == slot_id)
-            .ok_or_else(|| "找不到该 SV2 槽位。".to_string())?;
-        slot.manually_confirmed_voices = voices;
         save_manifest(paths, &manifest)?;
         build_state(paths, &manifest, false, String::new())
     }
@@ -1178,29 +1145,6 @@ fn enrich_account_probes(
         slot.account_probe = view.clone();
         slot.concurrent_account_probe = view;
     }
-
-    for slot in &mut state.slots {
-        let verified_count = [&slot.account_probe, &slot.concurrent_account_probe]
-            .into_iter()
-            .filter(|probe| probe.authorization_status == Sv2AuthorizationStatus::Verified)
-            .map(|probe| probe.authorized_voice_count)
-            .max();
-        if let Some(verified_count) = verified_count {
-            slot.voice_inventory.status =
-                crate::svp_launch_router::Sv2VoiceInventoryStatus::Verified;
-            slot.voice_inventory.verified_authorized_voice_count = verified_count;
-            slot.voice_inventory.detail =
-                if slot.voice_inventory.manually_confirmed_voices.is_empty() {
-                    format!("账号登录预检已确认 {verified_count} 个声库授权。")
-                } else {
-                    format!(
-                        "账号登录预检已确认 {} 个声库授权；另保留 {} 个用户确认记录作为补充。",
-                        verified_count,
-                        slot.voice_inventory.manually_confirmed_voices.len()
-                    )
-                };
-        }
-    }
 }
 
 fn build_account_precheck(state: &Sv2ProfilesState) -> Sv2AccountPrecheck {
@@ -1413,10 +1357,6 @@ fn build_state(
                 session_protection,
                 concurrent_session_protection,
                 concurrent,
-                voice_inventory: inspect_voice_inventory(
-                    &data_path,
-                    &slot.manually_confirmed_voices,
-                ),
                 account_probe: Sv2AccountProbeView::not_checked(session_cached),
                 concurrent_account_probe: Sv2AccountProbeView::not_checked(
                     concurrent_session_cached,
