@@ -2436,9 +2436,9 @@ function renderAiProviderSettings(): string {
     : "";
   const activeProvider = activeAiProvider();
   const activeVerified = Boolean(activeProvider && (activeProvider.accounts.some((account) => account.authorized) || activeProvider.apiKeys.length));
-  const activeStatus = activeProvider ? `${activeProvider.accounts.filter((account) => account.authorized).length} 个 OAuth · ${activeProvider.apiKeys.length} 个 API Key` : "未配置连接";
-  return `<section class="panel ai-provider-panel"><div class="section-heading"><div><h2>模型提供商</h2><p>可使用 OAuth 订阅或多份 API Key 接入；凭据均由本机后端处理。</p></div><span class="availability ${activeVerified ? "ready" : "warning"}">${activeStatus}</span></div>
-    ${legacyWarning}<div class="ai-provider-summary"><div><strong>${escapeHtml(activeProvider ? aiProviderDisplayName(activeProvider) : "尚未选择提供商")}</strong><small>${escapeHtml(activeProvider?.model || "选择认证方式、提供商与模型后即可开始对话。")}</small></div><button type="button" class="primary" data-open-ai-provider-picker ${busy ? "disabled" : ""}>添加或切换连接</button></div>
+  const activeStatus = activeVerified && activeProvider ? `${activeProvider.accounts.filter((account) => account.authorized).length} 个 OAuth · ${activeProvider.apiKeys.length} 个 API Key` : "未配置连接";
+  return `<section class="panel ai-provider-panel"><div class="section-heading"><div><h2>模型提供商</h2><p>可使用 OAuth 订阅或多份 API Key 接入；凭据均由本机后端处理。</p></div><button type="button" class="primary" data-open-ai-provider-picker ${busy ? "disabled" : ""}>添加连接</button></div>
+    ${legacyWarning}<div class="ai-provider-summary"><div><strong>${escapeHtml(activeVerified && activeProvider ? aiProviderDisplayName(activeProvider) : "尚未连接模型提供商")}</strong><small>${escapeHtml(activeVerified ? activeProvider?.model || "请选择模型。" : "添加 OAuth 订阅或 API Key 后即可选择模型。")}</small></div><span class="availability ${activeVerified ? "ready" : "warning"}">${activeStatus}</span></div>
   </section>`;
 }
 
