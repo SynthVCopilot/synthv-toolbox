@@ -750,7 +750,7 @@ function navItem(target: Page, label: string, glyph: Parameters<typeof icon>[0])
 function renderSidebar(): string {
   if (!app) return "";
   return `<div class="brand" data-page="home" title="返回概览">
-      <div class="brand-mark small"><img class="brand-logo" src="/assets/synthv-toolbox-logo-white-outlined.svg" alt="SynthV Toolbox" /></div>
+      <div class="brand-mark small"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="SynthV Toolbox" /></div>
       <div><strong>SynthV Toolbox</strong><span>Creative utility suite</span></div>
     </div>
     <nav class="nav" aria-label="主导航">
@@ -778,7 +778,7 @@ function render(): void {
   if (!app) return;
   if (app.settingsLoadError) {
     root.innerHTML = `<main class="fatal settings-recovery" role="alert">
-      <div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo-white-outlined.svg" alt="SynthV Toolbox" /></div>
+      <div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="SynthV Toolbox" /></div>
       <span class="eyebrow">设置恢复保护模式</span>
       <h1>配置需要修复，原文件尚未被覆盖</h1>
       <p>工具箱检测到设置文件无法安全读取，因此已停用所有设置写入。OAuth 凭据和账号映射不会被默认配置替换。</p>
@@ -1326,7 +1326,7 @@ function renderOnboarding(): void {
   root.innerHTML = `<main class="onboarding">
     <div class="onboarding-glow one"></div><div class="onboarding-glow two"></div>
     <section class="onboarding-card">
-      <div class="onboarding-brand"><div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo-white-outlined.svg" alt="SynthV Toolbox" /></div><span>SynthV Toolbox</span></div>
+      <div class="onboarding-brand"><div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="SynthV Toolbox" /></div><span>SynthV Toolbox</span></div>
       <div class="eyebrow">首次启动 · 选择工作方式</div>
       <h1>一个工具箱，按你的方式工作。</h1>
       <p class="lead">随时可以在设置中切换。纯工具箱模式不会显示或启动任何 AI 功能。</p>
@@ -1541,7 +1541,7 @@ function renderHome(): string {
         <p>${app.mode === "ai" ? "从音频分析到 SynthV 工程操作，AI 只通过你启用的能力和 MCP 工具工作。" : "无需模型配置即可进行确定性的音频、MIDI、工程和 Bridge 操作。"}</p>
         <div class="hero-actions"><button class="primary" data-page="${app.mode === "ai" ? "copilot" : "import"}">${icon(app.mode === "ai" ? "bot" : "pipeline", 18)} ${app.mode === "ai" ? "打开 Copilot" : "打开导入与转换"}</button><button class="secondary" data-page="bridge">检查 Bridge</button></div>
       </div>
-      <div class="hero-orb"><div><img class="brand-logo" src="/assets/synthv-toolbox-logo-white-outlined.svg" alt="SynthV Toolbox" /></div><span>${app.mode === "ai" ? "COPILOT READY" : "LOCAL FIRST"}</span></div>
+      <div class="hero-orb"><div><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="SynthV Toolbox" /></div><span>${app.mode === "ai" ? "COPILOT READY" : "LOCAL FIRST"}</span></div>
     </div>
     <div class="stats-grid">
       <article class="stat-card"><span>运行模式</span><strong>${app.mode === "ai" ? "AI 增强" : "纯工具箱"}</strong><small>${app.mode === "ai" ? aiConnectionSummary() : "模型运行时已停用"}</small></article>
@@ -3647,6 +3647,6 @@ void (async () => {
     render();
     refreshAiCatalogLive();
   } catch (reason) {
-    root.innerHTML = `<div class="fatal"><div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo-white-outlined.svg" alt="SynthV Toolbox" /></div><h1>无法启动 SynthV Toolbox</h1><pre>${escapeHtml(formatError(reason))}</pre><p>请确认应用由 Tauri 运行，而不是直接打开前端页面。</p></div>`;
+    root.innerHTML = `<div class="fatal"><div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="SynthV Toolbox" /></div><h1>无法启动 SynthV Toolbox</h1><pre>${escapeHtml(formatError(reason))}</pre><p>请确认应用由 Tauri 运行，而不是直接打开前端页面。</p></div>`;
   }
 })();
