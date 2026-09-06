@@ -36,4 +36,7 @@ if (!packageVersion.test(cargo))
 const updatedCargo = cargo.replace(packageVersion, `$1"${version}"`);
 fs.writeFileSync(cargoFile, updatedCargo);
 
+if (process.env.GITHUB_OUTPUT) {
+  fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+}
 process.stdout.write(`SynthV Toolbox build version: ${version}\n`);

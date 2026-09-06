@@ -5,7 +5,9 @@ use crate::components::{find_ffmpeg_pair, validate_ffmpeg_directory};
 use crate::config::ToolboxSettings;
 
 fn temporary_root(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("synthv-toolbox-{name}-{}", uuid::Uuid::new_v4()))
+    fs::canonicalize(std::env::temp_dir())
+        .expect("system temporary directory must exist")
+        .join(format!("synthv-toolbox-{name}-{}", uuid::Uuid::new_v4()))
 }
 
 fn executable_names() -> (&'static str, &'static str) {
@@ -18,8 +20,10 @@ fn executable_names() -> (&'static str, &'static str) {
 
 #[test]
 fn ffmpeg_selection_is_persisted_with_settings() {
-    let mut settings = ToolboxSettings::default();
-    settings.ffmpeg_directory = Some("C:/tools/ffmpeg/bin".to_string());
+    let settings = ToolboxSettings {
+        ffmpeg_directory: Some("C:/tools/ffmpeg/bin".to_string()),
+        ..ToolboxSettings::default()
+    };
 
     let value = serde_json::to_value(&settings).unwrap();
     assert_eq!(value["ffmpegDirectory"], "C:/tools/ffmpeg/bin");
@@ -42,6 +46,26 @@ fn ffmpeg_pair_accepts_an_extracted_root_or_its_bin_directory() {
     assert!(find_ffmpeg_pair(&root).is_some());
     assert!(find_ffmpeg_pair(&bin).is_some());
 
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn ffmpeg_pair_rejects_a_linked_directory() {
+    use std::os::unix::fs::symlink;
+
+    let root = temporary_root("linked-pair");
+    let bin = root.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let (ffmpeg, ffprobe) = executable_names();
+    fs::write(bin.join(ffmpeg), b"test").unwrap();
+    fs::write(bin.join(ffprobe), b"test").unwrap();
+    let linked_root = temporary_root("linked-pair-alias");
+    symlink(&root, &linked_root).unwrap();
+
+    assert!(find_ffmpeg_pair(&linked_root).is_none());
+
+    fs::remove_file(linked_root).unwrap();
     fs::remove_dir_all(root).unwrap();
 }
 

@@ -1,0 +1,86 @@
+name: Prepare Desktop Build
+
+on:
+  workflow_call:
+    inputs:
+      release:
+        required: true
+        type: boolean
+    outputs:
+      version:
+        value: ${{ jobs.prepare.outputs.version }}
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ inputs.release && steps.release-version.outputs.version || steps.development-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22.19.0"
+          cache: npm
+          cache-dependency-path: |
+            src/PiDesktop.Tauri/package-lock.json
+            src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/package-lock.json
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Apply version from release tag
+        id: release-version
+        if: inputs.release
+        run: node .github/scripts/set-version.mjs "${{ github.ref_name }}"
+
+      - name: Apply development version from source commit
+        id: development-version
+        if: ${{ !inputs.release }}
+        run: node .github/scripts/set-dev-version.mjs "${{ github.sha }}"
+
+      - name: Check Python component sources
+        run: python -m py_compile src/PiDesktop.Tauri/src-tauri/components/pi-audio/pi_audio.py src/PiDesktop.Tauri/src-tauri/components/cvrs/cvrs.py src/PiDesktop.Tauri/src-tauri/components/vocal-separation/separate.py
+
+      - name: Build bundled SynthV Bridge
+        working-directory: src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+          npm prune --omit=dev --no-audit --no-fund
+
+      - name: Install desktop dependencies
+        working-directory: src/PiDesktop.Tauri
+        run: npm ci --no-audit --no-fund
+
+      - name: Build frontend and test desktop contracts
+        working-directory: src/PiDesktop.Tauri
+        run: |
+          npm run build
+          npm run test:contracts
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src/PiDesktop.Tauri/src-tauri/Cargo.toml -- --check
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prepared-desktop
+          if-no-files-found: error
+          retention-days: 1
+          path: |
+            src/PiDesktop.Tauri/dist
+            src/PiDesktop.Tauri/package.json
+            src/PiDesktop.Tauri/package-lock.json
+            src/PiDesktop.Tauri/src-tauri/Cargo.toml
+            src/PiDesktop.Tauri/src-tauri/tauri.conf.json
+            src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/dist
