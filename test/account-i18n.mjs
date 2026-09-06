@@ -20,11 +20,15 @@ evaluate(stripModule(read('accountStatus.ts')));
 evaluate(stripTypeScriptTypes(functions.map(fn => source.slice(fn.start, fn.end)).join('\n'), { mode: 'transform' }));
 const zhKeys = evaluate('Object.keys(i18n.global.getLocaleMessage("zh-CN").accountUi).sort().join("|")');
 assert.equal(zhKeys, evaluate('Object.keys(i18n.global.getLocaleMessage("en").accountUi).sort().join("|")'));
-const calls = [...source.matchAll(/t\("(accountUi\.[^"]+)"/g)].map(match => match[1]);
+const calls = [...source.matchAll(/"(account(?:Ui|Notice)\.[^"]+)"/g)].map(match => match[1]);
 for (const lang of ['en', 'zh-CN']) {
   evaluate(`setLocale(${JSON.stringify(lang)})`);
   for (const key of calls) assert.equal(evaluate(`i18n.global.te(${JSON.stringify(key)})`), true, key);
 }
+evaluate('setLocale("en")');
+assert.equal(evaluate('t("accountNotice.globalSavedPrepared", { count: 3 })'), 'Global settings saved. Isolated environments prepared automatically: 3.');
+assert.match(evaluate('t("settings.aiDisabledDescription")'), /own local MCP service remains available/);
+assert.match(source, /error = probe\.detail \|\| t\("accountNotice\.authorizationUnknown"\)/);
 const hostile = '<img src=x onerror=alert(1)> & "name"';
 const probe = { sessionStatus: 'ready', remoteUse: 'clear', authorizationStatus: 'verified', authorizedVoiceCount: 2, authorizedVoices: [], authorizedVoiceProducts: [], accountDisplayName: hostile, accountEmail: hostile, detail: '原始诊断', };
 const slot = { id: 'slot', displayName: hostile, color: '#123456', sessionCached: true, isActive: true, dataPath: hostile, accountProbe: probe, concurrentAccountProbe: { ...probe }, concurrent: { ready: true, runningPids: [21] }, sessionProtection: { status: 'ready' }, concurrentSessionProtection: { status: 'ready' }, installedVoiceIds: [] };

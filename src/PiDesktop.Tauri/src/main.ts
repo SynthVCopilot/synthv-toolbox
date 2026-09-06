@@ -2691,7 +2691,7 @@ function wireForms(): void {
       profiles = await api.importCurrentSv2Profile(displayName);
       const prepared = await prepareConcurrentSlotsWhenEnabled();
       await refreshAccountUsage();
-      notice = `已导入账号槽位。${prepared ? "已自动准备隔离环境。" : ""}`;
+      notice = t(prepared ? "accountNotice.importedPrepared" : "accountNotice.imported");
     });
   });
   document.querySelector<HTMLFormElement>("#profile-create-form")?.addEventListener("submit", (event) => {
@@ -2701,7 +2701,7 @@ function wireForms(): void {
       profiles = await api.createSv2Profile(displayName);
       const prepared = await prepareConcurrentSlotsWhenEnabled();
       await refreshAccountUsage();
-      notice = `已创建账号槽位。${prepared ? "已自动准备隔离环境。" : ""}`;
+      notice = t(prepared ? "accountNotice.createdPrepared" : "accountNotice.created");
     });
   });
   document.querySelectorAll<HTMLFormElement>("[data-profile-rename-form]").forEach((form) => form.addEventListener("submit", (event) => {
@@ -2709,7 +2709,7 @@ function wireForms(): void {
     const slotId = form.dataset.profileRenameForm ?? "";
     const displayName = form.querySelector<HTMLInputElement>("input")?.value.trim() ?? "";
     if (!slotId) return;
-    void run(async () => { profiles = await api.renameSv2Profile(slotId, displayName); notice = displayName ? "备注已保存。" : "备注已清除。"; });
+    void run(async () => { profiles = await api.renameSv2Profile(slotId, displayName); notice = displayName ? t("accountNotice.noteSaved") : t("accountNotice.noteCleared"); });
   }));
   document.querySelector<HTMLFormElement>("#sv2-global-settings-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -2727,7 +2727,7 @@ function wireForms(): void {
       const prepared = await prepareConcurrentSlotsWhenEnabled();
       app = await api.setSv2AccountIndicator(accountProbeEnabled);
       if (!accountProbeEnabled) profiles = await api.sv2ProfileState();
-      notice = `全局设置已保存。${prepared ? `已自动准备 ${prepared} 个隔离环境。` : ""}`;
+      notice = t(prepared ? "accountNotice.globalSavedPrepared" : "accountNotice.globalSaved", { count: prepared });
     });
   });
   document.querySelector<HTMLFormElement>("#chat-form")?.addEventListener("submit", (event) => {
@@ -2736,7 +2736,7 @@ function wireForms(): void {
     if (!input) return;
     void sendPrompt(input);
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-approve-file], [data-deny-file]").forEach((button) => button.addEventListener("click", () => void run(async () => { await api.decideAgentFileApproval(button.dataset.approveFile ?? button.dataset.denyFile ?? "", button.hasAttribute("data-approve-file")); fileApprovals = await api.agentFileApprovals(); notice = button.hasAttribute("data-approve-file") ? "文件访问已批准。" : "文件访问已拒绝。"; })));
+  document.querySelectorAll<HTMLButtonElement>("[data-approve-file], [data-deny-file]").forEach((button) => button.addEventListener("click", () => void run(async () => { await api.decideAgentFileApproval(button.dataset.approveFile ?? button.dataset.denyFile ?? "", button.hasAttribute("data-approve-file")); fileApprovals = await api.agentFileApprovals(); notice = button.hasAttribute("data-approve-file") ? t("accountNotice.fileApproved") : t("accountNotice.fileDenied"); })));
   document.querySelector<HTMLTextAreaElement>("#chat-input")?.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
@@ -2749,8 +2749,8 @@ function wireForms(): void {
     void run(async () => {
       app = await api.setSvpLaunchRouting(enabled);
       notice = enabled
-        ? "智能 .svp 启动已开启。请确认 Windows 已将 Synthesizer V Toolbox 设为 .svp 默认应用。"
-        : "智能 .svp 启动已关闭；工程会透明转交给原始处理程序。";
+        ? t("accountNotice.routingEnabled")
+        : t("accountNotice.routingDisabled");
     });
   });
   document.querySelector<HTMLFormElement>("#http-api-form")?.addEventListener("submit", (event) => {
@@ -3221,7 +3221,7 @@ document.addEventListener("click", (event) => {
       }
       app = await api.setSv2AccountIndicator(true, true);
       if (consent.refreshAfterEnable) await refreshAccountUsage(consent.refreshSlotId);
-      notice = "账号登录指示器已开启，并已完成首次授权查询。";
+      notice = t("accountNotice.indicatorEnabled");
     });
     return;
   }
@@ -3234,7 +3234,7 @@ document.addEventListener("click", (event) => {
     void run(async () => {
       app = await api.setSv2AccountIndicator(false);
       profiles = await api.sv2ProfileState();
-      notice = "账号登录指示器已关闭；之后进入账号页不会探测官方登录接口。";
+      notice = t("accountNotice.indicatorDisabled");
     });
     return;
   }
@@ -3300,7 +3300,7 @@ document.addEventListener("click", (event) => {
       profiles = await api.deleteSv2Profile(slotId);
       managedProfileSlotId = profiles.slots.find((slot) => slot.isActive)?.id ?? profiles.slots[0]?.id;
       accountManagerOpen = false;
-      notice = "账号槽位及其本机数据已删除。";
+      notice = t("accountNotice.deleted");
     });
     return;
   }
@@ -3542,7 +3542,7 @@ document.addEventListener("click", (event) => {
       void run(async () => {
         await refreshAccountUsage();
         loadSv2VoiceCatalog(true);
-        notice = "账号槽位与授权状态已刷新。";
+        notice = t("accountNotice.refreshed");
       });
     }
     return;
@@ -3559,9 +3559,9 @@ document.addEventListener("click", (event) => {
         const slot = profiles?.slots.find((item) => item.id === slotId);
         const probe = slot?.accountProbe;
         if (probe && ["syncFailed", "offline", "expired", "invalid", "unsupported", "accountMismatch"].includes(probe.sessionStatus)) {
-          error = probe.detail || "当前无法确认该账号的授权状态。";
+          error = probe.detail || t("accountNotice.authorizationUnknown");
         } else {
-          notice = "此账号的会话与授权状态已检查。";
+          notice = t("accountNotice.checked");
         }
       });
     }
@@ -3572,9 +3572,9 @@ document.addEventListener("click", (event) => {
     void run(async () => { await launchSv2ProfileAfterLiveCheck(slotId); });
     return;
   }
-  if (target.dataset.profileActivate) { void run(async () => { profiles = await api.activateSv2Profile(target.dataset.profileActivate ?? ""); notice = "默认账号槽位已切换。"; }); return; }
+  if (target.dataset.profileActivate) { void run(async () => { profiles = await api.activateSv2Profile(target.dataset.profileActivate ?? ""); notice = t("accountNotice.activated"); }); return; }
   if (target.dataset.profileFolder) { void run(async () => { setFeedback(await api.openSv2ProfileFolder(target.dataset.profileFolder ?? "")); }); return; }
-  if (target.dataset.profileConcurrentPrepare) { void run(async () => { profiles = await api.prepareSv2ConcurrentProfile(target.dataset.profileConcurrentPrepare ?? ""); notice = "隔离环境已准备，可以并发启动。"; }); return; }
+  if (target.dataset.profileConcurrentPrepare) { void run(async () => { profiles = await api.prepareSv2ConcurrentProfile(target.dataset.profileConcurrentPrepare ?? ""); notice = t("accountNotice.isolationPrepared"); }); return; }
   if (target.dataset.profileConcurrentLaunch) {
     const slotId = target.dataset.profileConcurrentLaunch;
     if (!app?.concurrentDisclaimerAccepted) {
@@ -3682,7 +3682,7 @@ async function listenForSvpRouteRequests(): Promise<void> {
   await Promise.all([listen<unknown>("svp-route-request", (event) => {
     const plan = svpRoutePlanFromPayload(event.payload);
     if (!plan) {
-      error = "收到的 .svp 智能路由请求格式无效。";
+      error = t("accountNotice.invalidRouteRequest");
       render();
       return;
     }
