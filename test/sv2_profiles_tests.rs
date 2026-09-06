@@ -100,7 +100,6 @@ fn import_fixture(paths: &SlotPaths, name: &str) -> SlotManifest {
         slots: vec![SlotRecord {
             id,
             display_name: name.to_string(),
-            manually_confirmed_voices: Vec::new(),
             color: SLOT_COLORS[0].to_string(),
             created_at_utc: Utc::now().to_rfc3339(),
             last_activated_at_utc: None,
@@ -128,7 +127,6 @@ fn add_parked(paths: &SlotPaths, manifest: &mut SlotManifest, name: &str) -> Str
     manifest.slots.push(SlotRecord {
         id: id.clone(),
         display_name: name.to_string(),
-        manually_confirmed_voices: Vec::new(),
         color: SLOT_COLORS[1].to_string(),
         created_at_utc: Utc::now().to_rfc3339(),
         last_activated_at_utc: None,
@@ -311,7 +309,7 @@ fn names_and_slot_ids_are_strictly_validated() {
 }
 
 #[test]
-fn legacy_manual_identity_fields_are_ignored_and_not_reserialized() {
+fn legacy_manual_fields_are_ignored_and_not_reserialized() {
     let (root, paths) = fixture();
     let manifest_path = &paths.manifest;
     fs::write(
@@ -321,6 +319,7 @@ fn legacy_manual_identity_fields_are_ignored_and_not_reserialized() {
             "slots": [{
                 "id": Uuid::new_v4().to_string(),
                 "displayName": "备注",
+                "manuallyConfirmedVoices": ["Mai 2"],
                 "username": "obsolete-name",
                 "email": "obsolete@example.test",
                 "color": "#ABCDEF",
@@ -334,6 +333,9 @@ fn legacy_manual_identity_fields_are_ignored_and_not_reserialized() {
     let manifest = load_manifest(&paths).unwrap();
     assert_eq!(manifest.slots[0].display_name, "备注");
     let serialized = serde_json::to_value(manifest).unwrap();
+    assert!(serialized["slots"][0]
+        .get("manuallyConfirmedVoices")
+        .is_none());
     assert!(serialized["slots"][0].get("username").is_none());
     assert!(serialized["slots"][0].get("email").is_none());
     fs::remove_dir_all(root).unwrap();

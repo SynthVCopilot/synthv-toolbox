@@ -31,23 +31,6 @@ pub struct SvpAssociationView {
     pub detail: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum Sv2VoiceInventoryStatus {
-    Verified,
-    Manual,
-    Unknown,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Sv2VoiceInventoryView {
-    pub status: Sv2VoiceInventoryStatus,
-    pub manually_confirmed_voices: Vec<String>,
-    pub verified_authorized_voice_count: usize,
-    pub detail: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SvpVoiceRequirement {
@@ -67,8 +50,6 @@ pub enum SvpLaunchMode {
 #[serde(rename_all = "camelCase")]
 pub enum SvpAuthorizationSource {
     Session,
-    Mixed,
-    Manual,
     Unknown,
 }
 
@@ -202,55 +183,6 @@ pub fn passthrough_svp_project(
     {
         let _ = (project_path, original_prog_id);
         Err("当前平台不支持按 Windows ProgID 透传 .svp 工程。".to_string())
-    }
-}
-
-pub fn validate_confirmed_voice_names(values: Vec<String>) -> Result<Vec<String>, String> {
-    if values.len() > 256 {
-        return Err("每个账号最多记录 256 个声库授权。".to_string());
-    }
-    let mut seen = HashSet::new();
-    let mut result = Vec::new();
-    for value in values {
-        let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
-        if value.is_empty() {
-            continue;
-        }
-        if value.len() > 160 || value.chars().any(char::is_control) {
-            return Err("声库名称过长或包含控制字符。".to_string());
-        }
-        let key = normalized_voice_name(&value);
-        if seen.insert(key) {
-            result.push(value);
-        }
-    }
-    result.sort_by_key(|value| normalized_voice_name(value));
-    Ok(result)
-}
-
-pub fn inspect_voice_inventory(
-    _data_root: &Path,
-    manually_confirmed_voices: &[String],
-) -> Sv2VoiceInventoryView {
-    let (status, detail) = if !manually_confirmed_voices.is_empty() {
-        (
-            Sv2VoiceInventoryStatus::Manual,
-            format!(
-                "已手工确认 {} 个声库；该记录只用于工程路由，不替代 Dreamtonics 官方授权预检。",
-                manually_confirmed_voices.len()
-            ),
-        )
-    } else {
-        (
-            Sv2VoiceInventoryStatus::Unknown,
-            "尚无官方账号授权结果或用户手工确认记录。".to_string(),
-        )
-    };
-    Sv2VoiceInventoryView {
-        status,
-        manually_confirmed_voices: manually_confirmed_voices.to_vec(),
-        verified_authorized_voice_count: 0,
-        detail,
     }
 }
 
@@ -398,12 +330,6 @@ fn route_mode_candidate(
         && !login_required;
     let launch_mode = idle.then_some(mode);
 
-    let manually_confirmed = slot
-        .voice_inventory
-        .manually_confirmed_voices
-        .iter()
-        .map(|name| normalized_voice_name(name))
-        .collect::<HashSet<_>>();
     let verified = account_probe
         .authorized_voices
         .iter()
@@ -412,30 +338,22 @@ fn route_mode_candidate(
     let mut matched_voices = Vec::new();
     let mut missing_or_unknown_voices = Vec::new();
     let mut verified_matches = 0usize;
-    let mut manual_matches = 0usize;
     for voice in required {
         let normalized = normalized_voice_name(&voice.name);
         if verified.contains(&normalized) {
             matched_voices.push(voice.name.clone());
             verified_matches += 1;
-        } else if manually_confirmed.contains(&normalized) {
-            matched_voices.push(voice.name.clone());
-            manual_matches += 1;
         } else {
             missing_or_unknown_voices.push(voice.name.clone());
         }
     }
     let exact_authorization_match = !required.is_empty() && missing_or_unknown_voices.is_empty();
-    let verified_authorization_match = exact_authorization_match && manual_matches == 0;
-    let authorization_source = if verified_matches > 0 && manual_matches > 0 {
-        SvpAuthorizationSource::Mixed
-    } else if !verified.is_empty()
+    let verified_authorization_match = exact_authorization_match;
+    let authorization_source = if !verified.is_empty()
         || account_probe.authorization_status
             == crate::sv2_account_probe::Sv2AuthorizationStatus::Verified
     {
         SvpAuthorizationSource::Session
-    } else if manual_matches > 0 || !manually_confirmed.is_empty() {
-        SvpAuthorizationSource::Manual
     } else {
         SvpAuthorizationSource::Unknown
     };
@@ -456,10 +374,8 @@ fn route_mode_candidate(
         10_000
     } else if verified_authorization_match {
         20_000 + verified_matches as i32 * 200
-    } else if exact_authorization_match {
-        10_000 + matched_voices.len() as i32 * 100
     } else {
-        verified_matches as i32 * 200 + manual_matches as i32 * 100
+        verified_matches as i32 * 200
     };
     if slot.is_active {
         score += 20;
@@ -495,8 +411,6 @@ fn route_mode_candidate(
             "账号登录预检已匹配工程所需的 {} 个官方声库授权。",
             required.len()
         )
-    } else if exact_authorization_match {
-        format!("已由用户确认记录补全工程所需的 {} 个声库。", required.len())
     } else {
         "账号授权不完整或未知，需要人工确认。".to_string()
     };
