@@ -1,5 +1,6 @@
 import "./styles.css";
 import "./i18nCommon";
+import "./i18nLyrics";
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { registerModelAuthElement } from "@model-auth/vue/custom-element";
@@ -159,8 +160,8 @@ let lyricRhymeTargets: Record<string, string> = { A: "ang", B: "ai", C: "", D: "
 let lyricDraft = "";
 let lyricCandidateBrief = "";
 let lyricCandidateImagery = "";
-let lyricCandidateSection = "副歌";
-let lyricCandidateTone = "克制而有画面感";
+let lyricCandidateSection = t("lyrics.chorus");
+let lyricCandidateTone = t("lyrics.defaultTone");
 let lyricCandidateRhyme = "ang";
 let lyricCandidateCount = 4;
 let lyricCandidates: LyricCandidateSet | undefined;
@@ -245,28 +246,28 @@ function createLyricSection(
 }
 
 function createLyricPreset(preset: "compact" | "pop" | "rap" | "blank"): LyricSectionRequest[] {
-  if (preset === "blank") return [createLyricSection("verse", "段落 1", 4, "AAAA")];
+  if (preset === "blank") return [createLyricSection("verse", t("lyrics.numberedSection", { count: 1 }), 4, "AAAA")];
   if (preset === "rap") return [
-    createLyricSection("intro", "前奏", 2, "--"),
+    createLyricSection("intro", t("lyrics.intro"), 2, "--"),
     createLyricSection("verse", "Verse 1", 16, "AABB"),
     createLyricSection("chorus", "Hook", 8, "AAAA"),
     createLyricSection("verse", "Verse 2", 16, "AABB"),
-    createLyricSection("outro", "尾声", 4, "AAAA"),
+    createLyricSection("outro", t("lyrics.outro"), 4, "AAAA"),
   ];
   if (preset === "pop") return [
-    createLyricSection("verse", "主歌 1", 4, "ABAB"),
-    createLyricSection("preChorus", "预副歌", 4, "AABB"),
-    createLyricSection("chorus", "副歌", 4, "AAAA"),
-    createLyricSection("verse", "主歌 2", 4, "ABAB"),
-    createLyricSection("chorus", "副歌重复", 4, "AAAA"),
-    createLyricSection("bridge", "桥段", 4, "CCDD"),
-    createLyricSection("chorus", "末副歌", 4, "AAAA"),
+    createLyricSection("verse", t("lyrics.verseOne"), 4, "ABAB"),
+    createLyricSection("preChorus", t("lyrics.preChorus"), 4, "AABB"),
+    createLyricSection("chorus", t("lyrics.chorus"), 4, "AAAA"),
+    createLyricSection("verse", t("lyrics.verseTwo"), 4, "ABAB"),
+    createLyricSection("chorus", t("lyrics.chorusRepeat"), 4, "AAAA"),
+    createLyricSection("bridge", t("lyrics.bridge"), 4, "CCDD"),
+    createLyricSection("chorus", t("lyrics.finalChorus"), 4, "AAAA"),
   ];
   return [
-    createLyricSection("verse", "主歌 1", 4, "ABAB"),
-    createLyricSection("chorus", "副歌", 4, "AAAA"),
-    createLyricSection("verse", "主歌 2", 4, "ABAB"),
-    createLyricSection("chorus", "副歌重复", 4, "AAAA"),
+    createLyricSection("verse", t("lyrics.verseOne"), 4, "ABAB"),
+    createLyricSection("chorus", t("lyrics.chorus"), 4, "AAAA"),
+    createLyricSection("verse", t("lyrics.verseTwo"), 4, "ABAB"),
+    createLyricSection("chorus", t("lyrics.chorusRepeat"), 4, "AAAA"),
   ];
 }
 
@@ -1666,14 +1667,14 @@ function formatHistoryTime(value: string | null | undefined): string {
 
 function renderHistoryPage(): string {
   const history = creativeHistory.length
-    ? creativeHistory.map((item) => `<article class="timeline-item"><span class="status-dot online"></span><div><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.summary)}</small><code>${escapeHtml(new Date(item.createdAtUtc).toLocaleString("zh-CN"))}${item.outputPath ? ` · ${escapeHtml(item.outputPath)}` : ""}</code></div></article>`).join("")
+    ? creativeHistory.map((item) => `<article class="timeline-item"><span class="status-dot online"></span><div><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.summary)}</small><code>${escapeHtml(new Date(item.createdAtUtc).toLocaleString(locale()))}${item.outputPath ? ` · ${escapeHtml(item.outputPath)}` : ""}</code></div></article>`).join("")
     : `<div class="empty-inline">${t("history.emptyWorkflow")}</div>`;
   const checkpoints = projectCheckpoints.length
-    ? projectCheckpoints.map((item) => `<article class="checkpoint-item"><span class="feature-icon blue">${icon("shield", 17)}</span><div><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.sourcePath)}</small><code>SHA-256 ${escapeHtml(item.sourceSha256.slice(0, 16))}… · ${new Date(item.createdAtUtc).toLocaleString("zh-CN")}</code></div><button class="secondary compact" data-restore-checkpoint="${escapeHtml(item.id)}">恢复副本</button></article>`).join("")
+    ? projectCheckpoints.map((item) => `<article class="checkpoint-item"><span class="feature-icon blue">${icon("shield", 17)}</span><div><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.sourcePath)}</small><code>SHA-256 ${escapeHtml(item.sourceSha256.slice(0, 16))}… · ${new Date(item.createdAtUtc).toLocaleString(locale())}</code></div><button class="secondary compact" data-restore-checkpoint="${escapeHtml(item.id)}">${t("history.restore")}</button></article>`).join("")
     : `<div class="empty-inline">${t("history.emptySnapshots")}</div>`;
   const backup = projectBackupState;
   const itemError = backup?.projects.some((item) => item.lastError) ?? false;
-  const backupStatus = historyLoadState === "error" ? t("history.readingFailed", { error: "" }).replace(/：$/, "") : historyLoadState === "loading" ? t("history.reading") : backup?.lastError || itemError ? t("history.needsAttention") : backup ? t("history.tracking") : t("history.waiting");
+  const backupStatus = historyLoadState === "error" ? t("history.readFailedStatus") : historyLoadState === "loading" ? t("history.reading") : backup?.lastError || itemError ? t("history.needsAttention") : backup ? t("history.tracking") : t("history.waiting");
   const tracked = backup?.projects.length ? backup.projects.map((item) => `<article class="checkpoint-item"><span class="feature-icon blue">${icon("history", 17)}</span><div><strong>${escapeHtml(item.sourcePath)}</strong><small>${t("history.recentlyFound", { time: formatHistoryTime(item.lastSeenAtUtc), count: item.backupCount })}</small><code>${item.lastError ? escapeHtml(t("history.failed", { error: item.lastError })) : escapeHtml(t("history.lastBackup", { time: formatHistoryTime(item.lastBackupAtUtc) }))}</code></div></article>`).join("") : `<div class="empty-inline">${t("history.emptyTracked")}</div>`;
   const loadError = historyLoadState === "error" ? `<div class="audio-inline-error" role="alert">${escapeHtml(t("history.readingFailed", { error: historyLoadError }))}</div>` : "";
   return `<section class="panel history-intro"><span class="feature-icon blue">${icon("history", 22)}</span><div><span class="eyebrow">${t("history.eyebrow")}</span><h2>${t("history.title")}</h2><p>${t("history.description")}</p></div><span class="availability ${historyLoadState === "ready" && !backup?.lastError && !itemError ? "ready" : "warning"}">${backupStatus}</span></section>${loadError}
@@ -1801,10 +1802,10 @@ function renderLyricTemplateResult(data: JsonObject): string | undefined {
   if (data.language !== "zh-CN" || !Array.isArray(data.sections) || typeof data.totalLines !== "number") return undefined;
   const sections = data.sections.map(asObject).filter((section): section is JsonObject => Boolean(section));
   const targets = asObject(data.rhymeTargets) ?? {};
-  return `<div class="result-dashboard compact">${resultMetric("歌曲", data.title ?? "未命名歌曲")}${resultMetric("段落", sections.length)}${resultMetric("总行数", data.totalLines)}${resultMetric("韵脚", Object.entries(targets).filter(([, value]) => value).map(([key, value]) => `${key}:${value}`).join(" · ") || "自由")}</div><div class="lyric-template-preview">${sections.map((section) => {
+  return `<div class="result-dashboard compact">${resultMetric(t("lyrics.song"), data.title ?? t("lyrics.untitledSong"))}${resultMetric(t("lyrics.sections"), sections.length)}${resultMetric(t("lyrics.totalLines"), data.totalLines)}${resultMetric(t("lyrics.rhymes"), Object.entries(targets).filter(([, value]) => value).map(([key, value]) => `${key}:${value}`).join(" · ") || t("lyrics.free"))}</div><div class="lyric-template-preview">${sections.map((section) => {
     const lines = Array.isArray(section.lines) ? section.lines.map(asObject).filter((line): line is JsonObject => Boolean(line)) : [];
-    return `<article><header><strong>${escapeHtml(section.label ?? "未命名段落")}</strong><span>${escapeHtml(section.rhymeScheme ?? "-")} · ${lines.length} 行</span></header>${lines.map((line) => `<div><span>${escapeHtml(line.lineNumber)}</span><p>${escapeHtml(line.placeholder ?? "填写歌词")}</p>${line.targetRhyme ? `<code>${escapeHtml(line.targetRhyme)}</code>` : ""}</div>`).join("")}</article>`;
-  }).join("")}</div><button type="button" class="secondary" data-insert-lyric-template>${icon("plus", 15)} 把结构骨架加入歌词草稿</button>`;
+    return `<article><header><strong>${escapeHtml(section.label ?? t("lyrics.untitledSection"))}</strong><span>${escapeHtml(section.rhymeScheme ?? "-")} · ${t("lyrics.lines", { count: lines.length })}</span></header>${lines.map((line) => `<div><span>${escapeHtml(line.lineNumber)}</span><p>${escapeHtml(line.placeholder ?? t("lyrics.writeLyrics"))}</p>${line.targetRhyme ? `<code>${escapeHtml(line.targetRhyme)}</code>` : ""}</div>`).join("")}</article>`;
+  }).join("")}</div><button type="button" class="secondary" data-insert-lyric-template>${icon("plus", 15)} ${t("lyrics.addSkeleton")}</button>`;
 }
 
 function renderAbAudioResult(data: JsonObject): string | undefined {
@@ -1845,27 +1846,27 @@ function renderWorkflowResult(result: WorkflowResult, ai: boolean): string {
 function renderRhymeLookupResult(): string {
   if (!lyricRhymeResult) return `<div class="lyric-empty">${t("lyrics.emptyRhyme")}</div>`;
   const result = lyricRhymeResult;
-  return `<section class="rhyme-results"><div class="rhyme-result-head"><div><span class="availability ready">${result.matchMode === "family" ? t("lyrics.rhymeFamily") : t("lyrics.rhymeExact")}</span><strong>${escapeHtml(result.rhymeKeys.join(" / "))}</strong></div><span>${t("lyrics.characters", { count: result.total.toLocaleString() })}${result.queryPinyin.length ? ` · ${escapeHtml(result.queryPinyin.join(" / "))}` : ""}</span></div><div class="rhyme-character-grid">${result.characters.map((item) => `<button type="button" data-rhyme-character="${escapeHtml(item.character)}" title="${escapeHtml(item.pinyin.join(" / "))}">${escapeHtml(item.character)}</button>`).join("")}</div><small class="coverage-note">${escapeHtml(result.coverageNote)} ${t("lyrics.addToDraft")}</small></section>`;
+  return `<section class="rhyme-results"><div class="rhyme-result-head"><div><span class="availability ready">${result.matchMode === "family" ? t("lyrics.rhymeFamily") : t("lyrics.rhymeExact")}</span><strong>${escapeHtml(result.rhymeKeys.join(" / "))}</strong></div><span>${t("lyrics.characters", { count: result.total.toLocaleString(locale()) })}${result.queryPinyin.length ? ` · ${escapeHtml(result.queryPinyin.join(" / "))}` : ""}</span></div><div class="rhyme-character-grid">${result.characters.map((item) => `<button type="button" data-rhyme-character="${escapeHtml(item.character)}" title="${escapeHtml(item.pinyin.join(" / "))}">${escapeHtml(item.character)}</button>`).join("")}</div><small class="coverage-note">${escapeHtml(result.coverageNote)} ${t("lyrics.addToDraft")}</small></section>`;
 }
 
 function renderLyricCandidates(): string {
   if (!lyricCandidates) return `<div class="lyric-empty">${t("lyrics.emptyCandidates")}</div>`;
-  return `<div class="lyric-candidate-list">${lyricCandidates.candidates.map((candidate, index) => `<article class="lyric-candidate ${candidate.rhymeMatched === false ? "off-rhyme" : ""}"><div><span>${candidate.rhymeMatched == null ? t("lyrics.unlimitedRhyme") : candidate.rhymeMatched ? t("lyrics.rhymeMatch", { rhyme: escapeHtml(lyricCandidates?.targetRhyme ?? "目标韵") }) : t("lyrics.rhymeMiss")}</span>${candidate.rhymeFoot ? `<code>${escapeHtml(candidate.rhymeFoot)}</code>` : ""}</div><strong>${escapeHtml(candidate.text)}</strong>${candidate.note ? `<p>${escapeHtml(candidate.note)}</p>` : ""}<button type="button" class="secondary" data-use-lyric-candidate="${index}">${icon("plus", 14)} ${t("lyrics.useCandidate")}</button></article>`).join("")}</div>`;
+  return `<div class="lyric-candidate-list">${lyricCandidates.candidates.map((candidate, index) => `<article class="lyric-candidate ${candidate.rhymeMatched === false ? "off-rhyme" : ""}"><div><span>${candidate.rhymeMatched == null ? t("lyrics.unlimitedRhyme") : candidate.rhymeMatched ? t("lyrics.rhymeMatch", { rhyme: escapeHtml(lyricCandidates?.targetRhyme ?? t("lyrics.targetRhyme")) }) : t("lyrics.rhymeMiss")}</span>${candidate.rhymeFoot ? `<code>${escapeHtml(candidate.rhymeFoot)}</code>` : ""}</div><strong>${escapeHtml(candidate.text)}</strong>${candidate.note ? `<p>${escapeHtml(candidate.note)}</p>` : ""}<button type="button" class="secondary" data-use-lyric-candidate="${index}">${icon("plus", 14)} ${t("lyrics.useCandidate")}</button></article>`).join("")}</div>`;
 }
 
 function renderLyricStudio(ai: boolean): string {
   const sectionOptions = lyricSections.map((section) => `<option value="${escapeHtml(section.label)}" ${section.label === lyricCandidateSection ? "selected" : ""}>${escapeHtml(section.label)}</option>`).join("");
   const lineCount = lyricDraft.trim() ? lyricDraft.trim().split(/\r?\n/).length : 0;
-  const projectOptions = lyricProjects.map((project) => `<option value="${escapeHtml(project.id)}" ${project.id === lyricProjectId ? "selected" : ""}>${escapeHtml(project.title)} · ${project.lineCount} 行 · r${project.revision}</option>`).join("");
+  const projectOptions = lyricProjects.map((project) => `<option value="${escapeHtml(project.id)}" ${project.id === lyricProjectId ? "selected" : ""}>${escapeHtml(project.title)} · ${t("lyrics.lines", { count: project.lineCount })} · r${project.revision}</option>`).join("");
   const projectStatus = lyricProjectId === undefined
     ? t("lyrics.unsavedDraft")
     : lyricProjectHasUnsavedChanges()
       ? t("lyrics.localProjectUnsaved", { revision: lyricProjectRevision })
       : t("lyrics.localProjectSaved", { revision: lyricProjectRevision });
-  const projectToolbar = `<section class="lyric-project-toolbar panel-inset"><div><span class="eyebrow">LOCAL SONG PROJECT</span><strong>${escapeHtml(projectStatus)}</strong><small>${t("lyrics.projectLocalDescription")}</small></div><div class="lyric-project-actions"><button type="button" class="secondary compact" data-new-lyric-project>${t("lyrics.newProject")}</button><select id="lyric-project-select" ${lyricProjects.length ? "" : "disabled"}><option value="">${lyricProjects.length ? t("lyrics.chooseProject") : t("lyrics.noProjects")}</option>${projectOptions}</select><button type="button" class="secondary compact" data-load-lyric-project ${lyricProjects.length ? "" : "disabled"}>${t("lyrics.open")}</button><button type="button" class="primary compact" data-save-lyric-project>${lyricProjectId === undefined ? t("lyrics.saveAsProject") : t("lyrics.save")}</button></div></section>`;
-  const structureRows = lyricSections.map((section, index) => `<article class="lyric-section-row" data-lyric-section-id="${escapeHtml(section.id)}"><span class="section-index">${index + 1}</span><label>段落名称<input data-lyric-section-field="label" maxlength="60" value="${escapeHtml(section.label)}" /></label><label>行数<input data-lyric-section-field="lineCount" type="number" min="1" max="32" value="${section.lineCount}" /></label><label>格式<input data-lyric-section-field="rhymeScheme" maxlength="32" value="${escapeHtml(section.rhymeScheme)}" placeholder="可选，如 ABAB" /></label><input type="hidden" data-lyric-section-field="kind" value="${escapeHtml(section.kind)}" /><div class="lyric-row-actions"><button type="button" class="icon-plain" data-move-lyric-section="up" data-section-id="${escapeHtml(section.id)}" title="上移" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" class="icon-plain" data-move-lyric-section="down" data-section-id="${escapeHtml(section.id)}" title="下移" ${index === lyricSections.length - 1 ? "disabled" : ""}>↓</button><button type="button" class="icon-plain danger" data-remove-lyric-section="${escapeHtml(section.id)}" title="删除">×</button></div></article>`).join("");
-  const copilot = ai ? `<section class="lyric-copilot panel-inset"><div class="lyric-subhead"><div><span class="eyebrow">COPILOT</span><h3>${icon("sparkles", 17)} 帮我续写</h3></div><span class="availability ready">只给候选，不会改稿</span></div><form id="lyric-candidate-form" class="lyric-candidate-form"><label class="wide">这一句 / 这一段想表达什么<textarea id="lyric-brief" rows="3" maxlength="2000" placeholder="例如：夜车离开故乡时，想起没说出口的告别">${escapeHtml(lyricCandidateBrief)}</textarea></label><label class="wide">画面或关键词<input id="lyric-imagery" maxlength="1000" value="${escapeHtml(lyricCandidateImagery)}" placeholder="月台、旧信、雨后的路灯、车窗倒影" /></label><label>写到哪一段<select id="lyric-candidate-section">${sectionOptions}</select></label><label>语气<input id="lyric-candidate-tone" maxlength="80" value="${escapeHtml(lyricCandidateTone)}" placeholder="克制、口语化、明亮" /></label><label>句尾提示（可空）<input id="lyric-candidate-rhyme" maxlength="24" value="${escapeHtml(lyricCandidateRhyme)}" placeholder="如：ang / 光" /></label><label>候选数量<select id="lyric-candidate-count">${[2, 3, 4, 5, 6].map((count) => `<option value="${count}" ${lyricCandidateCount === count ? "selected" : ""}>${count} 条</option>`).join("")}</select></label><button class="primary wide">${icon("sparkles", 16)} 给我几个写法</button></form>${renderLyricCandidates()}</section>` : `<section class="lyric-copilot locked panel-inset"><div class="lyric-subhead"><div><span class="eyebrow">COPILOT</span><h3>${icon("sparkles", 17)} 帮我续写</h3></div><span class="availability blocked">AI 模式</span></div><p>这里始终是你的草稿。开启 AI 后，可以为某一段索取原创写法，选择后再手动加入。</p><button type="button" class="secondary" data-enable-ai>开启 Copilot</button></section>`;
-  return `<div class="lyric-mode-banner"><span class="feature-icon ${ai ? "violet" : "emerald"}">${icon(ai ? "sparkles" : "lyrics", 21)}</span><div><strong>把注意力放在歌词上</strong><p>草稿会自动保存在本机；结构、韵脚和 Copilot 都是按需打开的辅助工具。</p></div><span class="lyric-save-state">本机自动保存</span></div>${projectToolbar}<div class="lyric-workbench-grid lyric-writing-layout"><main class="lyric-editor panel-inset"><div class="lyric-editor-head"><label class="lyric-title">歌名<input id="lyric-song-title" maxlength="120" value="${escapeHtml(lyricSongTitle)}" placeholder="未命名歌词" /></label><div class="lyric-editor-actions"><button type="button" class="secondary compact" data-copy-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>复制</button><button type="button" class="secondary compact" data-clear-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>清空</button></div></div><label class="lyric-draft-label">歌词草稿<textarea id="lyric-draft" rows="22" spellcheck="false" placeholder="从这里开始写。\n\n你可以直接写完整歌词，也可以先写几个句子或画面。">${escapeHtml(lyricDraft)}</textarea></label><footer class="lyric-editor-footer"><span>${lineCount} 行 · ${lyricDraft.length.toLocaleString()} 字</span><span>输入时自动保存</span></footer></main><aside class="lyric-helper-stack">${copilot}<details class="lyric-tools panel-inset"><summary><span><span class="eyebrow">OPTIONAL TOOLS</span><strong>${icon("recipe", 16)} 段落结构</strong></span><small>${lyricSections.length} 段 · ${lyricSections.reduce((sum, section) => sum + section.lineCount, 0)} 行</small></summary><form id="lyric-structure-form"><div class="lyric-presets"><span>快速开始</span><button type="button" data-lyric-preset="compact">流行</button><button type="button" data-lyric-preset="pop">完整歌曲</button><button type="button" data-lyric-preset="rap">说唱</button><button type="button" data-lyric-preset="blank">空白</button></div><div class="lyric-section-list">${structureRows}</div><div class="lyric-structure-actions"><button type="button" class="secondary" data-add-lyric-section>${icon("plus", 15)} 添加段落</button><button class="primary">${icon("recipe", 15)} 插入段落骨架</button></div></form></details><details class="lyric-tools panel-inset"><summary><span><span class="eyebrow">OPTIONAL TOOLS</span><strong>${icon("pronunciation", 16)} 韵脚助手</strong></span><small>只在需要时查询</small></summary><form id="rhyme-lookup-form" class="rhyme-search"><input id="rhyme-query" required maxlength="24" value="${escapeHtml(lyricRhymeQuery)}" placeholder="输入一个字或韵母，如 光 / ang" /><select id="rhyme-match-mode"><option value="family" ${lyricRhymeMode === "family" ? "selected" : ""}>同韵部</option><option value="exact" ${lyricRhymeMode === "exact" ? "selected" : ""}>精确韵母</option></select><button class="secondary">查找同韵字</button></form>${renderRhymeLookupResult()}</details></aside></div>`;
+  const projectToolbar = `<section class="lyric-project-toolbar panel-inset"><div><span class="eyebrow">${t("lyrics.localProject")}</span><strong>${escapeHtml(projectStatus)}</strong><small>${t("lyrics.projectLocalDescription")}</small></div><div class="lyric-project-actions"><button type="button" class="secondary compact" data-new-lyric-project>${t("lyrics.newProject")}</button><select id="lyric-project-select" ${lyricProjects.length ? "" : "disabled"}><option value="">${lyricProjects.length ? t("lyrics.chooseProject") : t("lyrics.noProjects")}</option>${projectOptions}</select><button type="button" class="secondary compact" data-load-lyric-project ${lyricProjects.length ? "" : "disabled"}>${t("lyrics.open")}</button><button type="button" class="primary compact" data-save-lyric-project>${lyricProjectId === undefined ? t("lyrics.saveAsProject") : t("lyrics.save")}</button></div></section>`;
+  const structureRows = lyricSections.map((section, index) => `<article class="lyric-section-row" data-lyric-section-id="${escapeHtml(section.id)}"><span class="section-index">${index + 1}</span><label>${t("lyrics.sectionName")}<input data-lyric-section-field="label" maxlength="60" value="${escapeHtml(section.label)}" /></label><label>${t("lyrics.lineCount")}<input data-lyric-section-field="lineCount" type="number" min="1" max="32" value="${section.lineCount}" /></label><label>${t("lyrics.scheme")}<input data-lyric-section-field="rhymeScheme" maxlength="32" value="${escapeHtml(section.rhymeScheme)}" placeholder="${t("lyrics.schemeHint")}" /></label><input type="hidden" data-lyric-section-field="kind" value="${escapeHtml(section.kind)}" /><div class="lyric-row-actions"><button type="button" class="icon-plain" data-move-lyric-section="up" data-section-id="${escapeHtml(section.id)}" title="${t("lyrics.moveUp")}" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" class="icon-plain" data-move-lyric-section="down" data-section-id="${escapeHtml(section.id)}" title="${t("lyrics.moveDown")}" ${index === lyricSections.length - 1 ? "disabled" : ""}>↓</button><button type="button" class="icon-plain danger" data-remove-lyric-section="${escapeHtml(section.id)}" title="${t("lyrics.delete")}">×</button></div></article>`).join("");
+  const copilot = ai ? `<section class="lyric-copilot panel-inset"><div class="lyric-subhead"><div><span class="eyebrow">COPILOT</span><h3>${icon("sparkles", 17)} ${t("lyrics.continueWriting")}</h3></div><span class="availability ready">${t("lyrics.suggestionsOnly")}</span></div><form id="lyric-candidate-form" class="lyric-candidate-form"><label class="wide">${t("lyrics.brief")}<textarea id="lyric-brief" rows="3" maxlength="2000" placeholder="${t("lyrics.briefHint")}">${escapeHtml(lyricCandidateBrief)}</textarea></label><label class="wide">${t("lyrics.imagery")}<input id="lyric-imagery" maxlength="1000" value="${escapeHtml(lyricCandidateImagery)}" placeholder="${t("lyrics.imageryHint")}" /></label><label>${t("lyrics.targetSection")}<select id="lyric-candidate-section">${sectionOptions}</select></label><label>${t("lyrics.tone")}<input id="lyric-candidate-tone" maxlength="80" value="${escapeHtml(lyricCandidateTone)}" placeholder="${t("lyrics.toneHint")}" /></label><label>${t("lyrics.endingHintLabel")}<input id="lyric-candidate-rhyme" maxlength="24" value="${escapeHtml(lyricCandidateRhyme)}" placeholder="${t("lyrics.endingHint")}" /></label><label>${t("lyrics.candidateCount")}<select id="lyric-candidate-count">${[2, 3, 4, 5, 6].map((count) => `<option value="${count}" ${lyricCandidateCount === count ? "selected" : ""}>${t("lyrics.suggestionCount", { count })}</option>`).join("")}</select></label><button class="primary wide">${icon("sparkles", 16)} ${t("lyrics.suggest")}</button></form>${renderLyricCandidates()}</section>` : `<section class="lyric-copilot locked panel-inset"><div class="lyric-subhead"><div><span class="eyebrow">COPILOT</span><h3>${icon("sparkles", 17)} ${t("lyrics.continueWriting")}</h3></div><span class="availability blocked">${t("lyrics.aiMode")}</span></div><p>${t("lyrics.copilotDescription")}</p><button type="button" class="secondary" data-enable-ai>${t("lyrics.enableCopilot")}</button></section>`;
+  return `<div class="lyric-mode-banner"><span class="feature-icon ${ai ? "violet" : "emerald"}">${icon(ai ? "sparkles" : "lyrics", 21)}</span><div><strong>${t("lyrics.focus")}</strong><p>${t("lyrics.autosaveDescription")}</p></div><span class="lyric-save-state">${t("lyrics.localAutosave")}</span></div>${projectToolbar}<div class="lyric-workbench-grid lyric-writing-layout"><main class="lyric-editor panel-inset"><div class="lyric-editor-head"><label class="lyric-title">${t("lyrics.songTitle")}<input id="lyric-song-title" maxlength="120" value="${escapeHtml(lyricSongTitle)}" placeholder="${t("lyrics.untitledLyrics")}" /></label><div class="lyric-editor-actions"><button type="button" class="secondary compact" data-copy-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>${t("lyrics.copyButton")}</button><button type="button" class="secondary compact" data-clear-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>${t("lyrics.clearButton")}</button></div></div><label class="lyric-draft-label">${t("lyrics.draftLabel")}<textarea id="lyric-draft" rows="22" spellcheck="false" placeholder="${t("lyrics.draftHint")}">${escapeHtml(lyricDraft)}</textarea></label><footer class="lyric-editor-footer"><span>${t("lyrics.draftStats", { lines: lineCount, characters: lyricDraft.length.toLocaleString(locale()) })}</span><span>${t("lyrics.autosaveTyping")}</span></footer></main><aside class="lyric-helper-stack">${copilot}<details class="lyric-tools panel-inset"><summary><span><span class="eyebrow">${t("lyrics.optionalTools")}</span><strong>${icon("recipe", 16)} ${t("lyrics.structure")}</strong></span><small>${t("lyrics.structureStats", { sections: lyricSections.length, lines: lyricSections.reduce((sum, section) => sum + section.lineCount, 0) })}</small></summary><form id="lyric-structure-form"><div class="lyric-presets"><span>${t("lyrics.quickStart")}</span><button type="button" data-lyric-preset="compact">${t("lyrics.presetCompact")}</button><button type="button" data-lyric-preset="pop">${t("lyrics.presetPop")}</button><button type="button" data-lyric-preset="rap">${t("lyrics.presetRap")}</button><button type="button" data-lyric-preset="blank">${t("lyrics.presetBlank")}</button></div><div class="lyric-section-list">${structureRows}</div><div class="lyric-structure-actions"><button type="button" class="secondary" data-add-lyric-section>${icon("plus", 15)} ${t("lyrics.addSection")}</button><button class="primary">${icon("recipe", 15)} ${t("lyrics.insertStructure")}</button></div></form></details><details class="lyric-tools panel-inset"><summary><span><span class="eyebrow">${t("lyrics.optionalTools")}</span><strong>${icon("pronunciation", 16)} ${t("lyrics.rhymeHelper")}</strong></span><small>${t("lyrics.rhymeOnDemand")}</small></summary><form id="rhyme-lookup-form" class="rhyme-search"><input id="rhyme-query" required maxlength="24" value="${escapeHtml(lyricRhymeQuery)}" placeholder="${t("lyrics.rhymeHint")}" /><select id="rhyme-match-mode"><option value="family" ${lyricRhymeMode === "family" ? "selected" : ""}>${t("lyrics.familyLabel")}</option><option value="exact" ${lyricRhymeMode === "exact" ? "selected" : ""}>${t("lyrics.exactLabel")}</option></select><button class="secondary">${t("lyrics.findRhymes")}</button></form>${renderRhymeLookupResult()}</details></aside></div>`;
 }
 
 function renderLyricsPage(): string {
@@ -2683,7 +2684,7 @@ function wireForms(): void {
     lyricRhymeMode = (document.querySelector<HTMLSelectElement>("#rhyme-match-mode")?.value ?? "family") as RhymeMatchMode;
     void run(async () => {
       lyricRhymeResult = await api.lookupChineseRhyme(lyricRhymeQuery, lyricRhymeMode);
-      notice = t("lyrics.characters", { count: lyricRhymeResult.total.toLocaleString() }) + ` · ${lyricRhymeResult.rhymeKeys.join(" / ")}`;
+      notice = t("lyrics.characters", { count: lyricRhymeResult.total.toLocaleString(locale()) }) + ` · ${lyricRhymeResult.rhymeKeys.join(" / ")}`;
     });
   });
   document.querySelector<HTMLFormElement>("#lyric-structure-form")?.addEventListener("submit", (event) => {
@@ -2707,7 +2708,7 @@ function wireForms(): void {
         targetRhyme: lyricCandidateRhyme,
         candidateCount: lyricCandidateCount,
       }));
-      notice = `${t("copilot.history")}: ${lyricCandidates.candidates.length}`;
+      notice = t("lyrics.candidatesReady", { count: lyricCandidates.candidates.length });
     });
   });
   document.querySelector<HTMLFormElement>("#pronunciation-form")?.addEventListener("submit", (event) => {
@@ -3118,18 +3119,18 @@ document.addEventListener("click", (event) => {
     const draft = document.querySelector<HTMLTextAreaElement>("#lyric-draft");
     if (!draft?.value.trim()) return;
     void navigator.clipboard.writeText(draft.value).then(() => {
-      notice = t("lyrics.copy");
+      notice = t("lyrics.copied");
       render();
     }).catch(() => {
-      error = t("lyrics.copy");
+      error = t("lyrics.copyFailed");
       render();
     });
     return;
   }
   if (target.hasAttribute("data-new-lyric-project")) {
-    if (lyricProjectHasUnsavedChanges() && !window.confirm(t("lyrics.localProjectUnsaved", { revision: lyricProjectRevision }))) return;
+    if (lyricProjectHasUnsavedChanges() && !window.confirm(t("lyrics.newDiscardConfirm"))) return;
     startNewLyricProject();
-    notice = t("lyrics.unsavedDraft");
+    notice = t("lyrics.projectCreated");
     render();
     return;
   }
@@ -3152,7 +3153,7 @@ document.addEventListener("click", (event) => {
       render();
       return;
     }
-    if (lyricProjectHasUnsavedChanges() && !window.confirm("当前项目有未保存修改。打开其他项目会丢弃这些修改，是否继续？")) return;
+    if (lyricProjectHasUnsavedChanges() && !window.confirm(t("lyrics.openDiscardConfirm"))) return;
     void run(async () => {
       const project = await api.loadLyricProject(id);
       applyLyricProject(project);
@@ -3195,7 +3196,7 @@ document.addEventListener("click", (event) => {
   }
   if (target.hasAttribute("data-add-lyric-section")) {
     syncLyricDraftFromDom();
-    lyricSections.push(createLyricSection("custom", `段落 ${lyricSections.length + 1}`, 4, "AAAA"));
+    lyricSections.push(createLyricSection("custom", t("lyrics.numberedSection", { count: lyricSections.length + 1 }), 4, "AAAA"));
     persistLyricWorkspace();
     render();
     return;
@@ -3203,7 +3204,7 @@ document.addEventListener("click", (event) => {
   if (target.dataset.removeLyricSection) {
     syncLyricDraftFromDom();
     if (lyricSections.length <= 1) {
-      error = "歌曲结构至少需要一个段落。";
+      error = t("lyrics.sectionRequired");
     } else {
       lyricSections = lyricSections.filter((section) => section.id !== target.dataset.removeLyricSection);
       error = "";
@@ -3252,7 +3253,7 @@ document.addEventListener("click", (event) => {
     const sections = Array.isArray(data?.sections) ? data.sections.map(asObject).filter((section): section is JsonObject => Boolean(section)) : [];
     const skeleton = sections.map((section) => {
       const lines = Array.isArray(section.lines) ? section.lines.map(asObject).filter((line): line is JsonObject => Boolean(line)) : [];
-      return `[${String(section.label ?? "未命名段落")}]\n${lines.map((line) => `（${String(line.placeholder ?? "填写歌词")}）`).join("\n")}`;
+      return `[${String(section.label ?? t("lyrics.untitledSection"))}]\n${lines.map((line) => `（${String(line.placeholder ?? t("lyrics.writeLyrics"))}）`).join("\n")}`;
     }).join("\n\n");
     lyricDraft = `${lyricDraft.trimEnd()}${lyricDraft.trim() ? "\n\n" : ""}${skeleton}`;
     persistLyricWorkspace();
