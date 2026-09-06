@@ -13,7 +13,7 @@ const [packageJson, api, main, types, commands, lib] = await Promise.all([
 
 assert.match(packageJson, /lsy-404\/model-auth\/releases\/download\/v0\.2\.1\/model-auth-vue-0\.2\.1\.tgz/);
 assert.match(main, /registerModelAuthElement\(\)/);
-assert.match(main, /<model-auth-dialog>/);
+assert.match(main, /mountModelAuthDialog/);
 assert.match(main, /oauthCredentials/);
 assert.match(main, /apiKeyCredentials/);
 assert.match(main, /update-provider-strategy/);

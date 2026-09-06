@@ -12,7 +12,7 @@ assert.match(types, /oauthEnabled: boolean/);
 assert.match(api, /cancelAiAuthorization/);
 assert.match(main, /authorize-oauth/);
 assert.match(main, /reconnect-oauth/);
-assert.match(main, /activeModelAuthAuthorization/);
+assert.match(main, /cancelAuthorization: api.cancelAiAuthorization/);
 assert.doesNotMatch(main, /data-ai-api-key-form/);
 assert.doesNotMatch(main, /aiProviderPickerStep/);
 console.log("dual-auth-ui contracts passed");

@@ -2,6 +2,7 @@ import "./styles.css";
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { registerModelAuthElement } from "@model-auth/vue/custom-element";
+import { mountModelAuthDialog, type ModelAuthAction } from "./modelAuthDialog";
 import { api } from "./api";
 import { evaluateAccountEnvironment } from "./accountStatus";
 import { instanceAccount, instanceProjectTitle } from "./sv2Instances";
@@ -150,7 +151,7 @@ let pendingInstanceTermination: SynthVProcess | undefined;
 let pendingAccountIndicatorConsent: PendingAccountIndicatorConsent | undefined;
 let removingComponentId: string | undefined;
 let aiProviderPickerOpen = false;
-let activeModelAuthAuthorization: { operationId: string; controller: AbortController } | undefined;
+let modelAuthDialog: ReturnType<typeof mountModelAuthDialog> | undefined;
 let downloadPollTimer: number | undefined;
 let mediaTaskPollTimer: number | undefined;
 let toastDismissTimer: number | undefined;
@@ -554,7 +555,7 @@ function render(): void {
       }, 4200);
     }
   }
-  const overlayHtml = pendingInstanceTermination ? renderInstanceTerminationDialog() : pendingComponentRemovalId ? renderComponentRemovalDialog() : pendingProfileDeletionId ? renderProfileDeletionDialog() : pendingBlockedSwitchSlot ? renderBlockedSwitchDialog() : pendingConcurrentLaunchSlot ? renderConcurrentDisclaimer() : pendingSvpRoute ? renderSvpRouteDialog() : pendingAccountIndicatorConsent ? renderAccountIndicatorConsent() : accountManagerOpen && page === "accounts" ? renderAccountManager() : aiProviderPickerOpen ? renderAiProviderPicker() : "";
+  const overlayHtml = pendingInstanceTermination ? renderInstanceTerminationDialog() : pendingComponentRemovalId ? renderComponentRemovalDialog() : pendingProfileDeletionId ? renderProfileDeletionDialog() : pendingBlockedSwitchSlot ? renderBlockedSwitchDialog() : pendingConcurrentLaunchSlot ? renderConcurrentDisclaimer() : pendingSvpRoute ? renderSvpRouteDialog() : pendingAccountIndicatorConsent ? renderAccountIndicatorConsent() : accountManagerOpen && page === "accounts" ? renderAccountManager() : "";
   const nextShellState = {
     page,
     sidebarCollapsed,
@@ -573,8 +574,9 @@ function render(): void {
   const wiredMarkup = `${pageHtml}\u0000${overlayHtml}`;
   if (wiredMarkup !== lastWiredMarkup) {
     lastWiredMarkup = wiredMarkup;
-    shellController.afterUpdate(() => { wireForms(); wireModelAuthDialog(); });
+    shellController.afterUpdate(wireForms);
   }
+  syncModelAuthDialog();
   scheduleDownloadPoll();
   scheduleMediaTaskPoll();
 }
@@ -1894,44 +1896,17 @@ function aiProviderMark(provider: AiProviderSummary): string {
   return provider.id === "anthropic" ? "C" : provider.id === "openai-codex" ? "O" : provider.id === "workbuddy" ? "W" : "T";
 }
 
-function renderAiProviderPicker(): string {
-  return "<model-auth-dialog></model-auth-dialog>";
-}
-
-function wireModelAuthDialog(): void {
-  const dialog = document.querySelector<HTMLElement>("model-auth-dialog") as (HTMLElement & Record<string, unknown>) | null;
-  if (!dialog) return;
-  syncModelAuthDialog(dialog);
-  const detail = (event: Event): unknown[] => Array.isArray((event as CustomEvent<unknown>).detail) ? (event as CustomEvent<unknown[]>).detail : [(event as CustomEvent<unknown>).detail];
-  const execute = (event: Event, operation: (operationId?: string) => Promise<void>, authorization = false, closeOnSuccess = false) => {
-    event.stopPropagation();
-    void runModelAuthOperation(dialog, operation, authorization, closeOnSuccess);
-  };
-  dialog.addEventListener("close", () => {
-    const active = activeModelAuthAuthorization;
-    active?.controller.abort();
-    if (active) void api.cancelAiAuthorization(active.operationId);
-    activeModelAuthAuthorization = undefined;
-    aiProviderPickerOpen = false;
-    render();
+function syncModelAuthDialog(): void {
+  if (!modelAuthDialog && !aiProviderPickerOpen) return;
+  modelAuthDialog ??= mountModelAuthDialog({
+    execute: executeModelAuthAction,
+    cancelAuthorization: api.cancelAiAuthorization,
+    close() { aiProviderPickerOpen = false; render(); },
+    updated: render,
+    formatError,
   });
-  dialog.addEventListener("authorize-oauth", (event) => execute(event, async (operationId) => { const [provider] = detail(event) as [AiProviderId]; app = await api.authorizeAiProvider(provider, undefined, operationId); notice = "官方账号授权已更新。"; }, true));
-  dialog.addEventListener("reconnect-oauth", (event) => execute(event, async (operationId) => { const [provider, credentialId] = detail(event) as [AiProviderId, string]; app = await api.authorizeAiProvider(provider, credentialId, operationId); notice = "官方账号授权已更新。"; }, true));
-  dialog.addEventListener("add-api-key", (event) => execute(event, async () => { const [payload] = detail(event) as [{ providerId: AiProviderId; label: string; apiKey: string }]; app = await api.addAiApiKey(payload.providerId, payload.label, payload.apiKey); notice = "API Key 已保存并验证。"; }));
-  dialog.addEventListener("remove-oauth", (event) => execute(event, async () => { const [provider, id] = detail(event) as [AiProviderId, string]; app = await api.removeAiProviderAccount(provider, id); }));
-  dialog.addEventListener("remove-api-key", (event) => execute(event, async () => { const [provider, id] = detail(event) as [AiProviderId, string]; app = await api.removeAiApiKey(provider, id); }));
-  dialog.addEventListener("update-credential", (event) => execute(event, async () => { const [payload] = detail(event) as [{ providerId: AiProviderId; credentialId: string; enabled: boolean; weight: number }]; app = await api.updateAiCredential(payload.providerId, payload.credentialId, payload.enabled, payload.weight); }));
-  dialog.addEventListener("update-provider", (event) => execute(event, async () => { const [payload] = detail(event) as [{ providerId: AiProviderId; oauthEnabled: boolean }]; app = await api.updateAiProvider(payload.providerId, payload.oauthEnabled); }));
-  dialog.addEventListener("select-model", (event) => execute(event, async () => { const [payload] = detail(event) as [{ providerId: AiProviderId; model: string }]; app = await api.selectAiProvider(payload.providerId, payload.model); notice = "当前 AI 提供商与模型已更新。"; }, false, true));
-  dialog.addEventListener("update-provider-strategy", (event) => execute(event, async () => { const [payload] = detail(event) as [{ providerId: AiProviderId; strategy: AiLoadStrategy }]; app = await api.updateAiProviderStrategy(payload.providerId, payload.strategy); }));
-  dialog.addEventListener("refresh-catalog", (event) => { event.stopPropagation(); void runModelAuthOperation(dialog, async () => { await refreshAiProviderSummary(true); }); });
-}
-
-function syncModelAuthDialog(dialog: HTMLElement & Record<string, unknown>): void {
   const catalog = app?.model;
-  dialog.open = true;
-  dialog.theme = "system";
-  dialog.providers = aiProviders().map((provider) => ({
+  const providers = aiProviders().map((provider) => ({
     id: provider.id, name: provider.displayName, description: provider.description, authMethods: provider.authMethods,
     available: provider.available, unavailableReason: provider.unavailableReason, oauthEnabled: provider.oauthEnabled,
     loadStrategy: provider.loadStrategy, mark: aiProviderMark(provider),
@@ -1940,31 +1915,61 @@ function syncModelAuthDialog(dialog: HTMLElement & Record<string, unknown>): voi
     oauthCredentials: provider.accounts.map((account) => ({ id: account.id, label: account.label, account: account.label, healthy: account.healthy, enabled: account.enabled, weight: account.weight, models: provider.oauthModels })),
     apiKeyCredentials: provider.apiKeys.map((key) => ({ id: key.id, label: key.label, healthy: key.healthy, enabled: key.enabled, weight: key.weight, models: key.models, cooldownUntilUtc: key.cooldownUntilUtc })),
   }));
-  dialog.model = catalog ? { providerId: catalog.activeProvider, model: aiProviders().find((item) => item.id === catalog.activeProvider)?.model ?? "" } : null;
-  dialog.catalogStatus = { state: catalog?.catalogError ? "error" : "ready", source: catalog?.catalogSource === "models-dev" ? "models.dev" : "fallback", checkedAt: catalog?.catalogGeneratedAt ? new Date(catalog.catalogGeneratedAt).toISOString() : undefined, error: catalog?.catalogError };
+  modelAuthDialog.update({
+    providers,
+    theme: "system",
+    model: catalog ? { providerId: catalog.activeProvider, model: aiProviders().find((item) => item.id === catalog.activeProvider)?.model ?? "" } : null,
+    catalogStatus: { state: catalog?.catalogError ? "error" : "ready", source: catalog?.catalogSource === "models-dev" ? "models.dev" : "fallback", checkedAt: catalog?.catalogGeneratedAt ? new Date(catalog.catalogGeneratedAt).toISOString() : undefined, error: catalog?.catalogError },
+    open: aiProviderPickerOpen,
+  });
 }
 
-async function runModelAuthOperation(dialog: HTMLElement & Record<string, unknown>, operation: (operationId?: string) => Promise<void>, authorization = false, closeOnSuccess = false): Promise<void> {
-  if (dialog.busy) return;
-  dialog.busy = true;
-  dialog.error = null;
-  const controller = new AbortController();
-  const operationId = authorization ? crypto.randomUUID() : undefined;
-  if (operationId) activeModelAuthAuthorization = { operationId, controller };
-  try {
-    await operation(operationId);
-    if (controller.signal.aborted) return;
-    if (closeOnSuccess) {
-      aiProviderPickerOpen = false;
-      render();
-      return;
+async function executeModelAuthAction(action: ModelAuthAction, detail: unknown[], operationId?: string): Promise<void> {
+  switch (action) {
+    case "authorize-oauth":
+    case "reconnect-oauth": {
+      const [provider, credentialId] = detail as [AiProviderId, string?];
+      app = await api.authorizeAiProvider(provider, credentialId, operationId);
+      notice = "官方账号授权已更新。";
+      break;
     }
-    syncModelAuthDialog(dialog);
-  } catch (reason) {
-    if (!controller.signal.aborted) dialog.error = formatError(reason);
-  } finally {
-    dialog.busy = false;
-    if (operationId && activeModelAuthAuthorization?.operationId === operationId) activeModelAuthAuthorization = undefined;
+    case "add-api-key": {
+      const [payload] = detail as [{ providerId: AiProviderId; label: string; apiKey: string }];
+      app = await api.addAiApiKey(payload.providerId, payload.label, payload.apiKey);
+      notice = "API Key 已保存并验证。";
+      break;
+    }
+    case "remove-oauth":
+    case "remove-api-key": {
+      const [provider, id] = detail as [AiProviderId, string];
+      app = await (action === "remove-oauth" ? api.removeAiProviderAccount(provider, id) : api.removeAiApiKey(provider, id));
+      break;
+    }
+    case "update-credential": {
+      const [payload] = detail as [{ providerId: AiProviderId; credentialId: string; enabled: boolean; weight: number }];
+      app = await api.updateAiCredential(payload.providerId, payload.credentialId, payload.enabled, payload.weight);
+      break;
+    }
+    case "update-provider": {
+      const [payload] = detail as [{ providerId: AiProviderId; oauthEnabled: boolean }];
+      app = await api.updateAiProvider(payload.providerId, payload.oauthEnabled);
+      break;
+    }
+    case "select-model": {
+      const [payload] = detail as [{ providerId: AiProviderId; model: string }];
+      app = await api.selectAiProvider(payload.providerId, payload.model);
+      notice = "当前 AI 提供商与模型已更新。";
+      break;
+    }
+    case "update-provider-strategy": {
+      const [payload] = detail as [{ providerId: AiProviderId; strategy: AiLoadStrategy }];
+      app = await api.updateAiProviderStrategy(payload.providerId, payload.strategy);
+      break;
+    }
+    case "refresh-catalog": {
+      await refreshAiProviderSummary(true);
+      break;
+    }
   }
 }
 
@@ -2466,13 +2471,18 @@ document.addEventListener("keydown", (event) => {
   }
   if (event.key !== "Escape" || !aiProviderPickerOpen) return;
   event.preventDefault();
-    aiProviderPickerOpen = false;
-  render();
+  modelAuthDialog?.close();
 });
 
 document.addEventListener("click", (event) => {
   const target = (event.target as HTMLElement).closest<HTMLElement>("button, [data-page], [data-onboarding]");
   if (!target || target.hasAttribute("disabled")) return;
+  if (target.hasAttribute("data-open-ai-provider-picker")) {
+    aiProviderPickerOpen = true;
+    render();
+    refreshAiCatalogLive();
+    return;
+  }
   if (page === "lyrics" && document.querySelector(".lyric-workbench-grid")) syncLyricDraftFromDom();
   if (target.hasAttribute("data-toggle-sidebar")) {
     sidebarCollapsed = !sidebarCollapsed;
