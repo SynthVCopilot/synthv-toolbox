@@ -45,7 +45,7 @@
       }
     },
     "resources": {
-      "../../LICENSE": "LICENSE",
+      "../../../LICENSE": "LICENSE",
       "components/synthv-agent-bridge/dist": "components/synthv-agent-bridge/dist",
       "components/synthv-agent-bridge/scripts": "components/synthv-agent-bridge/scripts",
       "components/synthv-agent-bridge/synthv": "components/synthv-agent-bridge/synthv",
@@ -63,7 +63,7 @@
     "macOS": {
       "files": {
         "SharedSupport/TERMS-OF-USE.md": "./TERMS-OF-USE.md",
-        "SharedSupport/LICENSE": "../../LICENSE"
+        "SharedSupport/LICENSE": "../../../LICENSE"
       }
     },
     "category": "Music",
