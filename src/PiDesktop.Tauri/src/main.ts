@@ -13,6 +13,7 @@ import { mountShell, type ShellController } from "./vue/shell";
 import { locale, setLocale, t } from "./i18n";
 import "./i18nHome";
 import "./i18nAccounts";
+import "./i18nBridge";
 import type {
   AiProviderId,
   AgentWorkMode,
@@ -1489,7 +1490,7 @@ function renderAccounts(): string {
 }
 
 function renderSv2InstanceList(): string {
-  return `<section class="panel account-instances-panel"><div class="panel-heading"><h2>SynthV 实例</h2></div><div class="synthv-process-list">${renderSv2InstanceRows()}</div></section>`;
+  return `<section class="panel account-instances-panel"><div class="panel-heading"><h2>${t("bridge.instances")}</h2></div><div class="synthv-process-list">${renderSv2InstanceRows()}</div></section>`;
 }
 
 function renderSv2InstanceRows(): string {
@@ -1499,9 +1500,9 @@ function renderSv2InstanceRows(): string {
     const product = [process.productName || process.name, process.version].filter(Boolean).join(" ");
     const identity = process.processIdentity || "";
     const disabled = !identity || busy ? " disabled" : "";
-    return `<article class="synthv-process-row account-instance-row" data-process-id="${process.processId}"><div class="instance-heading"><strong>${escapeHtml(`${product} · ${slot?.displayName ?? "未关联账号"} · ${title}`)}</strong></div><div class="button-row"><button class="secondary compact" data-focus-sv2="${process.processId}" data-process-identity="${escapeHtml(identity)}"${disabled}>切换到</button><button class="danger compact" data-terminate-sv2="${process.processId}" data-process-identity="${escapeHtml(identity)}"${disabled}>终止</button></div><details><summary>详情</summary><small>PID ${process.processId} · ${escapeHtml(mode)}</small><code>${escapeHtml(process.command)}</code></details></article>`;
+    return `<article class="synthv-process-row account-instance-row" data-process-id="${process.processId}"><div class="instance-heading"><strong>${escapeHtml(`${product} · ${slot?.displayName ?? t("bridge.unlinkedAccount")} · ${title}`)}</strong></div><div class="button-row"><button class="secondary compact" data-focus-sv2="${process.processId}" data-process-identity="${escapeHtml(identity)}"${disabled}>${t("bridge.focus")}</button><button class="danger compact" data-terminate-sv2="${process.processId}" data-process-identity="${escapeHtml(identity)}"${disabled}>${t("bridge.terminate")}</button></div><details><summary>${t("bridge.details")}</summary><small>PID ${process.processId} · ${escapeHtml(mode)}</small><code>${escapeHtml(process.command)}</code></details></article>`;
   }).join("");
-  return instances || '<div class="empty-inline compact-empty">当前没有检测到 SynthV 实例。</div>';
+  return instances || `<div class="empty-inline compact-empty">${t("bridge.noInstances")}</div>`;
 }
 
 function supportsWindowsSv2Extensions(): boolean {
@@ -2135,8 +2136,8 @@ function renderComponents(): string {
 
 function renderBridgeProcessRows(): string {
   return synthvProcesses.length
-    ? synthvProcesses.map((process) => `<article class="synthv-process-row"><div><strong>${escapeHtml(process.name)}</strong><small>PID ${process.processId} · ${escapeHtml(process.command)}</small></div><div class="button-row"><button class="primary compact" data-auto-connect-synthv="${process.processId}">F13 启动并连接</button><button class="secondary compact" data-send-synthv-stop="${process.processId}">F14 停止</button></div></article>`).join("")
-    : '<div class="empty-inline compact-empty">没有发现正在运行的 SynthV 进程。</div>';
+    ? synthvProcesses.map((process) => `<article class="synthv-process-row"><div><strong>${escapeHtml(process.name)}</strong><small>PID ${process.processId} · ${escapeHtml(process.command)}</small></div><div class="button-row"><button class="primary compact" data-auto-connect-synthv="${process.processId}">${t("bridge.startConnect")}</button><button class="secondary compact" data-send-synthv-stop="${process.processId}">${t("bridge.stop")}</button></div></article>`).join("")
+    : `<div class="empty-inline compact-empty">${t("bridge.noProcesses")}</div>`;
 }
 
 function bridgeTargetKey(scriptsPath: string): string {
@@ -2158,7 +2159,7 @@ function bridgeTargets(installations: SynthVInstallation[]): BridgeTarget[] {
 }
 
 function bridgeProfileLabel(profile: BridgeProfile): string {
-  return profile === "sv2" ? "SV2 脚本" : profile === "sv1" ? "SV1 兼容脚本" : profile === "flat" ? "Flat 兼容脚本" : "不支持脚本安装";
+  return profile === "sv2" ? t("bridge.sv2") : profile === "sv1" ? t("bridge.sv1") : profile === "flat" ? t("bridge.flat") : t("bridge.unsupported");
 }
 
 function renderBridgeResult(target: BridgeTarget): string {
@@ -2174,25 +2175,25 @@ function renderBridge(): string {
   const unsupportedLocations = app.installations.filter((item) => item.bridgeProfile === "unsupported");
   const applicationList = applicationLocations.length
     ? applicationLocations.map((item) => `<article class="installation-item"><span class="status-dot online"></span><span><strong>${escapeHtml(item.displayName)}</strong><small title="${escapeHtml(item.installPath ?? "")}">${escapeHtml(item.installPath ?? "")}</small></span><span class="location-source">${escapeHtml(item.source)}</span></article>`).join("")
-    : '<div class="empty-inline compact-empty">没有发现 Synthesizer V 应用安装。</div>';
+    : `<div class="empty-inline compact-empty">${t("bridge.noApplications")}</div>`;
   const scriptsList = targets.length
     ? targets.map((target) => `<article class="installation-item"><span class="status-dot online"></span><span><strong>${escapeHtml(target.installations.map((item) => item.displayName).join(" / "))}</strong><small title="${escapeHtml(target.scriptsPath)}">${escapeHtml(target.scriptsPath)}</small></span><span class="location-source">${escapeHtml(bridgeProfileLabel(target.bridgeProfile))}</span></article>`).join("")
-    : '<div class="empty-inline compact-empty">没有发现可管理的 scripts 目录，可以在右侧手动填写。</div>';
+    : `<div class="empty-inline compact-empty">${t("bridge.noTargets")}</div>`;
   const unsupportedList = unsupportedLocations.length
-    ? `<section class="detection-group"><div class="detection-group-title"><strong>无需或不支持脚本安装</strong><span>${unsupportedLocations.length}</span></div><div class="installation-list">${unsupportedLocations.map((item) => `<article class="installation-item"><span class="status-dot"></span><span><strong>${escapeHtml(item.displayName)}</strong><small>${escapeHtml(item.installPath ?? "未找到安装目录")}</small></span><span class="location-source">${escapeHtml(bridgeProfileLabel(item.bridgeProfile ?? "unsupported"))}</span></article>`).join("")}</div></section>`
+    ? `<section class="detection-group"><div class="detection-group-title"><strong>${t("bridge.noInstall")}</strong><span>${unsupportedLocations.length}</span></div><div class="installation-list">${unsupportedLocations.map((item) => `<article class="installation-item"><span class="status-dot"></span><span><strong>${escapeHtml(item.displayName)}</strong><small>${escapeHtml(item.installPath ?? t("bridge.unknownInstall"))}</small></span><span class="location-source">${escapeHtml(bridgeProfileLabel(item.bridgeProfile ?? "unsupported"))}</span></article>`).join("")}</div></section>`
     : "";
-  const shortcuts = synthvShortcutProfile ?? { bridgeStart: "F13", bridgeStop: "F14", detail: "正在读取快捷键配置…" };
+  const shortcuts = synthvShortcutProfile ?? { bridgeStart: "F13", bridgeStop: "F14", detail: t("bridge.shortcutsLoading") };
   const processList = renderBridgeProcessRows();
-  const processControls = `<section class="panel bridge-instances-panel"><div class="panel-heading"><span class="feature-icon violet">${icon("bridge", 25)}</span><div><h2>SynthV 实例</h2><p>${escapeHtml(shortcuts.detail)}</p></div></div><div class="shortcut-tags"><span>启动 / 重连：${escapeHtml(shortcuts.bridgeStart)}</span><span>停止：${escapeHtml(shortcuts.bridgeStop)}</span></div><div class="synthv-process-list">${processList}</div></section>`;
-  return `<div class="bridge-grid"><section class="panel"><div class="panel-heading"><span class="feature-icon orange">${icon("bridge", 25)}</span><div><h2>Synthesizer V 探测</h2><p>Windows 与 macOS 使用各自的标准路径，只进行只读检查。</p></div><button class="secondary compact" data-scan>${icon("sync", 16)} 重新探测</button></div>
+  const processControls = `<section class="panel bridge-instances-panel"><div class="panel-heading"><span class="feature-icon violet">${icon("bridge", 25)}</span><div><h2>${t("bridge.instances")}</h2><p>${escapeHtml(shortcuts.detail)}</p></div></div><div class="shortcut-tags"><span>${t("bridge.start", { shortcut: shortcuts.bridgeStart })}</span><span>${t("bridge.stopShortcut", { shortcut: shortcuts.bridgeStop })}</span></div><div class="synthv-process-list">${processList}</div></section>`;
+  return `<div class="bridge-grid"><section class="panel"><div class="panel-heading"><span class="feature-icon orange">${icon("bridge", 25)}</span><div><h2>${t("bridge.detection")}</h2><p>${t("bridge.detectionDescription")}</p></div><button class="secondary compact" data-scan>${icon("sync", 16)} ${t("bridge.rescan")}</button></div>
     <div class="detection-groups">
-      <section class="detection-group"><div class="detection-group-title"><strong>应用安装</strong><span>${applicationLocations.length}</span></div><div class="installation-list">${applicationList}</div></section>
-      <section class="detection-group"><div class="detection-group-title"><strong>可管理的 Scripts 目录</strong><span>${targets.length}</span></div><p class="detection-group-help">相同目录只执行一次；SV1 与 SV2 使用各自匹配的安装脚本。</p><div class="installation-list">${scriptsList}</div></section>${unsupportedList}
+      <section class="detection-group"><div class="detection-group-title"><strong>${t("bridge.applications")}</strong><span>${applicationLocations.length}</span></div><div class="installation-list">${applicationList}</div></section>
+      <section class="detection-group"><div class="detection-group-title"><strong>${t("bridge.targets")}</strong><span>${targets.length}</span></div><p class="detection-group-help">${t("bridge.targetsDescription")}</p><div class="installation-list">${scriptsList}</div></section>${unsupportedList}
     </div></section>
-    <section class="panel"><div class="panel-heading"><span class="feature-icon blue">${icon("plug", 25)}</span><div><h2>Bridge 管理</h2><p>可对全部已识别目录批量安装或检查；每个目标独立执行并显示结果。</p></div></div>
-      ${targets.length ? `<div class="button-row"><button class="primary" type="button" data-bridge-batch="install">安装 / 更新全部 (${targets.length})</button><button class="secondary" type="button" data-bridge-batch="diagnose">检查全部安装</button></div><div class="installation-list">${targets.map((target) => `<article class="installation-item"><span class="status-dot online"></span><span><strong>${escapeHtml(target.installations.map((item) => item.displayName).join(" / "))}</strong><small>${escapeHtml(target.scriptsPath)}</small>${renderBridgeResult(target)}</span><div class="button-row"><button class="secondary compact" type="button" data-bridge-target="install" data-scripts-path="${escapeHtml(target.scriptsPath)}" data-bridge-profile="${target.bridgeProfile}">安装 / 更新</button><button class="secondary compact" type="button" data-bridge-target="diagnose" data-scripts-path="${escapeHtml(target.scriptsPath)}" data-bridge-profile="${target.bridgeProfile}">检查</button></div></article>`).join("")}</div>` : ""}
-      <form id="bridge-form" class="form-stack"><label>手动 Scripts 目录<input id="scripts-path" value="${escapeHtml(bridgeManualScriptsPath || (app.scriptsPath ?? ""))}" placeholder="粘贴 SynthV scripts 目录" /></label><label>目标类型<select id="bridge-profile"><option value="sv2" ${bridgeManualProfile === "sv2" ? "selected" : ""}>SV2 脚本</option><option value="sv1" ${bridgeManualProfile === "sv1" ? "selected" : ""}>SV1 兼容脚本</option><option value="flat" ${bridgeManualProfile === "flat" ? "selected" : ""}>Flat 兼容脚本</option></select></label><div class="button-row"><button class="primary" value="install">安装 / 更新此目录</button><button class="secondary" value="diagnose">检查此目录</button><button class="secondary" value="connect">测试连接</button></div></form>
-      <div class="inline-status"><span class="status-dot ${app.bridgeBundled ? "online" : ""}"></span><span>${app.bridgeBundled ? "内置 Bridge 资源已就绪" : "当前构建未包含 Bridge 资源"}</span></div>
+    <section class="panel"><div class="panel-heading"><span class="feature-icon blue">${icon("plug", 25)}</span><div><h2>${t("bridge.management")}</h2><p>${t("bridge.managementDescription")}</p></div></div>
+      ${targets.length ? `<div class="button-row"><button class="primary" type="button" data-bridge-batch="install">${t("bridge.installAll", { count: targets.length })}</button><button class="secondary" type="button" data-bridge-batch="diagnose">${t("bridge.diagnoseAll")}</button></div><div class="installation-list">${targets.map((target) => `<article class="installation-item"><span class="status-dot online"></span><span><strong>${escapeHtml(target.installations.map((item) => item.displayName).join(" / "))}</strong><small>${escapeHtml(target.scriptsPath)}</small>${renderBridgeResult(target)}</span><div class="button-row"><button class="secondary compact" type="button" data-bridge-target="install" data-scripts-path="${escapeHtml(target.scriptsPath)}" data-bridge-profile="${target.bridgeProfile}">${t("bridge.install")}</button><button class="secondary compact" type="button" data-bridge-target="diagnose" data-scripts-path="${escapeHtml(target.scriptsPath)}" data-bridge-profile="${target.bridgeProfile}">${t("bridge.diagnose")}</button></div></article>`).join("")}</div>` : ""}
+      <form id="bridge-form" class="form-stack"><label>${t("bridge.manualDirectory")}<input id="scripts-path" value="${escapeHtml(bridgeManualScriptsPath || (app.scriptsPath ?? ""))}" placeholder="${t("bridge.directoryPlaceholder")}" /></label><label>${t("bridge.targetType")}<select id="bridge-profile"><option value="sv2" ${bridgeManualProfile === "sv2" ? "selected" : ""}>${t("bridge.sv2")}</option><option value="sv1" ${bridgeManualProfile === "sv1" ? "selected" : ""}>${t("bridge.sv1")}</option><option value="flat" ${bridgeManualProfile === "flat" ? "selected" : ""}>${t("bridge.flat")}</option></select></label><div class="button-row"><button class="primary" value="install">${t("bridge.installManual")}</button><button class="secondary" value="diagnose">${t("bridge.diagnoseManual")}</button><button class="secondary" value="connect">${t("bridge.testConnection")}</button></div></form>
+      <div class="inline-status"><span class="status-dot ${app.bridgeBundled ? "online" : ""}"></span><span>${app.bridgeBundled ? t("bridge.bundled") : t("bridge.missingBundle")}</span></div>
     </section>${processControls}</div>`;
 }
 
@@ -2820,7 +2821,7 @@ function wireForms(): void {
           : await api.installBridge([{ scriptsPath, bridgeProfile }]);
         for (const item of results) bridgeTargetResults.set(bridgeTargetKey(item.scriptsPath), item.result);
         if (action === "install" && results[0]?.result.succeeded) app = await api.saveScriptsPath(scriptsPath);
-        setFeedback(results[0]?.result ?? { succeeded: false, summary: "没有可执行的 Bridge 目标。", detail: "请填写 scripts 目录。" });
+        setFeedback(results[0]?.result ?? { succeeded: false, summary: t("bridge.noTarget"), detail: t("bridge.enterDirectory") });
       }
       await refresh();
     });
@@ -2841,7 +2842,9 @@ function wireForms(): void {
       const results = action === "diagnose" ? await api.diagnoseBridge(targets) : await api.installBridge(targets);
       for (const item of results) bridgeTargetResults.set(bridgeTargetKey(item.scriptsPath), item.result);
       const failed = results.filter((item) => !item.result.succeeded).length;
-      notice = failed ? `${results.length - failed} 个目标已完成，${failed} 个目标需要处理。` : `${results.length} 个 Bridge 目标已完成。`;
+      notice = failed
+        ? t("bridge.batchPartial", { completed: results.length - failed, failed })
+        : t("bridge.batchComplete", { count: results.length });
       await refresh();
     });
   }));
