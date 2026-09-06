@@ -25,11 +25,13 @@ jobs:
             target: x86_64-pc-windows-msvc
             rust_targets: x86_64-pc-windows-msvc
             bundles: nsis
+            artifact_suffix: -nsis.exe
           - name: macOS Universal
             os: macos-14
             target: universal-apple-darwin
             rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
             bundles: app,dmg
+            artifact_suffix: .dmg
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -201,14 +203,13 @@ jobs:
           test "$archs" = "x86_64 arm64" || test "$archs" = "arm64 x86_64"
           artifact_root="$RUNNER_TEMP/synthv-toolbox-artifacts/${{ matrix.target }}"
           mkdir -p "$artifact_root"
-          ditto -c -k --sequesterRsrc --keepParent "$app_path" "$artifact_root/synthv-toolbox-${{ steps.version.outputs.version }}-${{ matrix.target }}.app.zip"
           cp "$dmg_path" "$artifact_root/synthv-toolbox-${{ steps.version.outputs.version }}-${{ matrix.target }}.dmg"
 
       - name: Upload development build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: synthv-toolbox-${{ steps.version.outputs.version }}-${{ matrix.target }}
-          path: ${{ runner.temp }}/synthv-toolbox-artifacts/${{ matrix.target }}
+          path: ${{ runner.temp }}/synthv-toolbox-artifacts/${{ matrix.target }}/synthv-toolbox-${{ steps.version.outputs.version }}-${{ matrix.target }}${{ matrix.artifact_suffix }}
+          archive: false
           if-no-files-found: error
           retention-days: 14
 
