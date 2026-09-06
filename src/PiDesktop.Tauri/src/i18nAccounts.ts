@@ -408,3 +408,51 @@ addMessages("en", { accountUi: {
   "traecodeConnection": "Sign in through the local TraeCode CLI and use its read-only agent.",
   "traecodeUnavailable": "TraeCode CLI was not detected. Install traecli and sign in first."
 } });
+
+addMessages("zh-CN", { accountNotice: {
+  "imported": "已导入账号槽位。",
+  "importedPrepared": "已导入账号槽位。已自动准备隔离环境。",
+  "created": "已创建账号槽位。",
+  "createdPrepared": "已创建账号槽位。已自动准备隔离环境。",
+  "noteSaved": "备注已保存。",
+  "noteCleared": "备注已清除。",
+  "globalSaved": "全局设置已保存。",
+  "globalSavedPrepared": "全局设置已保存。已自动准备 {count} 个隔离环境。",
+  "fileApproved": "文件访问已批准。",
+  "fileDenied": "文件访问已拒绝。",
+  "routingEnabled": "智能 .svp 启动已开启。请确认 Windows 已将 Synthesizer V Toolbox 设为 .svp 默认应用。",
+  "routingDisabled": "智能 .svp 启动已关闭；工程会透明转交给原始处理程序。",
+  "indicatorEnabled": "账号登录指示器已开启，并已完成首次授权查询。",
+  "indicatorDisabled": "账号登录指示器已关闭；之后进入账号页不会探测官方登录接口。",
+  "deleted": "账号槽位及其本机数据已删除。",
+  "refreshed": "账号槽位与授权状态已刷新。",
+  "authorizationUnknown": "当前无法确认该账号的授权状态。",
+  "checked": "此账号的会话与授权状态已检查。",
+  "activated": "默认账号槽位已切换。",
+  "isolationPrepared": "隔离环境已准备，可以并发启动。",
+  "invalidRouteRequest": "收到的 .svp 智能路由请求格式无效。"
+} });
+
+addMessages("en", { accountNotice: {
+  "imported": "Account slot imported.",
+  "importedPrepared": "Account slot imported and isolation prepared automatically.",
+  "created": "Account slot created.",
+  "createdPrepared": "Account slot created and isolation prepared automatically.",
+  "noteSaved": "Note saved.",
+  "noteCleared": "Note cleared.",
+  "globalSaved": "Global settings saved.",
+  "globalSavedPrepared": "Global settings saved. Isolated environments prepared automatically: {count}.",
+  "fileApproved": "File access approved.",
+  "fileDenied": "File access denied.",
+  "routingEnabled": "Smart .svp launch is enabled. Make sure Synthesizer V Toolbox is the default .svp app in Windows.",
+  "routingDisabled": "Smart .svp launch is off. Projects will be passed to the original handler.",
+  "indicatorEnabled": "Account sign-in indicator enabled; the first authorization check is complete.",
+  "indicatorDisabled": "Account sign-in indicator disabled. Opening the accounts page will no longer query the official sign-in service.",
+  "deleted": "Account slot and its local data deleted.",
+  "refreshed": "Account slots and authorization status refreshed.",
+  "authorizationUnknown": "The authorization status of this account cannot be confirmed right now.",
+  "checked": "This account’s session and authorization status have been checked.",
+  "activated": "Default account slot switched.",
+  "isolationPrepared": "Isolation is prepared and ready for concurrent launch.",
+  "invalidRouteRequest": "The received smart .svp routing request has an invalid format."
+} });
