@@ -211,6 +211,7 @@ pub fn run() {
             commands::check_toolbox_update,
             commands::open_toolbox_releases,
             commands::sv2_profile_state,
+            commands::sv2_cached_profile_state,
             commands::sv2_voice_catalog,
             commands::sv2_account_precheck,
             commands::sv2_account_usage_snapshot,

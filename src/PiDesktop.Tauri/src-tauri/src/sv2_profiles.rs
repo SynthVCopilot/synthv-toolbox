@@ -315,6 +315,74 @@ impl Sv2ProfileService {
         build_state(paths, &manifest, recovery_required, recovery_detail)
     }
 
+    pub fn cached_state(&self) -> Result<Sv2ProfilesState, String> {
+        let Ok(paths) = &self.paths else {
+            return Ok(unsupported_state(
+                self.paths.as_ref().err().cloned().unwrap_or_default(),
+            ));
+        };
+        let manifest = load_manifest(paths)?;
+        let slots = manifest
+            .slots
+            .iter()
+            .map(|slot| {
+                let is_active = manifest.active_slot_id.as_deref() == Some(slot.id.as_str());
+                let data_path = slot_data_root(paths, &manifest, &slot.id);
+                let session_cached = data_path.join("license/session").is_file();
+                let account_probe =
+                    cached_sv2_account_probe_for_account(&data_path, false, &slot.id, false);
+                let concurrent = Sv2ConcurrentSlotView {
+                    ready: false,
+                    data_path: String::new(),
+                    running_pids: Vec::new(),
+                    detail: "正在读取最新隔离环境状态。".to_string(),
+                    content: slot
+                        .concurrent_content
+                        .resolve(manifest.concurrent_defaults),
+                };
+                let session_protection =
+                    Sv2SessionProtectionView::attention("正在读取最新登录态保护状态。".to_string());
+                Sv2ProfileSlotView {
+                    id: slot.id.clone(),
+                    display_name: slot.display_name.clone(),
+                    color: slot.color.clone(),
+                    created_at_utc: slot.created_at_utc.clone(),
+                    last_activated_at_utc: slot.last_activated_at_utc.clone(),
+                    is_active,
+                    session_cached,
+                    installed_voice_ids: Vec::new(),
+                    data_path: data_path.to_string_lossy().into_owned(),
+                    session_protection: session_protection.clone(),
+                    concurrent_session_protection: session_protection,
+                    concurrent,
+                    account_probe: account_probe.clone(),
+                    concurrent_account_probe: account_probe,
+                }
+            })
+            .collect();
+        Ok(Sv2ProfilesState {
+            supported: true,
+            canonical_path: paths.canonical.to_string_lossy().into_owned(),
+            vault_path: paths.vault.to_string_lossy().into_owned(),
+            active_slot_id: manifest.active_slot_id,
+            canonical_root_exists: false,
+            can_import_current: false,
+            recovery_required: false,
+            recovery_detail: String::new(),
+            slots,
+            blockers: Vec::new(),
+            concurrent_provider: Sv2ConcurrentProviderView {
+                available: false,
+                name: String::new(),
+                edition: String::new(),
+                version: String::new(),
+                install_path: String::new(),
+                detail: "正在读取最新隔离环境状态。".to_string(),
+            },
+            concurrent_defaults: manifest.concurrent_defaults,
+        })
+    }
+
     pub fn account_precheck(&self) -> Result<Sv2AccountPrecheck, String> {
         self.build_account_usage_snapshot(false, None)
             .map(|snapshot| snapshot.precheck)

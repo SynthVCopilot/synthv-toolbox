@@ -1447,6 +1447,16 @@ pub async fn sv2_profile_state(state: State<'_, AppState>) -> Result<Sv2Profiles
 }
 
 #[tauri::command]
+pub async fn sv2_cached_profile_state(
+    state: State<'_, AppState>,
+) -> Result<Sv2ProfilesState, String> {
+    let profiles = state.sv2_profiles.clone();
+    tauri::async_runtime::spawn_blocking(move || profiles.cached_state())
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 pub async fn sv2_account_precheck(
     state: State<'_, AppState>,
 ) -> Result<Sv2AccountPrecheck, String> {
