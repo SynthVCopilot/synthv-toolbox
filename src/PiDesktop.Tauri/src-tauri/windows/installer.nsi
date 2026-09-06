@@ -239,6 +239,7 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 
 ; 2. License Page (if defined)
 !if "${LICENSE}" != ""
+  !define MUI_LICENSEPAGE_RADIOBUTTONS
   !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
   !insertmacro MUI_PAGE_LICENSE "${LICENSE}"
 !endif
@@ -561,6 +562,17 @@ Function .onInit
   ${GetOptions} $CMDLINE "/UPDATE" $UpdateMode
   ${IfNot} ${Errors}
     StrCpy $UpdateMode 1
+  ${EndIf}
+
+  ; Passive and silent invocations cannot present or collect terms acceptance.
+  ${If} ${Silent}
+    SetErrorLevel 1
+    Abort "Terms acceptance requires the interactive installer. / 使用条款需要通过交互式安装器接受。"
+  ${EndIf}
+  ${If} $PassiveMode = 1
+    MessageBox MB_OK|MB_ICONSTOP "Terms acceptance requires the interactive installer. / 使用条款需要通过交互式安装器接受。"
+    SetErrorLevel 1
+    Abort
   ${EndIf}
 
   !if "${DISPLAYLANGUAGESELECTOR}" == "true"

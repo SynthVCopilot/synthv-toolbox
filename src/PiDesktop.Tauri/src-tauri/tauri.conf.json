@@ -30,6 +30,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "licenseFile": "./TERMS-OF-USE.md",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -44,6 +45,7 @@
       }
     },
     "resources": {
+      "../../LICENSE": "LICENSE",
       "components/synthv-agent-bridge/dist": "components/synthv-agent-bridge/dist",
       "components/synthv-agent-bridge/scripts": "components/synthv-agent-bridge/scripts",
       "components/synthv-agent-bridge/synthv": "components/synthv-agent-bridge/synthv",
@@ -57,6 +59,12 @@
       "components/pi-audio/requirements.txt": "components/pi-audio/requirements.txt",
       "components/vocal-separation/separate.py": "components/vocal-separation/separate.py",
       "components/vocal-separation/requirements.txt": "components/vocal-separation/requirements.txt"
+    },
+    "macOS": {
+      "files": {
+        "SharedSupport/TERMS-OF-USE.md": "./TERMS-OF-USE.md",
+        "SharedSupport/LICENSE": "../../LICENSE"
+      }
     },
     "category": "Music",
     "shortDescription": "Cross-platform Synthesizer V creative toolbox",

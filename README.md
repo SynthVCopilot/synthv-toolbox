@@ -42,3 +42,5 @@ Windows 和 macOS 都提供可选的 SV2 本地数据槽位，可在 SV2 完全�
 ## License
 
 [Apache-2.0](LICENSE)
+
+使用工具箱前，请阅读[使用条款](src/PiDesktop.Tauri/src-tauri/TERMS-OF-USE.md)。该条款独立于 Apache-2.0 许可证；Windows 交互式安装器要求接受使用条款。
