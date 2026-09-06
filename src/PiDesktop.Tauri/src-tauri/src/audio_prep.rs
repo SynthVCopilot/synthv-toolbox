@@ -27,7 +27,9 @@ use tokio::process::Command;
 use uuid::Uuid;
 
 use crate::agent::data_root;
-use crate::components::{component_usage_guard, find_ffmpeg_pair, managed_ffmpeg_runtime};
+use crate::components::{
+    component_usage_guard, configured_ffmpeg_directory, find_ffmpeg_pair, managed_ffmpeg_runtime,
+};
 use crate::process_tree::{attach_child, prepare_command};
 
 const TOKEN_TTL: Duration = Duration::from_secs(10 * 60);
@@ -1856,7 +1858,7 @@ fn diagnostic_tail(value: &[u8]) -> String {
 }
 
 fn resolve_runtime(resource_dir: &Path) -> Result<Runtime, String> {
-    let explicit = env::var_os("SYNTHV_TOOLBOX_FFMPEG_DIR").map(PathBuf::from);
+    let explicit = configured_ffmpeg_directory();
     let path_directories = env::var_os("PATH")
         .into_iter()
         .flat_map(|value| env::split_paths(&value).collect::<Vec<_>>())
@@ -1883,6 +1885,10 @@ fn resolve_runtime_from_candidates(
                 ffprobe: ffprobe.into_os_string(),
             });
         }
+        return Err(
+            "已选择的 FFmpeg 目录不再包含可用的 ffmpeg 和 ffprobe。请重新选择或清除该目录。"
+                .to_string(),
+        );
     }
     if let Some((ffmpeg, ffprobe)) = managed {
         return Ok(Runtime {
@@ -1908,7 +1914,7 @@ fn resolve_runtime_from_candidates(
             ffprobe: ffprobe.into_os_string(),
         });
     }
-    Err("FFmpeg and ffprobe were not found. Configure SYNTHV_TOOLBOX_FFMPEG_DIR, install the Toolbox-managed component, or add both binaries to PATH.".to_string())
+    Err("FFmpeg and ffprobe were not found. Select an FFmpeg directory, install the Toolbox-managed component, or add both binaries to PATH.".to_string())
 }
 
 pub(crate) fn configure_ffmpeg_environment(

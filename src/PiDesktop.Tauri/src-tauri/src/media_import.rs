@@ -126,7 +126,7 @@ pub async fn import_audio_cancellable(
                 .to_string_lossy()
                 .into_owned(),
         ]);
-        if let Some(ffmpeg) = resolved_ffmpeg_directory(&resource_root) {
+        if let Some(ffmpeg) = resolved_ffmpeg_directory(&resource_root)? {
             args.push("--ffmpeg-location".to_string());
             args.push(ffmpeg.to_string_lossy().into_owned());
         }

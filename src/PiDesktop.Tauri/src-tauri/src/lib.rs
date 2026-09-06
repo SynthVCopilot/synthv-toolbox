@@ -11,6 +11,9 @@ mod creative_history;
 mod creative_tools;
 pub mod credential_balancer;
 mod downloads;
+#[cfg(test)]
+#[path = "../../../../test/ffmpeg_local_source.rs"]
+mod ffmpeg_local_source_tests;
 mod http_api;
 mod lyric_projects;
 mod lyric_tools;
@@ -257,6 +260,9 @@ pub fn run() {
             commands::capture_synthv_clip,
             commands::compare_synthv_clips,
             commands::ffmpeg_status,
+            commands::get_ffmpeg_configuration,
+            commands::set_ffmpeg_directory,
+            commands::open_ffmpeg_download_page,
             commands::probe_media,
             commands::plan_audio_prepare,
             commands::start_audio_prepare,
