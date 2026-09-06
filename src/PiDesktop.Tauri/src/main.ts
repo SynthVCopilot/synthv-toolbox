@@ -1032,6 +1032,17 @@ async function launchConcurrentSlot(slotId: string, prepare: boolean): Promise<v
   profiles = await api.sv2ProfileState();
 }
 
+async function launchSv2ProfileAfterLiveCheck(slotId: string): Promise<void> {
+  const currentProfiles = await api.sv2ProfileState();
+  profiles = currentProfiles;
+  if (currentProfiles.activeSlotId !== slotId && currentProfiles.blockers.length) {
+    pendingBlockedSwitchSlot = slotId;
+    return;
+  }
+  setFeedback(await api.launchSv2Profile(slotId));
+  profiles = await api.sv2ProfileState();
+}
+
 async function prepareConcurrentSlotsWhenEnabled(): Promise<number> {
   if (!app?.sv2ConcurrentEnabled || !profiles?.concurrentProvider.available) return 0;
   let prepared = 0;
@@ -2966,13 +2977,7 @@ document.addEventListener("click", (event) => {
   }
   if (target.dataset.profileLaunch) {
     const slotId = target.dataset.profileLaunch;
-    const slot = profiles?.slots.find((item) => item.id === slotId);
-    if (slot && !slot.isActive && profiles?.blockers.length) {
-      pendingBlockedSwitchSlot = slotId;
-      render();
-    } else {
-      void run(async () => { setFeedback(await api.launchSv2Profile(slotId)); profiles = await api.sv2ProfileState(); });
-    }
+    void run(async () => { await launchSv2ProfileAfterLiveCheck(slotId); });
     return;
   }
   if (target.dataset.profileActivate) { void run(async () => { profiles = await api.activateSv2Profile(target.dataset.profileActivate ?? ""); notice = "默认账号槽位已切换。"; }); return; }
