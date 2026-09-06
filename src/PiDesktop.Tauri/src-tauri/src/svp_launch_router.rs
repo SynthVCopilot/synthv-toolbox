@@ -642,7 +642,8 @@ mod windows_association {
                     .to_string()
             }
             (true, true, None) => {
-                "Synthesizer V Toolbox 已是 .svp 默认处理器，但未找到可安全透传的原处理器。".to_string()
+                "Synthesizer V Toolbox 已是 .svp 默认处理器，但未找到可安全透传的原处理器。"
+                    .to_string()
             }
             (true, false, _) => {
                 "Synthesizer V Toolbox 已注册为“打开方式”候选；默认应用仍由用户选择。".to_string()
@@ -743,7 +744,9 @@ mod windows_association {
 
     pub(super) fn passthrough(project_path: &Path, original_prog_id: &str) -> Result<(), String> {
         if handler_points_to_toolbox(original_prog_id) {
-            return Err("原 .svp 处理器会再次启动 Synthesizer V Toolbox，已阻止递归透传。".to_string());
+            return Err(
+                "原 .svp 处理器会再次启动 Synthesizer V Toolbox，已阻止递归透传。".to_string(),
+            );
         }
         let verb = to_wide("open");
         let project = project_path

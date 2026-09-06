@@ -659,7 +659,8 @@ fn sandboxie_component_info() -> ComponentInfo {
     ComponentInfo {
         id: "sandboxie".to_string(),
         display_name: format!("Sandboxie Plus {SANDBOXIE_VERSION}"),
-        description: "Synthesizer V Toolbox 并发隔离提供方；下载官方安装包后由用户交互安装。".to_string(),
+        description: "Synthesizer V Toolbox 并发隔离提供方；下载官方安装包后由用户交互安装。"
+            .to_string(),
         audience: "Windows 并发隔离".to_string(),
         installed,
         removable: false,

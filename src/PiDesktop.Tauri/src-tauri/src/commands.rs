@@ -1427,7 +1427,10 @@ pub async fn check_toolbox_update() -> Result<crate::update_checker::ToolboxUpda
 #[tauri::command]
 pub fn open_toolbox_releases() -> OperationResult {
     match crate::update_checker::open_releases_page() {
-        Ok(()) => succeeded("已打开 Synthesizer V Toolbox 官方发布页。", RELEASES_PAGE_DETAIL),
+        Ok(()) => succeeded(
+            "已打开 Synthesizer V Toolbox 官方发布页。",
+            RELEASES_PAGE_DETAIL,
+        ),
         Err(error) => failed("无法打开 Synthesizer V Toolbox 官方发布页。", error),
     }
 }
