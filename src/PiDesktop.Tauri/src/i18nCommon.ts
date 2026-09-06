@@ -1,6 +1,7 @@
 import { addMessages } from "./i18n";
 
 addMessages("zh-CN", {
+  "common.install": "安装",
   "onboarding.eyebrow": "首次启动 · 选择工作方式",
   "onboarding.title": "一个工具箱，按你的方式工作。",
   "onboarding.lead": "随时可以在设置中切换。纯工具箱模式不会显示或启动任何 AI 功能。",
@@ -52,6 +53,7 @@ addMessages("zh-CN", {
 });
 
 addMessages("en", {
+  "common.install": "Install",
   "onboarding.eyebrow": "FIRST LAUNCH · CHOOSE HOW TO WORK",
   "onboarding.title": "One toolbox, your way of working.",
   "onboarding.lead": "You can change this at any time in Settings. Toolbox mode does not show or start AI features.",

@@ -13,7 +13,14 @@ globalThis.localStorage = { getItem: key => values.get(key) ?? null, setItem: (k
 globalThis.document = { documentElement: { lang: "" } };
 const i18nSource = source("i18n").replace('from "vue-i18n"', `from ${JSON.stringify(runtimeUrl)}`);
 const i18nUrl = moduleUrl(i18nSource);
-const { t, locale, setLocale } = await import(i18nUrl);
+const { t, locale, setLocale, i18n } = await import(i18nUrl);
+for (const name of ["i18nCommon", "i18nAccounts", "i18nBridge", "i18nHome", "i18nLyrics", "i18nWorkflows", "i18nCopilot", "i18nSystem"]) {
+  await import(moduleUrl(source(name).replace('from "./i18n"', `from ${JSON.stringify(i18nUrl)}`)));
+}
+const literalKeys = [...source("main").matchAll(/\bt\("([^"`]+)"/g)].map(match => match[1]);
+for (const language of ["zh-CN", "en"]) {
+  for (const key of new Set(literalKeys)) assert.ok(i18n.global.te(key, language), `Missing ${language} message: ${key}`);
+}
 assert.equal(locale(), "en");
 assert.equal(document.documentElement.lang, "en");
 assert.equal(t("nav.settings"), "Settings");
@@ -51,4 +58,4 @@ const unavailable = await import(moduleUrl(`${i18nSource}\nexport const unavaila
 assert.equal(unavailable.locale(), "zh-CN");
 assert.doesNotThrow(() => unavailable.setLocale("en"));
 assert.equal(unavailable.t("nav.settings"), "Settings");
-console.log("Language persistence, interpolation, and live catalog translations passed.");
+console.log("Language persistence, translation key coverage, interpolation, and live catalog translations passed.");

@@ -113,7 +113,7 @@ assert.match(main, /audioLoudnessAnalysisGeneration/);
 assert.match(main, /if \(!inputPath \|\| audioLoudnessAnalysisInFlight\) return/);
 assert.match(main, /controlsLocked = [^;]*audioLoudnessAnalysisInFlight/);
 assert.match(main, /analysisGeneration !== audioLoudnessAnalysisGeneration/);
-assert.match(main, /if \(audioLoudnessAnalysisInFlight\) \{[\s\S]{0,220}更换输入文件/);
+assert.match(main, /if \(audioLoudnessAnalysisInFlight\) \{[\s\S]{0,220}t\("workflowCopy\.loudnessAnalysisIsRunningWaitForIt"\)/);
 assert.match(main, /function mergeAudioJobSnapshot[\s\S]{0,420}isTerminalAudioJob\(current\)/);
 assert.ok(
   (main.match(/mergeAudioJobSnapshot\(audioJob,\s*snapshot\)/g) ?? []).length >= 2,
@@ -130,7 +130,8 @@ assert.match(main, /id="audio-normalize-lufs"[^>]*min="-70"[^>]*max="-5"/);
 assert.match(main, /id="audio-normalize-peak"[^>]*min="-9"[^>]*max="0"/);
 
 const audioSection = main.match(/if \(id === "audio-preparation"\) \{([\s\S]*?)\} else if \(id === "audio-insight"/i)?.[1] ?? "";
-assert.match(audioSection, /不会自动导入 SynthV/);
+assert.match(audioSection, /t\("workflowCopy\.clickToSelectOrDropOneLocal"\)/);
+assert.match(read(join(webRoot, "i18nWorkflows.ts")), /不会自动导入 SynthV/);
 assert.doesNotMatch(audioSection, /runAudioToProject|runBatchWorkflow|runScoreToSynthv|runProjectReference/i);
 
 console.log("Audio preparation UI contracts passed.");

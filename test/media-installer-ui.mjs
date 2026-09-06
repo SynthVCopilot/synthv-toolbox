@@ -73,7 +73,7 @@ function createHarness(api = {}) {
 `;
 const transformed = stripTypeScriptTypes(harnessSource, { mode: "transform", sourceUrl: "installer-ui-harness.ts" });
 const module = { exports: {} };
-vm.runInNewContext(transformed, { module, exports: module.exports, console, api, document: dom.window.document });
+vm.runInNewContext(transformed, { module, exports: module.exports, console, api, t: key => key, document: dom.window.document });
 return module.exports;
 }
 
