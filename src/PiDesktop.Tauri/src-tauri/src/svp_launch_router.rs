@@ -390,8 +390,7 @@ fn route_mode_candidate(
         account_probe.session_status == Sv2SessionInspectionStatus::AccountMismatch;
     let session_sync_failed =
         account_probe.session_status == Sv2SessionInspectionStatus::SyncFailed;
-    let login_required =
-        account_probe.session_status == Sv2SessionInspectionStatus::LoginRequired;
+    let login_required = account_probe.session_status == Sv2SessionInspectionStatus::LoginRequired;
     let idle = locally_available
         && !remote_busy
         && !account_mismatch

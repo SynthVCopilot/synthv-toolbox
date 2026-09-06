@@ -503,7 +503,9 @@ fn login_required_environment_is_never_routable() {
     slot.concurrent_account_probe.remote_use = Sv2RemoteUseStatus::Unknown;
     slot.concurrent_account_probe.authorization_status = Sv2AuthorizationStatus::Unknown;
     slot.concurrent_account_probe.authorized_voices.clear();
-    slot.concurrent_account_probe.authorized_voice_products.clear();
+    slot.concurrent_account_probe
+        .authorized_voice_products
+        .clear();
     slot.concurrent_account_probe.authorized_voice_count = 0;
     let mut state = route_state(vec![slot]);
     state.concurrent_provider.available = true;

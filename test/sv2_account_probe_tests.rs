@@ -885,15 +885,26 @@ fn enroll_response_only_marks_clear_with_server_identity() {
 fn login_required_placeholder_requires_both_empty_credentials() {
     let _guard = PROBE_TEST_GATE.lock().unwrap();
     let placeholder = "\n\n2099-01-02T03:00:00+00:00\n2099-01-02T02:00:00+00:00\ndevice-id";
-    let only_access_empty = "\nrefresh\n2099-01-02T03:00:00+00:00\n2099-01-02T02:00:00+00:00\ndevice-id";
-    let only_refresh_empty = "access\n\n2099-01-02T03:00:00+00:00\n2099-01-02T02:00:00+00:00\ndevice-id";
+    let only_access_empty =
+        "\nrefresh\n2099-01-02T03:00:00+00:00\n2099-01-02T02:00:00+00:00\ndevice-id";
+    let only_refresh_empty =
+        "access\n\n2099-01-02T03:00:00+00:00\n2099-01-02T02:00:00+00:00\ndevice-id";
 
-    assert!(is_login_required_session_placeholder(placeholder.as_bytes()));
-    assert!(!is_login_required_session_placeholder(only_access_empty.as_bytes()));
-    assert!(!is_login_required_session_placeholder(only_refresh_empty.as_bytes()));
+    assert!(is_login_required_session_placeholder(
+        placeholder.as_bytes()
+    ));
+    assert!(!is_login_required_session_placeholder(
+        only_access_empty.as_bytes()
+    ));
+    assert!(!is_login_required_session_placeholder(
+        only_refresh_empty.as_bytes()
+    ));
     assert!(parse_session_plaintext(Zeroizing::new(placeholder.as_bytes().to_vec())).is_err());
 
-    let decoded = decode_session_credentials(encrypt_fixture(placeholder.as_bytes(), b"test-key"), b"test-key");
+    let decoded = decode_session_credentials(
+        encrypt_fixture(placeholder.as_bytes(), b"test-key"),
+        b"test-key",
+    );
     assert!(matches!(decoded, SessionDecode::LoginRequired));
 }
 
