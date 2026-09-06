@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { icon } from "../../icons";
+import { useI18n } from "vue-i18n";
 
 defineProps<{ title: string; subtitle: string; page: string; busy: boolean }>();
 const refreshIcon = icon("sync", 17);
+const { t } = useI18n();
 </script>
 
 <template>
@@ -15,13 +17,13 @@ const refreshIcon = icon("sync", 17);
       <Transition name="busy-chip">
         <div v-if="busy" class="top-actions operation-progress" role="status" aria-live="polite">
           <span class="mini-spinner"></span>
-          <span>处理中</span>
+          <span>{{ t("header.processing") }}</span>
         </div>
       </Transition>
       <div v-if="page === 'accounts'" class="topbar-account-actions">
-        <button class="topbar-icon-button" data-profile-refresh title="刷新账号状态" aria-label="刷新账号状态" v-html="refreshIcon"></button>
-        <button class="secondary compact" data-account-manager="global">全部设置</button>
-        <button class="primary compact" data-account-manager="add">添加账号</button>
+        <button class="topbar-icon-button" data-profile-refresh :title="t('accounts.refresh')" :aria-label="t('accounts.refresh')" v-html="refreshIcon"></button>
+        <button class="secondary compact" data-account-manager="global">{{ t("header.allSettings") }}</button>
+        <button class="primary compact" data-account-manager="add">{{ t("header.addAccount") }}</button>
       </div>
     </div>
   </header>
