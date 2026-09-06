@@ -131,6 +131,44 @@ fn catalog_deduplicates_product_ids_and_sorts_names() {
     );
 }
 
+#[test]
+fn installed_voice_ids_require_local_manifest_and_model_files() {
+    let fixture = Fixture::new();
+    let root = fixture.root("slot");
+    let installed = "00000000-0000-4000-8000-000000000003";
+    let incomplete = "00000000-0000-4000-8000-000000000004";
+    let cache_only = "00000000-0000-4000-8000-000000000005";
+    let missing_manifest = "00000000-0000-4000-8000-000000000006";
+    let empty_files = "00000000-0000-4000-8000-000000000007";
+
+    let installed_version = root.join(format!("databases/{installed}/204b1"));
+    fs::create_dir_all(&installed_version).unwrap();
+    fs::write(installed_version.join("m"), b"manifest").unwrap();
+    fs::write(installed_version.join("model.dnni"), b"model").unwrap();
+
+    let incomplete_version = root.join(format!("databases/{incomplete}/204b1"));
+    fs::create_dir_all(&incomplete_version).unwrap();
+    fs::write(incomplete_version.join("m"), b"manifest").unwrap();
+    fs::write(incomplete_version.join("model.dnni.part"), b"partial").unwrap();
+
+    let missing_manifest_version = root.join(format!("databases/{missing_manifest}/204b1"));
+    fs::create_dir_all(&missing_manifest_version).unwrap();
+    fs::write(missing_manifest_version.join("model.dnni"), b"model").unwrap();
+
+    let empty_files_version = root.join(format!("databases/{empty_files}/204b1"));
+    fs::create_dir_all(&empty_files_version).unwrap();
+    fs::write(empty_files_version.join("m"), []).unwrap();
+    fs::write(empty_files_version.join("model.dnni"), []).unwrap();
+
+    fs::write(
+        root.join(format!("databases/meta/{cache_only}.json")),
+        br#"{"name":"Cached only"}"#,
+    )
+    .unwrap();
+
+    assert_eq!(read_installed_voice_ids(&root), vec![installed.to_string()]);
+}
+
 #[cfg(windows)]
 #[test]
 fn catalog_does_not_follow_a_redirected_metadata_directory() {
@@ -145,4 +183,24 @@ fn catalog_does_not_follow_a_redirected_metadata_directory() {
     fs::remove_dir(root.join("databases/meta")).unwrap();
     junction::create(outside.join("databases/meta"), root.join("databases/meta")).unwrap();
     assert!(read_catalog(&[root]).is_empty());
+}
+
+#[cfg(windows)]
+#[test]
+fn installed_voice_ids_do_not_follow_redirected_product_directories() {
+    let fixture = Fixture::new();
+    let root = fixture.root("slot");
+    let outside = fixture.root("outside");
+    let product = "00000000-0000-4000-8000-000000000006";
+    let version = outside.join(format!("databases/{product}/204b1"));
+    fs::create_dir_all(&version).unwrap();
+    fs::write(version.join("m"), b"manifest").unwrap();
+    fs::write(version.join("model.dnni"), b"model").unwrap();
+    junction::create(
+        outside.join(format!("databases/{product}")),
+        root.join(format!("databases/{product}")),
+    )
+    .unwrap();
+
+    assert!(read_installed_voice_ids(&root).is_empty());
 }

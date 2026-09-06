@@ -12,6 +12,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 
 const MAX_VOICES: usize = 256;
+const MAX_INSTALL_VARIANTS: usize = 32;
+const MAX_INSTALL_FILES: usize = 256;
 const MAX_METADATA_BYTES: usize = 16 * 1024;
 const MAX_IMAGE_BYTES: usize = 512 * 1024;
 const MAX_CATALOG_IMAGE_BYTES: usize = 16 * 1024 * 1024;
@@ -124,6 +126,78 @@ pub fn read_catalog(roots: &[PathBuf]) -> Vec<Sv2CachedVoice> {
     }
     voices.retain(|voice| voice.name.is_some() || voice.image_data_url.is_some());
     voices
+}
+
+pub fn read_installed_voice_ids(root: &Path) -> Vec<String> {
+    let database = root.join("databases");
+    if !safe_directory(root) || !safe_directory(&database) {
+        return Vec::new();
+    }
+    let Ok(entries) = fs::read_dir(&database) else {
+        return Vec::new();
+    };
+    let mut product_directories = entries
+        .take(MAX_VOICES * 4)
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| safe_directory(path))
+        .filter_map(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .and_then(|name| uuid::Uuid::parse_str(name).ok())
+                .map(|id| (id.to_string(), path))
+        })
+        .collect::<Vec<_>>();
+    product_directories.sort_by(|left, right| left.0.cmp(&right.0));
+    product_directories
+        .into_iter()
+        .take(MAX_VOICES)
+        .filter_map(|(id, directory)| installed_voice(&directory).then_some(id))
+        .collect()
+}
+
+fn installed_voice(product_directory: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(product_directory) else {
+        return false;
+    };
+    entries
+        .take(MAX_INSTALL_VARIANTS)
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| safe_directory(path))
+        .any(|variant| installed_variant(&variant))
+}
+
+fn installed_variant(variant: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(variant) else {
+        return false;
+    };
+    let mut has_manifest = false;
+    let mut has_model = false;
+    for entry in entries.take(MAX_INSTALL_FILES).filter_map(Result::ok) {
+        let path = entry.path();
+        if !nonempty_regular_file(&path) {
+            continue;
+        }
+        if path.file_name().is_some_and(|name| name == "m") {
+            has_manifest = true;
+        }
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "dnni")
+        {
+            has_model = true;
+        }
+        if has_manifest && has_model {
+            return true;
+        }
+    }
+    false
+}
+
+fn nonempty_regular_file(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0 && !redirected(&metadata))
 }
 
 fn normalize_text(value: String) -> Option<String> {
