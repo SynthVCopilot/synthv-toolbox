@@ -239,6 +239,14 @@ async fn discovered_with_connections(
     Ok(hosts)
 }
 
+pub async fn observe_connected_project_paths(manager: &McpManager) {
+    for host_id in manager.connected_synthv_hosts().await.into_keys() {
+        if let Ok(project) = read_value(manager, &host_id, "project", json!({})).await {
+            crate::project_backups::observe_value(&project);
+        }
+    }
+}
+
 async fn list_public_hosts(manager: &McpManager) -> Result<Value, String> {
     Ok(Value::Array(
         discovered_with_connections(manager)
