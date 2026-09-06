@@ -1,3 +1,4 @@
+import "./i18nSystem";
 import "./i18nWorkflows";
 import "./styles.css";
 import "./i18nCommon";
@@ -810,7 +811,7 @@ function navItem(target: Page, label: string, glyph: Parameters<typeof icon>[0])
 
 function renderSidebar(): string {
   if (!app) return "";
-  return `<div class="brand" data-page="home" title="返回概览">
+  return `<div class="brand" data-page="home" title="${t("onboardingDetails.home")}">
       <div class="brand-mark small"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div>
       <div><strong>Synthesizer V Toolbox</strong><span>Creative utility suite</span></div>
     </div>
@@ -840,12 +841,12 @@ function render(): void {
   if (app.settingsLoadError) {
     root.innerHTML = `<main class="fatal settings-recovery" role="alert">
       <div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div>
-      <span class="eyebrow">设置恢复保护模式</span>
-      <h1>配置需要修复，原文件尚未被覆盖</h1>
-      <p>工具箱检测到设置文件无法安全读取，因此已停用所有设置写入。OAuth 凭据和账号映射不会被默认配置替换。</p>
+      <span class="eyebrow">${t("system.recovery")}</span>
+      <h1>${t("system.recoveryTitle")}</h1>
+      <p>${t("system.recoveryDescription")}</p>
       <pre>${escapeHtml(app.settingsLoadError)}</pre>
-      <div class="settings-recovery-path"><strong>配置文件</strong><code>${escapeHtml(app.configPath)}</code></div>
-      <p>请修复 JSON 与 <code>schemaVersion</code>，或从备份恢复此文件，然后重新启动 Synthesizer V Toolbox。</p>
+      <div class="settings-recovery-path"><strong>${t("system.configFile")}</strong><code>${escapeHtml(app.configPath)}</code></div>
+      <p>${t("system.recoveryHelp")}</p>
     </main>`;
     return;
   }
@@ -949,7 +950,7 @@ function renderAccountIndicatorConsent(): string {
 function renderInstanceTerminationDialog(): string {
   const process = pendingInstanceTermination;
   if (!process) return "";
-  return `<div class="dialog-backdrop" role="presentation"><section class="fluent-dialog" role="alertdialog" aria-modal="true" aria-labelledby="terminate-instance-title"><h2 id="terminate-instance-title">终止这个实例？</h2><p>${escapeHtml(instanceProjectTitle(process.windowTitle))} · PID ${process.processId}</p><p>未保存的工程修改会丢失。请确认已保存；其他实例会继续运行。</p><div class="dialog-actions"><button class="secondary" data-cancel-instance-termination>取消</button><button class="danger-action" data-confirm-instance-termination>终止实例</button></div></section></div>`;
+  return `<div class="dialog-backdrop" role="presentation"><section class="fluent-dialog" role="alertdialog" aria-modal="true" aria-labelledby="terminate-instance-title"><h2 id="terminate-instance-title">${t("system.terminateTitle")}</h2><p>${escapeHtml(instanceProjectTitle(process.windowTitle))} · PID ${process.processId}</p><p>${t("system.terminateWarning")}</p><div class="dialog-actions"><button class="secondary" data-cancel-instance-termination>${t("system.cancel")}</button><button class="danger-action" data-confirm-instance-termination>${t("system.terminate")}</button></div></section></div>`;
 }
 
 function renderProfileDeletionDialog(): string {
@@ -976,14 +977,14 @@ function renderComponentRemovalDialog(): string {
   const component = app?.components.find((item) => item.id === pendingComponentRemovalId);
   if (!component) return "";
   const cleanupOnly = !component.installed;
-  const actionLabel = cleanupOnly ? "清理残留" : "删除组件";
+  const actionLabel = cleanupOnly ? t("system.cleanup") : t("system.deleteComponent");
   return `<div class="dialog-backdrop" role="presentation">
     <section class="fluent-dialog component-removal-dialog" role="alertdialog" aria-modal="true" aria-labelledby="component-removal-title">
       <span class="dialog-icon danger">${icon("trash", 24)}</span>
-      <div><span class="eyebrow">本地组件管理</span><h2 id="component-removal-title">${cleanupOnly ? "清理" : "删除"}“${escapeHtml(component.displayName)}”？</h2></div>
-      <p>此操作会删除 Synthesizer V Toolbox 管理的本地运行环境与对应配置。依赖此组件的工作流在重新安装前将不可用。</p>
-      <p class="dialog-choice-note">用户工程、输入素材以及已导出的输出文件不会被删除；之后仍可从组件中心重新安装。</p>
-      <div class="dialog-actions"><button class="secondary" data-cancel-component-removal>取消</button><button class="danger-action" data-confirm-component-removal>${icon("trash", 16)} ${actionLabel}</button></div>
+      <div><span class="eyebrow">${t("system.componentManagement")}</span><h2 id="component-removal-title">${escapeHtml(t(cleanupOnly ? "system.cleanupTitle" : "system.deleteTitle", { name: component.displayName }))}</h2></div>
+      <p>${t("system.componentRemoval")}</p>
+      <p class="dialog-choice-note">${t("system.componentPreserved")}</p>
+      <div class="dialog-actions"><button class="secondary" data-cancel-component-removal>${t("system.cancel")}</button><button class="danger-action" data-confirm-component-removal>${icon("trash", 16)} ${actionLabel}</button></div>
     </section>
   </div>`;
 }
@@ -2223,7 +2224,7 @@ function renderMcp(): string {
   if (!app) return "";
   const externalMcp = app.mode === "ai"
     ? `<div class="warning-card"><span>${icon("server", 23)}</span><div><strong>${t("connections.externalWarning")}</strong><p>${t("connections.externalWarningDescription")}</p></div></div>
-      <div class="mcp-layout"><section class="panel"><div class="section-heading"><div><h2>${t("connections.external")}</h2><p>${t("connections.configurations", { count: app.mcpServers.length })}</p></div></div><div class="mcp-list">${app.mcpServers.length ? app.mcpServers.map((server) => `<article><span class="server-icon">${icon("server", 20)}</span><div><strong>${escapeHtml(server.name)}</strong><code>${escapeHtml([server.command, ...server.args].join(" "))}</code></div><span class="availability">${server.enabled ? t("connections.enabled") : t("connections.disabledServer")}</span><button class="icon-plain" data-test-mcp="${escapeHtml(server.id)}" title="${t("nav.connections")}">${icon("sync", 17)}</button><button class="icon-plain danger" data-delete-mcp="${escapeHtml(server.id)}" title="${t("connections.deleted")}">${icon("trash", 17)}</button></article>`).join("") : `<div class="empty-inline">${t("connections.noServers")}</div>`}</div></section>
+      <div class="mcp-layout"><section class="panel"><div class="section-heading"><div><h2>${t("connections.external")}</h2><p>${t("connections.configurations", { count: app.mcpServers.length })}</p></div></div><div class="mcp-list">${app.mcpServers.length ? app.mcpServers.map((server) => `<article><span class="server-icon">${icon("server", 20)}</span><div><strong>${escapeHtml(server.name)}</strong><code>${escapeHtml([server.command, ...server.args].join(" "))}</code></div><span class="availability">${server.enabled ? t("connections.enabled") : t("connections.disabledServer")}</span><button class="icon-plain" data-test-mcp="${escapeHtml(server.id)}" title="${t("system.testConnection")}">${icon("sync", 17)}</button><button class="icon-plain danger" data-delete-mcp="${escapeHtml(server.id)}" title="${t("system.deleteConnection")}">${icon("trash", 17)}</button></article>`).join("") : `<div class="empty-inline">${t("connections.noServers")}</div>`}</div></section>
       <section class="panel"><div class="section-heading"><div><h2>${t("connections.addStdio")}</h2><p>${t("connections.stdioDescription")}</p></div></div><form id="mcp-form" class="form-stack"><label>${t("connections.name")}<input id="mcp-name" required placeholder="Filesystem tools" /></label><label>${t("connections.command")}<input id="mcp-command" required placeholder="npx, node, or an absolute path" /></label><label>${t("connections.arguments")}<textarea id="mcp-args" rows="4" placeholder="-y\n@modelcontextprotocol/server-filesystem\n/path/to/workspace"></textarea></label><label class="checkbox"><input id="mcp-enabled" type="checkbox" checked /> ${t("connections.enableOnSave")}</label><button class="primary">${t("connections.addServer")}</button></form></section></div>`
     : `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("server", 24)}</span><div><h2>${t("connections.aiOnly")}</h2><p>${t("connections.aiOnlyDescription")}</p></div></section>`;
   return `<div class="connections-layout"><section class="panel http-api-settings"><div class="section-heading"><div><h2>${t("connections.localService")}</h2><p>${t("connections.localServiceDescription")}</p></div><span class="availability ${httpApiStatus.running ? "ready" : httpApiStatus.enabled || httpApiStatus.agentEnabled ? "warning" : ""}">${httpApiStatus.running ? t("connections.running") : httpApiStatus.enabled || httpApiStatus.agentEnabled ? t("connections.failed") : t("connections.off")}</span></div><form id="http-api-form" class="http-api-form"><label class="fluent-switch large"><input id="http-api-enabled" name="enabled" type="checkbox" ${httpApiStatus.enabled ? "checked" : ""} aria-label="${t("connections.mcpTools")}" aria-describedby="http-api-help" /><span></span>${t("connections.mcpTools")}</label><label class="fluent-switch large"><input id="http-agent-enabled" name="agentEnabled" type="checkbox" ${httpApiStatus.agentEnabled ? "checked" : ""} aria-label="${t("connections.agentChat")}" aria-describedby="http-api-help" /><span></span>${t("connections.agentChat")}</label><label class="http-api-port">${t("connections.port")}<input id="http-api-port" name="port" type="number" min="1" max="65535" step="1" value="${httpApiStatus.port || 17831}" inputmode="numeric" required aria-describedby="http-api-help" /></label><button class="primary" type="submit" ${busy ? "disabled" : ""}>${t("connections.apply")}</button></form><div id="http-api-help" class="http-api-status"><span><strong>${t("connections.listening")}</strong>${httpApiStatus.running ? t("connections.active") : httpApiStatus.enabled || httpApiStatus.agentEnabled ? t("connections.inactive") : t("connections.disabled")}</span>${httpApiStatus.endpoint ? `<span><strong>MCP</strong><code>${escapeHtml(httpApiStatus.endpoint)}</code></span>` : ""}${httpApiStatus.agentEndpoint ? `<span><strong>Agent</strong><code>${escapeHtml(httpApiStatus.agentEndpoint)}</code></span>` : ""}${httpApiStatus.lastError ? `<span class="error-text"><strong>${t("connections.error")}</strong>${escapeHtml(httpApiStatus.lastError)}</span>` : ""}</div></section>${externalMcp}</div>`;
@@ -3465,17 +3466,17 @@ document.addEventListener("click", (event) => {
   const onboarding = target.dataset.onboarding as AppMode | undefined;
   if (onboarding) { void run(async () => { app = await api.completeOnboarding(onboarding); page = "home"; }); return; }
   const mode = target.dataset.setMode as AppMode | undefined;
-  if (mode) { void run(async () => { app = await api.setMode(mode); notice = `已切换到${mode === "ai" ? " AI 模式" : "纯工具箱模式"}。`; }); return; }
+  if (mode) { void run(async () => { app = await api.setMode(mode); notice = t("system.modeChanged", { mode: t(mode === "ai" ? "settings.ai" : "settings.toolbox") }); }); return; }
   const agentWorkMode = target.dataset.agentWorkMode as AgentWorkMode | undefined;
-  if (agentWorkMode) { void run(async () => { app = await api.setAgentWorkMode(agentWorkMode); notice = `Agent 已切换到 ${agentWorkMode === "solo" ? "Solo" : "Edit"} 模式。`; }); return; }
+  if (agentWorkMode) { void run(async () => { app = await api.setAgentWorkMode(agentWorkMode); notice = t("system.agentModeChanged", { mode: agentWorkMode === "solo" ? "Solo" : "Edit" }); }); return; }
   if (target.hasAttribute("data-check-toolbox-update")) {
     void run(async () => {
       toolboxUpdate = await api.checkToolboxUpdate();
       notice = toolboxUpdate.updateAvailable
-        ? `发现新版本 v${toolboxUpdate.latestVersion}。`
+        ? t("system.updateFound", { version: toolboxUpdate.latestVersion })
         : toolboxUpdate.latestVersion === toolboxUpdate.currentVersion
-          ? "当前已是最新稳定版。"
-          : "当前应用版本高于最新稳定版。";
+          ? t("system.latest")
+          : t("system.newer");
     });
     return;
   }
@@ -3540,7 +3541,7 @@ document.addEventListener("click", (event) => {
     });
     return;
   }
-  if (target.hasAttribute("data-scan")) { void run(async () => { if (app) app.installations = await api.scanSynthV(); notice = "探测完成。"; }); return; }
+  if (target.hasAttribute("data-scan")) { void run(async () => { if (app) app.installations = await api.scanSynthV(); notice = t("system.scanComplete"); }); return; }
   if (target.dataset.focusSv2) {
     const processId = Number(target.dataset.focusSv2);
     const identity = target.dataset.processIdentity || "";
@@ -3683,21 +3684,21 @@ document.addEventListener("click", (event) => {
   if (target.dataset.installComponent) {
     void run(async () => {
       if (app) app.downloads = await api.queueComponentInstall(target.dataset.installComponent ?? "");
-      notice = "组件已加入下载队列。";
+      notice = t("system.componentQueued");
     });
     return;
   }
   if (target.dataset.cancelComponentTask) {
     void run(async () => {
       if (app) app.downloads = await api.cancelComponentInstall(target.dataset.cancelComponentTask ?? "");
-      notice = "排队中的组件任务已取消。";
+      notice = t("system.componentCancelled");
     });
     return;
   }
   if (target.dataset.retryComponentTask) {
     void run(async () => {
       if (app) app.downloads = await api.retryComponentInstall(target.dataset.retryComponentTask ?? "");
-      notice = "组件任务已重新加入队列。";
+      notice = t("system.componentRetried");
     });
     return;
   }
@@ -3785,6 +3786,6 @@ void (async () => {
     render();
     refreshAiCatalogLive();
   } catch (reason) {
-    root.innerHTML = `<div class="fatal"><div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div><h1>无法启动 Synthesizer V Toolbox</h1><pre>${escapeHtml(formatError(reason))}</pre><p>请确认应用由 Tauri 运行，而不是直接打开前端页面。</p></div>`;
+    root.innerHTML = `<div class="fatal"><div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div><h1>${t("system.startupFailed")}</h1><pre>${escapeHtml(formatError(reason))}</pre><p>${t("system.startupHelp")}</p></div>`;
   }
 })();
