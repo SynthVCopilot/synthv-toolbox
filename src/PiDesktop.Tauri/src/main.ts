@@ -2106,35 +2106,35 @@ function renderMessage(message: ChatMessage): string {
 
 function renderComponents(): string {
   if (!app) return "";
-  const statusLabel = { queued: "排队中", downloading: "下载中", installing: "安装中", completed: "已完成", failed: "失败", cancelled: "已取消" } as const;
+  const statusLabel = { queued: t("components.status.queued"), downloading: t("components.status.downloading"), installing: t("components.status.installing"), completed: t("components.status.completed"), failed: t("components.status.failed"), cancelled: t("components.status.cancelled") } as const;
   const activeDownloads = app.downloads.filter((item) => item.status !== "completed");
   const queue = activeDownloads.length ? `<section class="download-queue panel">
-    <div class="section-heading"><div><h2>下载队列</h2><p>队列串行执行；内置下载器只获取固定版本，并在安装前校验 SHA-256。</p></div><span class="queue-count">${activeDownloads.length}</span></div>
+    <div class="section-heading"><div><h2>${t("components.queue")}</h2><p>${t("components.queueDescription")}</p></div><span class="queue-count">${activeDownloads.length}</span></div>
     <div class="download-list">${activeDownloads.map((item) => `<article class="download-item ${item.status}">
       <span class="component-status ${item.status === "completed" ? "ready" : ""}">${item.status === "failed" ? icon("plug", 17) : icon("download", 17)}</span>
       <div><div class="download-title"><strong>${escapeHtml(item.displayName)}</strong><span>${statusLabel[item.status]}</span></div><div class="progress-track"><span style="width:${Math.max(2, Math.min(100, item.progress))}%"></span></div><small>${escapeHtml(item.detail)}</small></div>
-      ${item.status === "queued" ? `<button class="secondary compact" data-cancel-component-task="${escapeHtml(item.id)}">取消</button>` : ["failed", "cancelled"].includes(item.status) ? `<button class="secondary compact" data-retry-component-task="${escapeHtml(item.id)}">重试</button>` : ""}
+      ${item.status === "queued" ? `<button class="secondary compact" data-cancel-component-task="${escapeHtml(item.id)}">${t("common.cancel")}</button>` : ["failed", "cancelled"].includes(item.status) ? `<button class="secondary compact" data-retry-component-task="${escapeHtml(item.id)}">${t("common.retry")}</button>` : ""}
     </article>`).join("")}</div>
   </section>` : "";
-  return `${queue}<div class="section-heading"><div><h2>本地组件</h2><p>下载任务会加入队列；无固定来源与 SHA-256 的组件会拒绝安装。</p></div></div>
+  return `${queue}<div class="section-heading"><div><h2>${t("components.local")}</h2><p>${t("components.localDescription")}</p></div></div>
     <div class="component-list">${app.components.map((component) => {
       const task = app?.downloads.find((item) => item.componentId === component.id && ["queued", "downloading", "installing"].includes(item.status));
       const isRemoving = removingComponentId === component.id;
       let actionButton: string;
       if (isRemoving) {
-        actionButton = `<button class="secondary component-remove-action" disabled>删除中…</button>`;
+        actionButton = `<button class="secondary component-remove-action" disabled>${t("components.removing")}</button>`;
       } else if (task) {
         actionButton = `<button class="secondary" disabled>${statusLabel[task.status]}</button>`;
       } else if (component.removable) {
-        actionButton = `<button class="secondary component-remove-action" data-remove-component="${escapeHtml(component.id)}">${icon("trash", 16)} ${component.installed ? "删除" : "清理残留"}</button>`;
+        actionButton = `<button class="secondary component-remove-action" data-remove-component="${escapeHtml(component.id)}">${icon("trash", 16)} ${component.installed ? t("common.delete") : t("components.cleanup")}</button>`;
       } else if (component.installed) {
-        actionButton = `<button class="secondary" disabled>已就绪</button>`;
+        actionButton = `<button class="secondary" disabled>${t("components.ready")}</button>`;
       } else if (component.downloaded) {
-        actionButton = `<button class="secondary" data-open-component-download="${escapeHtml(component.id)}">打开安装包位置</button>`;
+        actionButton = `<button class="secondary" data-open-component-download="${escapeHtml(component.id)}">${t("components.openPackage")}</button>`;
       } else if (component.installable) {
-        actionButton = `<button class="secondary" data-install-component="${escapeHtml(component.id)}">加入队列</button>`;
+        actionButton = `<button class="secondary" data-install-component="${escapeHtml(component.id)}">${t("components.addQueue")}</button>`;
       } else {
-        actionButton = `<button class="secondary" disabled>当前平台不可用</button>`;
+        actionButton = `<button class="secondary" disabled>${t("components.unavailable")}</button>`;
       }
       return `<article class="component-row"><span class="component-status ${component.installed || component.downloaded ? "ready" : ""}">${component.installed ? icon("check", 18) : icon("download", 18)}</span><div><h3>${escapeHtml(component.displayName)}</h3><p>${escapeHtml(component.description)}</p><div class="tags"><span>${escapeHtml(component.audience)}</span><span>${escapeHtml(component.status)}</span></div></div>${actionButton}</article>`;
     }).join("")}</div>`;
