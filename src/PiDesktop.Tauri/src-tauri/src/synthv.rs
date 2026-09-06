@@ -98,6 +98,10 @@ pub fn scan_installations() -> Vec<SynthVInstallation> {
     #[cfg(windows)]
     {
         scan_windows_registry(&mut found);
+        let flat_installed = found.iter().any(|installation| {
+            installation.bridge_profile == BridgeProfile::Flat
+                && installation.install_path.is_some()
+        });
         if let Some(app_data) = std::env::var_os("APPDATA").map(PathBuf::from) {
             for folder in ["Synthesizer V Studio 2", "Synthesizer V Studio"] {
                 add_installation(
@@ -123,14 +127,16 @@ pub fn scan_installations() -> Vec<SynthVInstallation> {
                 "Windows 文档脚本目录",
             );
         }
-        for scripts_path in windows_flat_script_candidates() {
-            add_installation(
-                &mut found,
-                "Synthesizer V Studio Flat",
-                None,
-                Some(scripts_path),
-                "Windows Flat 脚本目录",
-            );
+        if flat_installed {
+            for scripts_path in windows_flat_script_candidates() {
+                add_installation(
+                    &mut found,
+                    "Synthesizer V Studio Flat",
+                    None,
+                    Some(scripts_path),
+                    "Windows Flat 脚本目录",
+                );
+            }
         }
         for variable in ["ProgramFiles", "ProgramFiles(x86)"] {
             if let Some(program_files) = std::env::var_os(variable).map(PathBuf::from) {
@@ -231,6 +237,7 @@ fn find_executable_in(install_path: &Path) -> Option<PathBuf> {
         install_path.join("Synthesizer V Studio Pro.exe"),
         install_path.join("Synthesizer V Studio.exe"),
         install_path.join("Synthesizer V Flat.exe"),
+        install_path.join("Synthesizer V Studio Flat.exe"),
         install_path.join("synthesizer-v-flat.exe"),
     ];
     #[cfg(target_os = "macos")]
@@ -464,18 +471,23 @@ pub fn unique_bridge_targets(targets: Vec<BridgeTarget>) -> Vec<BridgeTarget> {
                 bridge_profile: target.bridge_profile,
             })
         })
-        .filter(|target| unique.insert(target_key(&target.scripts_path)))
+        .filter(|target| unique.insert(target_key(&target.scripts_path, target.bridge_profile)))
         .collect()
 }
 
-fn target_key(path: &str) -> String {
+fn target_key(path: &str, profile: BridgeProfile) -> String {
+    let installer = match profile {
+        BridgeProfile::Sv1 => "sv1",
+        BridgeProfile::Sv2 | BridgeProfile::Flat => "modern",
+        BridgeProfile::Unsupported => "unsupported",
+    };
     #[cfg(windows)]
     {
-        path.to_ascii_lowercase()
+        format!("{installer}:{}", path.to_ascii_lowercase())
     }
     #[cfg(not(windows))]
     {
-        path.to_string()
+        format!("{installer}:{path}")
     }
 }
 

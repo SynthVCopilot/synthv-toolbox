@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
+import { stripTypeScriptTypes } from 'node:module';
 
 const read = relative => fs.readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
 const synthv = read('../src/PiDesktop.Tauri/src-tauri/src/synthv.rs');
@@ -31,5 +33,39 @@ assert.match(main, /data-bridge-batch/);
 assert.match(main, /data-bridge-target/);
 assert.match(main, /const instanceRefreshInterval = 3000/);
 assert.doesNotMatch(main, /data-refresh-synthv-processes/);
+
+const targetStart = main.indexOf('function bridgeTargetKey(');
+const targetEnd = main.indexOf('function bridgeProfileLabel(', targetStart);
+const batchStart = main.indexOf('async function runBridgeTargets(');
+const batchEnd = main.indexOf('function renderBridge(', batchStart);
+let refreshes = 0;
+const context = vm.createContext({
+  app: { platform: 'windows' },
+  Map,
+  bridgeTargetResults: new Map(),
+  t: (key, params) => `${key}:${JSON.stringify(params ?? {})}`,
+  refresh: async () => { refreshes += 1; },
+  api: {
+    installBridge: async targets => [
+      { scriptsPath: targets[0].scriptsPath, bridgeProfile: targets[0].bridgeProfile, result: { succeeded: false } },
+      { scriptsPath: targets[1].scriptsPath, bridgeProfile: targets[1].bridgeProfile, result: { succeeded: true } },
+    ],
+    diagnoseBridge: async () => [],
+  },
+});
+vm.runInContext(stripTypeScriptTypes(main.slice(targetStart, targetEnd) + main.slice(batchStart, batchEnd)), context);
+const targets = context.bridgeTargets([
+  { scriptsPath: 'C:\\Scripts', bridgeProfile: 'sv1' },
+  { scriptsPath: 'c:/scripts', bridgeProfile: 'flat' },
+  { scriptsPath: 'C:/Scripts', bridgeProfile: 'sv2' },
+]);
+assert.equal(targets.length, 2, 'SV1 and modern installers retain the same directory as distinct targets');
+assert.equal(targets.filter(target => target.bridgeProfile === 'sv1').length, 1);
+assert.equal(targets.filter(target => target.bridgeProfile === 'flat').length, 1, 'Flat and SV2 share the modern installer target');
+await context.runBridgeTargets('install', targets);
+assert.equal(context.bridgeTargetResults.size, 2, 'a failed target does not prevent a later target result');
+assert.equal(refreshes, 1);
+context.app.platform = 'macos';
+assert.notEqual(context.bridgeTargetKey('/Users/Test/Scripts', 'sv1'), context.bridgeTargetKey('/Users/Test/scripts', 'sv1'));
 
 console.log('Bridge installation management contracts passed.');
