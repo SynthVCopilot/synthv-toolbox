@@ -12,6 +12,7 @@ import type {
   AudioPrepareRequest,
   AudioWritePlan,
   FfmpegRuntimeStatus,
+  FfmpegConfiguration,
   LoudnessNormalizeRequest,
   LoudnessReport,
   MediaProbe,
@@ -89,6 +90,7 @@ let previewSynthvProcesses: SynthVProcess[] = [
   { processId: 4203, processIdentity: "preview-4203", productName: "Synthesizer V Flat", version: "1.4.3", name: "Synthesizer V Flat", command: "C:\\Apps\\Synthesizer V Flat.exe", windowTitle: "", isSv2: false, sandboxed: false },
 ];
 let previewDownloads: ComponentDownload[] = [];
+let previewFfmpegDirectory: string | null = null;
 let previewMediaTasks: MediaTaskSnapshot[] = [];
 let previewLyricProjects: LyricProject[] = [];
 const previewManagedComponentIds = new Set(["pi-audio", "cvrs", "media-fetcher", "vocal-separation"]);
@@ -441,6 +443,13 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     return previewState() as T;
   }
   if (command === "get_http_api_status") return { ...previewHttpApiStatus } as T;
+  if (command === "get_ffmpeg_configuration") return { directory: previewFfmpegDirectory } as T;
+  if (command === "set_ffmpeg_directory") {
+    const directory = args?.directory;
+    previewFfmpegDirectory = typeof directory === "string" && directory.trim() ? directory.trim() : null;
+    return { succeeded: true, summary: previewFfmpegDirectory ? "FFmpeg 路径已保存。" : "已清除自定义 FFmpeg 路径。", detail: "预览模式" } as T;
+  }
+  if (command === "open_ffmpeg_download_page") return { succeeded: true, summary: "已打开 FFmpeg 官方下载页。", detail: "预览模式" } as T;
   if (command === "focus_sv2_instance" || command === "terminate_sv2_instance") {
     const instance = previewSynthvProcesses.find((item) => item.processId === Number(args?.processId));
     if (!instance?.processIdentity || instance.processIdentity !== args?.processIdentity) throw new Error("目标实例已变化，请刷新后重试。");
@@ -1345,7 +1354,16 @@ export const api = {
     if (Array.isArray(selected)) return selected[0];
     return typeof selected === "string" ? selected : undefined;
   },
+  pickDirectory: async (): Promise<string | undefined> => {
+    if (preview) return undefined;
+    const selected = await open({ multiple: false, directory: true });
+    if (Array.isArray(selected)) return selected[0];
+    return typeof selected === "string" ? selected : undefined;
+  },
   ffmpegStatus: () => call<FfmpegRuntimeStatus>("ffmpeg_status"),
+  getFfmpegConfiguration: () => call<FfmpegConfiguration>("get_ffmpeg_configuration"),
+  setFfmpegDirectory: (directory: string | null) => call<OperationResult>("set_ffmpeg_directory", { directory }),
+  openFfmpegDownloadPage: () => call<OperationResult>("open_ffmpeg_download_page"),
   probeMedia: (path: string) => call<MediaProbe>("probe_media", { path }),
   planAudioPrepare: (request: AudioPrepareRequest) =>
     call<AudioWritePlan>("plan_audio_prepare", { request }),

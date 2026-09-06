@@ -165,6 +165,7 @@ let pendingProfileDeletionId: string | undefined;
 let pendingInstanceTermination: SynthVProcess | undefined;
 let pendingAccountIndicatorConsent: PendingAccountIndicatorConsent | undefined;
 let removingComponentId: string | undefined;
+let ffmpegDirectory: string | null | undefined;
 let aiProviderPickerOpen = false;
 let modelAuthDialog: ReturnType<typeof mountModelAuthDialog> | undefined;
 let downloadPollTimer: number | undefined;
@@ -2124,7 +2125,8 @@ function renderComponents(): string {
       ${item.status === "queued" ? `<button class="secondary compact" data-cancel-component-task="${escapeHtml(item.id)}">取消</button>` : ["failed", "cancelled"].includes(item.status) ? `<button class="secondary compact" data-retry-component-task="${escapeHtml(item.id)}">重试</button>` : ""}
     </article>`).join("")}</div>
   </section>` : "";
-  return `${queue}<div class="section-heading"><div><h2>本地组件</h2><p>下载任务会加入队列；无固定来源与 SHA-256 的组件会拒绝安装。</p></div></div>
+  const ffmpegControls = `<section class="panel ffmpeg-settings"><div class="section-heading"><div><h2>FFmpeg 路径</h2><p>可选择本地目录；清除后自动使用 PATH、受管版本或内置版本。</p></div></div><form id="ffmpeg-config-form" class="ffmpeg-config-form"><label>本地目录<input id="ffmpeg-directory" name="directory" value="${escapeHtml(ffmpegDirectory ?? "")}" placeholder="选择包含 FFmpeg 的目录" /></label><div class="button-row"><button class="secondary" type="button" data-pick-ffmpeg-directory>选择目录</button><button class="primary" type="submit">保存路径</button><button class="secondary" type="button" data-clear-ffmpeg-directory ${ffmpegDirectory ? "" : "disabled"}>清除选择</button><button class="secondary" type="button" data-open-ffmpeg-download>手动下载</button></div></form></section>`;
+  return `${queue}${ffmpegControls}<div class="section-heading"><div><h2>本地组件</h2><p>下载任务会加入队列；无固定来源与 SHA-256 的组件会拒绝安装。</p></div></div>
     <div class="component-list">${app.components.map((component) => {
       const task = app?.downloads.find((item) => item.componentId === component.id && ["queued", "downloading", "installing"].includes(item.status));
       const isRemoving = removingComponentId === component.id;
@@ -2133,18 +2135,22 @@ function renderComponents(): string {
         actionButton = `<button class="secondary component-remove-action" disabled>删除中…</button>`;
       } else if (task) {
         actionButton = `<button class="secondary" disabled>${statusLabel[task.status]}</button>`;
-      } else if (component.removable) {
-        actionButton = `<button class="secondary component-remove-action" data-remove-component="${escapeHtml(component.id)}">${icon("trash", 16)} ${component.installed ? "删除" : "清理残留"}</button>`;
+      } else if (component.removable && component.installed) {
+        actionButton = `<button class="secondary component-remove-action" data-remove-component="${escapeHtml(component.id)}">${icon("trash", 16)} 删除</button>`;
       } else if (component.installed) {
         actionButton = `<button class="secondary" disabled>已就绪</button>`;
-      } else if (component.downloaded) {
+      } else if (component.downloaded && component.id === "sandboxie") {
         actionButton = `<button class="secondary" data-open-component-download="${escapeHtml(component.id)}">打开安装包位置</button>`;
+      } else if (component.downloaded && component.installable) {
+        actionButton = `<button class="secondary" data-install-component="${escapeHtml(component.id)}">安装</button>`;
+      } else if (component.removable) {
+        actionButton = `<button class="secondary component-remove-action" data-remove-component="${escapeHtml(component.id)}">${icon("trash", 16)} ${component.installed ? "删除" : "清理残留"}</button>`;
       } else if (component.installable) {
         actionButton = `<button class="secondary" data-install-component="${escapeHtml(component.id)}">加入队列</button>`;
       } else {
         actionButton = `<button class="secondary" disabled>当前平台不可用</button>`;
       }
-      return `<article class="component-row"><span class="component-status ${component.installed || component.downloaded ? "ready" : ""}">${component.installed ? icon("check", 18) : icon("download", 18)}</span><div><h3>${escapeHtml(component.displayName)}</h3><p>${escapeHtml(component.description)}</p><div class="tags"><span>${escapeHtml(component.audience)}</span><span>${escapeHtml(component.status)}</span></div></div>${actionButton}</article>`;
+      return `<article class="component-row"><span class="component-status ${component.installed || component.downloaded ? "ready" : ""}">${component.installed ? icon("check", 18) : icon("download", 18)}</span><div><h3>${escapeHtml(component.displayName)}</h3><p>${escapeHtml(component.description)}</p></div>${actionButton}</article>`;
     }).join("")}</div>`;
 }
 
@@ -2778,6 +2784,18 @@ function wireForms(): void {
     const server: McpServerConfig = { id: crypto.randomUUID(), name, command, args, enabled };
     void run(async () => { app = await api.saveMcpServer(server); notice = `${name} 已添加。`; });
   });
+  document.querySelector<HTMLFormElement>("#ffmpeg-config-form")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const directory = document.querySelector<HTMLInputElement>("#ffmpeg-directory")?.value.trim() ?? "";
+    void run(async () => {
+      const result = await api.setFfmpegDirectory(directory || null);
+      setFeedback(result);
+      if (result.succeeded) {
+        const configuration = await api.getFfmpegConfiguration();
+        ffmpegDirectory = configuration.directory;
+      }
+    });
+  });
   document.querySelector<HTMLFormElement>("#bridge-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null;
@@ -3364,12 +3382,26 @@ document.addEventListener("click", (event) => {
     const leavingHistory = page === "history" && targetPage !== "history";
     const enteringAccounts = targetPage === "accounts" && page !== "accounts";
     const leavingAccounts = page === "accounts" && targetPage !== "accounts";
+    const enteringComponents = targetPage === "components" && page !== "components";
     const enteringToolCategory = targetPage === "import" || targetPage === "quality";
     const activeFeatureId = activeWorkflow;
     const activeGroup = activeFeatureId ? toolGroups.find((group) => group.featureIds.includes(activeFeatureId)) : undefined;
     instanceRefreshGeneration += 1;
     if (enteringAccounts || leavingAccounts) accountPageGeneration += 1;
     page = targetPage;
+    if (enteringComponents) {
+      ffmpegDirectory = undefined;
+      void api.getFfmpegConfiguration().then((configuration) => {
+        if (page !== "components") return;
+        ffmpegDirectory = configuration.directory;
+        render();
+      }).catch((reason) => {
+        if (page !== "components") return;
+        error = formatError(reason);
+        ffmpegDirectory = null;
+        render();
+      });
+    }
     if (leavingHistory) stopHistoryRefresh();
     if (enteringToolCategory && (activeGroup?.id !== targetPage || workflowResult?.kind === "lyric-template")) {
       activeWorkflow = undefined;
@@ -3620,6 +3652,30 @@ document.addEventListener("click", (event) => {
   }
   if (target.dataset.openComponentDownload) {
     void run(async () => { setFeedback(await api.openDownloadedComponent(target.dataset.openComponentDownload ?? "")); });
+    return;
+  }
+  if (target.hasAttribute("data-pick-ffmpeg-directory")) {
+    void api.pickDirectory().then((directory) => {
+      if (!directory) return;
+      const input = document.querySelector<HTMLInputElement>("#ffmpeg-directory");
+      if (input) input.value = directory;
+    }).catch((reason) => {
+      error = formatError(reason);
+      notice = "";
+      render();
+    });
+    return;
+  }
+  if (target.hasAttribute("data-clear-ffmpeg-directory")) {
+    void run(async () => {
+      const result = await api.setFfmpegDirectory(null);
+      setFeedback(result);
+      if (result.succeeded) ffmpegDirectory = null;
+    });
+    return;
+  }
+  if (target.hasAttribute("data-open-ffmpeg-download")) {
+    void run(async () => { setFeedback(await api.openFfmpegDownloadPage()); });
     return;
   }
   if (target.dataset.installComponent) {
