@@ -20,8 +20,10 @@ fn executable_names() -> (&'static str, &'static str) {
 
 #[test]
 fn ffmpeg_selection_is_persisted_with_settings() {
-    let mut settings = ToolboxSettings::default();
-    settings.ffmpeg_directory = Some("C:/tools/ffmpeg/bin".to_string());
+    let settings = ToolboxSettings {
+        ffmpeg_directory: Some("C:/tools/ffmpeg/bin".to_string()),
+        ..ToolboxSettings::default()
+    };
 
     let value = serde_json::to_value(&settings).unwrap();
     assert_eq!(value["ffmpegDirectory"], "C:/tools/ffmpeg/bin");
