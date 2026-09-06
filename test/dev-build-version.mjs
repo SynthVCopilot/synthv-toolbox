@@ -39,6 +39,22 @@ try {
   assert.equal(JSON.parse(readFileSync(join(desktop, "src-tauri", "tauri.conf.json"), "utf8")).version, version);
   assert.match(readFileSync(join(desktop, "src-tauri", "Cargo.toml"), "utf8"), /version = "1\.2\.3-dev\.abc1234"/);
   assert.equal(readFileSync(output, "utf8"), `version=${version}\n`);
+
+  execFileSync(process.execPath, [join(root, ".github", "scripts", "set-dev-version.mjs"), "AbC1234f", fixture]);
+  assert.equal(JSON.parse(readFileSync(join(desktop, "package.json"), "utf8")).version, version);
+
+  assert.throws(
+    () => execFileSync(process.execPath, [join(root, ".github", "scripts", "set-dev-version.mjs"), "def5678", fixture], { stdio: "pipe" }),
+    /different development version/,
+  );
+  assert.equal(JSON.parse(readFileSync(join(desktop, "package.json"), "utf8")).version, version);
+
+  writeFileSync(join(desktop, "src-tauri", "tauri.conf.json"), JSON.stringify({ version: "1.2.4" }));
+  assert.throws(
+    () => execFileSync(process.execPath, [join(root, ".github", "scripts", "set-dev-version.mjs"), "AbC1234f", fixture], { stdio: "pipe" }),
+    /same base version/,
+  );
+  assert.equal(JSON.parse(readFileSync(join(desktop, "package.json"), "utf8")).version, version);
 } finally {
   rmSync(fixture, { recursive: true, force: true });
 }

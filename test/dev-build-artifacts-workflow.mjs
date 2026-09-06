@@ -15,7 +15,7 @@ assert.match(workflow, /^on:\n  pull_request:\n  push:\n    branches: \[main\]\n
 assert.equal((workflow.match(/npm run tauri build/g) ?? []).length, 1);
 assert.match(workflow, /name: Apply development version from source commit/);
 assert.match(workflow, /id: version/);
-assert.match(workflow, /set-dev-version\.mjs "\$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}"/);
+assert.match(workflow, /set-dev-version\.mjs "\$\{\{ github\.sha \}\}"/);
 assert.match(workflow, /bundles: nsis/);
 assert.match(workflow, /bundles: app,dmg/);
 assert.match(workflow, /target: x86_64-pc-windows-msvc/);

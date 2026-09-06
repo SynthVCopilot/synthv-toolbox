@@ -56,7 +56,7 @@ jobs:
 
       - name: Apply development version from source commit
         id: version
-        run: node .github/scripts/set-dev-version.mjs "${{ github.event.pull_request.head.sha || github.sha }}"
+        run: node .github/scripts/set-dev-version.mjs "${{ github.sha }}"
 
       - name: Cache Rust build
         uses: actions/cache@v5
