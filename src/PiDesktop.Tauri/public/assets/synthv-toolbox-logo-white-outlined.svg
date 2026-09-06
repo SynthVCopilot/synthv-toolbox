@@ -1,5 +1,5 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
-  <g>
+  <g stroke="#fff" stroke-width="6" stroke-linejoin="miter" paint-order="stroke fill">
     <path d="M571.774 373.531 L831.643 823.637 L883.604 823.637 L597.754 328.531 Z" fill="#16c46a"/>
     <path d="M534.246 438.531 L753.700 818.637 A30 30 0 0 0 779.681 833.637 L814.322 833.637 L560.226 393.531 Z" fill="#fff"/>
     <path d="M626.280 675.000 L106.542 675.000 L80.561 720.000 L652.261 720.000 Z" fill="#16c46a"/>
