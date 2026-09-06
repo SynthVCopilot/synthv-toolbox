@@ -21,6 +21,7 @@ mod media_tasks;
 mod oauth;
 pub mod opencode_catalog;
 mod process_tree;
+pub mod project_backups;
 mod solo_tuning;
 mod state;
 mod sv2_account_probe;
@@ -110,6 +111,28 @@ pub fn run() {
                 passthrough_only,
                 settings,
             ));
+            crate::project_backups::start();
+            if let Ok(checkpoints) = crate::creative_history::list_checkpoints(200) {
+                for checkpoint in checkpoints {
+                    crate::project_backups::observe_path(&checkpoint.source_path);
+                }
+            }
+            if let Ok(history) = crate::creative_history::list(200) {
+                for entry in history {
+                    crate::project_backups::observe_value(&entry.parameters);
+                    crate::project_backups::observe_value(&entry.result);
+                    if let Some(path) = entry.output_path.as_deref() {
+                        crate::project_backups::observe_path(path);
+                    }
+                }
+            }
+            let connected_hosts = app.state::<AppState>().mcp.clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    crate::synthv_unified::observe_connected_project_paths(&connected_hosts).await;
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                }
+            });
             let http_api = app.state::<AppState>().http_api.clone();
             let mut http_context = crate::http_api::HttpApiContext::from_state(
                 &app.state::<AppState>(),
@@ -124,6 +147,7 @@ pub fn run() {
                 let _ = http_api.start_if_enabled(http_context).await;
             });
             if let Some(activation) = initial_activation.clone() {
+                crate::project_backups::observe_path(&activation.project_path);
                 match open_original_svp_project(
                     &activation.project_path,
                     original_svp_prog_id.as_deref(),
@@ -240,6 +264,7 @@ pub fn run() {
             commands::remove_local_component,
             commands::list_workflow_recipes,
             commands::list_creative_history,
+            commands::get_project_backup_state,
             commands::create_project_checkpoint,
             commands::list_project_checkpoints,
             commands::restore_project_checkpoint,
@@ -361,6 +386,7 @@ fn handle_svp_activation(app: tauri::AppHandle, args: Vec<String>, cwd: Option<S
 }
 
 async fn route_hot_activation(app: tauri::AppHandle, activation: SvpActivation) {
+    crate::project_backups::observe_path(&activation.project_path);
     let state = app.state::<AppState>();
     let passthrough_only = state.svp_passthrough_only.load(Ordering::Acquire);
     let (enabled, original_prog_id, concurrent_disclaimer_accepted) = {

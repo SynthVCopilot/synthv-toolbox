@@ -338,6 +338,7 @@ impl McpManager {
         name: &str,
         arguments: Value,
     ) -> Result<Value, String> {
+        crate::project_backups::observe_value(&arguments);
         let client = {
             let servers = self.servers.lock().await;
             servers
@@ -346,6 +347,15 @@ impl McpManager {
                 .ok_or_else(|| format!("SynthV 宿主 {server_id} 尚未连接。"))?
         };
         let result = client.lock().await.call_tool(name, arguments).await;
+        if let Ok(value) = &result {
+            if !value
+                .get("isError")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                crate::project_backups::observe_value(value);
+            }
+        }
         result
     }
 
@@ -438,6 +448,7 @@ impl ToolExecutor for McpToolExecutor {
             return Ok(error_result(call, "没有匹配的 MCP 工具"));
         };
         let arguments = serde_json::from_str(&call.arguments_json).unwrap_or_else(|_| json!({}));
+        crate::project_backups::observe_value(&arguments);
         let response = self.runtime.block_on(async {
             let client = binding.client.lock().await;
             client.call_tool(&binding.remote_name, arguments).await
@@ -448,6 +459,9 @@ impl ToolExecutor for McpToolExecutor {
                     .get("isError")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
+                if !is_error {
+                    crate::project_backups::observe_value(&value);
+                }
                 Ok(ToolResult {
                     tool_call_id: call.id.clone(),
                     result_json: value.to_string(),
