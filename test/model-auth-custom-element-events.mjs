@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 const { JSDOM } = await import(new URL("../src/PiDesktop.Tauri/node_modules/jsdom/lib/api.js", import.meta.url));
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost" });
+// jsdom does not implement the browser top-layer methods.
+dom.window.HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
+dom.window.HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); };
 Object.assign(globalThis, {
   window: dom.window,
   document: dom.window.document,
@@ -27,6 +30,8 @@ dialog.providers = [{
 }];
 document.body.append(dialog);
 await new Promise((resolve) => setTimeout(resolve, 0));
+assert.equal(dialog.shadowRoot.querySelector("dialog")?.open, true);
+assert.equal(dialog.shadowRoot.querySelectorAll(".model-auth-progress-segment").length, 3);
 
 dialog.shadowRoot.querySelector('[data-part="method-oauth"]').click();
 await new Promise((resolve) => setTimeout(resolve, 0));
