@@ -16,7 +16,7 @@ export interface FeatureCatalogItem {
 }
 
 export interface ToolGroup {
-  id: string;
+  id: "import" | "quality";
   title: string;
   description: string;
   icon: IconName;
@@ -58,21 +58,5 @@ export const toolGroups: ToolGroup[] = [
     icon: "doctor",
     accent: "emerald",
     featureIds: ["tuning-learning", "audio-insight", "project-doctor", "pronunciation-doctor", "render-review"],
-  },
-  {
-    id: "iteration",
-    title: "SynthV 试听与 Retake",
-    description: "围绕短片段和单音符候选进行快速试听、比较与安全切换。",
-    icon: "compare",
-    accent: "orange",
-    featureIds: ["retake-compare", "ab-audition"],
-  },
-  {
-    id: "manage",
-    title: "工程与批量管理",
-    description: "处理工程副本、批量任务和账号间的非敏感资源。",
-    icon: "file",
-    accent: "blue",
-    featureIds: ["project-tools", "batch-recipes", "selective-sync"],
   },
 ];
