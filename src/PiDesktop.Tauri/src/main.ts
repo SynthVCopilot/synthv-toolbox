@@ -1,3 +1,4 @@
+import "./i18nWorkflows";
 import "./styles.css";
 import "./i18nCommon";
 import "./i18nLyrics";
@@ -391,7 +392,7 @@ function optionalFinite(value: string): number | undefined {
 }
 
 function formatAudioNumber(value: number | undefined, suffix = ""): string {
-  return value === undefined || !Number.isFinite(value) ? "未知" : `${value.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}${suffix}`;
+  return value === undefined || !Number.isFinite(value) ? t("workflowCopy.unknown") : `${value.toLocaleString(locale(), { maximumFractionDigits: 2 })}${suffix}`;
 }
 
 function beginAudioArtifactAction(): boolean {
@@ -443,7 +444,7 @@ function scheduleAudioJobPoll(jobId: string): void {
       audioJob = merged;
       if (isTerminalAudioJob(merged)) {
         clearAudioJobPoll();
-        audioUiNotice = merged.status === "completed" ? "音频任务已完成。" : "音频任务已结束。";
+        audioUiNotice = merged.status === "completed" ? t("workflowCopy.audioTaskCompleted") : t("workflowCopy.audioTaskEnded");
       } else {
         audioJobPollTimer = window.setTimeout(() => { void poll(); }, 800);
       }
@@ -497,7 +498,7 @@ function requestAudioPlan(kind: AudioJobKind): void {
   pendingAudioPlan = undefined;
   audioPlanRequestInFlight = true;
   audioUiError = "";
-  audioUiNotice = "正在生成安全写入计划…";
+  audioUiNotice = t("workflowCopy.preparingASafeWritePlan");
   render();
   void (async () => {
     try {
@@ -529,7 +530,7 @@ function startPlannedAudioJob(): void {
   audioJob = undefined;
   audioPreviewUrl = "";
   audioUiError = "";
-  audioUiNotice = "正在建立受控音频任务…";
+  audioUiNotice = t("workflowCopy.creatingAManagedAudioTask");
   // The one-use confirmation is now consumed locally.  Render immediately so
   // the modal disappears and input controls cannot be used while the backend
   // is installing the job record.
@@ -540,10 +541,10 @@ function startPlannedAudioJob(): void {
         ? await audioApi.startAudioPrepare(pending.request as AudioPrepareForm, pending.plan.token)
         : await audioApi.startLoudnessNormalize(pending.request as LoudnessNormalizeForm, pending.plan.token);
       if (!isTerminalAudioJob(audioJob)) {
-        audioUiNotice = "音频任务已开始；可继续浏览其他页面。";
+        audioUiNotice = t("workflowCopy.audioTaskStartedYouCanContinueBrowsing");
         scheduleAudioJobPoll(audioJob.id);
       }
-      else audioUiNotice = audioJob.status === "completed" ? "音频任务已完成。" : "音频任务已结束。";
+      else audioUiNotice = audioJob.status === "completed" ? t("workflowCopy.audioTaskCompleted") : t("workflowCopy.audioTaskEnded");
     } catch (reason) {
       audioUiNotice = "";
       audioUiError = formatError(reason);
@@ -558,17 +559,17 @@ function selectAudioPreparationInput(path: string): void {
   const trimmed = path.trim();
   if (!trimmed) return;
   if (audioPlanRequestInFlight || pendingAudioPlan) {
-    audioUiError = "请先完成或取消当前写入确认，再更换输入文件。";
+    audioUiError = t("workflowCopy.completeOrCancelTheCurrentWriteConfirmation");
     render();
     return;
   }
   if (audioStartInFlight || (audioJob && !isTerminalAudioJob(audioJob))) {
-    audioUiError = "当前有一个音频写入任务正在运行；完成或取消后才能更换输入。";
+    audioUiError = t("workflowCopy.anAudioWriteTaskIsRunningComplete");
     render();
     return;
   }
   if (audioLoudnessAnalysisInFlight) {
-    audioUiError = "正在检查当前文件响度；完成后才能更换输入文件。";
+    audioUiError = t("workflowCopy.loudnessAnalysisIsRunningWaitForIt");
     render();
     return;
   }
@@ -585,13 +586,13 @@ function selectAudioPreparationInput(path: string): void {
   audioPreviewUrl = "";
   audioSourcePreviewUrl = "";
   audioUiError = "";
-  audioUiNotice = "正在读取媒体信息…";
+  audioUiNotice = t("workflowCopy.readingMediaInformation");
   void (async () => {
     try {
       const probe = await audioApi.probeMedia(trimmed);
       if (generation !== audioInputGeneration || audioPrepareForm.inputPath !== trimmed) return;
       audioProbe = probe;
-      audioUiNotice = "媒体信息已读取。";
+      audioUiNotice = t("workflowCopy.mediaInformationLoaded");
     } catch (reason) {
       if (generation !== audioInputGeneration || audioPrepareForm.inputPath !== trimmed) return;
       audioUiError = formatError(reason);
@@ -903,15 +904,15 @@ function renderAudioPlanDialog(): string {
   if (!pending) return "";
   const plan = pending.plan;
   const expiry = new Date(plan.expiresAt);
-  const expiryText = Number.isNaN(expiry.getTime()) ? plan.expiresAt : expiry.toLocaleString("zh-CN");
+  const expiryText = Number.isNaN(expiry.getTime()) ? plan.expiresAt : expiry.toLocaleString(locale());
   return `<div class="dialog-backdrop" role="presentation">
     <section class="fluent-dialog audio-plan-dialog" role="dialog" aria-modal="true" aria-labelledby="audio-plan-title">
       <span class="dialog-icon route">${icon("audio", 24)}</span>
-      <div><span class="eyebrow">AUDIO WRITE CONFIRMATION</span><h2 id="audio-plan-title">确认${pending.kind === "prepare" ? "生成 PCM WAV" : "响度标准化"}</h2></div>
-      <p>工具箱将只按以下已审核计划写入一个新文件。源文件不会修改，确认令牌只能使用一次。</p>
-      <dl class="audio-plan-details"><div><dt>输入</dt><dd><code>${escapeHtml(plan.inputPath)}</code></dd></div><div><dt>输出</dt><dd><code>${escapeHtml(plan.outputPath)}</code></dd></div><div><dt>全部参数</dt><dd>${plan.parameters.length ? plan.parameters.map(escapeHtml).join(" · ") : "默认参数"}</dd></div><div><dt>令牌有效至</dt><dd>${escapeHtml(expiryText)}</dd></div></dl>
-      ${plan.warnings.length ? `<div class="audio-plan-warnings" role="status"><strong>注意</strong><ul>${plan.warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul></div>` : ""}
-      <div class="dialog-actions"><button class="secondary" data-cancel-audio-plan>取消</button><button class="primary" data-confirm-audio-plan>${icon("check", 16)} 确认并开始</button></div>
+      <div><span class="eyebrow">${t("workflowCopy.writeConfirmation")}</span><h2 id="audio-plan-title">${t("workflowCopy.confirmOperation", { operation: pending.kind === "prepare" ? t("workflowCopy.generatePcmWav") : t("workflowCopy.loudnessNormalization") })}</h2></div>
+      <p>${t("workflowCopy.toolboxWillWriteOneNewFileUsing")}</p>
+      <dl class="audio-plan-details"><div><dt>${t("workflowCopy.input")}</dt><dd><code>${escapeHtml(plan.inputPath)}</code></dd></div><div><dt>${t("workflowCopy.output")}</dt><dd><code>${escapeHtml(plan.outputPath)}</code></dd></div><div><dt>${t("workflowCopy.allParameters")}</dt><dd>${plan.parameters.length ? plan.parameters.map(escapeHtml).join(" · ") : t("workflowCopy.defaultParameters")}</dd></div><div><dt>${t("workflowCopy.tokenExpires")}</dt><dd>${escapeHtml(expiryText)}</dd></div></dl>
+      ${plan.warnings.length ? `<div class="audio-plan-warnings" role="status"><strong>${t("workflowCopy.notice")}</strong><ul>${plan.warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul></div>` : ""}
+      <div class="dialog-actions"><button class="secondary" data-cancel-audio-plan>${t("workflowCopy.cancel")}</button><button class="primary" data-confirm-audio-plan>${icon("check", 16)} ${t("workflowCopy.confirmAndStart")}</button></div>
     </section>
   </div>`;
 }
@@ -1757,37 +1758,37 @@ function renderDiagnosticResult(data: JsonObject): string | undefined {
   const inspected = typeof report.inspectedItems === "number" ? report.inspectedItems : 0;
   const list = issues.length ? `<div class="diagnostic-list">${issues.map((issue) => {
     const severity = issue.severity === "error" ? "error" : issue.severity === "warning" ? "warning" : "info";
-    const severityLabel = severity === "error" ? "错误" : severity === "warning" ? "警告" : "提示";
-    return `<article class="diagnostic-item ${severity}"><span>${severityLabel}</span><div><strong>${escapeHtml(issue.message ?? issue.code ?? "诊断项")}</strong>${issue.location ? `<code>${escapeHtml(issue.location)}</code>` : ""}${issue.suggestion ? `<small>${escapeHtml(issue.suggestion)}</small>` : ""}</div><code>${escapeHtml(issue.code ?? "")}</code></article>`;
-  }).join("")}</div>` : `<div class="result-clear">${icon("shield", 18)} 未发现需要处理的问题。</div>`;
-  return `<div class="result-dashboard">${resultMetric("检查项目", inspected)}${resultMetric("错误", errors, errors ? "error" : "")}${resultMetric("警告", warnings, warnings ? "warning" : "")}${resultMetric("结论", report.ok ? "通过" : "需处理", report.ok ? "success" : "error")}</div>${list}`;
+    const severityLabel = severity === "error" ? t("workflowCopy.errors") : severity === "warning" ? t("workflowCopy.warnings") : t("workflowCopy.information");
+    return `<article class="diagnostic-item ${severity}"><span>${severityLabel}</span><div><strong>${escapeHtml(issue.message ?? issue.code ?? t("workflowCopy.findings"))}</strong>${issue.location ? `<code>${escapeHtml(issue.location)}</code>` : ""}${issue.suggestion ? `<small>${escapeHtml(issue.suggestion)}</small>` : ""}</div><code>${escapeHtml(issue.code ?? "")}</code></article>`;
+  }).join("")}</div>` : `<div class="result-clear">${icon("shield", 18)} ${t("workflowCopy.noIssuesRequiringActionWereFound")}</div>`;
+  return `<div class="result-dashboard">${resultMetric(t("workflowCopy.checks"), inspected)}${resultMetric(t("workflowCopy.errors"), errors, errors ? "error" : "")}${resultMetric(t("workflowCopy.warnings"), warnings, warnings ? "warning" : "")}${resultMetric(t("workflowCopy.conclusion"), report.ok ? t("workflowCopy.passed") : t("workflowCopy.needsAttention"), report.ok ? "success" : "error")}</div>${list}`;
 }
 
 function renderBatchResult(data: JsonObject): string | undefined {
   if (!Array.isArray(data.items) || typeof data.completed !== "number" || typeof data.failed !== "number") return undefined;
   const items = data.items.map(asObject).filter((item): item is JsonObject => Boolean(item));
-  return `<div class="result-dashboard">${resultMetric("总计", items.length)}${resultMetric("完成", data.completed, "success")}${resultMetric("失败", data.failed, data.failed ? "error" : "")}</div><div class="batch-result-list">${items.map((item) => {
+  return `<div class="result-dashboard">${resultMetric(t("workflowCopy.total"), items.length)}${resultMetric(t("workflowCopy.completed"), data.completed, "success")}${resultMetric(t("workflowCopy.failed"), data.failed, data.failed ? "error" : "")}</div><div class="batch-result-list">${items.map((item) => {
     const completed = item.status === "completed";
     const nested = asObject(item.result);
-    return `<article class="batch-result-item ${completed ? "completed" : "failed"}"><span>${icon(completed ? "check" : "plug", 15)}</span><div><strong>${escapeHtml(item.inputPath ?? "未命名输入")}</strong><small>${escapeHtml(completed ? nested?.summary ?? "处理完成" : item.error ?? "处理失败")}</small></div><span>${completed ? "完成" : "失败"}</span></article>`;
+    return `<article class="batch-result-item ${completed ? "completed" : "failed"}"><span>${icon(completed ? "check" : "plug", 15)}</span><div><strong>${escapeHtml(item.inputPath ?? t("workflowCopy.unnamedInput"))}</strong><small>${escapeHtml(completed ? nested?.summary ?? t("workflowCopy.processingComplete") : item.error ?? t("workflowCopy.processingFailed"))}</small></div><span>${completed ? t("workflowCopy.completed") : t("workflowCopy.failed")}</span></article>`;
   }).join("")}</div>`;
 }
 
 function renderScalarResult(data: JsonObject): string {
   const source = asObject(data.probe) ?? data;
   const definitions: Array<[string, string, (value: unknown) => unknown]> = [
-    ["duration_sec", "时长", (value) => typeof value === "number" ? `${value} 秒` : value],
+    ["duration_sec", t("workflowCopy.duration"), (value) => typeof value === "number" ? `${value} ${t("workflowCopy.s")}` : value],
     ["bpm", "BPM", (value) => value],
-    ["key_guess", "调性估计", (value) => value],
-    ["peak_dbfs", "峰值", (value) => typeof value === "number" ? `${value} dBFS` : value],
+    ["key_guess", t("workflowCopy.estimatedKey"), (value) => value],
+    ["peak_dbfs", t("workflowCopy.peak"), (value) => typeof value === "number" ? `${value} dBFS` : value],
     ["rms_dbfs", "RMS", (value) => typeof value === "number" ? `${value} dBFS` : value],
-    ["clipped_sample_ratio", "削波样本", (value) => typeof value === "number" ? `${(value * 100).toFixed(3)}%` : value],
-    ["silent_frame_ratio", "静音帧", (value) => typeof value === "number" ? `${(value * 100).toFixed(1)}%` : value],
-    ["brightness_trend", "明亮度趋势", (value) => value],
-    ["copied", "已复制", (value) => value],
-    ["updated", "已更新", (value) => value],
-    ["skipped", "已跳过", (value) => value],
-    ["conflicts", "冲突", (value) => value],
+    ["clipped_sample_ratio", t("workflowCopy.clippedSamples"), (value) => typeof value === "number" ? `${(value * 100).toFixed(3)}%` : value],
+    ["silent_frame_ratio", t("workflowCopy.silentFrames"), (value) => typeof value === "number" ? `${(value * 100).toFixed(1)}%` : value],
+    ["brightness_trend", t("workflowCopy.brightnessTrend"), (value) => value],
+    ["copied", t("workflowCopy.copied"), (value) => value],
+    ["updated", t("workflowCopy.updated"), (value) => value],
+    ["skipped", t("workflowCopy.skipped"), (value) => value],
+    ["conflicts", t("workflowCopy.conflicts"), (value) => value],
   ];
   const metrics = definitions
     .filter(([key]) => source[key] !== undefined)
@@ -1813,16 +1814,16 @@ function renderLyricTemplateResult(data: JsonObject): string | undefined {
 function renderAbAudioResult(data: JsonObject): string | undefined {
   const metrics = asObject(data.metrics);
   if (metrics && typeof data.requestedStartSeconds === "number" && typeof data.requestedEndSeconds === "number") {
-    return `<div class="result-dashboard compact">${resultMetric("范围", `${Number(data.requestedStartSeconds).toFixed(2)}–${Number(data.requestedEndSeconds).toFixed(2)} s`)}${resultMetric("时长", `${Number(metrics.durationSeconds ?? 0).toFixed(2)} s`)}${resultMetric("峰值", `${Number(metrics.peakDbfs ?? 0).toFixed(1)} dBFS`)}${resultMetric("RMS", `${Number(metrics.rmsDbfs ?? 0).toFixed(1)} dBFS`)}${resultMetric("边界误差", `±${Number(data.boundaryUncertaintyMs ?? 0).toFixed(0)} ms`)}${resultMetric("中断", data.discontinuities ?? 0, Number(data.discontinuities ?? 0) ? "error" : "success")}</div>`;
+    return `<div class="result-dashboard compact">${resultMetric(t("workflowCopy.range"), `${Number(data.requestedStartSeconds).toFixed(2)}–${Number(data.requestedEndSeconds).toFixed(2)} s`)}${resultMetric(t("workflowCopy.duration"), `${Number(metrics.durationSeconds ?? 0).toFixed(2)} s`)}${resultMetric(t("workflowCopy.peak"), `${Number(metrics.peakDbfs ?? 0).toFixed(1)} dBFS`)}${resultMetric("RMS", `${Number(metrics.rmsDbfs ?? 0).toFixed(1)} dBFS`)}${resultMetric(t("workflowCopy.boundaryUncertainty"), `±${Number(data.boundaryUncertaintyMs ?? 0).toFixed(0)} ms`)}${resultMetric(t("workflowCopy.discontinuities"), data.discontinuities ?? 0, Number(data.discontinuities ?? 0) ? "error" : "success")}</div>`;
   }
   if (typeof data.correlation === "number" && typeof data.similarityPercent === "number") {
     const labels: Record<string, string> = {
-      "near-identical": "几乎相同",
-      "subtle-change": "细微变化",
-      "material-change": "明显变化",
-      "large-change-or-misalignment": "大幅变化 / 检查对齐",
+      "near-identical": t("workflowCopy.nearlyIdentical"),
+      "subtle-change": t("workflowCopy.subtleChange"),
+      "material-change": t("workflowCopy.materialChange"),
+      "large-change-or-misalignment": t("workflowCopy.largeChangeCheckAlignment"),
     };
-    return `<div class="result-dashboard compact">${resultMetric("分类", labels[String(data.classification)] ?? data.classification ?? "未知")}${resultMetric("相似度", `${Number(data.similarityPercent).toFixed(1)}%`)}${resultMetric("相关性", Number(data.correlation).toFixed(4))}${resultMetric("对齐偏移", `${Number(data.alignedLagMs ?? 0) >= 0 ? "+" : ""}${Number(data.alignedLagMs ?? 0).toFixed(1)} ms`)}${resultMetric("响度变化", `${Number(data.loudnessDeltaDb ?? 0) >= 0 ? "+" : ""}${Number(data.loudnessDeltaDb ?? 0).toFixed(2)} dB`)}${resultMetric("高频变化", `${Number(data.highFrequencyDeltaDb ?? 0) >= 0 ? "+" : ""}${Number(data.highFrequencyDeltaDb ?? 0).toFixed(2)} dB`)}</div>`;
+    return `<div class="result-dashboard compact">${resultMetric(t("workflowCopy.classification"), labels[String(data.classification)] ?? data.classification ?? t("workflowCopy.unknown"))}${resultMetric(t("workflowCopy.similarity"), `${Number(data.similarityPercent).toFixed(1)}%`)}${resultMetric(t("workflowCopy.correlation"), Number(data.correlation).toFixed(4))}${resultMetric(t("workflowCopy.alignmentOffset"), `${Number(data.alignedLagMs ?? 0) >= 0 ? "+" : ""}${Number(data.alignedLagMs ?? 0).toFixed(1)} ms`)}${resultMetric(t("workflowCopy.loudnessChange"), `${Number(data.loudnessDeltaDb ?? 0) >= 0 ? "+" : ""}${Number(data.loudnessDeltaDb ?? 0).toFixed(2)} dB`)}${resultMetric(t("workflowCopy.highFrequencyChange"), `${Number(data.highFrequencyDeltaDb ?? 0) >= 0 ? "+" : ""}${Number(data.highFrequencyDeltaDb ?? 0).toFixed(2)} dB`)}</div>`;
   }
   return undefined;
 }
@@ -1918,60 +1919,60 @@ function renderWorkflowPanel(id: string): string {
     const controlsLocked = running || audioPlanRequestInFlight || audioLoudnessAnalysisInFlight;
     const probe = audioProbe;
     const probeCard = probe
-      ? `<section class="audio-probe-card" aria-label="媒体信息"><div class="audio-probe-heading"><div><span class="eyebrow">MEDIA PROBE</span><strong>${escapeHtml(probe.codec ?? "未知编码")}</strong></div><span class="availability ready">已读取</span></div><dl class="audio-metadata"><div><dt>容器</dt><dd>${escapeHtml(probe.container ?? "未知")}</dd></div><div><dt>时长</dt><dd>${formatAudioNumber(probe.durationSeconds, " 秒")}</dd></div><div><dt>采样率</dt><dd>${formatAudioNumber(probe.sampleRate, " Hz")}</dd></div><div><dt>声道</dt><dd>${formatAudioNumber(probe.channels)}${probe.channelLayout ? ` · ${escapeHtml(probe.channelLayout)}` : ""}</dd></div><div><dt>位深</dt><dd>${formatAudioNumber(probe.bitDepth, " bit")}</dd></div><div><dt>码率</dt><dd>${formatAudioNumber(probe.bitRate ? probe.bitRate / 1000 : undefined, " kb/s")}</dd></div></dl>${probe.sourceArtifactId && probe.sourceMimeType ? `<div class="audio-source-preview">${audioSourcePreviewUrl ? `<audio controls preload="metadata" src="${escapeHtml(audioSourcePreviewUrl)}" data-audio-preview-artifact="${escapeHtml(probe.sourceArtifactId)}" data-audio-preview-kind="source" data-audio-preview-generation="${audioInputGeneration}" aria-label="原音试听"></audio>` : `<button class="secondary" data-preview-audio-artifact="${escapeHtml(probe.sourceArtifactId)}" data-audio-preview-kind="source" ${audioArtifactActionInFlight ? "disabled" : ""}>${icon("play", 16)} 试听原音</button>`}</div>` : ""}</section>`
-      : `<div class="audio-empty-probe" role="status">选择一个本地音频后，将显示容器、编码、时长、采样率、声道、位深与码率。</div>`;
+      ? `<section class="audio-probe-card" aria-label="${t("workflowCopy.mediaInformation")}"><div class="audio-probe-heading"><div><span class="eyebrow">${t("workflowCopy.mediaProbe")}</span><strong>${escapeHtml(probe.codec ?? t("workflowCopy.unknownCodec"))}</strong></div><span class="availability ready">${t("workflowCopy.loaded")}</span></div><dl class="audio-metadata"><div><dt>${t("workflowCopy.container")}</dt><dd>${escapeHtml(probe.container ?? t("workflowCopy.unknown"))}</dd></div><div><dt>${t("workflowCopy.duration")}</dt><dd>${formatAudioNumber(probe.durationSeconds, t("workflowCopy.s2"))}</dd></div><div><dt>${t("workflowCopy.sampleRate")}</dt><dd>${formatAudioNumber(probe.sampleRate, " Hz")}</dd></div><div><dt>${t("workflowCopy.channels")}</dt><dd>${formatAudioNumber(probe.channels)}${probe.channelLayout ? ` · ${escapeHtml(probe.channelLayout)}` : ""}</dd></div><div><dt>${t("workflowCopy.bitDepth")}</dt><dd>${formatAudioNumber(probe.bitDepth, " bit")}</dd></div><div><dt>${t("workflowCopy.bitRate")}</dt><dd>${formatAudioNumber(probe.bitRate ? probe.bitRate / 1000 : undefined, " kb/s")}</dd></div></dl>${probe.sourceArtifactId && probe.sourceMimeType ? `<div class="audio-source-preview">${audioSourcePreviewUrl ? `<audio controls preload="metadata" src="${escapeHtml(audioSourcePreviewUrl)}" data-audio-preview-artifact="${escapeHtml(probe.sourceArtifactId)}" data-audio-preview-kind="source" data-audio-preview-generation="${audioInputGeneration}" aria-label="${t("workflowCopy.sourceAudioPreview")}"></audio>` : `<button class="secondary" data-preview-audio-artifact="${escapeHtml(probe.sourceArtifactId)}" data-audio-preview-kind="source" ${audioArtifactActionInFlight ? "disabled" : ""}>${icon("play", 16)} ${t("workflowCopy.previewSource")}</button>`}</div>` : ""}</section>`
+      : `<div class="audio-empty-probe" role="status">${t("workflowCopy.chooseALocalAudioFileToView")}</div>`;
     const loudness = audioLoudness
-      ? `<div class="audio-loudness-readout" role="status"><strong>EBU R128 结果</strong><span>综合响度 ${formatAudioNumber(audioLoudness.integratedLufs, " LUFS")}</span><span>True Peak ${formatAudioNumber(audioLoudness.truePeakDbtp, " dBTP")}</span><span>LRA ${formatAudioNumber(audioLoudness.loudnessRange, " LU")}</span></div>`
+      ? `<div class="audio-loudness-readout" role="status"><strong>${t("workflowCopy.ebuR128Results")}</strong><span>${t("workflowCopy.integratedLoudness")} ${formatAudioNumber(audioLoudness.integratedLufs, " LUFS")}</span><span>True Peak ${formatAudioNumber(audioLoudness.truePeakDbtp, " dBTP")}</span><span>LRA ${formatAudioNumber(audioLoudness.loudnessRange, " LU")}</span></div>`
       : "";
     const jobPanel = audioJob
-      ? `<section class="audio-job-card ${audioJob.status}" aria-live="polite"><div class="audio-job-heading"><div><span class="eyebrow">AUDIO TASK</span><strong>${audioJob.operation === "loudness-normalize" ? "响度标准化" : "PCM WAV 转码"}</strong></div><span class="availability ${audioJob.status === "completed" ? "ready" : audioJob.status === "failed" ? "warning" : ""}">${escapeHtml(audioJob.status)}</span></div>${audioJob.progressPercent !== undefined ? `<div class="audio-progress" role="progressbar" aria-label="音频处理进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(audioJob.progressPercent)}"><span style="width:${Math.max(0, Math.min(100, audioJob.progressPercent))}%"></span></div><small>${formatAudioNumber(audioJob.progressPercent, "%")}</small>` : `<small>${running ? "正在处理；可继续浏览其他页面。" : "任务已结束。"}</small>`}${audioJob.outputPath ? `<div class="audio-output-path"><span>结果路径</span><code>${escapeHtml(audioJob.outputPath)}</code></div>` : ""}${audioJob.error ? `<pre class="audio-job-error">${escapeHtml(audioJob.error)}</pre>` : ""}${audioJob.loudnessReport ? `<div class="audio-loudness-readout compact"><span>复测 ${formatAudioNumber(audioJob.loudnessReport.integratedLufs, " LUFS")}</span><span>峰值 ${formatAudioNumber(audioJob.loudnessReport.truePeakDbtp, " dBTP")}</span><span>LRA ${formatAudioNumber(audioJob.loudnessReport.loudnessRange, " LU")}</span></div>` : ""}${running ? `<div class="button-row"><button class="secondary" data-cancel-audio-job="${escapeHtml(audioJob.id)}" ${audioCancelInFlight ? "disabled" : ""}>${audioCancelInFlight ? "正在取消…" : "取消任务"}</button></div>` : audioJob.status === "completed" && audioJob.artifactId ? `<div class="audio-artifact-actions">${audioPreviewUrl ? `<audio controls preload="metadata" src="${escapeHtml(audioPreviewUrl)}" data-audio-preview-artifact="${escapeHtml(audioJob.artifactId)}" data-audio-preview-kind="result" data-audio-preview-generation="${audioInputGeneration}" aria-label="结果试听"></audio>` : `<button class="secondary" data-preview-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>${icon("play", 16)} 试听结果</button>`}<button class="secondary" data-reveal-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>打开文件位置</button><button class="secondary" data-copy-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>复制路径</button><button class="primary" data-save-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>安全另存为</button></div>` : ""}</section>`
+      ? `<section class="audio-job-card ${audioJob.status}" aria-live="polite"><div class="audio-job-heading"><div><span class="eyebrow">${t("workflowCopy.audioTask")}</span><strong>${audioJob.operation === "loudness-normalize" ? t("workflowCopy.loudnessNormalization") : t("workflowCopy.pcmWavConversion")}</strong></div><span class="availability ${audioJob.status === "completed" ? "ready" : audioJob.status === "failed" ? "warning" : ""}">${escapeHtml(t(`workflowTaskStatus.${audioJob.status}`))}</span></div>${audioJob.progressPercent !== undefined ? `<div class="audio-progress" role="progressbar" aria-label="${t("workflowCopy.audioProcessingProgress")}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(audioJob.progressPercent)}"><span style="width:${Math.max(0, Math.min(100, audioJob.progressPercent))}%"></span></div><small>${formatAudioNumber(audioJob.progressPercent, "%")}</small>` : `<small>${running ? t("workflowCopy.processingYouCanContinueBrowsingOtherPages") : t("workflowCopy.taskEnded")}</small>`}${audioJob.outputPath ? `<div class="audio-output-path"><span>${t("workflowCopy.resultPath")}</span><code>${escapeHtml(audioJob.outputPath)}</code></div>` : ""}${audioJob.error ? `<pre class="audio-job-error">${escapeHtml(audioJob.error)}</pre>` : ""}${audioJob.loudnessReport ? `<div class="audio-loudness-readout compact"><span>${t("workflowCopy.recheck")} ${formatAudioNumber(audioJob.loudnessReport.integratedLufs, " LUFS")}</span><span>${t("workflowCopy.peak")} ${formatAudioNumber(audioJob.loudnessReport.truePeakDbtp, " dBTP")}</span><span>LRA ${formatAudioNumber(audioJob.loudnessReport.loudnessRange, " LU")}</span></div>` : ""}${running ? `<div class="button-row"><button class="secondary" data-cancel-audio-job="${escapeHtml(audioJob.id)}" ${audioCancelInFlight ? "disabled" : ""}>${audioCancelInFlight ? t("workflowCopy.cancelling") : t("workflowCopy.cancelTask")}</button></div>` : audioJob.status === "completed" && audioJob.artifactId ? `<div class="audio-artifact-actions">${audioPreviewUrl ? `<audio controls preload="metadata" src="${escapeHtml(audioPreviewUrl)}" data-audio-preview-artifact="${escapeHtml(audioJob.artifactId)}" data-audio-preview-kind="result" data-audio-preview-generation="${audioInputGeneration}" aria-label="${t("workflowCopy.resultAudioPreview")}"></audio>` : `<button class="secondary" data-preview-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>${icon("play", 16)} ${t("workflowCopy.previewResult")}</button>`}<button class="secondary" data-reveal-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>${t("workflowCopy.openFileLocation")}</button><button class="secondary" data-copy-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>${t("workflowCopy.copyPath")}</button><button class="primary" data-save-audio-artifact="${escapeHtml(audioJob.artifactId)}" ${audioArtifactActionInFlight ? "disabled" : ""}>${t("workflowCopy.saveSafelyAs")}</button></div>` : ""}</section>`
       : "";
-    form = `<div class="audio-preparation" aria-label="音频准备">
-      <section class="audio-runtime-card ${runtime?.available ? "ready" : "warning"}"><div><span class="eyebrow">FFMPEG RUNTIME</span><strong>${runtime === undefined ? "正在检查…" : runtime.available ? `可用${runtime.version ? ` · ${escapeHtml(runtime.version)}` : ""}` : "未找到 FFmpeg"}</strong><small>${escapeHtml(runtime?.detail ?? "进入此工具后检查本机 FFmpeg。")}${runtime !== undefined && !runtime.available ? " 请在组件中心安装或修复 FFmpeg 后重试。" : ""}</small></div><span class="availability ${runtime?.available ? "ready" : "warning"}">${escapeHtml(runtime?.source ?? (runtime === undefined ? "检查中" : runtime.available ? "已就绪" : "需要组件"))}</span></section>
-      <section class="audio-input-card"><div class="section-heading"><div><h3>选择单个音频</h3><p>支持点击选择或拖放一个本地文件；不会自动导入 SynthV、运行 CVRS 或批处理。</p></div><button type="button" class="secondary" data-pick-audio-file ${controlsLocked ? "disabled" : ""}>选择文件</button></div><label class="visually-hidden" for="audio-prep-input">音频文件路径</label><input id="audio-prep-input" value="${escapeHtml(audioPrepareForm.inputPath)}" readonly placeholder="尚未选择文件" aria-describedby="audio-drop-help" /><button type="button" class="audio-drop-zone" data-audio-drop-zone aria-label="拖放一个音频文件或选择文件" aria-describedby="audio-drop-help" ${controlsLocked ? "disabled" : ""}><span>${icon("audio", 22)}</span><strong>把一个音频文件拖到这里</strong><small id="audio-drop-help">一次只接受一个文件。拖放后先进行只读媒体探测。</small></button></section>
+    form = `<div class="audio-preparation" aria-label="${t("workflowCopy.audioPreparation")}">
+      <section class="audio-runtime-card ${runtime?.available ? "ready" : "warning"}"><div><span class="eyebrow">${t("workflowCopy.ffmpegRuntime")}</span><strong>${runtime === undefined ? t("workflowCopy.checking") : runtime.available ? `${t("workflowCopy.available")}${runtime.version ? ` · ${escapeHtml(runtime.version)}` : ""}` : t("workflowCopy.ffmpegNotFound")}</strong><small>${escapeHtml(runtime?.detail ?? t("workflowCopy.openingThisToolChecksForLocalFfmpeg"))}${runtime !== undefined && !runtime.available ? t("workflowCopy.installOrRepairFfmpegInComponentsThen") : ""}</small></div><span class="availability ${runtime?.available ? "ready" : "warning"}">${escapeHtml(runtime?.source ?? (runtime === undefined ? t("workflowCopy.checking2") : runtime.available ? t("workflowCopy.ready") : t("workflowCopy.componentRequired")))}</span></section>
+      <section class="audio-input-card"><div class="section-heading"><div><h3>${t("workflowCopy.chooseOneAudioFile")}</h3><p>${t("workflowCopy.clickToSelectOrDropOneLocal")}</p></div><button type="button" class="secondary" data-pick-audio-file ${controlsLocked ? "disabled" : ""}>${t("workflowCopy.chooseFile")}</button></div><label class="visually-hidden" for="audio-prep-input">${t("workflowCopy.audioFilePath")}</label><input id="audio-prep-input" value="${escapeHtml(audioPrepareForm.inputPath)}" readonly placeholder="${t("workflowCopy.noFileSelected")}" aria-describedby="audio-drop-help" /><button type="button" class="audio-drop-zone" data-audio-drop-zone aria-label="${t("workflowCopy.dropAnAudioFileOrChooseA")}" aria-describedby="audio-drop-help" ${controlsLocked ? "disabled" : ""}><span>${icon("audio", 22)}</span><strong>${t("workflowCopy.dropAnAudioFileHere")}</strong><small id="audio-drop-help">${t("workflowCopy.onlyOneFileIsAcceptedAtA")}</small></button></section>
       ${probeCard}
-      <div class="audio-action-grid"><section class="audio-action-card"><div><span class="eyebrow">SYNTHV PCM WAV</span><h3>为 SynthV 准备 PCM WAV</h3><p>默认保持原采样率和声道，输出 24-bit PCM WAV。</p></div><form id="audio-prepare-form" class="workflow-form"><div class="workflow-pair three"><label>采样率（Hz）<input id="audio-prep-rate" type="number" min="8000" max="192000" step="1" value="${audioPrepareForm.sampleRate ?? ""}" placeholder="保持不变" ${controlsLocked ? "disabled" : ""}/></label><label>声道数<select id="audio-prep-channels" ${controlsLocked ? "disabled" : ""}><option value="">保持不变</option><option value="1" ${audioPrepareForm.channels === 1 ? "selected" : ""}>单声道</option><option value="2" ${audioPrepareForm.channels === 2 ? "selected" : ""}>立体声</option></select></label><label>位深<select id="audio-prep-format" ${controlsLocked ? "disabled" : ""}><option value="s16" ${audioPrepareForm.sampleFormat === "s16" ? "selected" : ""}>16-bit PCM</option><option value="s24" ${audioPrepareForm.sampleFormat === "s24" ? "selected" : ""}>24-bit PCM</option><option value="f32" ${audioPrepareForm.sampleFormat === "f32" ? "selected" : ""}>32-bit float</option></select></label></div><div class="workflow-pair"><label>起始位置（秒）<input id="audio-prep-start" type="number" min="0" step="0.01" value="${audioPrepareForm.startSeconds ?? ""}" placeholder="从头开始" ${controlsLocked ? "disabled" : ""}/></label><label>时长（秒）<input id="audio-prep-duration" type="number" min="0.01" step="0.01" value="${audioPrepareForm.durationSeconds ?? ""}" placeholder="直到结尾" ${controlsLocked ? "disabled" : ""}/></label></div><button class="primary" ${!audioPrepareForm.inputPath || !runtime?.available || controlsLocked ? "disabled" : ""}>${icon("audio", 16)} 查看写入计划</button></form></section>
-      <section class="audio-action-card"><div><span class="eyebrow">EBU R128</span><h3>检查 / 平衡响度</h3><p>默认目标 −16 LUFS / −1.5 dBTP / 11 LRA，写入后会自动复测。</p></div><div class="button-row"><button class="secondary" data-analyze-audio-loudness ${!audioPrepareForm.inputPath || !runtime?.available || controlsLocked ? "disabled" : ""}>检查响度</button></div>${loudness}<form id="audio-normalize-form" class="workflow-form"><div class="workflow-pair three"><label>LUFS<input id="audio-normalize-lufs" type="number" min="-70" max="-5" step="0.1" required value="${audioNormalizeForm.integratedLufs}" ${controlsLocked ? "disabled" : ""}/></label><label>dBTP<input id="audio-normalize-peak" type="number" min="-9" max="0" step="0.1" required value="${audioNormalizeForm.truePeakDbtp}" ${controlsLocked ? "disabled" : ""}/></label><label>LRA<input id="audio-normalize-lra" type="number" min="1" max="20" step="0.1" required value="${audioNormalizeForm.loudnessRange}" ${controlsLocked ? "disabled" : ""}/></label></div><button class="primary" ${!audioPrepareForm.inputPath || !runtime?.available || controlsLocked ? "disabled" : ""}>${icon("shield", 16)} 查看标准化计划</button></form></section></div>
+      <div class="audio-action-grid"><section class="audio-action-card"><div><span class="eyebrow">SYNTHV PCM WAV</span><h3>${t("workflowCopy.preparePcmWavForSynthv")}</h3><p>${t("workflowCopy.preservesTheOriginalSampleRateAndChannels")}</p></div><form id="audio-prepare-form" class="workflow-form"><div class="workflow-pair three"><label>${t("workflowCopy.sampleRateHz")}<input id="audio-prep-rate" type="number" min="8000" max="192000" step="1" value="${audioPrepareForm.sampleRate ?? ""}" placeholder="${t("workflowCopy.keepOriginal")}" ${controlsLocked ? "disabled" : ""}/></label><label>${t("workflowCopy.channelCount")}<select id="audio-prep-channels" ${controlsLocked ? "disabled" : ""}><option value="">${t("workflowCopy.keepOriginal")}</option><option value="1" ${audioPrepareForm.channels === 1 ? "selected" : ""}>${t("workflowCopy.mono")}</option><option value="2" ${audioPrepareForm.channels === 2 ? "selected" : ""}>${t("workflowCopy.stereo")}</option></select></label><label>${t("workflowCopy.bitDepth")}<select id="audio-prep-format" ${controlsLocked ? "disabled" : ""}><option value="s16" ${audioPrepareForm.sampleFormat === "s16" ? "selected" : ""}>16-bit PCM</option><option value="s24" ${audioPrepareForm.sampleFormat === "s24" ? "selected" : ""}>24-bit PCM</option><option value="f32" ${audioPrepareForm.sampleFormat === "f32" ? "selected" : ""}>32-bit float</option></select></label></div><div class="workflow-pair"><label>${t("workflowCopy.startPositionSeconds")}<input id="audio-prep-start" type="number" min="0" step="0.01" value="${audioPrepareForm.startSeconds ?? ""}" placeholder="${t("workflowCopy.fromTheBeginning")}" ${controlsLocked ? "disabled" : ""}/></label><label>${t("workflowCopy.durationSeconds")}<input id="audio-prep-duration" type="number" min="0.01" step="0.01" value="${audioPrepareForm.durationSeconds ?? ""}" placeholder="${t("workflowCopy.untilTheEnd")}" ${controlsLocked ? "disabled" : ""}/></label></div><button class="primary" ${!audioPrepareForm.inputPath || !runtime?.available || controlsLocked ? "disabled" : ""}>${icon("audio", 16)} ${t("workflowCopy.viewWritePlan")}</button></form></section>
+      <section class="audio-action-card"><div><span class="eyebrow">EBU R128</span><h3>${t("workflowCopy.checkBalanceLoudness")}</h3><p>${t("workflowCopy.defaultTargets16Lufs15Dbtp")}</p></div><div class="button-row"><button class="secondary" data-analyze-audio-loudness ${!audioPrepareForm.inputPath || !runtime?.available || controlsLocked ? "disabled" : ""}>${t("workflowCopy.checkLoudness")}</button></div>${loudness}<form id="audio-normalize-form" class="workflow-form"><div class="workflow-pair three"><label>LUFS<input id="audio-normalize-lufs" type="number" min="-70" max="-5" step="0.1" required value="${audioNormalizeForm.integratedLufs}" ${controlsLocked ? "disabled" : ""}/></label><label>dBTP<input id="audio-normalize-peak" type="number" min="-9" max="0" step="0.1" required value="${audioNormalizeForm.truePeakDbtp}" ${controlsLocked ? "disabled" : ""}/></label><label>LRA<input id="audio-normalize-lra" type="number" min="1" max="20" step="0.1" required value="${audioNormalizeForm.loudnessRange}" ${controlsLocked ? "disabled" : ""}/></label></div><button class="primary" ${!audioPrepareForm.inputPath || !runtime?.available || controlsLocked ? "disabled" : ""}>${icon("shield", 16)} ${t("workflowCopy.viewNormalizationPlan")}</button></form></section></div>
       ${audioUiNotice ? `<div class="audio-inline-notice" role="status">${escapeHtml(audioUiNotice)}</div>` : ""}${audioUiError ? `<div class="audio-inline-error" role="alert">${escapeHtml(audioUiError)}</div>` : ""}${jobPanel}
     </div>`;
   } else if (id === "cover") {
-    const processOptions = [`<option value="">自动选择${synthvProcesses.length > 1 ? "（多实例时由 Agent 指定）" : ""}</option>`, ...synthvProcesses.map((process) => `<option value="${process.processId}">PID ${process.processId} · ${escapeHtml(process.name)}</option>`)].join("");
+    const processOptions = [`<option value="">${t("workflowCopy.selectAutomatically")}${synthvProcesses.length > 1 ? t("workflowCopy.agentSelectsWhenMultipleInstancesAreRunning") : ""}</option>`, ...synthvProcesses.map((process) => `<option value="${process.processId}">PID ${process.processId} · ${escapeHtml(process.name)}</option>`)].join("");
     const taskCards = mediaTasks.filter((item) => item.kind === "cover").slice(-5).reverse().map((task) => {
       const result = asObject(task.result) ?? {};
       const midi = asObject(result.midi) ?? {};
       const assignment = asObject(result.voiceAssignment) ?? {};
       const action = ["queued", "running", "cancelling"].includes(task.status)
-        ? `<button class="secondary compact" data-cancel-media-task="${escapeHtml(task.id)}" ${task.status === "cancelling" ? "disabled" : ""}>${task.status === "cancelling" ? "终止中…" : "取消"}</button>`
+        ? `<button class="secondary compact" data-cancel-media-task="${escapeHtml(task.id)}" ${task.status === "cancelling" ? "disabled" : ""}>${task.status === "cancelling" ? t("workflowCopy.stopping") : t("workflowCopy.cancel")}</button>`
         : ["failed", "cancelled"].includes(task.status)
-          ? `<button class="secondary compact" data-retry-media-task="${escapeHtml(task.id)}">重试</button>`
+          ? `<button class="secondary compact" data-retry-media-task="${escapeHtml(task.id)}">${t("workflowCopy.retry")}</button>`
           : "";
       const outputPath = typeof midi.outputPath === "string" ? midi.outputPath : "";
-      const voiceBoundary = assignment.requiresHostSelection === true ? `<small>指定声库：${escapeHtml(String(result.requestedVoice ?? ""))} · 宿主 API 不可自动分配身份</small>` : "";
+      const voiceBoundary = assignment.requiresHostSelection === true ? `<small>${t("workflowCopy.requestedVoice")}${escapeHtml(String(result.requestedVoice ?? ""))} ${t("workflowCopy.theHostApiCannotAssignVoiceIdentities")}</small>` : "";
       const svpPath = typeof result.svpPath === "string" ? result.svpPath : "";
-      const saveState = svpPath ? `<small>SVP：${escapeHtml(svpPath)} · ${result.saveVerified === true ? "已验证落盘" : "保存未验证"}</small>` : "";
-      return `<article class="download-item ${task.status}"><span class="component-status ${task.status === "completed" ? "ready" : ""}">${icon(task.status === "failed" ? "plug" : "sparkles", 17)}</span><div><div class="download-title"><strong>一键 Cover</strong><span>${escapeHtml(task.status)}</span></div><div class="progress-track"><span style="width:${Math.max(2, Math.min(100, task.progress))}%"></span></div><small>${escapeHtml(task.error || task.detail)}</small>${outputPath ? `<small>MIDI：${escapeHtml(outputPath)}</small>` : ""}${saveState}${voiceBoundary}</div>${action}</article>`;
+      const saveState = svpPath ? `<small>SVP：${escapeHtml(svpPath)} · ${result.saveVerified === true ? t("workflowCopy.saveVerified") : t("workflowCopy.saveNotVerified")}</small>` : "";
+      return `<article class="download-item ${task.status}"><span class="component-status ${task.status === "completed" ? "ready" : ""}">${icon(task.status === "failed" ? "plug" : "sparkles", 17)}</span><div><div class="download-title"><strong>${t("workflowCopy.oneClickCover")}</strong><span>${escapeHtml(t(`workflowTaskStatus.${task.status}`))}</span></div><div class="progress-track"><span style="width:${Math.max(2, Math.min(100, task.progress))}%"></span></div><small>${escapeHtml(task.error || task.detail)}</small>${outputPath ? `<small>MIDI：${escapeHtml(outputPath)}</small>` : ""}${saveState}${voiceBoundary}</div>${action}</article>`;
     }).join("");
-    const taskList = taskCards ? `<section class="download-queue"><div class="section-heading"><div><h3>Cover 任务</h3><p>下载、分离与旋律提取均可取消；Bridge 写入开始后以宿主实际结果为准。</p></div></div><div class="download-list">${taskCards}</div></section>` : "";
-    form = `<div class="mode-limit"><strong>声库边界：</strong>Toolbox 会记录指定声库并自动连接/导入，但 SynthV 官方脚本 API 当前不能分配 singer 身份；不会伪报已切换。</div><form id="cover-form" class="workflow-form workflow-wide"><label>BV 或 YouTube 来源<input id="cover-source" required placeholder="BV1... 或 https://www.youtube.com/watch?v=..." /></label><div class="workflow-pair"><label>目标声库<input id="cover-voice" required maxlength="200" placeholder="例如 Mai 2" /></label><label>SynthV 进程<select id="cover-process">${processOptions}</select></label></div><label>完整歌词（可选；CJK 按字、拉丁词按词映射）<textarea id="cover-lyrics" rows="7" placeholder="留空时使用 MIDI/SynthV 默认歌词；歌词 token 多于音符会明确失败"></textarea></label><div class="workflow-pair"><label>目标轨道编号<input id="cover-track" type="number" min="1" max="10000" value="1" required /></label><label>音符组名称<input id="cover-group" value="Toolbox Cover" maxlength="200" required /></label></div><label class="checkbox workflow-check"><input id="cover-rights" type="checkbox" /> 我拥有来源内容或已取得足够授权，并会遵守来源平台规则</label><button class="primary">${icon("sparkles", 16)} 开始完整 Cover</button></form>${taskList}`;
+    const taskList = taskCards ? `<section class="download-queue"><div class="section-heading"><div><h3>${t("workflowCopy.coverTasks")}</h3><p>${t("workflowCopy.downloadSeparationAndMelodyExtractionCanBe")}</p></div></div><div class="download-list">${taskCards}</div></section>` : "";
+    form = `<div class="mode-limit"><strong>${t("workflowCopy.voiceAssignmentLimit")}</strong>${t("workflowCopy.toolboxRecordsTheRequestedVoiceAndConnects")}</div><form id="cover-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.bvOrYoutubeSource")}<input id="cover-source" required placeholder="${t("workflowCopy.bv1OrHttpsWwwYoutubeComWatch")}" /></label><div class="workflow-pair"><label>${t("workflowCopy.targetVoice")}<input id="cover-voice" required maxlength="200" placeholder="${t("workflowCopy.forExampleMai2")}" /></label><label>${t("workflowCopy.synthvProcess")}<select id="cover-process">${processOptions}</select></label></div><label>${t("workflowCopy.fullLyricsOptionalCjkCharactersAndLatin")}<textarea id="cover-lyrics" rows="7" placeholder="${t("workflowCopy.leaveBlankToUseDefaultMidiSynthv")}"></textarea></label><div class="workflow-pair"><label>${t("workflowCopy.targetTrackNumber")}<input id="cover-track" type="number" min="1" max="10000" value="1" required /></label><label>${t("workflowCopy.noteGroupName")}<input id="cover-group" value="Toolbox Cover" maxlength="200" required /></label></div><label class="checkbox workflow-check"><input id="cover-rights" type="checkbox" /> ${t("workflowCopy.iOwnTheSourceContentOrHave")}</label><button class="primary">${icon("sparkles", 16)} ${t("workflowCopy.startFullCover")}</button></form>${taskList}`;
   } else if (id === "tuning-learning") {
-    const profiles = tuningProfiles.length ? `<div class="download-list">${tuningProfiles.map((profile) => `<article class="download-item completed"><span class="component-status ready">${icon("waveform", 17)}</span><div><div class="download-title"><strong>${escapeHtml(profile.voiceName)}</strong><span>${profile.sourceSamples} 个参考 · ${profile.outcomeSamples} 个反馈</span></div><small>响度 ${profile.parameters.loudness.toFixed(2)} · 张力 ${profile.parameters.tension.toFixed(3)} · 气声 ${profile.parameters.breathiness.toFixed(3)} · 颤音 ${profile.parameters.vibratoStrength.toFixed(3)}</small></div></article>`).join("")}</div>` : `<div class="mode-limit">尚无调声档案。每个精确声库名称使用独立本地档案，不会互相污染。</div>`;
-    form = `<div class="workflow-split"><form id="tuning-learn-form" class="workflow-form"><h3>从参考人声学习</h3><label>参考人声音频路径<input id="tuning-audio" required /></label><label>精确声库名称<input id="tuning-voice" required maxlength="200" /></label><button class="primary">${icon("waveform", 16)} 分析并更新档案</button></form><form id="tuning-apply-form" class="workflow-form"><h3>应用已学习参数</h3><label>声库档案<select id="tuning-profile" required>${tuningProfiles.map((profile) => `<option value="${escapeHtml(profile.voiceName)}">${escapeHtml(profile.voiceName)}</option>`).join("")}</select></label><div class="workflow-pair"><label>轨道<input id="tuning-track" type="number" min="1" value="1" required /></label><label>音符组<input id="tuning-group" type="number" min="1" value="1" required /></label></div><button class="primary" ${app.bridgeConnected && tuningProfiles.length ? "" : "disabled"}>${icon("sparkles", 16)} ${app.bridgeConnected ? "应用到 SynthV" : "请先连接 Bridge"}</button></form></div>${profiles}`;
+    const profiles = tuningProfiles.length ? `<div class="download-list">${tuningProfiles.map((profile) => `<article class="download-item completed"><span class="component-status ready">${icon("waveform", 17)}</span><div><div class="download-title"><strong>${escapeHtml(profile.voiceName)}</strong><span>${t("workflowCopy.profileSamples", { references: profile.sourceSamples, feedback: profile.outcomeSamples })}</span></div><small>${t("workflowCopy.loudness")} ${profile.parameters.loudness.toFixed(2)} ${t("workflowCopy.tension")} ${profile.parameters.tension.toFixed(3)} ${t("workflowCopy.breathiness")} ${profile.parameters.breathiness.toFixed(3)} ${t("workflowCopy.vibrato")} ${profile.parameters.vibratoStrength.toFixed(3)}</small></div></article>`).join("")}</div>` : `<div class="mode-limit">${t("workflowCopy.noTuningProfilesYetEachExactVoice")}</div>`;
+    form = `<div class="workflow-split"><form id="tuning-learn-form" class="workflow-form"><h3>${t("workflowCopy.learnFromReferenceVocals")}</h3><label>${t("workflowCopy.referenceVocalAudioPath")}<input id="tuning-audio" required /></label><label>${t("workflowCopy.exactVoiceName")}<input id="tuning-voice" required maxlength="200" /></label><button class="primary">${icon("waveform", 16)} ${t("workflowCopy.analyzeAndUpdateProfile")}</button></form><form id="tuning-apply-form" class="workflow-form"><h3>${t("workflowCopy.applyLearnedParameters")}</h3><label>${t("workflowCopy.voiceProfile")}<select id="tuning-profile" required>${tuningProfiles.map((profile) => `<option value="${escapeHtml(profile.voiceName)}">${escapeHtml(profile.voiceName)}</option>`).join("")}</select></label><div class="workflow-pair"><label>${t("workflowCopy.track")}<input id="tuning-track" type="number" min="1" value="1" required /></label><label>${t("workflowCopy.noteGroup")}<input id="tuning-group" type="number" min="1" value="1" required /></label></div><button class="primary" ${app.bridgeConnected && tuningProfiles.length ? "" : "disabled"}>${icon("sparkles", 16)} ${app.bridgeConnected ? t("workflowCopy.applyToSynthv") : t("workflowCopy.connectBridgeFirst")}</button></form></div>${profiles}`;
   } else if (id === "media-import") {
     const sourcePreview = mediaSourcePreview
-      ? `<section class="media-source-preview"><div><span class="availability ready">${escapeHtml(mediaSourcePreview.platform)}</span><h3>${escapeHtml(mediaSourcePreview.title)}</h3><p>${escapeHtml(mediaSourcePreview.uploader)} · ${mediaSourcePreview.durationSeconds ? `${Math.round(mediaSourcePreview.durationSeconds)} 秒` : "时长未知"}</p><code>${escapeHtml(mediaSourcePreview.canonicalUrl)}</code></div></section>`
-      : `<div class="mode-limit">支持裸 BV 号、Bilibili URL、YouTube URL 与 youtu.be 短链接。不会读取浏览器 Cookie、播放列表或付费内容。</div>`;
+      ? `<section class="media-source-preview"><div><span class="availability ready">${escapeHtml(mediaSourcePreview.platform)}</span><h3>${escapeHtml(mediaSourcePreview.title)}</h3><p>${escapeHtml(mediaSourcePreview.uploader)} · ${mediaSourcePreview.durationSeconds ? `${Math.round(mediaSourcePreview.durationSeconds)} ${t("workflowCopy.s")}` : t("workflowCopy.unknownDuration")}</p><code>${escapeHtml(mediaSourcePreview.canonicalUrl)}</code></div></section>`
+      : `<div class="mode-limit">${t("workflowCopy.supportsBvIdsBilibiliUrlsYoutubeUrls")}</div>`;
     const taskCards = mediaTasks.filter((item) => item.kind === "media-import").slice(-5).reverse().map((task) => {
       const result = asObject(task.result) ?? {};
       const audioPath = typeof result.audioPath === "string" ? result.audioPath : "";
       const action = ["queued", "running", "cancelling"].includes(task.status)
-        ? `<button class="secondary compact" data-cancel-media-task="${escapeHtml(task.id)}" ${task.status === "cancelling" ? "disabled" : ""}>${task.status === "cancelling" ? "终止中…" : "取消"}</button>`
+        ? `<button class="secondary compact" data-cancel-media-task="${escapeHtml(task.id)}" ${task.status === "cancelling" ? "disabled" : ""}>${task.status === "cancelling" ? t("workflowCopy.stopping") : t("workflowCopy.cancel")}</button>`
         : ["failed", "cancelled"].includes(task.status)
-          ? `<button class="secondary compact" data-retry-media-task="${escapeHtml(task.id)}">重试</button>`
+          ? `<button class="secondary compact" data-retry-media-task="${escapeHtml(task.id)}">${t("workflowCopy.retry")}</button>`
           : "";
-      return `<article class="download-item ${task.status}"><span class="component-status ${task.status === "completed" ? "ready" : ""}">${icon(task.status === "failed" ? "plug" : "download", 17)}</span><div><div class="download-title"><strong>平台音频导入</strong><span>${escapeHtml(task.status)}</span></div><div class="progress-track"><span style="width:${Math.max(2, Math.min(100, task.progress))}%"></span></div><small>${escapeHtml(task.error || task.detail)}</small>${audioPath ? `<small>WAV：${escapeHtml(audioPath)}</small>` : ""}</div>${action}</article>`;
+      return `<article class="download-item ${task.status}"><span class="component-status ${task.status === "completed" ? "ready" : ""}">${icon(task.status === "failed" ? "plug" : "download", 17)}</span><div><div class="download-title"><strong>${t("workflowCopy.platformAudioImport")}</strong><span>${escapeHtml(t(`workflowTaskStatus.${task.status}`))}</span></div><div class="progress-track"><span style="width:${Math.max(2, Math.min(100, task.progress))}%"></span></div><small>${escapeHtml(task.error || task.detail)}</small>${audioPath ? `<small>WAV：${escapeHtml(audioPath)}</small>` : ""}</div>${action}</article>`;
     }).join("");
-    const taskList = taskCards ? `<section class="download-queue"><div class="section-heading"><div><h3>媒体任务</h3><p>状态会持久化；取消会终止 yt-dlp 及其帮助进程。</p></div></div><div class="download-list">${taskCards}</div></section>` : "";
-    form = `<form id="media-import-form" class="workflow-form workflow-wide"><label>BV 或媒体 URL<input id="media-source" required value="${escapeHtml(mediaSourceInput)}" placeholder="BV1... 或 https://www.youtube.com/watch?v=..." /></label><label class="checkbox workflow-check"><input id="media-rights" type="checkbox" /> 我拥有该内容或已取得足够授权，并会遵守来源平台规则</label><div class="button-row"><button class="secondary" value="preview">${icon("waveform", 16)} 预览来源</button><button class="primary" value="import" ${mediaSourcePreview ? "" : "disabled"}>${icon("download", 16)} 下载受管 WAV</button></div></form>${sourcePreview}${taskList}`;
+    const taskList = taskCards ? `<section class="download-queue"><div class="section-heading"><div><h3>${t("workflowCopy.mediaTasks")}</h3><p>${t("workflowCopy.taskStateIsSavedCancellingStopsYt")}</p></div></div><div class="download-list">${taskCards}</div></section>` : "";
+    form = `<form id="media-import-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.bvOrMediaUrl")}<input id="media-source" required value="${escapeHtml(mediaSourceInput)}" placeholder="${t("workflowCopy.bv1OrHttpsWwwYoutubeComWatch")}" /></label><label class="checkbox workflow-check"><input id="media-rights" type="checkbox" /> ${t("workflowCopy.iOwnThisContentOrHaveSufficient")}</label><div class="button-row"><button class="secondary" value="preview">${icon("waveform", 16)} ${t("workflowCopy.previewSource2")}</button><button class="primary" value="import" ${mediaSourcePreview ? "" : "disabled"}>${icon("download", 16)} ${t("workflowCopy.downloadManagedWav")}</button></div></form>${sourcePreview}${taskList}`;
   } else if (id === "source-separation") {
     const taskCards = mediaTasks.filter((item) => item.kind === "source-separation").slice(-5).reverse().map((task) => {
       const wrapped = asObject(task.result) ?? {};
@@ -1979,86 +1980,86 @@ function renderWorkflowPanel(id: string): string {
       const vocalPath = typeof data.vocalPath === "string" ? data.vocalPath : "";
       const instrumentalPath = typeof data.instrumentalPath === "string" ? data.instrumentalPath : "";
       const action = ["queued", "running", "cancelling"].includes(task.status)
-        ? `<button class="secondary compact" data-cancel-media-task="${escapeHtml(task.id)}" ${task.status === "cancelling" ? "disabled" : ""}>${task.status === "cancelling" ? "终止中…" : "取消"}</button>`
+        ? `<button class="secondary compact" data-cancel-media-task="${escapeHtml(task.id)}" ${task.status === "cancelling" ? "disabled" : ""}>${task.status === "cancelling" ? t("workflowCopy.stopping") : t("workflowCopy.cancel")}</button>`
         : ["failed", "cancelled"].includes(task.status)
-          ? `<button class="secondary compact" data-retry-media-task="${escapeHtml(task.id)}">重试</button>`
+          ? `<button class="secondary compact" data-retry-media-task="${escapeHtml(task.id)}">${t("workflowCopy.retry")}</button>`
           : "";
       const outputs = vocalPath && instrumentalPath ? `<small>Vocals：${escapeHtml(vocalPath)}</small><small>Inst：${escapeHtml(instrumentalPath)}</small>` : "";
-      return `<article class="download-item ${task.status}"><span class="component-status ${task.status === "completed" ? "ready" : ""}">${icon(task.status === "failed" ? "plug" : "audio", 17)}</span><div><div class="download-title"><strong>人声伴奏分离</strong><span>${escapeHtml(task.status)}</span></div><div class="progress-track"><span style="width:${Math.max(2, Math.min(100, task.progress))}%"></span></div><small>${escapeHtml(task.error || task.detail)}</small>${outputs}</div>${action}</article>`;
+      return `<article class="download-item ${task.status}"><span class="component-status ${task.status === "completed" ? "ready" : ""}">${icon(task.status === "failed" ? "plug" : "audio", 17)}</span><div><div class="download-title"><strong>${t("workflowCopy.vocalInstrumentalSeparation")}</strong><span>${escapeHtml(t(`workflowTaskStatus.${task.status}`))}</span></div><div class="progress-track"><span style="width:${Math.max(2, Math.min(100, task.progress))}%"></span></div><small>${escapeHtml(task.error || task.detail)}</small>${outputs}</div>${action}</article>`;
     }).join("");
-    const taskList = taskCards ? `<section class="download-queue"><div class="section-heading"><div><h3>分离任务</h3><p>状态会持久化；取消会终止 Python、Demucs 及模型帮助进程。</p></div></div><div class="download-list">${taskCards}</div></section>` : "";
-    form = `<div class="mode-limit">首次运行会由 Demucs 获取 htdemucs 模型；输出始终写入 Toolbox 受管目录，不覆盖源音频。</div><form id="source-separation-form" class="workflow-form workflow-wide"><label>混音音频路径<input id="separation-source" required placeholder="选择平台导入的 source.wav 或其他本地音频" /></label><button class="primary">${icon("audio", 16)} 分离 vocals / inst</button></form>${taskList}`;
+    const taskList = taskCards ? `<section class="download-queue"><div class="section-heading"><div><h3>${t("workflowCopy.separationTasks")}</h3><p>${t("workflowCopy.taskStateIsSavedCancellingStopsPython")}</p></div></div><div class="download-list">${taskCards}</div></section>` : "";
+    form = `<div class="mode-limit">${t("workflowCopy.demucsFetchesTheHtdemucsModelOnFirst")}</div><form id="source-separation-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.mixedAudioPath")}<input id="separation-source" required placeholder="${t("workflowCopy.chooseAnImportedSourceWavOrAnother")}" /></label><button class="primary">${icon("audio", 16)} ${t("workflowCopy.separateVocalsInstrumental")}</button></form>${taskList}`;
   } else if (id === "audio-insight") {
     form = `<form id="audio-probe-form" class="workflow-form">
-      <label>音频文件路径<input id="audio-path" required placeholder="选择待分析的 WAV、FLAC、MP3、M4A、AAC、OGG 或 OPUS" /></label>
-      ${ai ? `<label class="checkbox workflow-check"><input id="audio-advanced" type="checkbox" checked /> 启用音符统计、PANNs 乐器/风格倾向和人声置信判断</label>` : `<div class="mode-limit">纯工具箱只输出 BPM、调性、能量与频谱趋势；不下载或运行高级模型。</div>`}
-      <button class="primary">${icon(ai ? "sparkles" : "play", 16)} 开始分析</button>
+      <label>${t("workflowCopy.audioFilePath")}<input id="audio-path" required placeholder="${t("workflowCopy.chooseAWavFlacMp3M4aAac")}" /></label>
+      ${ai ? `<label class="checkbox workflow-check"><input id="audio-advanced" type="checkbox" checked /> ${t("workflowCopy.enableNoteStatisticsPannsInstrumentStyleEstimates")}</label>` : `<div class="mode-limit">${t("workflowCopy.toolboxModeOnlyReportsBpmKeyEnergy")}</div>`}
+      <button class="primary">${icon(ai ? "sparkles" : "play", 16)} ${t("workflowCopy.startAnalysis")}</button>
     </form>`;
   } else if (id === "score-to-synthv") {
-    form = `<div class="mode-limit"><strong>转换范围：</strong>把单声部 MIDI / MusicXML 写入当前打开的 SynthV 工程；不会跨版本直译 SV1 / SV2 的歌手、唱法或参数，也不会代替你保存 .svp。</div>
+    form = `<div class="mode-limit"><strong>${t("workflowCopy.conversionScope")}</strong>${t("workflowCopy.writeMonophonicMidiMusicxmlIntoTheOpen")}</div>
       <form id="score-to-synthv-form" class="workflow-form workflow-wide">
-        <label>曲谱文件路径<input id="score-source-path" required placeholder="本地 .mid、.midi、.xml、.musicxml 或 .mxl 文件" /></label>
-        <div class="workflow-pair"><label>目标轨道编号<input id="score-target-track" type="number" min="1" max="10000" value="1" required /></label><label>音符组名称<input id="score-group-name" maxlength="200" value="Imported Score" required /></label></div>
-        <label class="checkbox workflow-check"><input id="score-rights" type="checkbox" /> 我确认有权把这份本地曲谱导入当前工程</label>
-        <button class="primary" ${app.bridgeConnected ? "" : "disabled"}>${icon("file", 16)} ${app.bridgeConnected ? "转换并导入当前工程" : "请先连接 Bridge"}</button>
+        <label>${t("workflowCopy.scoreFilePath")}<input id="score-source-path" required placeholder="${t("workflowCopy.localMidMidiXmlMusicxmlOrMxl")}" /></label>
+        <div class="workflow-pair"><label>${t("workflowCopy.targetTrackNumber")}<input id="score-target-track" type="number" min="1" max="10000" value="1" required /></label><label>${t("workflowCopy.noteGroupName")}<input id="score-group-name" maxlength="200" value="Imported Score" required /></label></div>
+        <label class="checkbox workflow-check"><input id="score-rights" type="checkbox" /> ${t("workflowCopy.iHavePermissionToImportThisLocal")}</label>
+        <button class="primary" ${app.bridgeConnected ? "" : "disabled"}>${icon("file", 16)} ${app.bridgeConnected ? t("workflowCopy.convertAndImportIntoCurrentProject") : t("workflowCopy.connectBridgeFirst")}</button>
       </form>`;
   } else if (id === "project-tools") {
-    form = `<div class="mode-limit">请先在 SynthV 中保存工程；这里读取磁盘上的 .svp，不包含尚未保存的内存修改。所有输出统一写入 ~/.SynthVcopilot/output/，源工程不会被覆盖。</div>
+    form = `<div class="mode-limit">${t("workflowCopy.saveTheProjectInSynthvFirstThis")}</div>
       <div class="workflow-split">
-        <form id="project-probe-form" class="workflow-form"><h3>只读工程探测</h3><label>.svp 工程路径<input id="project-probe-path" required placeholder="目标 .svp 文件" /></label><button class="primary">${icon("file", 16)} 探测版本与轨道</button></form>
-        <form id="project-no-params-form" class="workflow-form"><h3>导出无参工程</h3><label>已保存的 .svp 工程路径<input id="project-no-params-path" required placeholder="源工程不会被修改" /></label><label>输出工程文件名<input id="project-no-params-output" required value="project_no_params.svp" /></label><button class="secondary">${icon("file", 16)} 生成无参副本</button></form>
-        <form id="project-lyrics-form" class="workflow-form"><h3>生成 LRC / 逐字 LRC</h3><label>已保存的 .svp 工程路径<input id="project-lyrics-path" required /></label><div class="workflow-pair"><label>歌词轨道编号<input id="project-lyrics-track" type="number" min="1" max="10000" step="1" value="1" required /></label><label>分句空隙（秒）<input id="project-lyrics-gap" type="number" min="0" max="10" step="0.1" value="0.8" required /></label></div><label>普通 LRC 文件名<input id="project-lyrics-output" required value="project.lrc" /></label><label>逐字 LRC 文件名<input id="project-word-lyrics-output" required value="project.word.lrc" /></label><button class="secondary">${icon("file", 16)} 同时生成两种 LRC</button></form>
-        <form id="project-reference-form" class="workflow-form"><h3>生成参考轨副本</h3><label>目标 .svp 工程路径<input id="project-ref-path" required /></label><label>参考音频路径<input id="project-ref-audio" required /></label><div class="workflow-pair"><label>参考轨名称<input id="project-ref-name" required value="CVRS Reference" /></label><label>起始秒数<input id="project-ref-begin" type="number" min="0" max="86400" step="0.01" value="0" /></label></div><label>输出工程文件名<input id="project-ref-output" required value="project_cvrs.svp" /></label><button class="secondary">${icon("plus", 16)} 生成安全副本</button></form>
+        <form id="project-probe-form" class="workflow-form"><h3>${t("workflowCopy.readOnlyProjectProbe")}</h3><label>${t("workflowCopy.svpProjectPath")}<input id="project-probe-path" required placeholder="${t("workflowCopy.targetSvpFile")}" /></label><button class="primary">${icon("file", 16)} ${t("workflowCopy.inspectVersionAndTracks")}</button></form>
+        <form id="project-no-params-form" class="workflow-form"><h3>${t("workflowCopy.exportProjectWithoutParameters")}</h3><label>${t("workflowCopy.savedSvpProjectPath")}<input id="project-no-params-path" required placeholder="${t("workflowCopy.theSourceProjectWillNotBeChanged")}" /></label><label>${t("workflowCopy.outputProjectFilename")}<input id="project-no-params-output" required value="project_no_params.svp" /></label><button class="secondary">${icon("file", 16)} ${t("workflowCopy.createCopyWithoutParameters")}</button></form>
+        <form id="project-lyrics-form" class="workflow-form"><h3>${t("workflowCopy.generateLrcWordLevelLrc")}</h3><label>${t("workflowCopy.savedSvpProjectPath")}<input id="project-lyrics-path" required /></label><div class="workflow-pair"><label>${t("workflowCopy.lyricTrackNumber")}<input id="project-lyrics-track" type="number" min="1" max="10000" step="1" value="1" required /></label><label>${t("workflowCopy.phraseGapSeconds")}<input id="project-lyrics-gap" type="number" min="0" max="10" step="0.1" value="0.8" required /></label></div><label>${t("workflowCopy.standardLrcFilename")}<input id="project-lyrics-output" required value="project.lrc" /></label><label>${t("workflowCopy.wordLevelLrcFilename")}<input id="project-word-lyrics-output" required value="project.word.lrc" /></label><button class="secondary">${icon("file", 16)} ${t("workflowCopy.generateBothLrcFormats")}</button></form>
+        <form id="project-reference-form" class="workflow-form"><h3>${t("workflowCopy.createReferenceTrackCopy")}</h3><label>${t("workflowCopy.targetSvpProjectPath")}<input id="project-ref-path" required /></label><label>${t("workflowCopy.referenceAudioPath")}<input id="project-ref-audio" required /></label><div class="workflow-pair"><label>${t("workflowCopy.referenceTrackName")}<input id="project-ref-name" required value="CVRS Reference" /></label><label>${t("workflowCopy.startTimeSeconds")}<input id="project-ref-begin" type="number" min="0" max="86400" step="0.01" value="0" /></label></div><label>${t("workflowCopy.outputProjectFilename")}<input id="project-ref-output" required value="project_cvrs.svp" /></label><button class="secondary">${icon("plus", 16)} ${t("workflowCopy.createSafeCopy")}</button></form>
       </div>`;
   } else if (id === "audio-to-project") {
-    form = `<div class="mode-limit">这个入口已经合并 MIDI 导出与 SynthV 导入：默认只生成标准 MIDI；连接 Bridge 后可选择继续写入当前工程。</div>
+    form = `<div class="mode-limit">${t("workflowCopy.thisToolCombinesMidiExportAndSynthv")}</div>
       <form id="audio-to-project-form" class="workflow-form workflow-wide">
-        <div class="workflow-pair"><label>演唱版音频路径<input id="pipeline-vocal" required placeholder="包含目标演唱的音频" /></label><label>伴奏版音频路径<input id="pipeline-inst" required placeholder="同版本、同时间轴的伴奏" /></label></div>
-        <div class="workflow-pair"><label>输出 MIDI 文件名<input id="pipeline-output" required value="audio_to_project.mid" /></label>${ai ? `<label>匹配容差（秒）<input id="pipeline-tolerance" type="number" min="0.02" max="0.25" step="0.01" value="0.08" /></label>` : '<input id="pipeline-tolerance" type="hidden" value="0.08" />'}</div>
-        ${ai ? `<label class="checkbox workflow-check"><input id="pipeline-advanced" type="checkbox" checked /> 启用多参数寻优与低置信音符纠正</label>` : ""}
-        <label class="checkbox workflow-check"><input id="pipeline-import" type="checkbox" ${app.bridgeConnected ? "" : "disabled"} /> 提取完成后通过 Bridge 导入当前 SynthV 工程${app.bridgeConnected ? "" : "（Bridge 未连接）"}</label>
-        <div id="pipeline-import-options" class="workflow-nested" hidden><div class="workflow-pair"><label>目标轨道编号<input id="pipeline-track" type="number" min="1" max="10000" value="1" required disabled /></label><label>SynthV 音符组名称<input id="pipeline-group-name" required value="Toolbox Audio Import" maxlength="200" disabled /></label></div><label class="checkbox workflow-check"><input id="pipeline-rights" type="checkbox" disabled /> 我确认有权使用这些本地素材及生成的 MIDI</label></div>
-        <button class="primary" id="pipeline-submit">${icon("pipeline", 16)} 提取并导出 MIDI</button>
+        <div class="workflow-pair"><label>${t("workflowCopy.vocalVersionAudioPath")}<input id="pipeline-vocal" required placeholder="${t("workflowCopy.audioContainingTheTargetVocals")}" /></label><label>${t("workflowCopy.instrumentalVersionAudioPath")}<input id="pipeline-inst" required placeholder="${t("workflowCopy.instrumentalFromTheSameVersionAndTimeline")}" /></label></div>
+        <div class="workflow-pair"><label>${t("workflowCopy.outputMidiFilename")}<input id="pipeline-output" required value="audio_to_project.mid" /></label>${ai ? `<label>${t("workflowCopy.matchingToleranceSeconds")}<input id="pipeline-tolerance" type="number" min="0.02" max="0.25" step="0.01" value="0.08" /></label>` : '<input id="pipeline-tolerance" type="hidden" value="0.08" />'}</div>
+        ${ai ? `<label class="checkbox workflow-check"><input id="pipeline-advanced" type="checkbox" checked /> ${t("workflowCopy.enableParameterOptimizationAndLowConfidenceNote")}</label>` : ""}
+        <label class="checkbox workflow-check"><input id="pipeline-import" type="checkbox" ${app.bridgeConnected ? "" : "disabled"} /> ${t("workflowCopy.importIntoTheCurrentSynthvProjectThrough")}${app.bridgeConnected ? "" : t("workflowCopy.bridgeDisconnected")}</label>
+        <div id="pipeline-import-options" class="workflow-nested" hidden><div class="workflow-pair"><label>${t("workflowCopy.targetTrackNumber")}<input id="pipeline-track" type="number" min="1" max="10000" value="1" required disabled /></label><label>${t("workflowCopy.synthvNoteGroupName")}<input id="pipeline-group-name" required value="Toolbox Audio Import" maxlength="200" disabled /></label></div><label class="checkbox workflow-check"><input id="pipeline-rights" type="checkbox" disabled /> ${t("workflowCopy.iHavePermissionToUseTheseLocal")}</label></div>
+        <button class="primary" id="pipeline-submit">${icon("pipeline", 16)} ${t("workflowCopy.extractAndExportMidi")}</button>
       </form>`;
   } else if (id === "project-doctor") {
-    form = `<div class="mode-limit">完全离线、只读检查已保存的 .svp；不会调用模型或修改工程。</div><form id="project-doctor-form" class="workflow-form workflow-wide"><label>.svp 工程路径<input id="doctor-project" required placeholder="选择需要体检的工程" /></label><button class="primary">${icon("doctor", 16)} 开始只读体检</button></form>`;
+    form = `<div class="mode-limit">${t("workflowCopy.completelyOfflineReadOnlyInspectionOfA")}</div><form id="project-doctor-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.svpProjectPath")}<input id="doctor-project" required placeholder="${t("workflowCopy.chooseAProjectToInspect")}" /></label><button class="primary">${icon("doctor", 16)} ${t("workflowCopy.startReadOnlyInspection")}</button></form>`;
   } else if (id === "batch-recipes") {
     const recipes = workflowRecipes.filter((recipe) => recipe.supportsBatch);
-    form = `<div class="mode-limit">每行一个输入路径，一次最多 100 项。任务串行执行，单项失败不会中断其余文件。</div><form id="batch-workflow-form" class="workflow-form workflow-wide"><label>批处理配方<select id="batch-recipe">${recipes.map((recipe) => `<option value="${escapeHtml(recipe.id)}">${escapeHtml(recipe.title)} · ${escapeHtml(recipe.description)}</option>`).join("")}</select></label><label>输入文件路径（每行一个）<textarea id="batch-inputs" rows="8" required placeholder="C:\Projects\song-a.svp&#10;C:\Projects\song-b.svp"></textarea></label><label>可选 JSON 参数<textarea id="batch-options" rows="3" placeholder='例如 {"suffix":"_delivery"}'>{}</textarea></label><button class="primary">${icon("batch", 16)} 加入批处理并执行</button></form>`;
+    form = `<div class="mode-limit">${t("workflowCopy.enterOneInputPathPerLineUp")}</div><form id="batch-workflow-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.batchRecipe")}<select id="batch-recipe">${recipes.map((recipe) => `<option value="${escapeHtml(recipe.id)}">${escapeHtml(t(`workflowRecipes.${recipe.id}.title`))} · ${escapeHtml(t(`workflowRecipes.${recipe.id}.description`))}</option>`).join("")}</select></label><label>${t("workflowCopy.inputFilePathsOnePerLine")}<textarea id="batch-inputs" rows="8" required placeholder="C:\Projects\song-a.svp&#10;C:\Projects\song-b.svp"></textarea></label><label>${t("workflowCopy.optionalJsonParameters")}<textarea id="batch-options" rows="3" placeholder='${t("workflowCopy.forExample")} {"suffix":"_delivery"}'>{}</textarea></label><button class="primary">${icon("batch", 16)} ${t("workflowCopy.queueAndRunBatch")}</button></form>`;
   } else if (id === "selective-sync") {
-    const slotOptions = profiles?.slots.map((slot) => `<option value="${escapeHtml(slot.id)}" ${slot.id === syncSourceSlotId ? "selected" : ""}>${escapeHtml(slot.displayName)}${slot.isActive ? "（当前默认）" : ""}</option>`).join("") ?? "";
-    const targetOptions = profiles?.slots.map((slot) => `<option value="${escapeHtml(slot.id)}" ${slot.id === syncTargetSlotId ? "selected" : ""}>${escapeHtml(slot.displayName)}${slot.isActive ? "（当前默认）" : ""}</option>`).join("") ?? "";
-    const categoryOptions = syncCategories.map((category) => `<label class="sync-category"><input type="checkbox" name="sync-category" value="${category.id}" ${syncSelectedCategories.includes(category.id) ? "checked" : ""} /><span><strong>${escapeHtml(category.label)}</strong><small>${escapeHtml(category.description)}</small></span></label>`).join("");
-    const preview = syncManifest ? `<section class="sync-preview"><div class="section-heading"><div><h3>写入前清单</h3><p>${syncManifest.entries.length} 个文件；令牌会在执行前重新校验。</p></div><span class="availability">${syncManifest.overwrite ? "允许更新" : "冲突不覆盖"}</span></div><div class="sync-entry-list">${syncManifest.entries.map((entry) => `<div><span class="sync-action ${entry.action}">${entry.action}</span><code>${escapeHtml(entry.relativePath)}</code><small>${entry.sourceSize} bytes</small></div>`).join("") || '<div class="empty-inline">所选类别没有可同步文件。</div>'}</div></section>` : "";
-    form = profiles && profiles.slots.length >= 2 ? `<div class="mode-limit">只同步白名单中的词典、脚本、预设和安全设置；license、session、WebView2、Cookie 与声库数据库始终排除。同步前必须关闭相关普通/隔离实例。</div><form id="selective-sync-form" class="workflow-form workflow-wide"><div class="workflow-pair"><label>源账号<select id="sync-source">${slotOptions}</select></label><label>目标账号<select id="sync-target">${targetOptions}</select></label></div><div class="sync-category-grid">${categoryOptions}</div><label class="checkbox workflow-check"><input id="sync-overwrite" type="checkbox" ${syncOverwrite ? "checked" : ""} /> 目标不同文件显示为 Update 并允许覆盖；关闭时标记 Conflict 且不写入</label><div class="button-row"><button class="secondary" value="preview">${icon("compare", 16)} 生成差异预览</button><button class="primary" value="execute" ${syncManifest ? "" : "disabled"}>${icon("sync", 16)} 执行已批准清单</button></div></form>${preview}` : '<div class="mode-limit">至少需要两个 SV2 账号槽位才能使用选择性同步。</div>';
+    const slotOptions = profiles?.slots.map((slot) => `<option value="${escapeHtml(slot.id)}" ${slot.id === syncSourceSlotId ? "selected" : ""}>${escapeHtml(slot.displayName)}${slot.isActive ? t("workflowCopy.currentDefault") : ""}</option>`).join("") ?? "";
+    const targetOptions = profiles?.slots.map((slot) => `<option value="${escapeHtml(slot.id)}" ${slot.id === syncTargetSlotId ? "selected" : ""}>${escapeHtml(slot.displayName)}${slot.isActive ? t("workflowCopy.currentDefault") : ""}</option>`).join("") ?? "";
+    const categoryOptions = syncCategories.map((category) => `<label class="sync-category"><input type="checkbox" name="sync-category" value="${category.id}" ${syncSelectedCategories.includes(category.id) ? "checked" : ""} /><span><strong>${escapeHtml(t(`workflowSyncCategories.${category.id}.label`))}</strong><small>${escapeHtml(t(`workflowSyncCategories.${category.id}.description`))}</small></span></label>`).join("");
+    const preview = syncManifest ? `<section class="sync-preview"><div class="section-heading"><div><h3>${t("workflowCopy.preWriteManifest")}</h3><p>${t("workflowCopy.manifestCount", { count: syncManifest.entries.length })}</p></div><span class="availability">${syncManifest.overwrite ? t("workflowCopy.updatesAllowed") : t("workflowCopy.keepConflictingFiles")}</span></div><div class="sync-entry-list">${syncManifest.entries.map((entry) => `<div><span class="sync-action ${entry.action}">${t(`workflowSyncAction.${entry.action}`)}</span><code>${escapeHtml(entry.relativePath)}</code><small>${entry.sourceSize} bytes</small></div>`).join("") || `<div class="empty-inline">${t("workflowCopy.noFilesToSyncInTheSelected")}</div>`}</div></section>` : "";
+    form = profiles && profiles.slots.length >= 2 ? `<div class="mode-limit">${t("workflowCopy.onlyAllowlistedDictionariesScriptsPresetsAndSafe")}</div><form id="selective-sync-form" class="workflow-form workflow-wide"><div class="workflow-pair"><label>${t("workflowCopy.sourceAccount")}<select id="sync-source">${slotOptions}</select></label><label>${t("workflowCopy.targetAccount")}<select id="sync-target">${targetOptions}</select></label></div><div class="sync-category-grid">${categoryOptions}</div><label class="checkbox workflow-check"><input id="sync-overwrite" type="checkbox" ${syncOverwrite ? "checked" : ""} /> ${t("workflowCopy.markDifferingTargetFilesAsUpdateAnd")}</label><div class="button-row"><button class="secondary" value="preview">${icon("compare", 16)} ${t("workflowCopy.previewDifferences")}</button><button class="primary" value="execute" ${syncManifest ? "" : "disabled"}>${icon("sync", 16)} ${t("workflowCopy.executeApprovedManifest")}</button></div></form>${preview}` : `<div class="mode-limit">${t("workflowCopy.selectiveSyncRequiresAtLeastTwoSv2")}</div>`;
   } else if (id === "retake-compare") {
-    form = `<div class="mode-limit">在 SynthV 中确认目标音符编号。每次写入前都会重新读取 Retake 上下文；新鲜度校验失败时会直接停止，不会盲写。</div><form id="retake-form" class="workflow-form workflow-wide"><div class="workflow-pair three"><label>轨道编号<input id="retake-track" type="number" min="1" value="1" required /></label><label>音符组编号<input id="retake-group" type="number" min="1" value="1" required /></label><label>音符编号<input id="retake-note" type="number" min="1" value="1" required /></label></div><div class="workflow-pair"><label>操作<select id="retake-operation"><option value="refresh">读取候选</option><option value="generate">生成新候选</option><option value="activate">切换到 Take</option><option value="delete">删除 Take</option></select></label><label>Take ID（切换/删除）<input id="retake-id" type="number" min="0" value="0" /></label></div><div class="retake-dimensions"><label class="checkbox"><input id="retake-duration" type="checkbox" checked /> 时值</label><label class="checkbox"><input id="retake-pitch" type="checkbox" checked /> 音高</label><label class="checkbox"><input id="retake-timbre" type="checkbox" checked /> 音色/发音</label><label class="checkbox"><input id="retake-activate" type="checkbox" /> 生成后立即启用</label></div><button class="primary" ${app.bridgeConnected ? "" : "disabled"}>${icon("compare", 16)} ${app.bridgeConnected ? "执行 Retake 操作" : "请先连接 Bridge"}</button></form>`;
+    form = `<div class="mode-limit">${t("workflowCopy.confirmTheTargetNoteNumberInSynthv")}</div><form id="retake-form" class="workflow-form workflow-wide"><div class="workflow-pair three"><label>${t("workflowCopy.trackNumber")}<input id="retake-track" type="number" min="1" value="1" required /></label><label>${t("workflowCopy.noteGroupNumber")}<input id="retake-group" type="number" min="1" value="1" required /></label><label>${t("workflowCopy.noteNumber")}<input id="retake-note" type="number" min="1" value="1" required /></label></div><div class="workflow-pair"><label>${t("workflowCopy.operation")}<select id="retake-operation"><option value="refresh">${t("workflowCopy.readCandidates")}</option><option value="generate">${t("workflowCopy.generateNewCandidates")}</option><option value="activate">${t("workflowCopy.activateTake")}</option><option value="delete">${t("workflowCopy.deleteTake")}</option></select></label><label>${t("workflowCopy.takeIdActivateDelete")}<input id="retake-id" type="number" min="0" value="0" /></label></div><div class="retake-dimensions"><label class="checkbox"><input id="retake-duration" type="checkbox" checked /> ${t("workflowCopy.duration2")}</label><label class="checkbox"><input id="retake-pitch" type="checkbox" checked /> ${t("workflowCopy.pitch")}</label><label class="checkbox"><input id="retake-timbre" type="checkbox" checked /> ${t("workflowCopy.timbrePronunciation")}</label><label class="checkbox"><input id="retake-activate" type="checkbox" /> ${t("workflowCopy.activateImmediatelyAfterGeneration")}</label></div><button class="primary" ${app.bridgeConnected ? "" : "disabled"}>${icon("compare", 16)} ${app.bridgeConnected ? t("workflowCopy.runRetakeOperation") : t("workflowCopy.connectBridgeFirst")}</button></form>`;
   } else if (id === "ab-audition") {
     const captureSupported = audioCaptureCapability?.supported === true;
     const targetOptions = audioCaptureTargets.map((target) => `<option value="${target.processId}" ${abProcessId === target.processId ? "selected" : ""}>PID ${target.processId} · ${escapeHtml(target.name)}</option>`).join("");
     const targetControl = !audioCaptureCapability
-      ? `<div class="mode-limit">正在检查 Windows 进程级音频捕获能力…</div>`
+      ? `<div class="mode-limit">${t("workflowCopy.checkingWindowsProcessAudioCaptureSupport")}</div>`
       : !captureSupported
         ? `<div class="mode-limit">${escapeHtml(audioCaptureCapability.detail)}</div>`
         : targetOptions
-      ? `<label>SynthV 实例<select id="ab-process"><option value="">自动（仅一个实例时）</option>${targetOptions}</select></label>`
-      : `<div class="mode-limit">没有发现 SynthV standalone 进程。请启动 SynthV 2 Pro 后刷新实例。</div>`;
-    form = `<div class="mode-limit">捕获器只接收所选 SynthV 进程树的输出。开始前必须停止播放；完成后会恢复原播放头。A 可复用，连续优化时只需重新捕获 B。</div>
+      ? `<label>${t("workflowCopy.synthvInstance")}<select id="ab-process"><option value="">${t("workflowCopy.automaticWhenOnlyOneInstanceIsRunning")}</option>${targetOptions}</select></label>`
+      : `<div class="mode-limit">${t("workflowCopy.noSynthvStandaloneProcessFoundStartSynthv")}</div>`;
+    form = `<div class="mode-limit">${t("workflowCopy.onlyOutputFromTheSelectedSynthvProcess")}</div>
       <form id="ab-capture-form" class="workflow-form workflow-wide">
-        <div class="workflow-pair">${targetControl}<label>片段标签<input id="ab-label" maxlength="40" value="局部优化" /></label></div>
-        <div class="workflow-pair"><label>起点（秒）<input id="ab-start" type="number" min="0" max="86400" step="0.01" value="${abStartSeconds}" required /></label><label>终点（秒）<input id="ab-end" type="number" min="0.01" max="86400" step="0.01" value="${abEndSeconds}" required /></label></div>
-        <div class="workflow-pair"><label>前置保护区（秒）<input id="ab-preroll" type="number" min="0" max="2" step="0.05" value="${abPreRollSeconds}" required /></label><label>后置保护区（秒）<input id="ab-postroll" type="number" min="0" max="2" step="0.05" value="${abPostRollSeconds}" required /></label></div>
-        <div class="button-row"><button type="button" class="secondary" data-refresh-capture-targets ${captureSupported ? "" : "disabled"}>${icon("sync", 15)} 刷新实例</button><button class="secondary" value="baseline" ${captureSupported && audioCaptureTargets.length ? "" : "disabled"}>${icon("audio", 15)} 捕获 A 基线</button><button class="primary" value="candidate" ${captureSupported && audioCaptureTargets.length ? "" : "disabled"}>${icon("play", 15)} 捕获 B 候选</button></div>
+        <div class="workflow-pair">${targetControl}<label>${t("workflowCopy.clipLabel")}<input id="ab-label" maxlength="40" value="${t("workflowCopy.localOptimization")}" /></label></div>
+        <div class="workflow-pair"><label>${t("workflowCopy.startSeconds")}<input id="ab-start" type="number" min="0" max="86400" step="0.01" value="${abStartSeconds}" required /></label><label>${t("workflowCopy.endSeconds")}<input id="ab-end" type="number" min="0.01" max="86400" step="0.01" value="${abEndSeconds}" required /></label></div>
+        <div class="workflow-pair"><label>${t("workflowCopy.preRollSeconds")}<input id="ab-preroll" type="number" min="0" max="2" step="0.05" value="${abPreRollSeconds}" required /></label><label>${t("workflowCopy.postRollSeconds")}<input id="ab-postroll" type="number" min="0" max="2" step="0.05" value="${abPostRollSeconds}" required /></label></div>
+        <div class="button-row"><button type="button" class="secondary" data-refresh-capture-targets ${captureSupported ? "" : "disabled"}>${icon("sync", 15)} ${t("workflowCopy.refreshInstances")}</button><button class="secondary" value="baseline" ${captureSupported && audioCaptureTargets.length ? "" : "disabled"}>${icon("audio", 15)} ${t("workflowCopy.captureBaselineA")}</button><button class="primary" value="candidate" ${captureSupported && audioCaptureTargets.length ? "" : "disabled"}>${icon("play", 15)} ${t("workflowCopy.captureCandidateB")}</button></div>
       </form>
-      <div class="ab-capture-paths"><div><span>A 基线</span><code>${escapeHtml(abBaselinePath || "尚未捕获")}</code></div><div><span>B 候选</span><code>${escapeHtml(abCandidatePath || "尚未捕获")}</code></div></div>
-      <form id="ab-compare-form" class="workflow-form workflow-wide"><div class="workflow-pair"><label>A WAV 路径<input id="ab-baseline-path" required value="${escapeHtml(abBaselinePath)}" /></label><label>B WAV 路径<input id="ab-candidate-path" required value="${escapeHtml(abCandidatePath)}" /></label></div><label>最大自动对齐偏移（ms）<input id="ab-max-lag" type="number" min="0" max="1000" step="1" value="250" /></label><button class="primary">${icon("compare", 16)} 对齐并比较 A/B</button></form>`;
+      <div class="ab-capture-paths"><div><span>${t("workflowCopy.baselineA")}</span><code>${escapeHtml(abBaselinePath || t("workflowCopy.notCaptured"))}</code></div><div><span>${t("workflowCopy.candidateB")}</span><code>${escapeHtml(abCandidatePath || t("workflowCopy.notCaptured"))}</code></div></div>
+      <form id="ab-compare-form" class="workflow-form workflow-wide"><div class="workflow-pair"><label>${t("workflowCopy.aWavPath")}<input id="ab-baseline-path" required value="${escapeHtml(abBaselinePath)}" /></label><label>${t("workflowCopy.bWavPath")}<input id="ab-candidate-path" required value="${escapeHtml(abCandidatePath)}" /></label></div><label>${t("workflowCopy.maximumAutomaticAlignmentOffsetMs")}<input id="ab-max-lag" type="number" min="0" max="1000" step="1" value="250" /></label><button class="primary">${icon("compare", 16)} ${t("workflowCopy.alignAndCompareAB")}</button></form>`;
   } else if (id === "pronunciation-doctor") {
-    form = `<div class="mode-limit">可检查已保存工程，也可直接粘贴歌词；两种输入只填写一种。首版聚焦空歌词、多音节拥挤、混合文字和极短音符。</div><form id="pronunciation-form" class="workflow-form workflow-wide"><label>.svp 工程路径（可选）<input id="pronunciation-project" placeholder="填写工程路径时不要再粘贴歌词" /></label><label>歌词文本（可选）<textarea id="pronunciation-lyrics" rows="8" placeholder="逐行粘贴歌词；填写歌词时不要再填写工程路径"></textarea></label><button class="primary">${icon("pronunciation", 16)} 运行发音诊断</button></form>`;
+    form = `<div class="mode-limit">${t("workflowCopy.inspectASavedProjectOrPasteLyrics")}</div><form id="pronunciation-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.svpProjectPathOptional")}<input id="pronunciation-project" placeholder="${t("workflowCopy.doNotAlsoPasteLyricsWhenProviding")}" /></label><label>${t("workflowCopy.lyricTextOptional")}<textarea id="pronunciation-lyrics" rows="8" placeholder="${t("workflowCopy.pasteLyricsLineByLineLeaveThe")}"></textarea></label><button class="primary">${icon("pronunciation", 16)} ${t("workflowCopy.runPronunciationDiagnostics")}</button></form>`;
   } else if (id === "render-review") {
-    form = `<div class="mode-limit">复用本地 pi-audio 探测结果检查静音、时长、BPM 与音高事件；不会上传渲染音频。</div><form id="render-review-form" class="workflow-form workflow-wide"><label>渲染音频路径<input id="render-audio" required /></label><div class="workflow-pair"><label>预期时长（秒，可选）<input id="render-duration" type="number" min="0.01" step="0.01" /></label><label>预期 BPM（可选）<input id="render-bpm" type="number" min="1" max="1000" step="0.01" /></label></div><label class="checkbox workflow-check"><input id="render-notes" type="checkbox" /> 要求探测到音高事件</label>${ai ? '<label class="checkbox workflow-check"><input id="render-advanced" type="checkbox" /> 启用高级音频分析</label>' : ""}<button class="primary">${icon("shield", 16)} 开始交付复检</button></form>`;
+    form = `<div class="mode-limit">${t("workflowCopy.usesLocalPiAudioResultsToCheck")}</div><form id="render-review-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.renderedAudioPath")}<input id="render-audio" required /></label><div class="workflow-pair"><label>${t("workflowCopy.expectedDurationSecondsOptional")}<input id="render-duration" type="number" min="0.01" step="0.01" /></label><label>${t("workflowCopy.expectedBpmOptional")}<input id="render-bpm" type="number" min="1" max="1000" step="0.01" /></label></div><label class="checkbox workflow-check"><input id="render-notes" type="checkbox" /> ${t("workflowCopy.requireDetectedPitchEvents")}</label>${ai ? `<label class="checkbox workflow-check"><input id="render-advanced" type="checkbox" /> ${t("workflowCopy.enableAdvancedAudioAnalysis")}</label>` : ""}<button class="primary">${icon("shield", 16)} ${t("workflowCopy.startDeliveryReview")}</button></form>`;
   } else {
     const catalogFeature = features.find((item) => item.id === id);
-    form = catalogFeature ? `<div class="mode-limit"><strong>能力入口已就绪</strong><br />${escapeHtml(catalogFeature.base.join(" · "))}。后端工作流接入后会在这里显示参数与执行结果；当前不会对工程或音频执行写入。</div>` : "";
+    form = catalogFeature ? `<div class="mode-limit"><strong>${t("workflowCopy.toolEntryReady")}</strong><br />${escapeHtml(catalogFeature.base.join(" · "))}${t("workflowCopy.parametersAndResultsWillAppearHereWhen")}</div>` : "";
   }
   const result = workflowResult ? renderWorkflowResult(workflowResult, ai) : "";
   return `<section class="workflow-panel"><div class="workflow-heading"><span class="feature-icon ${feature?.accent ?? "violet"}">${icon(feature?.icon ?? "toolbox", 25)}</span><div><span class="eyebrow">${escapeHtml(group?.title ?? t("workflow.active"))}</span><h2>${escapeHtml(feature?.title ?? t("workflow.defaultTitle"))}</h2><p>${escapeHtml(feature?.description ?? "")}</p></div></div>${form}${result}</section>`;
@@ -2473,7 +2474,7 @@ function wireForms(): void {
     void run(async () => {
       const profile = await api.learnTuningProfile(document.querySelector<HTMLInputElement>("#tuning-audio")?.value.trim() ?? "", document.querySelector<HTMLInputElement>("#tuning-voice")?.value.trim() ?? "");
       tuningProfiles = [...tuningProfiles.filter((item) => item.normalizedVoiceName !== profile.normalizedVoiceName), profile].sort((left, right) => left.voiceName.localeCompare(right.voiceName));
-      notice = `已更新 ${profile.voiceName} 的调声档案。`;
+      notice = t("workflowCopy.profileUpdated", { voice: profile.voiceName });
     });
   });
   document.querySelector<HTMLFormElement>("#tuning-apply-form")?.addEventListener("submit", (event) => {
@@ -2500,7 +2501,7 @@ function wireForms(): void {
         advanced: true,
       });
       mediaTasks = [...mediaTasks.filter((item) => item.id !== task.id), task];
-      notice = "完整 Cover 已加入可取消任务队列。";
+      notice = t("workflowCopy.fullCoverAddedToTheCancellableTask");
     });
   });
   document.querySelector<HTMLFormElement>("#media-import-form")?.addEventListener("submit", (event) => {
@@ -2514,10 +2515,10 @@ function wireForms(): void {
       if (action === "import") {
         const task = await api.queueMediaImport(source, rightsConfirmed);
         mediaTasks = [...mediaTasks.filter((item) => item.id !== task.id), task];
-        notice = "平台音频导入已加入可取消任务队列。";
+        notice = t("workflowCopy.platformAudioImportAddedToTheCancellable");
       } else {
         mediaSourcePreview = await api.previewMediaSource(source);
-        notice = `已读取《${mediaSourcePreview.title}》的来源元数据。`;
+        notice = t("workflowCopy.metadataLoaded", { title: mediaSourcePreview.title });
       }
     });
   });
@@ -2533,7 +2534,7 @@ function wireForms(): void {
     void run(async () => {
       const task = await api.queueMediaSeparation(audioPath);
       mediaTasks = [...mediaTasks.filter((item) => item.id !== task.id), task];
-      notice = "人声伴奏分离已加入可取消任务队列。";
+      notice = t("workflowCopy.vocalInstrumentalSeparationAddedToTheCancellable");
     });
   });
   document.querySelector<HTMLFormElement>("#score-to-synthv-form")?.addEventListener("submit", (event) => {
@@ -2582,7 +2583,7 @@ function wireForms(): void {
       pipelineImportOptions.hidden = !enabled;
       pipelineImportOptions.querySelectorAll<HTMLInputElement>("input").forEach((input) => { input.disabled = !enabled; });
     }
-    if (pipelineSubmit) pipelineSubmit.innerHTML = `${icon("pipeline", 16)} ${enabled ? "提取并导入 SynthV" : "提取并导出 MIDI"}`;
+    if (pipelineSubmit) pipelineSubmit.innerHTML = `${icon("pipeline", 16)} ${enabled ? t("workflowCopy.extractAndImportIntoSynthv") : t("workflowCopy.extractAndExportMidi")}`;
   };
   pipelineImport?.addEventListener("change", syncPipelineMode);
   syncPipelineMode();
@@ -2612,7 +2613,7 @@ function wireForms(): void {
     void run(async () => {
       const options = JSON.parse(optionsText) as Record<string, unknown>;
       const batch = await api.runBatchWorkflow(recipeId, inputPaths, options);
-      workflowResult = { kind: "batch-recipes", summary: `批处理完成 ${batch.completed} 项，失败 ${batch.failed} 项。`, data: batch as unknown as Record<string, unknown> };
+      workflowResult = { kind: "batch-recipes", summary: t("workflowCopy.batchSummary", { completed: batch.completed, failed: batch.failed }), data: batch as unknown as Record<string, unknown> };
       notice = workflowResult.summary;
     });
   });
@@ -2629,14 +2630,14 @@ function wireForms(): void {
     syncOverwrite = overwrite;
     void run(async () => {
       if (submitter?.value === "execute") {
-        if (!syncManifest) throw new Error("请先生成并检查同步清单。");
+        if (!syncManifest) throw new Error(t("workflowCopy.generateAndReviewTheSyncManifestFirst"));
         const result = await api.executeSv2SelectiveSync(sourceSlotId, targetSlotId, categories, syncManifest);
-        workflowResult = { kind: "profile-selective-sync", summary: `选择性同步完成：复制 ${result.copied}、更新 ${result.updated}、跳过 ${result.skipped}、冲突 ${result.conflicts}。`, data: result as unknown as Record<string, unknown> };
+        workflowResult = { kind: "profile-selective-sync", summary: t("workflowCopy.syncSummary", { copied: result.copied, updated: result.updated, skipped: result.skipped, conflicts: result.conflicts }), data: result as unknown as Record<string, unknown> };
         notice = workflowResult.summary;
         syncManifest = undefined;
       } else {
         syncManifest = await api.previewSv2SelectiveSync(sourceSlotId, targetSlotId, categories, overwrite);
-        notice = `同步预览已生成：${syncManifest.entries.length} 个文件，尚未写入。`;
+        notice = t("workflowCopy.syncPreviewSummary", { count: syncManifest.entries.length });
       }
     });
   });
@@ -2664,7 +2665,7 @@ function wireForms(): void {
     abEndSeconds = Number(document.querySelector<HTMLInputElement>("#ab-end")?.value ?? "5");
     abPreRollSeconds = Number(document.querySelector<HTMLInputElement>("#ab-preroll")?.value ?? "0.4");
     abPostRollSeconds = Number(document.querySelector<HTMLInputElement>("#ab-postroll")?.value ?? "0.25");
-    const label = document.querySelector<HTMLInputElement>("#ab-label")?.value.trim() || "局部优化";
+    const label = document.querySelector<HTMLInputElement>("#ab-label")?.value.trim() || t("workflowCopy.localOptimization");
     void run(async () => {
       workflowResult = await api.captureSynthvClip(abProcessId, abStartSeconds, abEndSeconds, abPreRollSeconds, abPostRollSeconds, `${label}-${slot === "baseline" ? "A" : "B"}`);
       if (slot === "baseline") abBaselinePath = workflowResult.outputPath ?? "";
@@ -2961,7 +2962,7 @@ document.addEventListener("error", (event) => {
     if (!audioPreviewUrl) return;
     audioPreviewUrl = "";
   }
-  audioUiError = "当前 WebView 无法分段读取、文件过大或格式不支持；处理不受影响；结果可打开位置/另存为。";
+  audioUiError = t("workflowCopy.previewIsUnavailableBecauseThisWebviewCannot");
   render();
 }, true);
 document.addEventListener("keydown", (event) => {
@@ -3021,7 +3022,7 @@ document.addEventListener("click", (event) => {
       audioJob = merged;
       if (isTerminalAudioJob(merged)) {
         clearAudioJobPoll();
-        audioUiNotice = merged.status === "cancelled" ? "音频任务已取消。" : "音频任务已结束。";
+        audioUiNotice = merged.status === "cancelled" ? t("workflowCopy.audioTaskCancelled") : t("workflowCopy.audioTaskEnded");
       } else {
         scheduleAudioJobPoll(jobId);
       }
@@ -3040,12 +3041,12 @@ document.addEventListener("click", (event) => {
     const analysisGeneration = ++audioLoudnessAnalysisGeneration;
     audioLoudnessAnalysisInFlight = true;
     audioUiError = "";
-    audioUiNotice = "正在检查 EBU R128 响度…";
+    audioUiNotice = t("workflowCopy.checkingEbuR128Loudness");
     render();
     void audioApi.analyzeLoudness(inputPath).then((report) => {
       if (generation !== audioInputGeneration || audioPrepareForm.inputPath !== inputPath) return;
       audioLoudness = report;
-      audioUiNotice = "响度检查完成。";
+      audioUiNotice = t("workflowCopy.loudnessCheckComplete");
       render();
     }).catch((reason) => {
       if (generation !== audioInputGeneration || audioPrepareForm.inputPath !== inputPath) return;
@@ -3092,13 +3093,13 @@ document.addEventListener("click", (event) => {
       ? audioJob.outputPath
       : undefined;
     if (!displayPath) {
-      audioUiError = "此结果没有可复制的显示路径。";
+      audioUiError = t("workflowCopy.thisResultHasNoDisplayPathTo");
       render();
       return;
     }
     if (!beginAudioArtifactAction()) return;
     void navigator.clipboard.writeText(displayPath).then(() => {
-      audioUiNotice = "路径已复制到剪贴板。";
+      audioUiNotice = t("workflowCopy.pathCopiedToClipboard");
     }).catch((reason) => { audioUiError = formatError(reason); }).finally(finishAudioArtifactAction);
     return;
   }
@@ -3106,8 +3107,8 @@ document.addEventListener("click", (event) => {
     if (!beginAudioArtifactAction()) return;
     void audioApi.saveAudioArtifactAs(target.dataset.saveAudioArtifact).then((result) => {
       audioUiNotice = result.saved
-        ? `已安全另存为${result.fileName ? `“${result.fileName}”` : "新文件"}。`
-        : "已取消另存为。";
+        ? t("workflowCopy.savedAs", { file: result.fileName ?? t("workflowCopy.newFile") })
+        : t("workflowCopy.saveAsCancelled");
     }).catch((reason) => { audioUiError = formatError(reason); }).finally(finishAudioArtifactAction);
     return;
   }
@@ -3181,8 +3182,8 @@ document.addEventListener("click", (event) => {
       notice = !audioCaptureCapability.supported
         ? audioCaptureCapability.detail
         : audioCaptureTargets.length
-          ? `发现 ${audioCaptureTargets.length} 个 SynthV standalone 实例。`
-          : "没有发现运行中的 SynthV standalone 实例。";
+          ? t("workflowCopy.instancesFound", { count: audioCaptureTargets.length })
+          : t("workflowCopy.noRunningSynthvStandaloneInstancesFound");
     });
     return;
   }
@@ -3704,7 +3705,7 @@ document.addEventListener("click", (event) => {
     void run(async () => {
       const task = await api.cancelMediaTask(target.dataset.cancelMediaTask ?? "");
       mediaTasks = mediaTasks.map((item) => item.id === task.id ? task : item);
-      notice = task.status === "cancelled" ? "媒体任务已取消。" : "正在终止媒体进程树。";
+      notice = task.status === "cancelled" ? t("workflowCopy.mediaTaskCancelled") : t("workflowCopy.stoppingTheMediaProcessTree");
     });
     return;
   }
@@ -3712,7 +3713,7 @@ document.addEventListener("click", (event) => {
     void run(async () => {
       const task = await api.retryMediaTask(target.dataset.retryMediaTask ?? "");
       mediaTasks = mediaTasks.map((item) => item.id === task.id ? task : item);
-      notice = "媒体任务已重新加入队列。";
+      notice = t("workflowCopy.mediaTaskAddedToTheQueueAgain");
     });
     return;
   }
@@ -3763,7 +3764,7 @@ async function listenForAudioPreparationDrops(): Promise<void> {
       if (event.payload.type !== "drop") return;
       const paths = event.payload.paths;
       if (paths.length !== 1) {
-        audioUiError = "一次只能拖放一个音频文件。";
+        audioUiError = t("workflowCopy.onlyOneAudioFileCanBeDropped");
         render();
         return;
       }

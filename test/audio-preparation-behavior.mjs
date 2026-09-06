@@ -9,6 +9,15 @@ import { JSDOM } from "../src/PiDesktop.Tauri/node_modules/jsdom/lib/api.js";
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const desktopRoot = join(repositoryRoot, "src", "PiDesktop.Tauri");
 const mainPath = join(desktopRoot, "src", "main.ts");
+let audioMessages;
+vm.runInNewContext(readFileSync(join(desktopRoot, "src", "i18nWorkflows.ts"), "utf8").replace(/^import .*;\r?\n/gm, ""), {
+  addMessages(language, messages) { if (language === "zh-CN") audioMessages = messages; },
+});
+const translate = (key) => {
+  const value = key.split(".").reduce((message, part) => message?.[part], audioMessages);
+  assert.equal(typeof value, "string", `Missing audio message ${key}`);
+  return value;
+};
 
 function deferred() {
   let resolve;
@@ -130,7 +139,7 @@ module.exports = (function (__audioApi, __window) {
     clearTimeout(timer) { timers[timer] = undefined; },
   };
   const module = { exports: {} };
-  vm.runInNewContext(output, { module, exports: module.exports, __audioApi: audioApi, __window: window, __document: document, console });
+  vm.runInNewContext(output, { module, exports: module.exports, __audioApi: audioApi, __window: window, __document: document, console, t: translate });
   return {
     ...module.exports,
     fireNextTimer() { const callback = timers.find(Boolean); assert.ok(callback, "expected a pending audio poll"); callback(); },
