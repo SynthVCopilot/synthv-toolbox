@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
@@ -128,7 +128,6 @@ impl ProjectBackupStore {
             },
         );
         if let Err(error) = self.save_registry() {
-            self.registry.projects.remove(&key);
             self.last_error = Some(error.clone());
             return Err(error);
         }
@@ -138,6 +137,10 @@ impl ProjectBackupStore {
 
     pub(crate) fn process_once(&mut self) {
         if self.registry_blocked.is_some() {
+            return;
+        }
+        if let Err(error) = self.save_registry() {
+            self.last_error = Some(error);
             return;
         }
         let keys = self.registry.projects.keys().cloned().collect::<Vec<_>>();
@@ -339,11 +342,22 @@ fn snapshot_is_trusted(root: &Path, snapshot_path: &str, expected_hash: &str) ->
     let Ok(value) = serde_json::from_str::<Value>(&metadata) else {
         return false;
     };
-    value.get("sourceSha256").and_then(Value::as_str) == Some(expected_hash)
+    let source_size = value.get("sourceSize").and_then(Value::as_u64);
+    let metadata_valid = value.get("sourceSha256").and_then(Value::as_str) == Some(expected_hash)
         && value
             .get("snapshotPath")
             .and_then(Value::as_str)
             .is_some_and(|path| normalize_path(Path::new(path)) == snapshot)
+        && value.get("sourcePath").and_then(Value::as_str).is_some()
+        && value.get("label").and_then(Value::as_str).is_some()
+        && value.get("createdAtUtc").and_then(Value::as_str).is_some()
+        && value.get("id").and_then(Value::as_str).is_some_and(|id| {
+            directory.file_name().and_then(|name| name.to_str()) == Some(id)
+                && Uuid::parse_str(id).is_ok()
+        });
+    metadata_valid
+        && source_size == fs::metadata(&snapshot).ok().map(|metadata| metadata.len())
+        && sha256_limited(&snapshot).is_ok_and(|hash| hash == expected_hash)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -365,7 +379,7 @@ fn read_stable_svp(path: &Path) -> Result<(Vec<u8>, FileStamp), String> {
     if before.len > MAX_PROJECT_BYTES {
         return Err("工程超过 128 MiB 自动备份限制。".to_string());
     }
-    let bytes = fs::read(path).map_err(|error| format!("无法读取工程：{error}"))?;
+    let bytes = read_limited(path)?;
     let after = file_stamp(path)?;
     if before != after {
         return Err("工程正在写入，稍后会重试自动备份。".to_string());
@@ -380,6 +394,22 @@ fn read_stable_svp(path: &Path) -> Result<(Vec<u8>, FileStamp), String> {
         return Err("工程 JSON 必须是对象，稍后会重试自动备份。".to_string());
     }
     Ok((bytes, after))
+}
+
+fn read_limited(path: &Path) -> Result<Vec<u8>, String> {
+    let file = fs::File::open(path).map_err(|error| format!("无法读取工程：{error}"))?;
+    let mut bytes = Vec::new();
+    file.take(MAX_PROJECT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("无法读取工程：{error}"))?;
+    if bytes.len() as u64 > MAX_PROJECT_BYTES {
+        return Err("工程超过 128 MiB 自动备份限制。".to_string());
+    }
+    Ok(bytes)
+}
+
+fn sha256_limited(path: &Path) -> Result<String, String> {
+    Ok(format!("{:x}", Sha256::digest(read_limited(path)?)))
 }
 
 pub(crate) enum Message {

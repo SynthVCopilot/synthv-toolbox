@@ -136,10 +136,13 @@ fn retries_a_temporary_registry_write_failure_without_registering_unsaved_projec
     fs::remove_file(root.join("project-backups.json")).unwrap();
     fs::create_dir(root.join("project-backups.json")).unwrap();
     assert!(store.observe_path(&second.to_string_lossy()).is_err());
-    assert_eq!(store.state().projects.len(), 1);
-    fs::remove_dir(root.join("project-backups.json")).unwrap();
-    assert!(store.observe_path(&second.to_string_lossy()).unwrap());
     assert_eq!(store.state().projects.len(), 2);
+    fs::remove_dir(root.join("project-backups.json")).unwrap();
+    store.process_once();
+    assert_eq!(store.state().projects.len(), 2);
+    let registry: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("project-backups.json")).unwrap()).unwrap();
+    assert_eq!(registry["projects"].as_object().unwrap().len(), 2);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -154,6 +157,22 @@ fn never_overwrites_a_corrupt_registry() {
     assert!(store.observe_path(&source.to_string_lossy()).is_err());
     assert_eq!(fs::read_to_string(registry).unwrap(), "not json");
     assert!(store.state().last_error.is_some());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn replaces_a_corrupt_snapshot_when_source_is_unchanged() {
+    let root = temporary_root("corrupt-snapshot");
+    let source = root.join("song.svp");
+    project(&source, 1);
+    let mut store = ProjectBackupStore::open(root.clone());
+    store.observe_path(&source.to_string_lossy()).unwrap();
+    store.process_once();
+    let snapshot = checkpoint_paths(&root)[0].join("project.svp");
+    fs::write(snapshot, br#"{"truncated":true}"#).unwrap();
+    store.process_once();
+    assert_eq!(store.state().projects[0].backup_count, 2);
+    assert_eq!(checkpoint_paths(&root).len(), 2);
     let _ = fs::remove_dir_all(root);
 }
 
