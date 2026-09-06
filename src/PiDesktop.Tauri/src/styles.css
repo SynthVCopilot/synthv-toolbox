@@ -863,10 +863,12 @@ button.full { width: 100%; }
 .warning-card p, .quiet-panel p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 
 .component-list, .mcp-list { display: flex; flex-direction: column; gap: 8px; }
-.ffmpeg-settings { margin-bottom: 18px; }
 .ffmpeg-config-form { display: flex; flex-direction: column; gap: 10px; }
 .ffmpeg-config-form label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 11px; }
 .ffmpeg-config-form input { width: 100%; min-width: 0; }
+.component-extra { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.component-extra > strong { font-size: 11px; }
+.component-extra > small { color: var(--muted); font-size: 10px; }
 .component-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 15px; padding: 16px; border-radius: 8px; }
 .component-status { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 7px; color: var(--subtle); background: var(--surface-subtle); }
 .component-status.ready { color: var(--success); background: rgba(15,123,69,.1); }

@@ -166,6 +166,9 @@ let pendingInstanceTermination: SynthVProcess | undefined;
 let pendingAccountIndicatorConsent: PendingAccountIndicatorConsent | undefined;
 let removingComponentId: string | undefined;
 let ffmpegDirectory: string | null | undefined;
+let ffmpegDirectoryDraft: string | undefined;
+let ffmpegConfigurationLoading = false;
+let ffmpegConfigurationGeneration = 0;
 let aiProviderPickerOpen = false;
 let modelAuthDialog: ReturnType<typeof mountModelAuthDialog> | undefined;
 let downloadPollTimer: number | undefined;
@@ -2125,8 +2128,10 @@ function renderComponents(): string {
       ${item.status === "queued" ? `<button class="secondary compact" data-cancel-component-task="${escapeHtml(item.id)}">取消</button>` : ["failed", "cancelled"].includes(item.status) ? `<button class="secondary compact" data-retry-component-task="${escapeHtml(item.id)}">重试</button>` : ""}
     </article>`).join("")}</div>
   </section>` : "";
-  const ffmpegControls = `<section class="panel ffmpeg-settings"><div class="section-heading"><div><h2>FFmpeg 路径</h2><p>可选择本地目录；清除后自动使用 PATH、受管版本或内置版本。</p></div></div><form id="ffmpeg-config-form" class="ffmpeg-config-form"><label>本地目录<input id="ffmpeg-directory" name="directory" value="${escapeHtml(ffmpegDirectory ?? "")}" placeholder="选择包含 FFmpeg 的目录" /></label><div class="button-row"><button class="secondary" type="button" data-pick-ffmpeg-directory>选择目录</button><button class="primary" type="submit">保存路径</button><button class="secondary" type="button" data-clear-ffmpeg-directory ${ffmpegDirectory ? "" : "disabled"}>清除选择</button><button class="secondary" type="button" data-open-ffmpeg-download>手动下载</button></div></form></section>`;
-  return `${queue}${ffmpegControls}<div class="section-heading"><div><h2>本地组件</h2><p>下载任务会加入队列；无固定来源与 SHA-256 的组件会拒绝安装。</p></div></div>
+  const ffmpegControlsDisabled = busy || ffmpegConfigurationLoading;
+  const ffmpegDirectoryValue = ffmpegDirectoryDraft ?? ffmpegDirectory ?? "";
+  const ffmpegControls = `<form id="ffmpeg-config-form" class="ffmpeg-config-form"><label>本地目录<input id="ffmpeg-directory" name="directory" value="${escapeHtml(ffmpegDirectoryValue)}" placeholder="选择包含 FFmpeg 的目录" ${ffmpegControlsDisabled ? "disabled" : ""} /></label><div class="button-row"><button class="secondary" type="button" data-pick-ffmpeg-directory ${ffmpegControlsDisabled ? "disabled" : ""}>选择目录</button><button class="primary" type="submit" ${ffmpegControlsDisabled ? "disabled" : ""}>保存路径</button><button class="secondary" type="button" data-clear-ffmpeg-directory ${ffmpegControlsDisabled || !ffmpegDirectory ? "disabled" : ""}>清除选择</button><button class="secondary" type="button" data-open-ffmpeg-download ${ffmpegControlsDisabled ? "disabled" : ""}>手动下载</button></div></form>`;
+  return `${queue}<div class="section-heading"><div><h2>本地组件</h2><p>下载任务会加入队列；无固定来源与 SHA-256 的组件会拒绝安装。</p></div></div>
     <div class="component-list">${app.components.map((component) => {
       const task = app?.downloads.find((item) => item.componentId === component.id && ["queued", "downloading", "installing"].includes(item.status));
       const isRemoving = removingComponentId === component.id;
@@ -2150,7 +2155,8 @@ function renderComponents(): string {
       } else {
         actionButton = `<button class="secondary" disabled>当前平台不可用</button>`;
       }
-      return `<article class="component-row"><span class="component-status ${component.installed || component.downloaded ? "ready" : ""}">${component.installed ? icon("check", 18) : icon("download", 18)}</span><div><h3>${escapeHtml(component.displayName)}</h3><p>${escapeHtml(component.description)}</p></div>${actionButton}</article>`;
+      const extra = component.id === "ffmpeg" ? `<div class="component-extra"><strong>FFmpeg 来源</strong><small>可选本地目录；清除后自动使用 PATH、受管版本或内置版本。</small>${ffmpegControls}</div>` : "";
+      return `<article class="component-row"><span class="component-status ${component.installed || component.downloaded ? "ready" : ""}">${component.installed ? icon("check", 18) : icon("download", 18)}</span><div><h3>${escapeHtml(component.displayName)}</h3><p>${escapeHtml(component.description)}</p>${extra}</div>${actionButton}</article>`;
     }).join("")}</div>`;
 }
 
@@ -2791,8 +2797,10 @@ function wireForms(): void {
       const result = await api.setFfmpegDirectory(directory || null);
       setFeedback(result);
       if (result.succeeded) {
-        const configuration = await api.getFfmpegConfiguration();
-        ffmpegDirectory = configuration.directory;
+        ffmpegDirectory = directory || null;
+        ffmpegDirectoryDraft = undefined;
+        await refresh();
+        refreshAudioRuntimeStatus();
       }
     });
   });
@@ -2862,6 +2870,10 @@ async function withAiProviderStateRefresh<T>(action: () => Promise<T>): Promise<
 
 document.addEventListener("input", (event) => {
   const target = event.target as HTMLElement;
+  if (target.id === "ffmpeg-directory") {
+    ffmpegDirectoryDraft = (target as HTMLInputElement).value;
+    return;
+  }
   if (target.closest(".audio-preparation")) {
     syncAudioPreparationFormsFromDom();
     return;
@@ -3390,15 +3402,22 @@ document.addEventListener("click", (event) => {
     if (enteringAccounts || leavingAccounts) accountPageGeneration += 1;
     page = targetPage;
     if (enteringComponents) {
+      const generation = ++ffmpegConfigurationGeneration;
       ffmpegDirectory = undefined;
+      ffmpegDirectoryDraft = undefined;
+      ffmpegConfigurationLoading = true;
       void api.getFfmpegConfiguration().then((configuration) => {
+        if (generation !== ffmpegConfigurationGeneration) return;
         if (page !== "components") return;
         ffmpegDirectory = configuration.directory;
+        ffmpegConfigurationLoading = false;
         render();
       }).catch((reason) => {
+        if (generation !== ffmpegConfigurationGeneration) return;
         if (page !== "components") return;
         error = formatError(reason);
         ffmpegDirectory = null;
+        ffmpegConfigurationLoading = false;
         render();
       });
     }
@@ -3657,6 +3676,7 @@ document.addEventListener("click", (event) => {
   if (target.hasAttribute("data-pick-ffmpeg-directory")) {
     void api.pickDirectory().then((directory) => {
       if (!directory) return;
+      ffmpegDirectoryDraft = directory;
       const input = document.querySelector<HTMLInputElement>("#ffmpeg-directory");
       if (input) input.value = directory;
     }).catch((reason) => {
@@ -3670,7 +3690,12 @@ document.addEventListener("click", (event) => {
     void run(async () => {
       const result = await api.setFfmpegDirectory(null);
       setFeedback(result);
-      if (result.succeeded) ffmpegDirectory = null;
+      if (result.succeeded) {
+        ffmpegDirectory = null;
+        ffmpegDirectoryDraft = undefined;
+        await refresh();
+        refreshAudioRuntimeStatus();
+      }
     });
     return;
   }
