@@ -1,3 +1,4 @@
+import "./i18nCopilot";
 import "./i18nWorkflows";
 import "./styles.css";
 import "./i18nCommon";
@@ -2084,17 +2085,17 @@ function renderCopilot(): string {
   const messages = conversation?.messages.filter((message) => message.role === "user" || message.role === "assistant") ?? [];
   const approvals = fileApprovals.length ? `<section class="file-approvals"><strong>${t("copilot.fileApproval")}</strong>${fileApprovals.map((item) => `<article><code>${escapeHtml(item.path)}</code><small>${escapeHtml(item.purpose)}</small><button class="primary compact" data-approve-file="${escapeHtml(item.id)}">${t("copilot.approve")}</button><button class="secondary compact" data-deny-file="${escapeHtml(item.id)}">${t("copilot.deny")}</button></article>`).join("")}</section>` : "";
   const provider = activeAiProvider();
-  const providerName = provider ? aiProviderDisplayName(provider) : "尚未选择提供商";
-  const providerModel = provider?.model || "选择模型";
+  const providerName = provider ? aiProviderDisplayName(provider) : t("copilot.noProvider");
+  const providerModel = provider?.model || t("copilot.chooseModel");
   const providerStatus = provider
-    ? `${provider.accounts.filter((account) => account.authorized).length} 个 OAuth · ${provider.apiKeys.length} 个 API Key`
-    : "未配置连接";
+    ? t("copilot.connectionCounts", { oauth: provider.accounts.filter((account) => account.authorized).length, keys: provider.apiKeys.length })
+    : t("copilot.noConnection");
   return `<div class="copilot-layout">
-    <aside class="sessions-panel"><div class="sessions-panel-head"><button class="primary full" data-new-conversation>${icon("plus", 17)} ${t("copilot.newConversation")}</button><span class="nav-label">${t("copilot.history")}</span></div><div class="session-list">${conversations.length ? conversations.map((item) => `<button class="session-item ${conversation?.id === item.id ? "active" : ""}" data-conversation="${escapeHtml(item.id)}"><strong>${escapeHtml(item.title)}</strong><small>${item.messageCount} 条消息 · ${escapeHtml(item.updatedAt.slice(0, 10))}</small></button>`).join("") : `<p class="empty-small">${t("copilot.emptyHistory")}</p>`}</div></aside>
+    <aside class="sessions-panel"><div class="sessions-panel-head"><button class="primary full" data-new-conversation>${icon("plus", 17)} ${t("copilot.newConversation")}</button><span class="nav-label">${t("copilot.history")}</span></div><div class="session-list">${conversations.length ? conversations.map((item) => `<button class="session-item ${conversation?.id === item.id ? "active" : ""}" data-conversation="${escapeHtml(item.id)}"><strong>${escapeHtml(item.title)}</strong><small>${t("copilot.messageCount", { count: item.messageCount })} · ${escapeHtml(item.updatedAt.slice(0, 10))}</small></button>`).join("") : `<p class="empty-small">${t("copilot.emptyHistory")}</p>`}</div></aside>
     <section class="chat-panel">
-      <div class="chat-header"><div class="chat-title"><strong>${escapeHtml(conversation?.title ?? "新对话")}</strong><small>Copilot 只会调用已启用的能力</small></div><div class="chat-header-actions" aria-label="对话工具栏"><button type="button" class="chat-model-button" data-open-ai-provider-picker aria-label="选择供应商和模型；当前为 ${escapeHtml(providerName)} ${escapeHtml(providerModel)}"><span class="chat-model-mark">${icon("sparkles", 14)}</span><span><strong>${escapeHtml(providerName)}</strong><small>${escapeHtml(providerModel)} · ${providerStatus}</small></span>${icon("arrow", 14)}</button><div class="chat-work-mode" role="group" aria-label="Agent 工作模式"><button type="button" class="${app?.agentWorkMode === "edit" ? "active" : ""}" data-agent-work-mode="edit" aria-pressed="${app?.agentWorkMode === "edit"}">Edit</button><button type="button" class="${app?.agentWorkMode === "solo" ? "active" : ""}" data-agent-work-mode="solo" aria-pressed="${app?.agentWorkMode === "solo"}">Solo</button></div></div></div>
+      <div class="chat-header"><div class="chat-title"><strong>${escapeHtml(conversation?.title ?? t("copilot.newChat"))}</strong><small>${escapeHtml(t("copilot.enabledToolsOnly"))}</small></div><div class="chat-header-actions" aria-label="${escapeHtml(t("copilot.toolbar"))}"><button type="button" class="chat-model-button" data-open-ai-provider-picker aria-label="${escapeHtml(t("copilot.chooseProviderModel", { provider: providerName, model: providerModel }))}"><span class="chat-model-mark">${icon("sparkles", 14)}</span><span><strong>${escapeHtml(providerName)}</strong><small>${escapeHtml(providerModel)} · ${providerStatus}</small></span>${icon("arrow", 14)}</button><div class="chat-work-mode" role="group" aria-label="${escapeHtml(t("copilot.workMode"))}"><button type="button" class="${app?.agentWorkMode === "edit" ? "active" : ""}" data-agent-work-mode="edit" aria-pressed="${app?.agentWorkMode === "edit"}">Edit</button><button type="button" class="${app?.agentWorkMode === "solo" ? "active" : ""}" data-agent-work-mode="solo" aria-pressed="${app?.agentWorkMode === "solo"}">Solo</button></div></div></div>
       ${approvals}
-      <div class="messages">${messages.length ? messages.map(renderMessage).join("") : `<div class="empty-chat"><span class="mode-icon purple">${icon("bot", 30)}</span><h2>今天想完成什么？</h2><p>可以从分析音频、检查工程或连接 SynthV 开始。</p><div class="prompt-chips"><button data-prompt="分析这段音频的 BPM、调性和能量变化">分析音频特征</button><button data-prompt="检查当前 SynthV 工程并总结轨道结构">检查 SynthV 工程</button><button data-prompt="帮我规划从演唱音频到 MIDI 或 SynthV 工程的工作流">规划音频到 SynthV</button></div></div>`}</div>
+      <div class="messages">${messages.length ? messages.map(renderMessage).join("") : `<div class="empty-chat"><span class="mode-icon purple">${icon("bot", 30)}</span><h2>${escapeHtml(t("copilot.emptyTitle"))}</h2><p>${escapeHtml(t("copilot.emptyDescription"))}</p><div class="prompt-chips"><button data-prompt="${escapeHtml(t("copilot.audioPrompt"))}">${escapeHtml(t("copilot.audioAction"))}</button><button data-prompt="${escapeHtml(t("copilot.projectPrompt"))}">${escapeHtml(t("copilot.projectAction"))}</button><button data-prompt="${escapeHtml(t("copilot.planPrompt"))}">${escapeHtml(t("copilot.planAction"))}</button></div></div>`}</div>
       <form id="chat-form" class="composer"><div class="composer-shell"><textarea id="chat-input" rows="1" placeholder="${t("copilot.placeholder")}"></textarea><button class="primary icon-button" type="submit" title="${t("copilot.send")}" aria-label="${t("copilot.send")}">${icon("send", 19)}</button></div><span>${t("copilot.review")}</span></form>
     </section>
   </div>`;
@@ -2102,7 +2103,7 @@ function renderCopilot(): string {
 
 function renderMessage(message: ChatMessage): string {
   const mine = message.role === "user";
-  return `<div class="message ${mine ? "user" : "assistant"}"><span class="avatar">${mine ? "你" : "π"}</span><div><small>${mine ? "你" : "Copilot"}</small><p>${escapeHtml(message.content)}</p></div></div>`;
+  return `<div class="message ${mine ? "user" : "assistant"}"><span class="avatar">${mine ? t("copilot.you") : "π"}</span><div><small>${mine ? t("copilot.you") : "Copilot"}</small><p>${escapeHtml(message.content)}</p></div></div>`;
 }
 
 function renderComponents(): string {

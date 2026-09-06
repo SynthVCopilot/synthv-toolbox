@@ -9,13 +9,13 @@ const { createI18n } = require('vue-i18n');
 const read = (name) => readFileSync(new URL('../src/PiDesktop.Tauri/src/' + name, import.meta.url), 'utf8');
 const i18n = createI18n({ legacy: false, locale: 'en', fallbackLocale: 'zh-CN', messages: {} });
 const addMessages = (language, messages) => i18n.global.mergeLocaleMessage(language, messages);
-for (const name of ['i18nCommon.ts', 'i18nWorkflows.ts']) vm.runInNewContext(read(name).replace(/^import .*;\r?\n/gm, ''), { addMessages });
+for (const name of ['i18nCommon.ts', 'i18nWorkflows.ts', 'i18nCopilot.ts']) vm.runInNewContext(read(name).replace(/^import .*;\r?\n/gm, ''), { addMessages });
 const t = (key, params = {}) => {
   assert.ok(i18n.global.te(key), `Missing ${i18n.global.locale.value} message: ${key}`);
   return i18n.global.t(key, params);
 };
 const source = read('main.ts');
-const functions = new Set(['escapeHtml', 'formatAudioNumber', 'isTerminalAudioJob', 'asObject', 'resultMetric', 'renderDiagnosticResult', 'renderBatchResult', 'renderScalarResult', 'renderAbAudioResult', 'renderWorkflowPanel', 'renderAudioPlanDialog']);
+const functions = new Set(['escapeHtml', 'formatAudioNumber', 'isTerminalAudioJob', 'asObject', 'resultMetric', 'renderDiagnosticResult', 'renderBatchResult', 'renderScalarResult', 'renderAbAudioResult', 'renderWorkflowPanel', 'renderAudioPlanDialog', 'renderCopilot', 'renderMessage']);
 const ast = parse(source, { sourceType: 'module', plugins: ['typescript'] });
 const implementations = ast.program.body.filter((node) => node.type === 'FunctionDeclaration' && functions.has(node.id.name)).map((node) => source.slice(node.start, node.end)).join('\n');
 assert.doesNotMatch(implementations, /\p{Script=Han}/u, 'Static workflow wording must come from the dictionaries');
@@ -23,6 +23,7 @@ assert.doesNotMatch(implementations, /t\(['"]['"]\)/, 'No empty lookups');
 const ids = ['audio-preparation', 'cover', 'tuning-learning', 'media-import', 'source-separation', 'audio-insight', 'score-to-synthv', 'project-tools', 'audio-to-project', 'project-doctor', 'batch-recipes', 'selective-sync', 'retake-compare', 'ab-audition', 'pronunciation-doctor', 'render-review', 'future-tool'];
 const state = {
   t, locale: () => i18n.global.locale.value, icon: () => '',
+  conversation: undefined, conversations: [], fileApprovals: [], activeAiProvider: () => undefined, aiProviderDisplayName: (provider) => provider.displayName,
   app: { mode: 'ai', bridgeConnected: true }, features: [], toolGroups: [], workflowResult: undefined,
   audioRuntime: { available: true, version: '8', detail: 'Runtime detail', source: 'system' },
   audioStartInFlight: false, audioJob: undefined, audioPlanRequestInFlight: false, audioLoudnessAnalysisInFlight: false,
@@ -97,5 +98,24 @@ for (const language of ['zh-CN', 'en']) {
   });
   visit(i18n.global.getLocaleMessage(language).workflowCopy, 'workflowCopy');
 }
-console.log(`Workflow localization behavior passed (${renders} branch renders, populated states, dictionaries, option values, and escaped data).`);
+for (const language of ['en', 'zh-CN']) {
+  i18n.global.locale.value = language;
+  const document = new JSDOM(state.renderCopilot()).window.document;
+  if (language === 'en') assert.doesNotMatch(document.body.textContent, /\p{Script=Han}/u);
+  assert.equal(document.querySelector('[data-prompt]').dataset.prompt, t('copilot.audioPrompt'));
+  assert.equal(document.querySelector('[data-open-ai-provider-picker]').getAttribute('aria-label'), t('copilot.chooseProviderModel', { provider: t('copilot.noProvider'), model: t('copilot.chooseModel') }));
+  assert.deepEqual([...document.querySelectorAll('[data-agent-work-mode]')].map((button) => button.dataset.agentWorkMode), ['edit', 'solo']);
+}
+i18n.global.locale.value = 'en';
+state.activeAiProvider = () => ({ displayName: 'Provider <name>', model: 'Model <id>', accounts: [{ authorized: true }], apiKeys: [] });
+state.conversation = { id: 'chat', title: '原始标题 <title>', messages: [{ role: 'user', content: '原始内容 <script>hello</script>' }, { role: 'assistant', content: 'Original answer' }] };
+state.conversations = [{ id: 'chat', title: state.conversation.title, messageCount: 2, updatedAt: '2026-09-06' }];
+const chat = new JSDOM(state.renderCopilot()).window.document;
+assert.equal(chat.querySelector('.chat-title strong').textContent, state.conversation.title);
+assert.equal(chat.querySelector('.message.user p').textContent, state.conversation.messages[0].content);
+assert.equal(chat.querySelector('.message.user small').textContent, 'You');
+assert.equal(chat.querySelector('.session-item small').textContent, '2 messages · 2026-09-06');
+assert.equal(chat.querySelector('script'), null);
+assert.match(chat.querySelector('[data-open-ai-provider-picker]').getAttribute('aria-label'), /Provider <name> Model <id>/);
+console.log(`Workflow and Copilot localization behavior passed (${renders} workflow branch renders, populated states, dictionaries, option values, and escaped data).`);
 
