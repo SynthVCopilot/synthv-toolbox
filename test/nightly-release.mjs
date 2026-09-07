@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createPublicationPlan, parseChangesTsv } from "../.github/scripts/nightly-release.mjs";
+import { createPublicationPlan, mergeVersionsIndex, parseChangesTsv } from "../.github/scripts/nightly-release.mjs";
 
 const sha = "0123456789abcdef0123456789abcdef01234567";
 const common = {
@@ -36,5 +36,15 @@ assert.equal(createPublicationPlan({ ...common, previous: { commit: sha, runId: 
 assert.equal(createPublicationPlan({ ...common, previous: { commit: "abcdefabcdefabcdefabcdefabcdefabcdefabcd", runId: 99 } }).reason, "older-workflow-run");
 assert.equal(createPublicationPlan({ ...common, previous: { commit: "abcdefabcdefabcdefabcdefabcdefabcdefabcd", runId: 41 }, isAncestor: () => false }).reason, "obsolete-or-divergent-commit");
 assert.equal(createPublicationPlan({ ...common, previous: { commit: "abcdefabcdefabcdefabcdefabcdefabcdefabcd", runId: 41 } }).range, `abcdefabcdefabcdefabcdefabcdefabcdefabcd..${sha}`);
+
+const firstBuild = { version: common.developmentVersion, commit: "0123456", sourceCommittedAtUtc: common.sourceCommittedAtUtc, publishedAtUtc: "2026-09-06T21:00:00Z", runId: 42, releaseUrl: "https://example.test/release", changes: [], assets: [] };
+const firstIndex = mergeVersionsIndex(undefined, firstBuild);
+assert.deepEqual(firstIndex, { schemaVersion: 1, channel: "nightly", latest: "0123456", builds: [firstBuild] });
+assert.equal(mergeVersionsIndex(firstIndex, firstBuild), firstIndex);
+const nextBuild = { ...firstBuild, version: "0.1.7-dev.abcdef0", commit: "abcdef0", runId: 43 };
+const nextIndex = mergeVersionsIndex(firstIndex, nextBuild);
+assert.deepEqual(nextIndex.builds, [firstBuild, nextBuild]);
+assert.equal(nextIndex.latest, "abcdef0");
+assert.throws(() => mergeVersionsIndex(nextIndex, { ...nextBuild, runId: 41 }), /different details/);
 
 console.log("Nightly release planner contracts passed.");

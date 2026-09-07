@@ -244,7 +244,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          build_stamp="$(date -u +%Y%m%d.%H%M%S)"
           windows_source="$(find release-assets -maxdepth 1 -type f -name '*x86_64-pc-windows-msvc-nsis.exe' -print -quit)"
           macos_source="$(find release-assets -maxdepth 1 -type f -name '*universal-apple-darwin.dmg' -print -quit)"
           test -n "$windows_source" && test -n "$macos_source"
@@ -258,14 +257,14 @@ jobs:
               echo "Nightly release ${tag} is immutable and cannot accept another build. Disable immutable releases or publish a new base version."
               exit 1
             fi
-            if [[ "$(gh release view "$tag" --json assets --jq '[.assets[].name] | index("latest.json") != null')" == "true" ]]; then
-              gh release download "$tag" --pattern latest.json --dir nightly-assets --clobber
+            if [[ "$(gh release view "$tag" --json assets --jq '[.assets[].name] | index("versions.json") != null')" == "true" ]]; then
+              gh release download "$tag" --pattern versions.json --dir nightly-assets --clobber
             fi
           else
             gh release create "$tag" --target "$GITHUB_SHA" --prerelease --latest=false --title "SynthV Toolbox v${base_version} Pre-release" --notes "## 更新内容"
           fi
 
-          node .github/scripts/nightly-release.mjs plan "$DEVELOPMENT_VERSION" "$GITHUB_SHA" "$GITHUB_RUN_ID" nightly-assets/latest.json > nightly-assets/plan.json
+          node .github/scripts/nightly-release.mjs plan "$DEVELOPMENT_VERSION" "$GITHUB_SHA" "$GITHUB_RUN_ID" nightly-assets/versions.json > nightly-assets/plan.json
           if [[ "$(jq -r .publish nightly-assets/plan.json)" != "true" ]]; then
             echo "Skipping nightly publication: $(jq -r .reason nightly-assets/plan.json)"
             exit 0
@@ -301,8 +300,7 @@ jobs:
             --arg macosName "$macos_asset" \
             --arg macosUrl "https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${macos_asset}" \
             --arg macosSha "$macos_sha" \
-            '{schemaVersion: 1, channel: "nightly", version: $version, commit: $commit, sourceCommittedAtUtc: $sourceCommittedAtUtc, publishedAtUtc: $publishedAtUtc, runId: $runId, releaseUrl: $releaseUrl, changes: $changes[0], assets: [{name: $windowsName, url: $windowsUrl, sha256: $windowsSha}, {name: $macosName, url: $macosUrl, sha256: $macosSha}]}' > nightly-assets/latest.json
-          cp nightly-assets/latest.json "nightly-assets/build-${build_stamp}-${short_commit}.json"
+            '{version: $version, commit: $commit, sourceCommittedAtUtc: $sourceCommittedAtUtc, publishedAtUtc: $publishedAtUtc, runId: $runId, releaseUrl: $releaseUrl, changes: $changes[0], assets: [{name: $windowsName, url: $windowsUrl, sha256: $windowsSha}, {name: $macosName, url: $macosUrl, sha256: $macosSha}]}' > nightly-assets/build.json
           gh release view "$tag" --json assets > nightly-assets/release-assets.json
           upload_immutable_asset() {
             local asset_path="$1"
@@ -321,7 +319,6 @@ jobs:
           }
           upload_immutable_asset "nightly-assets/$windows_asset"
           upload_immutable_asset "nightly-assets/$macos_asset"
-          upload_immutable_asset "nightly-assets/build-${build_stamp}-${short_commit}.json"
           existing_notes="$(gh release view "$tag" --json body --jq .body)"
           note_marker="<!-- nightly-commit:${GITHUB_SHA} -->"
           if [[ "$existing_notes" != *"$note_marker"* ]]; then
@@ -332,4 +329,6 @@ jobs:
             } > nightly-assets/release-notes.md
             gh release edit "$tag" --title "SynthV Toolbox v${base_version} Pre-release" --notes-file nightly-assets/release-notes.md
           fi
-          gh release upload "$tag" nightly-assets/latest.json --clobber
+          node .github/scripts/nightly-release.mjs merge nightly-assets/versions.json nightly-assets/build.json > nightly-assets/versions.next.json
+          mv nightly-assets/versions.next.json nightly-assets/versions.json
+          gh release upload "$tag" nightly-assets/versions.json --clobber
