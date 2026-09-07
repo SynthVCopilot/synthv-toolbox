@@ -24,6 +24,38 @@ fn nightly(version: &str, committed: &str) -> NightlyManifest {
     }
 }
 
+fn nightly_index(latest: &str, builds: Vec<NightlyManifest>) -> NightlyIndex {
+    NightlyIndex {
+        schema_version: 1,
+        channel: "nightly".into(),
+        latest: latest.into(),
+        builds,
+    }
+}
+
+#[test]
+fn nightly_index_selects_latest_regardless_of_array_order() {
+    let mut older = nightly("0.2.0-dev.1111111", "2026-01-01T00:00:00Z");
+    older.commit = "1111111".into();
+    let newest = nightly("0.2.0-dev.abcdef0", "2026-01-02T00:00:00Z");
+    let selected =
+        select_latest_nightly_build(nightly_index("abcdef0", vec![newest, older])).unwrap();
+    assert_eq!(selected.commit, "abcdef0");
+}
+
+#[test]
+fn nightly_index_rejects_missing_or_duplicate_latest() {
+    assert!(select_latest_nightly_build(nightly_index("abcdef0", vec![])).is_err());
+    assert!(select_latest_nightly_build(nightly_index(
+        "abcdef0",
+        vec![
+            nightly("0.2.0-dev.abcdef0", "2026-01-01T00:00:00Z"),
+            nightly("0.2.0-dev.abcdef0", "2026-01-02T00:00:00Z")
+        ]
+    ))
+    .is_err());
+}
+
 #[test]
 fn stable_uses_semver_and_rejects_untrusted_links() {
     assert!(
