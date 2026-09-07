@@ -17,12 +17,14 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@model-auth/vue": "https://github.com/lsy-404/model-auth/releases/download/v0.2.7/model-auth-vue-0.2.7.tgz",
+    "@model-auth/vue": "file:.platform-kit-private/model-auth/model-auth-vue-0.2.7.tgz",
     "@tauri-apps/api": "2.11.1",
     "@tauri-apps/plugin-dialog": "2.7.2",
     "lucide": "1.41.0",
     "vue": "^3.5.42",
-    "vue-i18n": "^11.4.10"
+    "vue-i18n": "^11.4.10",
+    "@model-auth/core": "file:.platform-kit-private/model-auth/model-auth-core-0.2.7.tgz",
+    "@model-auth/providers": "file:.platform-kit-private/model-auth/model-auth-providers-0.2.7.tgz"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.4",

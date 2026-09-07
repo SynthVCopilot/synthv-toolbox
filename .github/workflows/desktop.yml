@@ -16,6 +16,8 @@ jobs:
     uses: ./.github/workflows/prepare-desktop.yml
     with:
       release: true
+    secrets:
+      PLATFORM_KIT_TOKEN: ${{ secrets.PLATFORM_KIT_TOKEN }}
 
   build:
     needs: prepare
@@ -56,6 +58,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust_targets }}
+      - uses: ./.github/actions/prepare-model-auth
+        with:
+          token: ${{ secrets.PLATFORM_KIT_TOKEN }}
+          target: src/PiDesktop.Tauri
       - name: Install platform dependencies
         working-directory: src/PiDesktop.Tauri
         run: npm ci --no-audit --no-fund
@@ -114,6 +120,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
           components: clippy
+      - uses: ./.github/actions/prepare-model-auth
+        with:
+          token: ${{ secrets.PLATFORM_KIT_TOKEN }}
+          target: src/PiDesktop.Tauri
       - name: Install platform dependencies
         working-directory: src/PiDesktop.Tauri
         run: npm ci --no-audit --no-fund

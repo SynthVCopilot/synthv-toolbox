@@ -14,3 +14,4 @@ src/PiDesktop.Tauri/src-tauri/target/
 src/PiDesktop.Tauri/src-tauri/gen/
 release-assets/
 test/.tmp/
+/.platform-kit-private/
