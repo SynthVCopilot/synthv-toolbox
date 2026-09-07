@@ -48,6 +48,8 @@ context.lyricBridgeSlots = ["新", "词"];
 context.lyricBridgePreview = { previewToken: "p", slotCount: 2, notes: [{ noteIndex: 4, currentLyric: "旧", text: "新" }, { noteIndex: 7, currentLyric: "词", text: "词" }] };
 const bridge = context.renderLyricBridgeFit();
 for (const text of ["Track 2 · group 3", "4: 旧 → 新", "7: 词 → 词", "Confirm write", "Fill from draft selection"]) assert.ok(bridge.includes(text), text);
+context.lyricBridgePreview = undefined;
+assert.ok(!context.renderLyricBridgeFit().includes("Confirm write"));
 setLocale("zh-CN");
 assert.ok(context.renderLyricStudio(true).includes("段落名称"));
 assert.equal(context.lyricWorkspaceSnapshot(), snapshot);
