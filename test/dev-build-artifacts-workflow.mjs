@@ -87,6 +87,8 @@ assert.match(nightlyPublisher, /\["merge-base", "--is-ancestor"/);
 assert.match(nightlyPublisher, /sourceCommittedAtUtc/);
 assert.match(nightlyPublisher, /mergeVersionsIndex/);
 assert.match(nightlyPublisher, /schemaVersion: 1, channel: "nightly"/);
+assert.match(workflow, /stat -c%s "nightly-assets\/\$windows_asset"/);
+assert.match(workflow, /sha256: \$windowsSha, size: \$windowsSize/);
 assert.match(workflow, /--json isImmutable/);
 assert.match(workflow, /Historical nightly asset \$asset_name already exists with a different digest/);
 assert.doesNotMatch(release, /\.app\.zip/);

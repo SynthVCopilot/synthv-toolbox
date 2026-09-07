@@ -277,12 +277,14 @@ jobs:
           macos_asset="SynthV.Toolbox_${base_version}_dev.${short_commit}_universal.dmg"
 
           git log "$range" --reverse --pretty=format:'%s%x09%h' > nightly-assets/changes.tsv
-          test -s nightly-assets/changes.tsv
           git log "$range" --reverse --pretty=format:"- %s ([%h](https://github.com/${GITHUB_REPOSITORY}/commit/%H))" > nightly-assets/new-release-notes.md
           mv "$windows_source" "nightly-assets/$windows_asset"
           mv "$macos_source" "nightly-assets/$macos_asset"
           windows_sha="$(sha256sum "nightly-assets/$windows_asset" | awk '{print $1}')"
           macos_sha="$(sha256sum "nightly-assets/$macos_asset" | awk '{print $1}')"
+          windows_size="$(stat -c%s "nightly-assets/$windows_asset")"
+          macos_size="$(stat -c%s "nightly-assets/$macos_asset")"
+          test "$windows_size" -gt 0 && test "$macos_size" -gt 0
           release_url="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}"
           published_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           node .github/scripts/nightly-release.mjs changes nightly-assets/changes.tsv > nightly-assets/changes.json
@@ -297,10 +299,12 @@ jobs:
             --arg windowsName "$windows_asset" \
             --arg windowsUrl "https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${windows_asset}" \
             --arg windowsSha "$windows_sha" \
+            --argjson windowsSize "$windows_size" \
             --arg macosName "$macos_asset" \
             --arg macosUrl "https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${macos_asset}" \
             --arg macosSha "$macos_sha" \
-            '{version: $version, commit: $commit, sourceCommittedAtUtc: $sourceCommittedAtUtc, publishedAtUtc: $publishedAtUtc, runId: $runId, releaseUrl: $releaseUrl, changes: $changes[0], assets: [{name: $windowsName, url: $windowsUrl, sha256: $windowsSha}, {name: $macosName, url: $macosUrl, sha256: $macosSha}]}' > nightly-assets/build.json
+            --argjson macosSize "$macos_size" \
+            '{version: $version, commit: $commit, sourceCommittedAtUtc: $sourceCommittedAtUtc, publishedAtUtc: $publishedAtUtc, runId: $runId, releaseUrl: $releaseUrl, changes: $changes[0], assets: [{name: $windowsName, url: $windowsUrl, sha256: $windowsSha, size: $windowsSize}, {name: $macosName, url: $macosUrl, sha256: $macosSha, size: $macosSize}]}' > nightly-assets/build.json
           gh release view "$tag" --json assets > nightly-assets/release-assets.json
           upload_immutable_asset() {
             local asset_path="$1"

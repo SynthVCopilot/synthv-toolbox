@@ -37,7 +37,7 @@ assert.equal(createPublicationPlan({ ...common, previous: { commit: "abcdefabcde
 assert.equal(createPublicationPlan({ ...common, previous: { commit: "abcdefabcdefabcdefabcdefabcdefabcdefabcd", runId: 41 }, isAncestor: () => false }).reason, "obsolete-or-divergent-commit");
 assert.equal(createPublicationPlan({ ...common, previous: { commit: "abcdefabcdefabcdefabcdefabcdefabcdefabcd", runId: 41 } }).range, `abcdefabcdefabcdefabcdefabcdefabcdefabcd..${sha}`);
 
-const firstBuild = { version: common.developmentVersion, commit: "0123456", sourceCommittedAtUtc: common.sourceCommittedAtUtc, publishedAtUtc: "2026-09-06T21:00:00Z", runId: 42, releaseUrl: "https://example.test/release", changes: [], assets: [] };
+const firstBuild = { version: common.developmentVersion, commit: "0123456", sourceCommittedAtUtc: common.sourceCommittedAtUtc, publishedAtUtc: "2026-09-06T21:00:00Z", runId: 42, releaseUrl: "https://example.test/release", changes: [], assets: [{ name: "setup.exe", url: "https://example.test/setup.exe", sha256: "a".repeat(64), size: 123 }] };
 const firstIndex = mergeVersionsIndex(undefined, firstBuild);
 assert.deepEqual(firstIndex, { schemaVersion: 1, channel: "nightly", latest: "0123456", builds: [firstBuild] });
 assert.equal(mergeVersionsIndex(firstIndex, firstBuild), firstIndex);
