@@ -87,7 +87,7 @@ assert.doesNotMatch(main, /sessionStorage\.[\s\S]{0,120}(?:audio|ffmpeg)[\s\S]{0
 // contract.  Keep these checks semantic rather than depending on CSS wording.
 assert.match(main, /onDragDropEvent\s*\(/);
 assert.match(main, /paths\.length\s*!==\s*1/);
-assert.match(main, /selectAudioPreparationInput\(paths\[0\]\)/);
+assert.match(main, /activeWorkflow === "audio-preparation"[\s\S]{0,480}selectAudioPreparationInput\(event\.payload\.paths\[0\]\)/);
 assert.match(main, /artifactId/);
 assert.match(main, /data-(?:preview|reveal|save)-audio-artifact/);
 assert.match(main, /audioProbe\?\.sourceArtifactId === artifactId/);
