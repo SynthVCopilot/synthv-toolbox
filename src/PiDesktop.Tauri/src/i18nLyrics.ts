@@ -82,6 +82,19 @@ addMessages("zh-CN", {
   "lyrics.newDiscardConfirm": "当前项目有未保存修改。新建项目会丢弃这些修改，是否继续？",
   "lyrics.projectCreated": "已开始新的歌词项目。",
   "lyrics.candidatesReady": "已生成 {count} 个原创候选。",
+  "lyrics.export": "导出 TXT",
+  "lyrics.exported": "歌词已导出为 TXT。",
+  "lyrics.versionHistory": "版本记录",
+  "lyrics.restoreVersion": "恢复版本",
+  "lyrics.restoreDiscardConfirm": "当前编辑尚未保存。恢复历史版本会丢弃这些修改，是否继续？",
+  "lyrics.readSelection": "读取选中音符",
+  "lyrics.selectedNotes": "选中音符",
+  "lyrics.previewReady": "已预览 {count} 个音符。",
+  "lyrics.selectedNotesHint": "在 SynthV 中选中音符后读取，先预览再确认写回。",
+  "lyrics.selectedNotesCount": "已选 {count} 个音符",
+  "lyrics.previewWrite": "预览写入",
+  "lyrics.confirmWrite": "确认写回",
+  "lyrics.writtenToSynthv": "已写入 {count} 个音符。",
   "history.readFailedStatus": "读取失败"
 });
 
@@ -167,6 +180,18 @@ addMessages("en", {
   "lyrics.newDiscardConfirm": "This project has unsaved changes. Discard them and create a new project?",
   "lyrics.projectCreated": "Started a new lyric project.",
   "lyrics.candidatesReady": "Generated {count} original suggestions.",
+  "lyrics.export": "Export TXT",
+  "lyrics.exported": "Lyrics exported as TXT.",
+  "lyrics.versionHistory": "Version history",
+  "lyrics.restoreVersion": "Restore version",
+  "lyrics.restoreDiscardConfirm": "This editor has unsaved changes. Restore the saved version and discard them?",
+  "lyrics.readSelection": "Read selected notes",
+  "lyrics.selectedNotes": "Selected notes",
+  "lyrics.previewReady": "Previewed {count} notes.",
+  "lyrics.selectedNotesHint": "Select notes in SynthV, then preview the writing before confirming it.",
+  "lyrics.selectedNotesCount": "{count} notes selected",
+  "lyrics.previewWrite": "Preview writing",
+  "lyrics.confirmWrite": "Confirm write",
+  "lyrics.writtenToSynthv": "Wrote {count} notes to SynthV.",
   "history.readFailedStatus": "Could not read history"
 });
-

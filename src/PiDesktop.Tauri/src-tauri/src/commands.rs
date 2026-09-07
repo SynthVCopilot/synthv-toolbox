@@ -2477,9 +2477,10 @@ pub async fn create_lyric_project(
     draft: String,
     sections: Vec<LyricSectionRequest>,
     rhyme_targets: BTreeMap<String, String>,
+    candidate_history: Vec<LyricCandidateSet>,
 ) -> Result<LyricProject, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        lyric_projects::create(title, draft, sections, rhyme_targets)
+        lyric_projects::create(title, draft, sections, rhyme_targets, candidate_history)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -2492,12 +2493,30 @@ pub async fn save_lyric_project(
     draft: String,
     sections: Vec<LyricSectionRequest>,
     rhyme_targets: BTreeMap<String, String>,
+    candidate_history: Vec<LyricCandidateSet>,
 ) -> Result<LyricProject, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        lyric_projects::save(&id, title, draft, sections, rhyme_targets)
+        lyric_projects::save(
+            &id,
+            title,
+            draft,
+            sections,
+            rhyme_targets,
+            candidate_history,
+        )
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn restore_lyric_project_version(
+    id: String,
+    revision: u32,
+) -> Result<LyricProject, String> {
+    tauri::async_runtime::spawn_blocking(move || lyric_projects::restore_version(&id, revision))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -2505,6 +2524,17 @@ pub async fn load_lyric_project(id: String) -> Result<LyricProject, String> {
     tauri::async_runtime::spawn_blocking(move || lyric_projects::load(&id))
         .await
         .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn export_lyric_project_text(
+    title: String,
+    draft: String,
+) -> Result<OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || lyric_projects::export_text(title, draft))
+        .await
+        .map_err(|error| error.to_string())?
+        .map(|path| succeeded("歌词已导出为 TXT。", format!("输出：{path}")))
 }
 
 #[tauri::command]

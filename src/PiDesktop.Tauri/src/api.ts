@@ -33,6 +33,9 @@ import type {
   OpenCodeCatalog,
   LyricCandidateRequest,
   LyricCandidateSet,
+  LyricBridgeConfirm,
+  LyricBridgePreview,
+  LyricBridgeSelection,
   LyricProject,
   LyricProjectSummary,
   LyricSectionRequest,
@@ -1033,6 +1036,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       draft: String(args?.draft ?? ""),
       rhymeTargets: { ...((args?.rhymeTargets as Record<string, string> | undefined) ?? {}) },
       sections: [...((args?.sections as LyricSectionRequest[] | undefined) ?? [])],
+      candidateHistory: [...((args?.candidateHistory as LyricCandidateSet[] | undefined) ?? [])],
+      versions: [],
       revision: 1,
       createdAtUtc: now,
       updatedAtUtc: now,
@@ -1051,6 +1056,16 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       draft: String(args?.draft ?? ""),
       rhymeTargets: { ...((args?.rhymeTargets as Record<string, string> | undefined) ?? {}) },
       sections: [...((args?.sections as LyricSectionRequest[] | undefined) ?? [])],
+      candidateHistory: [...((args?.candidateHistory as LyricCandidateSet[] | undefined) ?? [])],
+      versions: [...existing.versions, {
+        revision: existing.revision,
+        title: existing.title,
+        draft: existing.draft,
+        rhymeTargets: { ...existing.rhymeTargets },
+        sections: [...existing.sections],
+        candidateHistory: [...existing.candidateHistory],
+        savedAtUtc: existing.updatedAtUtc,
+      }].slice(-30),
       revision: existing.revision + 1,
       updatedAtUtc: new Date().toISOString(),
     };
@@ -1061,6 +1076,25 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     const project = previewLyricProjects.find((item) => item.id === String(args?.id ?? ""));
     if (!project) throw new Error("找不到该歌词项目。");
     return { ...project, rhymeTargets: { ...project.rhymeTargets }, sections: [...project.sections] } as T;
+  }
+  if (command === "restore_lyric_project_version") {
+    const id = String(args?.id ?? "");
+    const index = previewLyricProjects.findIndex((project) => project.id === id);
+    const version = previewLyricProjects[index]?.versions.find((item) => item.revision === Number(args?.revision));
+    if (index < 0 || !version) throw new Error("找不到该歌词版本。");
+    const current = previewLyricProjects[index];
+    const restored: LyricProject = {
+      ...current,
+      title: version.title,
+      draft: version.draft,
+      rhymeTargets: { ...version.rhymeTargets },
+      sections: [...version.sections],
+      candidateHistory: [...version.candidateHistory],
+      revision: current.revision + 1,
+      updatedAtUtc: new Date().toISOString(),
+    };
+    previewLyricProjects[index] = restored;
+    return restored as T;
   }
   if (command === "generate_lyric_candidates") return {
     language: "zh-CN",
@@ -1344,11 +1378,20 @@ export const api = {
   generateLyricCandidates: (request: LyricCandidateRequest) =>
     call<LyricCandidateSet>("generate_lyric_candidates", { request }),
   listLyricProjects: (limit = 50) => call<LyricProjectSummary[]>("list_lyric_projects", { limit }),
-  createLyricProject: (title: string, draft: string, sections: LyricSectionRequest[], rhymeTargets: Record<string, string>) =>
-    call<LyricProject>("create_lyric_project", { title, draft, sections, rhymeTargets }),
-  saveLyricProject: (id: string, title: string, draft: string, sections: LyricSectionRequest[], rhymeTargets: Record<string, string>) =>
-    call<LyricProject>("save_lyric_project", { id, title, draft, sections, rhymeTargets }),
+  createLyricProject: (title: string, draft: string, sections: LyricSectionRequest[], rhymeTargets: Record<string, string>, candidateHistory: LyricCandidateSet[]) =>
+    call<LyricProject>("create_lyric_project", { title, draft, sections, rhymeTargets, candidateHistory }),
+  saveLyricProject: (id: string, title: string, draft: string, sections: LyricSectionRequest[], rhymeTargets: Record<string, string>, candidateHistory: LyricCandidateSet[]) =>
+    call<LyricProject>("save_lyric_project", { id, title, draft, sections, rhymeTargets, candidateHistory }),
   loadLyricProject: (id: string) => call<LyricProject>("load_lyric_project", { id }),
+  restoreLyricProjectVersion: (id: string, revision: number) =>
+    call<LyricProject>("restore_lyric_project_version", { id, revision }),
+  exportLyricProjectText: (title: string, draft: string) =>
+    call<OperationResult>("export_lyric_project_text", { title, draft }),
+  readLyricBridgeSelection: () => call<LyricBridgeSelection>("read_lyric_bridge_selection"),
+  previewLyricBridgeFit: (selectionToken: string, sessionToken: string, slots: Array<{ text: string; phoneme?: string }>) =>
+    call<LyricBridgePreview>("preview_lyric_bridge_fit", { request: { selectionToken, sessionToken, slots } }),
+  confirmLyricBridgeFit: (previewToken: string) =>
+    call<LyricBridgeConfirm>("confirm_lyric_bridge_fit", { request: { previewToken } }),
   runProjectDoctor: (projectPath: string) =>
     call<WorkflowResult>("run_project_doctor", { projectPath }),
   runPronunciationDiagnostics: (projectPath?: string, lyrics?: string) =>

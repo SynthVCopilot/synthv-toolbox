@@ -313,6 +313,8 @@ pub fn run() {
             commands::create_lyric_project,
             commands::save_lyric_project,
             commands::load_lyric_project,
+            commands::export_lyric_project_text,
+            commands::restore_lyric_project_version,
             commands::run_project_doctor,
             commands::run_pronunciation_diagnostics,
             commands::run_render_review,
