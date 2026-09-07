@@ -77,7 +77,7 @@ assert.match(workflow, /v\$\{base_version\}-nightly/);
 assert.match(workflow, /--prerelease/);
 assert.match(workflow, /--latest=false/);
 assert.match(workflow, /SynthV Toolbox v\$\{base_version\} Pre-release/);
-assert.match(workflow, /git log "\$range" --reverse --pretty=format:'- %s \(#%h\)'/);
+assert.match(workflow, /git log "\$range" --reverse --pretty=format:"- %s \(\[%h\]\(https:\/\/github\.com\/\$\{GITHUB_REPOSITORY\}\/commit\/%H\)\)"/);
 assert.match(workflow, /schemaVersion: 1, channel: "nightly"/);
 assert.match(workflow, /build-\$\{build_stamp\}-\$\{short_commit\}\.json/);
 assert.match(workflow, /latest\.json --clobber/);
@@ -88,6 +88,7 @@ assert.match(nightlyPublisher, /sourceCommittedAtUtc/);
 assert.match(workflow, /--json isImmutable/);
 assert.match(workflow, /Historical nightly asset \$asset_name already exists with a different digest/);
 assert.doesNotMatch(release, /\.app\.zip/);
+assert.match(release, /gh release list --exclude-drafts --exclude-pre-releases/);
 assert.match(release, /test "\$\{#assets\[@\]\}" -ge 2/);
 
 console.log("Shared preparation workflow contracts passed.");

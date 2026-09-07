@@ -279,7 +279,7 @@ jobs:
 
           git log "$range" --reverse --pretty=format:'%s%x09%h' > nightly-assets/changes.tsv
           test -s nightly-assets/changes.tsv
-          git log "$range" --reverse --pretty=format:'- %s (#%h)' > nightly-assets/new-release-notes.md
+          git log "$range" --reverse --pretty=format:"- %s ([%h](https://github.com/${GITHUB_REPOSITORY}/commit/%H))" > nightly-assets/new-release-notes.md
           mv "$windows_source" "nightly-assets/$windows_asset"
           mv "$macos_source" "nightly-assets/$macos_asset"
           windows_sha="$(sha256sum "nightly-assets/$windows_asset" | awk '{print $1}')"

@@ -144,7 +144,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          previous_tag="$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName // ""')"
+          previous_tag="$(gh release list --exclude-drafts --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName // ""')"
           if [[ -n "$previous_tag" ]]; then
             range="$previous_tag..$GITHUB_REF_NAME"
           else
@@ -153,7 +153,7 @@ jobs:
           {
             echo "## 更新内容"
             echo
-            git log "$range" --pretty=format:"- %s ([\`%h\`](https://github.com/${GITHUB_REPOSITORY}/commit/%H))"
+            git log "$range" --pretty=format:"- %s ([%h](https://github.com/${GITHUB_REPOSITORY}/commit/%H))"
             echo
             if [[ -n "$previous_tag" ]]; then
               echo
