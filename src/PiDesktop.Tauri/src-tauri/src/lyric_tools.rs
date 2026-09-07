@@ -48,7 +48,7 @@ pub struct LyricSectionRequest {
     pub rhyme_scheme: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LyricLineSlot {
     pub line_number: usize,
@@ -57,7 +57,7 @@ pub struct LyricLineSlot {
     pub placeholder: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LyricTemplateSection {
     pub id: String,
@@ -94,7 +94,7 @@ pub struct LyricCandidateRequest {
     pub candidate_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LyricCandidate {
     pub text: String,
@@ -103,10 +103,10 @@ pub struct LyricCandidate {
     pub note: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LyricCandidateSet {
-    pub language: &'static str,
+    pub language: String,
     pub brief: String,
     pub imagery: String,
     pub section_label: String,
@@ -382,7 +382,7 @@ pub fn parse_candidate_response(
         )
     };
     Ok(LyricCandidateSet {
-        language: "zh-CN",
+        language: "zh-CN".to_string(),
         brief: request.brief.trim().to_string(),
         imagery: request.imagery.trim().to_string(),
         section_label: request.section_label.trim().to_string(),

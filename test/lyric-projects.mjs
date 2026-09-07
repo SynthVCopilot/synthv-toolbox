@@ -25,11 +25,16 @@ assert.match(commands, /list_lyric_projects/);
 assert.match(commands, /create_lyric_project/);
 assert.match(commands, /save_lyric_project/);
 assert.match(commands, /load_lyric_project/);
+assert.match(commands, /restore_lyric_project_version/);
 assert.match(library, /commands::save_lyric_project/);
+assert.match(library, /commands::restore_lyric_project_version/);
 assert.match(types, /interface LyricProject/);
 assert.match(api, /createLyricProject/);
+assert.match(api, /restoreLyricProjectVersion/);
 assert.match(main, /data-save-lyric-project/);
 assert.match(main, /data-load-lyric-project/);
 assert.match(main, /lyricProjectHasUnsavedChanges/);
+assert.match(main, /candidateHistory/);
+assert.match(main, /data-export-lyric-draft/);
 
 console.log("Lyric project contracts passed.");

@@ -7,10 +7,12 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::lyric_tools::{self, LyricSectionRequest};
+use crate::lyric_tools::{self, LyricCandidateSet, LyricSectionRequest};
 
 const SCHEMA_VERSION: u32 = 1;
 const MAX_PROJECTS: usize = 200;
+const MAX_CANDIDATE_SETS: usize = 20;
+const MAX_VERSIONS: usize = 30;
 const MAX_DRAFT_CHARS: usize = 200_000;
 const MAX_PROJECT_BYTES: u64 = 1024 * 1024;
 
@@ -23,9 +25,25 @@ pub struct LyricProject {
     pub draft: String,
     pub rhyme_targets: BTreeMap<String, String>,
     pub sections: Vec<LyricSectionRequest>,
+    #[serde(default)]
+    pub candidate_history: Vec<LyricCandidateSet>,
+    #[serde(default)]
+    pub versions: Vec<LyricProjectVersion>,
     pub revision: u32,
     pub created_at_utc: String,
     pub updated_at_utc: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LyricProjectVersion {
+    pub revision: u32,
+    pub title: String,
+    pub draft: String,
+    pub rhyme_targets: BTreeMap<String, String>,
+    pub sections: Vec<LyricSectionRequest>,
+    pub candidate_history: Vec<LyricCandidateSet>,
+    pub saved_at_utc: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -43,6 +61,7 @@ pub fn create(
     draft: String,
     sections: Vec<LyricSectionRequest>,
     rhyme_targets: BTreeMap<String, String>,
+    candidate_history: Vec<LyricCandidateSet>,
 ) -> Result<LyricProject, String> {
     let (title, draft) = validate_input(&title, draft, &sections, &rhyme_targets)?;
     let now = Utc::now().to_rfc3339();
@@ -53,6 +72,8 @@ pub fn create(
         draft,
         rhyme_targets,
         sections,
+        candidate_history: normalize_candidate_history(candidate_history)?,
+        versions: Vec::new(),
         revision: 1,
         created_at_utc: now.clone(),
         updated_at_utc: now,
@@ -67,10 +88,24 @@ pub fn save(
     draft: String,
     sections: Vec<LyricSectionRequest>,
     rhyme_targets: BTreeMap<String, String>,
+    candidate_history: Vec<LyricCandidateSet>,
 ) -> Result<LyricProject, String> {
     validate_id(id)?;
     let (title, draft) = validate_input(&title, draft, &sections, &rhyme_targets)?;
     let existing = read_project(id)?;
+    let mut versions = existing.versions;
+    versions.push(LyricProjectVersion {
+        revision: existing.revision,
+        title: existing.title,
+        draft: existing.draft,
+        rhyme_targets: existing.rhyme_targets,
+        sections: existing.sections,
+        candidate_history: existing.candidate_history,
+        saved_at_utc: existing.updated_at_utc,
+    });
+    if versions.len() > MAX_VERSIONS {
+        versions.drain(..versions.len() - MAX_VERSIONS);
+    }
     let project = LyricProject {
         schema_version: SCHEMA_VERSION,
         id: existing.id,
@@ -78,17 +113,71 @@ pub fn save(
         draft,
         rhyme_targets,
         sections,
+        candidate_history: normalize_candidate_history(candidate_history)?,
+        versions,
         revision: existing.revision.saturating_add(1),
         created_at_utc: existing.created_at_utc,
         updated_at_utc: Utc::now().to_rfc3339(),
     };
+    let mut project = project;
+    limit_project_size(&mut project)?;
     write_project(&project)?;
     Ok(project)
+}
+
+pub fn restore_version(id: &str, revision: u32) -> Result<LyricProject, String> {
+    let existing = read_project(id)?;
+    let version = existing
+        .versions
+        .iter()
+        .find(|version| version.revision == revision)
+        .cloned()
+        .ok_or_else(|| "找不到该歌词版本。".to_string())?;
+    save(
+        id,
+        version.title,
+        version.draft,
+        version.sections,
+        version.rhyme_targets,
+        version.candidate_history,
+    )
 }
 
 pub fn load(id: &str) -> Result<LyricProject, String> {
     validate_id(id)?;
     read_project(id)
+}
+
+pub fn export_text(title: String, draft: String) -> Result<String, String> {
+    if draft.chars().count() > MAX_DRAFT_CHARS {
+        return Err("歌词草稿超过 200000 字符限制。".to_string());
+    }
+    let title = if title.trim().is_empty() {
+        "未命名歌曲".to_string()
+    } else {
+        title.trim().to_string()
+    };
+    let directory = crate::agent::output_dir().join("lyrics");
+    fs::create_dir_all(&directory).map_err(|error| format!("无法创建歌词导出目录：{error}"))?;
+    let stem = title
+        .chars()
+        .filter(|character| {
+            character.is_alphanumeric()
+                || *character == ' '
+                || *character == '-'
+                || *character == '_'
+        })
+        .take(60)
+        .collect::<String>();
+    let name = if stem.trim().is_empty() {
+        "lyrics"
+    } else {
+        stem.trim()
+    };
+    let output = directory.join(format!("{}-{}.txt", name, Uuid::new_v4().simple()));
+    let content = format!("{title}\n\n{draft}");
+    fs::write(&output, content).map_err(|error| format!("无法导出歌词：{error}"))?;
+    Ok(output.to_string_lossy().into_owned())
 }
 
 pub fn list(limit: usize) -> Result<Vec<LyricProjectSummary>, String> {
@@ -144,6 +233,39 @@ fn validate_input(
         },
         draft,
     ))
+}
+
+fn normalize_candidate_history(
+    mut history: Vec<LyricCandidateSet>,
+) -> Result<Vec<LyricCandidateSet>, String> {
+    if history.len() > MAX_CANDIDATE_SETS {
+        history.drain(..history.len() - MAX_CANDIDATE_SETS);
+    }
+    for set in &history {
+        if set.candidates.len() < 2 || set.candidates.len() > 8 {
+            return Err("歌词候选记录无效。".to_string());
+        }
+        if set.candidates.iter().any(|candidate| {
+            candidate.text.chars().count() > 160 || candidate.note.chars().count() > 240
+        }) {
+            return Err("歌词候选记录超出限制。".to_string());
+        }
+    }
+    Ok(history)
+}
+
+fn limit_project_size(project: &mut LyricProject) -> Result<(), String> {
+    while serde_json::to_vec(project)
+        .map_err(|error| error.to_string())?
+        .len()
+        > MAX_PROJECT_BYTES as usize
+    {
+        if project.versions.is_empty() {
+            return Err("歌词项目超过 1 MiB 限制。".to_string());
+        }
+        project.versions.remove(0);
+    }
+    Ok(())
 }
 
 fn read_project(id: &str) -> Result<LyricProject, String> {

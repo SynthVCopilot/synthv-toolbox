@@ -14,7 +14,7 @@ const i18nUrl = moduleUrl(source("i18n").replace('from "vue-i18n"', `from ${JSON
 const { t, locale, setLocale } = await import(i18nUrl);
 for (const name of ["i18nCommon", "i18nLyrics"]) await import(moduleUrl(source(name).replace('from "./i18n"', `from ${JSON.stringify(i18nUrl)}`)));
 const main = source("main");
-const names = ["escapeHtml", "createLyricSection", "createLyricPreset", "lyricWorkspaceSnapshot", "lyricProjectHasUnsavedChanges", "renderLyricStudio", "renderLyricCandidates", "renderRhymeLookupResult", "renderLyricTemplateResult", "renderLyricsPage", "renderHistoryPage", "formatHistoryTime"];
+const names = ["escapeHtml", "createLyricSection", "createLyricPreset", "lyricWorkspaceSnapshot", "lyricProjectHasUnsavedChanges", "renderLyricStudio", "renderLyricCandidates", "renderLyricBridgeFit", "renderRhymeLookupResult", "renderLyricTemplateResult", "renderLyricsPage", "renderHistoryPage", "formatHistoryTime"];
 const functions = names.map(name => {
   const start = main.indexOf(`function ${name}(`);
   assert.notEqual(start, -1, name);
@@ -29,20 +29,25 @@ const context = vm.createContext({ t, locale, icon: () => "", console,
   lyricSectionCounter: 0, lyricSongTitle: "私の歌 <title>", lyricDraft: "原文 unchanged <script>\n第二行", lyricRhymeTargets: { A: "ang" },
   lyricSections: [{ id: "one", kind: "verse", label: "用户段落 <verse>", lineCount: 4, rhymeScheme: "ABAB" }],
   lyricCandidateSection: "用户段落 <verse>", lyricCandidateBrief: "自定义意图", lyricCandidateImagery: "雨", lyricCandidateTone: "温柔", lyricCandidateRhyme: "ang", lyricCandidateCount: 4,
-  lyricCandidates: undefined, lyricRhymeResult: undefined, lyricRhymeQuery: "ang", lyricRhymeMode: "family",
-  lyricProjects: [{ id: "saved", title: "已保存标题", lineCount: 2, revision: 1 }], lyricProjectId: "saved", lyricProjectRevision: 1, lyricSavedSnapshot: "",
+  lyricCandidates: undefined, lyricCandidateHistory: [], lyricBridgeSelection: undefined, lyricBridgePreview: undefined, lyricBridgeSlots: [], lyricRhymeResult: undefined, lyricRhymeQuery: "ang", lyricRhymeMode: "family",
+  lyricProjects: [{ id: "saved", title: "已保存标题", lineCount: 2, revision: 1 }], lyricProjectId: "saved", lyricProjectRevision: 1, lyricProjectVersions: [], lyricSavedSnapshot: "",
   creativeHistory: [], projectCheckpoints: [], projectBackupState: undefined, historyLoadState: "ready", historyLoadError: "",
 });
 vm.runInContext(stripTypeScriptTypes(functions.join("\n")), context);
 const snapshot = context.lyricWorkspaceSnapshot();
 context.lyricSavedSnapshot = snapshot;
 const english = context.renderLyricStudio(true);
-for (const text of ["Song title", "Lyric draft", "Section name", "Add section", "Suggest some lines", "Number of suggestions", "Find rhyming characters", "2 lines", "Move up", "Copy", "Clear"]) assert.ok(english.includes(text), text);
+for (const text of ["Song title", "Lyric draft", "Section name", "Add section", "Suggest some lines", "Number of suggestions", "Find rhyming characters", "2 lines", "Move up", "Copy", "Clear", "Export TXT"]) assert.ok(english.includes(text), text);
 assert.ok(english.includes("原文 unchanged &lt;script&gt;"));
 assert.ok(english.includes("用户段落 &lt;verse&gt;"));
 assert.ok(english.includes('value="family"')); assert.ok(english.includes('value="ABAB"'));
 assert.ok(context.renderLyricStudio(false).includes("Enable Copilot"));
 assert.ok(context.renderLyricsPage().includes("Focus on your lyrics"));
+context.lyricBridgeSelection = { selectionToken: "s", sessionToken: "x", target: { trackIndex: 2, groupIndex: 3 }, noteCount: 2, notes: [{ noteIndex: 4, lyric: "旧" }, { noteIndex: 7, lyric: "词" }] };
+context.lyricBridgeSlots = ["新", "词"];
+context.lyricBridgePreview = { previewToken: "p", slotCount: 2, notes: [{ noteIndex: 4, currentLyric: "旧", text: "新" }, { noteIndex: 7, currentLyric: "词", text: "词" }] };
+const bridge = context.renderLyricBridgeFit();
+for (const text of ["Track 2 · group 3", "4: 旧 → 新", "7: 词 → 词", "Confirm write", "Fill from draft selection"]) assert.ok(bridge.includes(text), text);
 setLocale("zh-CN");
 assert.ok(context.renderLyricStudio(true).includes("段落名称"));
 assert.equal(context.lyricWorkspaceSnapshot(), snapshot);
