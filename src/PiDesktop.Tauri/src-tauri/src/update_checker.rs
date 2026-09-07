@@ -52,6 +52,14 @@ struct NightlyManifest {
 }
 
 #[derive(Debug, Deserialize)]
+struct NightlyIndex {
+    schema_version: u32,
+    channel: String,
+    latest: String,
+    builds: Vec<NightlyManifest>,
+}
+
+#[derive(Debug, Deserialize)]
 struct GitHubReleaseSummary {
     tag_name: String,
     prerelease: bool,
@@ -128,7 +136,7 @@ fn check_nightly_update(current_version: &str) -> Result<ToolboxUpdateCheck, Str
         .map_err(|error| format!("无法解析 nightly 发布列表：{error}"))?;
     let tag = latest_nightly_tag(releases)?;
     let response = agent()
-        .get(&format!("{NIGHTLY_DOWNLOAD_PREFIX}{tag}/latest.json"))
+        .get(&format!("{NIGHTLY_DOWNLOAD_PREFIX}{tag}/versions.json"))
         .set("Accept", "application/json")
         .set(
             "User-Agent",
@@ -136,13 +144,34 @@ fn check_nightly_update(current_version: &str) -> Result<ToolboxUpdateCheck, Str
         )
         .call()
         .map_err(describe_nightly_request_error)?;
-    let manifest = response
-        .into_json::<NightlyManifest>()
-        .map_err(|error| format!("无法解析 nightly 更新清单：{error}"))?;
+    let index = response
+        .into_json::<NightlyIndex>()
+        .map_err(|error| format!("无法解析 nightly 更新索引：{error}"))?;
+    let manifest = select_latest_nightly_build(index)?;
     if manifest.release_url != format!("{RELEASES_TAG_PREFIX}{tag}") {
         return Err("nightly 清单与发布标签不一致。".to_string());
     }
     build_nightly_update_check(current_version, manifest)
+}
+
+fn select_latest_nightly_build(index: NightlyIndex) -> Result<NightlyManifest, String> {
+    if index.schema_version != 1 || index.channel != "nightly" {
+        return Err("nightly 更新索引版本或渠道无效。".to_string());
+    }
+    if index.latest.len() != 7 || !index.latest.chars().all(|value| value.is_ascii_hexdigit()) {
+        return Err("nightly 更新索引的 latest 提交标识无效。".to_string());
+    }
+    let mut matches = index
+        .builds
+        .into_iter()
+        .filter(|build| build.commit == index.latest);
+    let build = matches
+        .next()
+        .ok_or_else(|| "nightly 更新索引的 latest 未指向构建记录。".to_string())?;
+    if matches.next().is_some() {
+        return Err("nightly 更新索引的 latest 指向了重复构建记录。".to_string());
+    }
+    Ok(build)
 }
 
 fn latest_nightly_tag(releases: Vec<GitHubReleaseSummary>) -> Result<String, String> {
