@@ -1517,6 +1517,14 @@ pub async fn open_toolbox_releases(release_url: Option<String>) -> Result<Operat
     }
 }
 
+#[tauri::command]
+pub fn open_toolbox_project(target: String) -> OperationResult {
+    match crate::update_checker::open_project_page(&target) {
+        Ok(()) => succeeded("已打开官方页面。", RELEASES_PAGE_DETAIL),
+        Err(error) => failed("无法打开官方页面。", error),
+    }
+}
+
 const RELEASES_PAGE_DETAIL: &str =
     "仅打开 github.com/SynthVCopilot/synthv-toolbox 的官方 Releases 页面；不会自动下载或安装。";
 

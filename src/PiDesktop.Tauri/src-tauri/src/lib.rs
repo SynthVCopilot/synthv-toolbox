@@ -229,6 +229,7 @@ pub fn run() {
             commands::scan_synthv,
             commands::check_toolbox_update,
             commands::open_toolbox_releases,
+            commands::open_toolbox_project,
             commands::sv2_profile_state,
             commands::sv2_cached_profile_state,
             commands::sv2_voice_catalog,
