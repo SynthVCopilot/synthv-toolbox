@@ -1124,6 +1124,19 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       { text: "车窗外的故乡越来越长", rhymeFoot: "长", rhymeMatched: true, note: "用移动镜头扩大空间感。" },
     ],
   } as T;
+  if (command === "read_lyric_bridge_selection") return {
+    selectionToken: "preview-selection", sessionToken: "preview-session", target: { trackIndex: 0, groupIndex: 0 },
+    notes: [{ noteIndex: 0, lyric: "la" }, { noteIndex: 1, lyric: "la" }], noteCount: 2,
+  } as T;
+  if (command === "preview_lyric_bridge_fit") {
+    const request = args?.request as { selectionToken?: string; sessionToken?: string; slots?: Array<{ text?: string }> } | undefined;
+    if (request?.selectionToken !== "preview-selection" || request?.sessionToken !== "preview-session" || request.slots?.length !== 2 || request.slots.some((slot) => !slot.text?.trim())) throw new Error("预览词槽无效。");
+    return { previewToken: "preview-write", sessionToken: "preview-session", target: { trackIndex: 0, groupIndex: 0 }, notes: request.slots.map((slot, noteIndex) => ({ noteIndex, currentLyric: "la", text: slot.text!.trim() })), slotCount: 2, expiresInSeconds: 60 } as T;
+  }
+  if (command === "confirm_lyric_bridge_fit") {
+    if ((args?.request as { previewToken?: string } | undefined)?.previewToken !== "preview-write") throw new Error("预览已失效。");
+    return { applied: true, target: { trackIndex: 0, groupIndex: 0 }, noteCount: 2 } as T;
+  }
   if (command === "sv2_sync_categories") return [
     { id: "userDictionaries", label: "用户词典", description: "仅同步用户词典文件；不包含账号或登录数据。", relativeRoots: ["dicts"] },
     { id: "scripts", label: "脚本", description: "同步用户安装或编写的脚本。", relativeRoots: ["scripts"] },

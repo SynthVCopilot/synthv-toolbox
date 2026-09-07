@@ -95,6 +95,9 @@ addMessages("zh-CN", {
   "lyrics.previewWrite": "预览写入",
   "lyrics.confirmWrite": "确认写回",
   "lyrics.writtenToSynthv": "已写入 {count} 个音符。",
+  "lyrics.trackGroup": "轨道 {track} · 组 {group}",
+  "lyrics.fillFromDraftSelection": "用草稿选区填入",
+  "lyrics.selectionSlotCountMismatch": "选区含 {selected} 个非空白字符，但需要 {notes} 个音符。",
   "history.readFailedStatus": "读取失败"
 });
 
@@ -193,5 +196,8 @@ addMessages("en", {
   "lyrics.previewWrite": "Preview writing",
   "lyrics.confirmWrite": "Confirm write",
   "lyrics.writtenToSynthv": "Wrote {count} notes to SynthV.",
+  "lyrics.trackGroup": "Track {track} · group {group}",
+  "lyrics.fillFromDraftSelection": "Fill from draft selection",
+  "lyrics.selectionSlotCountMismatch": "The selection has {selected} non-whitespace characters; {notes} notes are required.",
   "history.readFailedStatus": "Could not read history"
 });

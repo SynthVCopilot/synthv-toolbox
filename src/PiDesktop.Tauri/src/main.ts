@@ -1952,7 +1952,8 @@ function renderLyricCandidates(): string {
 
 function renderLyricBridgeFit(): string {
   if (!lyricBridgeSelection) return `<section class="lyric-copilot panel-inset"><button type="button" class="secondary" data-read-lyric-bridge-selection>${t("lyrics.readSelection")}</button><p>${t("lyrics.selectedNotesHint")}</p></section>`;
-  return `<section class="lyric-copilot panel-inset"><div class="lyric-subhead"><h3>${t("lyrics.selectedNotesCount", { count: lyricBridgeSelection.noteCount })}</h3><button type="button" class="secondary compact" data-read-lyric-bridge-selection>${t("lyrics.readSelection")}</button></div><div class="lyric-candidate-list">${lyricBridgeSelection.notes.map((note, index) => `<label>${index + 1}<input data-lyric-bridge-slot="${index}" value="${escapeHtml(lyricBridgeSlots[index] ?? note.lyric)}" maxlength="160" /></label>`).join("")}</div><button type="button" class="secondary" data-preview-lyric-bridge-fit>${t("lyrics.previewWrite")}</button>${lyricBridgePreview ? `<button type="button" class="primary" data-confirm-lyric-bridge-fit>${t("lyrics.confirmWrite")}</button>` : ""}</section>`;
+  const preview = lyricBridgePreview ? `<div class="lyric-candidate-list">${lyricBridgePreview.notes.map((note) => `<p>${escapeHtml(`${note.noteIndex}: ${note.currentLyric} → ${note.text}`)}</p>`).join("")}</div>` : "";
+  return `<section class="lyric-copilot panel-inset"><div class="lyric-subhead"><h3>${t("lyrics.selectedNotesCount", { count: lyricBridgeSelection.noteCount })} · ${t("lyrics.trackGroup", { track: lyricBridgeSelection.target.trackIndex, group: lyricBridgeSelection.target.groupIndex })}</h3><button type="button" class="secondary compact" data-read-lyric-bridge-selection>${t("lyrics.readSelection")}</button></div><button type="button" class="secondary compact" data-fill-lyric-bridge-from-selection>${t("lyrics.fillFromDraftSelection")}</button><div class="lyric-candidate-list">${lyricBridgeSelection.notes.map((note, index) => `<label>${index + 1}<input data-lyric-bridge-slot="${index}" value="${escapeHtml(lyricBridgeSlots[index] ?? note.lyric)}" maxlength="160" /></label>`).join("")}</div><button type="button" class="secondary" data-preview-lyric-bridge-fit>${t("lyrics.previewWrite")}</button>${preview}${lyricBridgePreview ? `<button type="button" class="primary" data-confirm-lyric-bridge-fit>${t("lyrics.confirmWrite")}</button>` : ""}</section>`;
 }
 
 function renderLyricStudio(ai: boolean): string {
@@ -3193,6 +3194,10 @@ document.addEventListener("input", (event) => {
     return;
   }
   if (!target.closest(".lyric-workbench-grid")) return;
+  if (target.dataset.lyricBridgeSlot !== undefined) {
+    lyricBridgeSlots = lyricBridgeSelection?.notes.map((note, index) => document.querySelector<HTMLInputElement>(`[data-lyric-bridge-slot="${index}"]`)?.value ?? note.lyric) ?? [];
+    lyricBridgePreview = undefined;
+  }
   if (lyricPersistTimer !== undefined) window.clearTimeout(lyricPersistTimer);
   lyricPersistTimer = window.setTimeout(() => {
     lyricPersistTimer = undefined;
@@ -3457,10 +3462,26 @@ document.addEventListener("click", (event) => {
     const slots = lyricBridgeSelection.notes.map((note, index) => ({
       text: document.querySelector<HTMLInputElement>(`[data-lyric-bridge-slot="${index}"]`)?.value.trim() ?? note.lyric,
     }));
+    lyricBridgeSlots = slots.map((slot) => slot.text);
+    lyricBridgePreview = undefined;
     void run(async () => {
       lyricBridgePreview = await api.previewLyricBridgeFit(lyricBridgeSelection!.selectionToken, lyricBridgeSelection!.sessionToken, slots);
       lyricBridgeSlots = slots.map((slot) => slot.text);
     });
+    return;
+  }
+  if (target.hasAttribute("data-fill-lyric-bridge-from-selection") && lyricBridgeSelection) {
+    const draft = document.querySelector<HTMLTextAreaElement>("#lyric-draft");
+    const selected = draft ? draft.value.slice(draft.selectionStart, draft.selectionEnd).replace(/\s/g, "") : "";
+    const slots = Array.from(selected);
+    if (slots.length !== lyricBridgeSelection.noteCount) {
+      error = t("lyrics.selectionSlotCountMismatch", { selected: slots.length, notes: lyricBridgeSelection.noteCount });
+      render();
+      return;
+    }
+    lyricBridgeSlots = slots;
+    lyricBridgePreview = undefined;
+    render();
     return;
   }
   if (target.hasAttribute("data-confirm-lyric-bridge-fit") && lyricBridgePreview) {
