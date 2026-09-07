@@ -89,6 +89,27 @@ function click(document, selector) {
 }
 
 {
+  const pending = deferred();
+  const ui = harness({ previewLyricBridgeFit: () => pending.promise });
+  click(ui.document, "[data-preview-lyric-bridge-fit]");
+  pending.resolve({ previewToken: "current-preview" });
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(ui.state().lyricBridgePreview?.previewToken, "current-preview", "the current preview response must remain confirmable");
+}
+
+{
+  const pending = deferred();
+  const ui = harness({ previewLyricBridgeFit: () => pending.promise });
+  click(ui.document, "[data-preview-lyric-bridge-fit]");
+  const input = ui.document.querySelector('[data-lyric-bridge-slot="0"]');
+  input.value = "改";
+  input.dispatchEvent(new ui.document.defaultView.Event("input", { bubbles: true }));
+  pending.resolve({ previewToken: "stale-after-edit" });
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(ui.state().lyricBridgePreview, undefined, "editing a slot must invalidate an in-flight preview response");
+}
+
+{
   let confirmations = 0;
   const ui = harness({ confirmLyricBridgeFit: async () => { confirmations += 1; return { noteCount: 2 }; } });
   click(ui.document, "[data-confirm-lyric-bridge-fit]");
