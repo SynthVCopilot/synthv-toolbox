@@ -51,6 +51,10 @@ use crate::creative_tools::{
 use crate::credential_balancer::{CredentialBalancer, FailureKind};
 use crate::downloads::ComponentDownload;
 use crate::http_api::{validate_port, HttpApiStatus};
+use crate::lyric_bridge::{
+    self, LyricBridgeCommit, LyricBridgeConfirmRequest, LyricBridgePreview,
+    LyricBridgePreviewRequest, LyricBridgeSelection,
+};
 use crate::lyric_projects::{self, LyricProject, LyricProjectSummary};
 use crate::lyric_tools::{
     self, ChineseRhymeLookup, LyricCandidateRequest, LyricCandidateSet, LyricSectionRequest,
@@ -2505,6 +2509,28 @@ pub async fn load_lyric_project(id: String) -> Result<LyricProject, String> {
     tauri::async_runtime::spawn_blocking(move || lyric_projects::load(&id))
         .await
         .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn read_lyric_bridge_selection(
+    state: State<'_, AppState>,
+) -> Result<LyricBridgeSelection, String> {
+    lyric_bridge::read_selection(&state.mcp).await
+}
+
+#[tauri::command]
+pub fn preview_lyric_bridge_fit(
+    request: LyricBridgePreviewRequest,
+) -> Result<LyricBridgePreview, String> {
+    lyric_bridge::preview(request)
+}
+
+#[tauri::command]
+pub async fn confirm_lyric_bridge_fit(
+    request: LyricBridgeConfirmRequest,
+    state: State<'_, AppState>,
+) -> Result<LyricBridgeCommit, String> {
+    lyric_bridge::confirm(&state.mcp, request).await
 }
 
 #[tauri::command]

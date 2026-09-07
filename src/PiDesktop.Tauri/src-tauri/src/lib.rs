@@ -15,6 +15,10 @@ mod downloads;
 #[path = "../../../../test/ffmpeg_local_source.rs"]
 mod ffmpeg_local_source_tests;
 mod http_api;
+mod lyric_bridge;
+#[cfg(test)]
+#[path = "../../../../test/lyric_bridge.rs"]
+mod lyric_bridge_tests;
 mod lyric_projects;
 mod lyric_tools;
 mod managed_process;
@@ -313,6 +317,9 @@ pub fn run() {
             commands::create_lyric_project,
             commands::save_lyric_project,
             commands::load_lyric_project,
+            commands::read_lyric_bridge_selection,
+            commands::preview_lyric_bridge_fit,
+            commands::confirm_lyric_bridge_fit,
             commands::run_project_doctor,
             commands::run_pronunciation_diagnostics,
             commands::run_render_review,
