@@ -47,6 +47,10 @@ addMessages("zh-CN", {
     terminate: "终止",
     details: "详情",
     noInstances: "当前没有检测到 SynthV 实例。",
+    sessionConnected: "Bridge 会话已连接，实例归属未验证",
+    sessionDisconnected: "Bridge 会话未连接",
+    sessionOwnershipUnknown: "当前协议不提供宿主 PID；不会将会话归属到某个实例。",
+    requestedInstance: "已请求此实例启动；归属未验证",
   },
 });
 
@@ -97,5 +101,9 @@ addMessages("en", {
     terminate: "Terminate",
     details: "Details",
     noInstances: "No SynthV instances are currently detected.",
+    sessionConnected: "Bridge session connected; instance ownership is unverified",
+    sessionDisconnected: "Bridge session is disconnected",
+    sessionOwnershipUnknown: "The current protocol does not expose a host PID, so this session is not attributed to an instance.",
+    requestedInstance: "Activation requested for this instance; ownership is unverified",
   },
 });

@@ -37,6 +37,12 @@ struct SynthVHostBinding {
     profile: SynthVConnectionProfile,
 }
 
+#[derive(Clone)]
+struct OfficialBridgeSession {
+    session_token: String,
+    requested_process_id: Option<u32>,
+}
+
 impl ManagedClient {
     async fn initialize(&self, client_name: &str, client_version: &str) -> Result<Value, String> {
         match self {
@@ -92,6 +98,7 @@ pub struct McpManager {
     servers: Mutex<HashMap<String, ConnectedServer>>,
     synthv_hosts: Mutex<HashMap<String, SynthVHostBinding>>,
     legacy_connecting_host: Mutex<Option<String>>,
+    official_bridge_session: Mutex<Option<OfficialBridgeSession>>,
 }
 
 impl McpManager {
@@ -255,6 +262,9 @@ impl McpManager {
             .lock()
             .await
             .retain(|_, binding| binding.server_id != id);
+        if id == "synthv" {
+            *self.official_bridge_session.lock().await = None;
+        }
     }
 
     pub async fn is_connected(&self, id: &str) -> bool {
@@ -330,6 +340,26 @@ impl McpManager {
             .iter()
             .map(|(host_id, binding)| (host_id.clone(), binding.server_id.clone()))
             .collect()
+    }
+
+    pub async fn observe_official_bridge_session(
+        &self,
+        session_token: String,
+        requested_process_id: Option<u32>,
+    ) -> Option<u32> {
+        let mut session = self.official_bridge_session.lock().await;
+        let previous = session.as_ref();
+        let process_id = if previous.is_some_and(|current| current.session_token == session_token) {
+            requested_process_id
+                .or_else(|| previous.and_then(|current| current.requested_process_id))
+        } else {
+            requested_process_id
+        };
+        *session = Some(OfficialBridgeSession {
+            session_token,
+            requested_process_id: process_id,
+        });
+        process_id
     }
 
     pub async fn call_server_tool(

@@ -33,6 +33,64 @@ pub const TOOL_NAMES: &[&str] = &[
     "synthv_export",
 ];
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BridgeSessionStatus {
+    pub connected: bool,
+    pub session_token: Option<String>,
+    pub requested_process_id: Option<u32>,
+    pub instance_ownership: &'static str,
+    pub detail: String,
+}
+
+pub async fn official_bridge_session_status(
+    manager: &McpManager,
+    requested_process_id: Option<u32>,
+) -> Result<BridgeSessionStatus, String> {
+    if !manager.is_connected(OFFICIAL_SV2_SERVER).await {
+        return Ok(BridgeSessionStatus {
+            connected: false,
+            session_token: None,
+            requested_process_id: None,
+            instance_ownership: "unverified",
+            detail: "Bridge 会话未连接。".to_string(),
+        });
+    }
+    let status = call_payload(
+        manager,
+        OFFICIAL_SV2_SERVER,
+        "sv_status",
+        json!({ "operation": "bridge" }),
+    )
+    .await?;
+    let status_record = status
+        .get("status")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "Bridge 状态未返回心跳记录，无法确认当前会话。".to_string())?;
+    let connected = status.get("connected").and_then(Value::as_bool) == Some(true)
+        && status.get("fresh").and_then(Value::as_bool) == Some(true)
+        && status_record.get("state").and_then(Value::as_str) == Some("running");
+    if !connected {
+        return Err("Bridge 心跳未处于新鲜运行状态，无法确认当前会话。".to_string());
+    }
+    let session_token = status_record
+        .get("sessionToken")
+        .and_then(Value::as_str)
+        .filter(|token| !token.trim().is_empty())
+        .ok_or_else(|| "Bridge 状态未提供有效会话令牌，无法确认当前会话。".to_string())?;
+    let requested_process_id = manager
+        .observe_official_bridge_session(session_token.to_string(), requested_process_id)
+        .await;
+    Ok(BridgeSessionStatus {
+        connected: true,
+        session_token: Some(session_token.to_string()),
+        requested_process_id,
+        instance_ownership: "unverified",
+        detail: "Bridge 会话已连接；官方 Bridge 协议未提供宿主 PID，因此实例归属未验证。"
+            .to_string(),
+    })
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct HostRequest {
@@ -386,8 +444,9 @@ async fn connect(
                 bridge_dir.to_path_buf(),
             )
             .await
-            .map_err(standard_error)
-            .map(|_| (id.clone(), SynthVConnectionProfile::OfficialBridge))
+            .map_err(standard_error)?;
+            official_bridge_session_status(manager, host.process_id).await?;
+            Ok((id.clone(), SynthVConnectionProfile::OfficialBridge))
         }
         HostKind::OfficialSv1 => connect_sv1(manager, bridge_dir, &host, &id)
             .await

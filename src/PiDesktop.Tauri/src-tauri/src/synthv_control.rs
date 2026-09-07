@@ -97,6 +97,16 @@ pub fn send_shortcut(
     Ok(process)
 }
 
+pub fn send_verified_shortcut(
+    process_id: u32,
+    process_identity: String,
+    action: BridgeShortcutAction,
+) -> Result<SynthVProcess, String> {
+    let process = validate_instance_target(process_id, &process_identity)?;
+    platform::focus_and_send(process_id, action)?;
+    Ok(process)
+}
+
 pub fn focus_instance(process_id: u32, process_identity: String) -> Result<SynthVProcess, String> {
     let process = validate_instance_target(process_id, &process_identity)?;
     platform::focus_verified(process_id, &process_identity)?;
@@ -143,6 +153,28 @@ pub async fn start_bridge(process_id: u32) -> Result<SynthVProcess, String> {
     .map_err(|error| error.to_string())?
 }
 
+pub async fn start_verified_bridge(
+    process_id: u32,
+    process_identity: String,
+) -> Result<SynthVProcess, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        send_verified_shortcut(process_id, process_identity, BridgeShortcutAction::Start)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+pub async fn start_verified_bridge_and_connect(
+    process_id: u32,
+    process_identity: String,
+    manager: &McpManager,
+    node: String,
+    bridge_dir: PathBuf,
+) -> Result<(SynthVProcess, Vec<String>), String> {
+    let process = start_verified_bridge(process_id, process_identity).await?;
+    connect_started_bridge(process, manager, node, bridge_dir).await
+}
+
 pub async fn start_bridge_and_connect(
     process_id: u32,
     manager: &McpManager,
@@ -150,6 +182,15 @@ pub async fn start_bridge_and_connect(
     bridge_dir: PathBuf,
 ) -> Result<(SynthVProcess, Vec<String>), String> {
     let process = start_bridge(process_id).await?;
+    connect_started_bridge(process, manager, node, bridge_dir).await
+}
+
+async fn connect_started_bridge(
+    process: SynthVProcess,
+    manager: &McpManager,
+    node: String,
+    bridge_dir: PathBuf,
+) -> Result<(SynthVProcess, Vec<String>), String> {
     let mut last_error = "Bridge 尚未就绪。".to_string();
     for _ in 0..16 {
         manager.disconnect("synthv").await;

@@ -348,6 +348,14 @@ export interface OperationResult {
   detail: string;
 }
 
+export interface BridgeSessionStatus {
+  connected: boolean;
+  sessionToken?: string | null;
+  requestedProcessId?: number | null;
+  instanceOwnership: "unverified";
+  detail: string;
+}
+
 export interface ToolboxUpdateCheck {
   channel: UpdateChannel;
   currentVersion: string;
