@@ -1991,6 +1991,33 @@ function setAudioToProjectInstrumentalPath(path: string): void {
   render();
 }
 
+async function pickAudioToProjectInput(kind: "vocal" | "instrumental"): Promise<void> {
+  const path = await api.pickAudioFile();
+  if (!path) return;
+  if (kind === "vocal") setAudioToProjectVocalPath(path);
+  else setAudioToProjectInstrumentalPath(path);
+}
+
+async function pickAudioToProjectOutputDirectory(): Promise<void> {
+  const path = await api.pickDirectory();
+  if (!path) return;
+  audioToProjectOutputDirectory = path;
+  audioToProjectOutputDirectoryWasChosen = true;
+  render();
+}
+
+function dropAudioToProjectInput(paths: string[], position: { toLogical(scaleFactor: number): { x: number; y: number } }): void {
+  if (paths.length !== 1) {
+    error = t("workflowCopy.onlyOneAudioFileCanBeDropped");
+    render();
+    return;
+  }
+  const logicalPosition = position.toLogical(window.devicePixelRatio);
+  const target = document.elementFromPoint(logicalPosition.x, logicalPosition.y)?.closest<HTMLElement>("[data-pipeline-drop-target]")?.dataset.pipelineDropTarget;
+  if (target === "instrumental") setAudioToProjectInstrumentalPath(paths[0]);
+  else setAudioToProjectVocalPath(paths[0]);
+}
+
 function syncAudioToProjectForm(): void {
   audioToProjectVocalPath = document.querySelector<HTMLInputElement>("#pipeline-vocal")?.value.trim() ?? audioToProjectVocalPath;
   audioToProjectInstrumentalPath = document.querySelector<HTMLInputElement>("#pipeline-inst")?.value.trim() ?? audioToProjectInstrumentalPath;
@@ -3192,15 +3219,11 @@ document.addEventListener("click", (event) => {
   }
   if (page === "lyrics" && document.querySelector(".lyric-workbench-grid")) syncLyricDraftFromDom();
   if (target.hasAttribute("data-pick-pipeline-vocal")) {
-    void api.pickAudioFile().then((path) => {
-      if (path) setAudioToProjectVocalPath(path);
-    }).catch((reason) => { error = formatError(reason); render(); });
+    void pickAudioToProjectInput("vocal").catch((reason) => { error = formatError(reason); render(); });
     return;
   }
   if (target.hasAttribute("data-pick-pipeline-instrumental")) {
-    void api.pickAudioFile().then((path) => {
-      if (path) setAudioToProjectInstrumentalPath(path);
-    }).catch((reason) => { error = formatError(reason); render(); });
+    void pickAudioToProjectInput("instrumental").catch((reason) => { error = formatError(reason); render(); });
     return;
   }
   if (target.hasAttribute("data-clear-pipeline-instrumental")) {
@@ -3209,12 +3232,7 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (target.hasAttribute("data-pick-pipeline-output-directory")) {
-    void api.pickDirectory().then((path) => {
-      if (!path) return;
-      audioToProjectOutputDirectory = path;
-      audioToProjectOutputDirectoryWasChosen = true;
-      render();
-    }).catch((reason) => { error = formatError(reason); render(); });
+    void pickAudioToProjectOutputDirectory().catch((reason) => { error = formatError(reason); render(); });
     return;
   }
   if (target.hasAttribute("data-audio-drop-zone")) {
@@ -4032,21 +4050,16 @@ async function listenForAudioPreparationDrops(): Promise<void> {
     await getCurrentWebview().onDragDropEvent((event) => {
       if (page !== "import" || (activeWorkflow !== "audio-preparation" && activeWorkflow !== "audio-to-project")) return;
       if (event.payload.type !== "drop") return;
-      const paths = event.payload.paths;
-      if (paths.length !== 1) {
-        if (activeWorkflow === "audio-preparation") audioUiError = t("workflowCopy.onlyOneAudioFileCanBeDropped");
-        else error = t("workflowCopy.onlyOneAudioFileCanBeDropped");
-        render();
-        return;
-      }
       if (activeWorkflow === "audio-preparation") {
-        selectAudioPreparationInput(paths[0]);
+        if (event.payload.paths.length !== 1) {
+          audioUiError = t("workflowCopy.onlyOneAudioFileCanBeDropped");
+          render();
+          return;
+        }
+        selectAudioPreparationInput(event.payload.paths[0]);
         return;
       }
-      const position = event.payload.position.toLogical(window.devicePixelRatio);
-      const target = document.elementFromPoint(position.x, position.y)?.closest<HTMLElement>("[data-pipeline-drop-target]")?.dataset.pipelineDropTarget;
-      if (target === "instrumental") setAudioToProjectInstrumentalPath(paths[0]);
-      else setAudioToProjectVocalPath(paths[0]);
+      dropAudioToProjectInput(event.payload.paths, event.payload.position);
     });
   } catch {
     // The file picker remains available on hosts that do not expose Tauri v2

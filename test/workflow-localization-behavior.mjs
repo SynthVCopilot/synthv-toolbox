@@ -16,11 +16,11 @@ const t = (key, params = {}) => {
 };
 const source = read('main.ts');
 const apiSource = read('api.ts');
-assert.match(source, /event\.payload\.position\.toLogical\(window\.devicePixelRatio\)/, 'Native drops target the field under the pointer');
+assert.match(source, /position\.toLogical\(window\.devicePixelRatio\)/, 'Native drops target the field under the pointer');
 assert.match(source, /data-clear-pipeline-instrumental/, 'Optional instrumental input can be cleared');
 assert.match(apiSource, /instrumentalPath: string \| null/);
 assert.match(apiSource, /outputDirectory: string \| null/);
-const functions = new Set(['escapeHtml', 'formatAudioNumber', 'isTerminalAudioJob', 'asObject', 'resultMetric', 'renderDiagnosticResult', 'renderBatchResult', 'renderScalarResult', 'renderAbAudioResult', 'sourceDirectory', 'renderWorkflowPanel', 'renderAudioPlanDialog', 'renderCopilot', 'renderMessage']);
+const functions = new Set(['escapeHtml', 'formatAudioNumber', 'isTerminalAudioJob', 'asObject', 'resultMetric', 'renderDiagnosticResult', 'renderBatchResult', 'renderScalarResult', 'renderAbAudioResult', 'sourceDirectory', 'setAudioToProjectVocalPath', 'setAudioToProjectInstrumentalPath', 'pickAudioToProjectInput', 'pickAudioToProjectOutputDirectory', 'dropAudioToProjectInput', 'syncAudioToProjectForm', 'renderWorkflowPanel', 'renderAudioPlanDialog', 'renderCopilot', 'renderMessage', 'wireForms']);
 const ast = parse(source, { sourceType: 'module', plugins: ['typescript'] });
 const implementations = ast.program.body.filter((node) => node.type === 'FunctionDeclaration' && functions.has(node.id.name)).map((node) => source.slice(node.start, node.end)).join('\n');
 assert.doesNotMatch(implementations, /\p{Script=Han}/u, 'Static workflow wording must come from the dictionaries');
@@ -91,6 +91,53 @@ assert.equal(audioToProject.querySelector('#pipeline-vocal').readOnly, false, 'V
 assert.equal(audioToProject.querySelector('[data-clear-pipeline-instrumental]').disabled, true, 'Empty optional instrumental can be cleared safely');
 assert.equal(state.sourceDirectory('/song.wav'), '/');
 assert.equal(state.sourceDirectory('C:\\song.wav'), 'C:\\');
+
+// Exercise actual form handlers with a DOM, including the state changes caused
+// by native picker and Tauri drag-drop callbacks.
+const interactionDom = new JSDOM('<main></main>');
+const pickerCalls = [];
+state.document = interactionDom.window.document;
+state.window = interactionDom.window;
+state.api = {
+  pickAudioFile: async () => pickerCalls.shift(),
+  pickDirectory: async () => pickerCalls.shift(),
+  runAudioToProject: async (...args) => { state.audioToProjectRequest = args; return { summary: 'done' }; },
+};
+state.run = async (task) => { await task(); };
+state.renderWorkflowResult = () => '';
+state.render = () => {
+  state.document.body.innerHTML = state.renderWorkflowPanel('audio-to-project');
+  state.wireForms();
+};
+state.render();
+const dispatch = (element, type) => element.dispatchEvent(new interactionDom.window.Event(type, { bubbles: true }));
+const input = (selector, value) => {
+  const element = state.document.querySelector(selector);
+  element.value = value;
+  dispatch(element, 'input');
+  return element;
+};
+input('#pipeline-output', 'handwritten.mid');
+const importToggle = state.document.querySelector('#pipeline-import');
+importToggle.checked = true;
+dispatch(importToggle, 'change');
+pickerCalls.push('C:\\audio\\vocal.wav');
+await state.pickAudioToProjectInput('vocal');
+assert.equal(state.document.querySelector('#pipeline-output').value, 'handwritten.mid', 'Picking vocal audio preserves a typed output name');
+assert.equal(state.document.querySelector('#pipeline-import').checked, true, 'Picking vocal audio preserves import choice');
+pickerCalls.push('D:\\chosen-output');
+await state.pickAudioToProjectOutputDirectory();
+pickerCalls.push('C:\\replacement\\vocal.wav');
+await state.pickAudioToProjectInput('vocal');
+assert.equal(state.document.querySelector('#pipeline-output-directory').value, 'D:\\chosen-output', 'A chosen output directory survives source replacement');
+state.setAudioToProjectInstrumentalPath('C:\\audio\\inst.wav');
+input('#pipeline-inst', '');
+dispatch(state.document.querySelector('#audio-to-project-form'), 'submit');
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(state.audioToProjectRequest[1], null, 'Submitting an empty optional instrumental sends null');
+state.document.elementFromPoint = () => state.document.querySelector('#pipeline-inst');
+state.dropAudioToProjectInput(['C:\\audio\\dropped-inst.wav'], { toLogical: () => ({ x: 12, y: 34 }) });
+assert.equal(state.document.querySelector('#pipeline-inst').value, 'C:\\audio\\dropped-inst.wav', 'Drop callback uses the element under its position');
 state.pendingAudioPlan = { kind: 'prepare', plan: { inputPath: 'C:/项目/<source>.wav', outputPath: 'output.wav', expiresAt: '2026-09-06T12:00:00Z', parameters: [], warnings: [] } };
 const dialog = new JSDOM(state.renderAudioPlanDialog()).window.document;
 assert.equal(dialog.querySelector('#audio-plan-title').textContent, 'Confirm: Generate PCM WAV');
