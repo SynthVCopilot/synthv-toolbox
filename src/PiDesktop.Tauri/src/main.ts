@@ -1,4 +1,5 @@
 import "./i18nSystem";
+import "./i18nAbout";
 import "./i18nCopilot";
 import "./i18nWorkflows";
 import "./styles.css";
@@ -13,6 +14,7 @@ import { evaluateAccountEnvironment } from "./accountStatus";
 import { instanceAccount, instanceProjectTitle } from "./sv2Instances";
 import { findVoiceMetadata } from "./voiceCatalog";
 import { icon } from "./icons";
+import { renderAboutPage } from "./about";
 import { featureCatalog, toolGroups, type FeatureCatalogItem, type ToolGroup } from "./featureCatalog";
 import { mountShell, type ShellController } from "./vue/shell";
 import { locale, setLocale, t } from "./i18n";
@@ -69,6 +71,7 @@ import type {
   SynthVProcess,
   SynthVShortcutProfile,
   ToolboxUpdateCheck,
+  ToolboxUpdateDownload,
   TuningProfile,
   WorkflowRecipe,
   WorkflowResult,
@@ -79,7 +82,7 @@ registerModelAuthElement();
 const root = document.querySelector<HTMLDivElement>("#app")!;
 if (!root) throw new Error("Missing #app root");
 
-type Page = "home" | "accounts" | "import" | "quality" | "lyrics" | "history" | "copilot" | "components" | "bridge" | "connections" | "settings";
+type Page = "home" | "accounts" | "import" | "quality" | "lyrics" | "history" | "copilot" | "components" | "bridge" | "connections" | "settings" | "about";
 type AccountManagerSection = "profile" | "global" | "add";
 
 interface PendingAccountIndicatorConsent {
@@ -142,6 +145,9 @@ let abBaselinePath = "";
 let abCandidatePath = "";
 let toolboxUpdate: ToolboxUpdateCheck | undefined;
 let updateCheckGeneration = 0;
+let toolboxUpdateDownload: ToolboxUpdateDownload | undefined;
+let toolboxUpdateDownloadPollTimer: number | undefined;
+let toolboxUpdateDownloadPollGeneration = 0;
 let autostartQueryGeneration = 0;
 let workflowRecipes: WorkflowRecipe[] = [];
 let creativeHistory: CreativeHistoryEntry[] = [];
@@ -214,6 +220,7 @@ let sv2VoiceCatalog: Sv2CachedVoice[] | undefined;
 let sv2VoiceCatalogLoading = false;
 let shellController: ShellController | undefined;
 let lastWiredMarkup = "";
+
 
 // Keep navigation available while a cancellable FFmpeg job runs.
 type AudioJobKind = "prepare" | "normalize";
@@ -623,6 +630,31 @@ function resetContentScroll(): void {
   });
 }
 
+function shouldPollToolboxUpdateDownload(): boolean {
+  return page === "about" || toolboxUpdateDownload?.status === "downloading";
+}
+
+function scheduleToolboxUpdateDownloadPoll(delay = 1800): void {
+  if (!shouldPollToolboxUpdateDownload()) {
+    if (toolboxUpdateDownloadPollTimer !== undefined) window.clearTimeout(toolboxUpdateDownloadPollTimer);
+    toolboxUpdateDownloadPollTimer = undefined;
+    return;
+  }
+  if (toolboxUpdateDownloadPollTimer !== undefined) return;
+  toolboxUpdateDownloadPollTimer = window.setTimeout(() => {
+    toolboxUpdateDownloadPollTimer = undefined;
+    const generation = ++toolboxUpdateDownloadPollGeneration;
+    void api.getToolboxUpdateDownload().then((snapshot) => {
+      if (generation !== toolboxUpdateDownloadPollGeneration) return;
+      toolboxUpdateDownload = snapshot;
+      if (page === "about" || snapshot.status === "downloading") render();
+      else scheduleToolboxUpdateDownloadPoll();
+    }).catch(() => {
+      if (generation === toolboxUpdateDownloadPollGeneration) scheduleToolboxUpdateDownloadPoll(3500);
+    });
+  }, delay);
+}
+
 function setFeedback(result: OperationResult): void {
   if (result.succeeded) {
     notice = result.summary + (result.detail ? `\n${result.detail}` : "");
@@ -853,6 +885,7 @@ function renderSidebar(): string {
       <span class="version">v${escapeHtml(app.appVersion)} · ${escapeHtml(app.platform)}</span>
       <button class="nav-item sidebar-toggle" data-toggle-sidebar title="${sidebarCollapsed ? t("nav.expand") : t("nav.collapse")}" aria-label="${sidebarCollapsed ? t("nav.expand") : t("nav.collapse")}" aria-expanded="${!sidebarCollapsed}">${icon("arrow", 18)}<span>${sidebarCollapsed ? t("nav.expand") : t("nav.collapse")}</span></button>
       ${navItem("settings", t("nav.settings"), "settings")}
+      ${navItem("about", t("nav.about"), "info")}
     </div>`;
 }
 
@@ -916,6 +949,7 @@ function render(): void {
     shellController.afterUpdate(wireForms);
   }
   syncModelAuthDialog();
+  scheduleToolboxUpdateDownloadPoll();
   scheduleDownloadPoll();
   scheduleMediaTaskPoll();
 }
@@ -1453,6 +1487,7 @@ function renderPage(): string {
     case "bridge": return renderBridge();
     case "connections": return renderMcp();
     case "settings": return renderSettings();
+    case "about": return renderAboutPage({ app: app!, update: toolboxUpdate, download: toolboxUpdateDownload, busy, locale: locale(), translate: t, escapeHtml, icon });
   }
 }
 
@@ -2089,19 +2124,6 @@ function renderWorkflowPanel(id: string): string {
   return `<section class="workflow-panel"><div class="workflow-heading"><span class="feature-icon ${feature?.accent ?? "violet"}">${icon(feature?.icon ?? "toolbox", 25)}</span><div><span class="eyebrow">${escapeHtml(group?.title ?? t("workflow.active"))}</span><h2>${escapeHtml(feature?.title ?? t("workflow.defaultTitle"))}</h2><p>${escapeHtml(feature?.description ?? "")}</p></div></div>${form}${result}</section>`;
 }
 
-function renderToolboxUpdateResult(): string {
-  if (!toolboxUpdate) return "";
-  const result = toolboxUpdate;
-  const sameVersion = result.latestVersion === result.currentVersion;
-  const status = result.updateAvailable ? t("accountUi.updateAvailable") : sameVersion ? t("accountUi.upToDate") : t("accountUi.currentVersionIsNewer");
-  const published = result.publishedAtUtc ? new Date(result.publishedAtUtc).toLocaleString(locale()) : t("accountUi.publicationDateUnknown");
-  const checked = new Date(result.checkedAtUtc).toLocaleString(locale());
-  const notes = result.releaseNotes.trim()
-    ? `<pre class="update-release-notes">${escapeHtml(result.releaseNotes)}</pre>`
-    : `<div class="empty-inline">${t("accountUi.noReleaseNotesWereProvidedForThisVersion")}</div>`;
-  return `<section class="update-check-result ${result.updateAvailable ? "available" : "current"}"><div class="update-status"><span class="feature-icon ${result.updateAvailable ? "orange" : "emerald"}">${icon(result.updateAvailable ? "download" : "check", 22)}</span><div><span class="availability ${result.updateAvailable ? "warning" : "ready"}">${status}</span><h3>${escapeHtml(result.releaseName)}</h3><small>${t("accountUi.published")} ${escapeHtml(published)} ${t("accountUi.checked")} ${escapeHtml(checked)}</small></div></div><div class="result-dashboard compact">${resultMetric(t("accountUi.currentVersion"), `v${result.currentVersion}`)}${resultMetric(result.channel === "nightly" ? t("settings.latestNightlyVersion") : t("accountUi.latestStableVersion"), `v${result.latestVersion}`, result.updateAvailable ? "warning" : "success")}</div><div class="update-notes-heading"><strong>${t("accountUi.releaseNotes")}</strong><span>${t("accountUi.contentFromTheOfficialGithubRelease")}</span></div>${notes}<div class="result-actions"><span>${result.updateAvailable ? t("accountUi.confirmTheDownloadAndInstallationOnTheOfficialPage") : t("accountUi.youCanAlsoBrowseAllPreviousReleases")}</span><button class="secondary" data-open-toolbox-releases>${icon("arrow", 15)} ${t("accountUi.openOfficialReleases")}</button></div></section>`;
-}
-
 function renderCopilot(): string {
   const messages = conversation?.messages.filter((message) => message.role === "user" || message.role === "assistant") ?? [];
   const approvals = fileApprovals.length ? `<section class="file-approvals"><strong>${t("copilot.fileApproval")}</strong>${fileApprovals.map((item) => `<article><code>${escapeHtml(item.path)}</code><small>${escapeHtml(item.purpose)}</small><button class="primary compact" data-approve-file="${escapeHtml(item.id)}">${t("copilot.approve")}</button><button class="secondary compact" data-deny-file="${escapeHtml(item.id)}">${t("copilot.deny")}</button></article>`).join("")}</section>` : "";
@@ -2522,7 +2544,6 @@ function renderSettings(): string {
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.mode")}</h2><p>${t("settings.modeDescription")}</p></div></div><div class="mode-setting"><button class="setting-choice ${app.mode === "toolbox" ? "active" : ""}" data-set-mode="toolbox"><span class="mode-icon slate">${icon("toolbox", 23)}</span><span><strong>${t("settings.toolbox")}</strong><small>${t("settings.toolboxDescription")}</small></span>${app.mode === "toolbox" ? icon("check", 20) : ""}</button><button class="setting-choice ${app.mode === "ai" ? "active" : ""}" data-set-mode="ai"><span class="mode-icon purple">${icon("sparkles", 23)}</span><span><strong>${t("settings.ai")}</strong><small>${t("settings.aiDescription")}</small></span>${app.mode === "ai" ? icon("check", 20) : ""}</button></div></section>
     ${app.mode === "ai" ? renderAiProviderSettings() : `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("bot", 24)}</span><div><h2>${t("settings.aiDisabled")}</h2><p>${t("settings.aiDisabledDescription")}</p></div></section>`}
     ${showSvpRouting ? `<section class="panel smart-route-settings"><div class="section-heading"><div><h2>${t("settings.smartRoute")}</h2><p>${t("settings.smartRouteDescription")}</p></div><label class="fluent-switch large"><input id="svp-routing-enabled" type="checkbox" ${app.smartSvpLaunchEnabled ? "checked" : ""} ${association.supported ? "" : "disabled"} aria-label="${t("settings.smartRoute")}" /><span></span>${app.smartSvpLaunchEnabled ? t("settings.enabled") : t("settings.disabled")}</label></div><div class="smart-route-state ${association.isDefault ? "ready" : "pending"}"><span class="feature-icon ${association.isDefault ? "emerald" : "blue"}">${icon("file", 20)}</span><div><strong>${escapeHtml(associationLabel)}</strong><p>${escapeHtml(association.detail)}</p></div><button class="secondary compact" data-open-svp-default-apps ${association.supported ? "" : "disabled"}>${t("settings.openDefaults")}</button></div><div class="smart-route-boundary">${icon("shield", 17)}<span><strong>${t("accountUi.smartRoutingWorksOnlyWhileToolboxIsAlreadyRunning")}</strong><small>${t("accountUi.onAColdStartOrWhenThisFeatureIs")}</small></span></div></section>` : ""}
-    <section class="panel app-update-settings"><div class="section-heading"><div><h2>${t("settings.update")}</h2><p>${t("settings.updateDescription")}</p></div></div><label class="field"><span>${t("settings.updateChannel")}</span><select id="update-channel" ${busy ? "disabled" : ""}><option value="stable" ${app.updateChannel === "stable" ? "selected" : ""}>${t("settings.stable")}</option><option value="nightly" ${app.updateChannel === "nightly" ? "selected" : ""}>${t("settings.nightly")}</option></select><small>${app.updateChannel === "nightly" ? t("settings.nightlyDescription") : t("settings.stableDescription")}</small></label><div class="update-check-actions"><div><small>${t("settings.currentVersion")}</small><strong>v${escapeHtml(app.appVersion)}</strong></div><button class="secondary" data-check-toolbox-update>${icon("sync", 16)} ${toolboxUpdate ? t("settings.checkAgain") : t("settings.checkUpdate")}</button></div>${renderToolboxUpdateResult()}</section>
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.dataPlatform")}</h2><p>${t("settings.dataPlatformDescription")}</p></div></div><dl class="detail-list"><div><dt>${t("settings.platform")}</dt><dd>${escapeHtml(app.platform)}</dd></div><div><dt>${t("settings.config")}</dt><dd><code>${escapeHtml(app.configPath)}</code></dd></div><div><dt>${t("settings.appVersion")}</dt><dd>${escapeHtml(app.appVersion)}</dd></div></dl></section></div>`;
 }
 
@@ -3570,6 +3591,7 @@ document.addEventListener("click", (event) => {
     instanceRefreshGeneration += 1;
     if (enteringAccounts || leavingAccounts) accountPageGeneration += 1;
     page = targetPage;
+    if (page === "about") scheduleToolboxUpdateDownloadPoll(0);
     autostartQueryGeneration += 1;
     if (page === "settings") void refreshAutostartStatus();
     if (enteringComponents) {
@@ -3608,12 +3630,18 @@ document.addEventListener("click", (event) => {
   if (mode) { void run(async () => { app = await api.setMode(mode); notice = t("system.modeChanged", { mode: t(mode === "ai" ? "settings.ai" : "settings.toolbox") }); }); return; }
   const agentWorkMode = target.dataset.agentWorkMode as AgentWorkMode | undefined;
   if (agentWorkMode) { void run(async () => { app = await api.setAgentWorkMode(agentWorkMode); notice = t("system.agentModeChanged", { mode: agentWorkMode === "solo" ? "Solo" : "Edit" }); }); return; }
+  const toolboxProjectTarget = target.dataset.openToolboxProject as "project" | "issues" | "guide" | undefined;
+  if (toolboxProjectTarget) {
+    void run(async () => { setFeedback(await api.openToolboxProject(toolboxProjectTarget)); });
+    return;
+  }
   if (target.hasAttribute("data-check-toolbox-update")) {
     void run(async () => {
       const generation = ++updateCheckGeneration;
       const result = await api.checkToolboxUpdate();
       if (generation !== updateCheckGeneration) return;
       toolboxUpdate = result;
+      toolboxUpdateDownload = await api.getToolboxUpdateDownload();
       notice = toolboxUpdate.updateAvailable
         ? t("system.updateFound", { version: toolboxUpdate.latestVersion })
         : toolboxUpdate.latestVersion === toolboxUpdate.currentVersion
@@ -3622,8 +3650,16 @@ document.addEventListener("click", (event) => {
     });
     return;
   }
-  if (target.hasAttribute("data-open-toolbox-releases")) {
-    void run(async () => { setFeedback(await api.openToolboxReleases(toolboxUpdate?.releaseUrl)); });
+  if (target.hasAttribute("data-download-toolbox-update")) {
+    void run(async () => { toolboxUpdateDownload = await api.downloadToolboxUpdate(); });
+    return;
+  }
+  if (target.hasAttribute("data-cancel-toolbox-update")) {
+    void run(async () => { toolboxUpdateDownload = await api.cancelToolboxUpdateDownload(); });
+    return;
+  }
+  if (target.hasAttribute("data-install-toolbox-update")) {
+    void run(async () => { setFeedback(await api.installToolboxUpdate()); });
     return;
   }
   if (target.dataset.feature) {

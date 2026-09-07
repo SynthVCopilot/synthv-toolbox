@@ -30,6 +30,10 @@ const messages = {
 };
 
 const settingsMessages = messages["zh-CN"].settings as Record<string, string>;
+const chineseNavigation = messages["zh-CN"].nav as Record<string, string>;
+const chinesePages = messages["zh-CN"].pages as Record<string, string[]>;
+chineseNavigation.about = "关于";
+chinesePages.about = ["关于", "产品信息、许可证与应用更新"];
 settingsMessages.autostart = "开机启动";
 settingsMessages.autostartDescription = "登录系统时在后台启动 Toolbox；需要时可从托盘打开窗口。";
 settingsMessages.unknown = "状态未知";
@@ -40,6 +44,10 @@ settingsMessages.stableDescription = "仅检查正式发布版本。";
 settingsMessages.nightlyDescription = "检查最新开发构建；它可能不稳定。";
 settingsMessages.latestNightlyVersion = "最新 Nightly 版本";
 const englishSettingsMessages = messages.en.settings as Record<string, string>;
+const englishNavigation = messages.en.nav as Record<string, string>;
+const englishPages = messages.en.pages as Record<string, string[]>;
+englishNavigation.about = "About";
+englishPages.about = ["About", "Product information, license, and app updates"];
 englishSettingsMessages.autostart = "Launch at login";
 englishSettingsMessages.autostartDescription = "Start Toolbox in the background when you sign in; open the window from the tray when needed.";
 englishSettingsMessages.unknown = "Status unavailable";
