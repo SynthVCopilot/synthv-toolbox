@@ -15,14 +15,19 @@ const t = (key, params = {}) => {
   return i18n.global.t(key, params);
 };
 const source = read('main.ts');
-const functions = new Set(['escapeHtml', 'formatAudioNumber', 'isTerminalAudioJob', 'asObject', 'resultMetric', 'renderDiagnosticResult', 'renderBatchResult', 'renderScalarResult', 'renderAbAudioResult', 'renderWorkflowPanel', 'renderAudioPlanDialog', 'renderCopilot', 'renderMessage']);
+const apiSource = read('api.ts');
+assert.match(source, /event\.payload\.position\.toLogical\(window\.devicePixelRatio\)/, 'Native drops target the field under the pointer');
+assert.match(source, /data-clear-pipeline-instrumental/, 'Optional instrumental input can be cleared');
+assert.match(apiSource, /instrumentalPath: string \| null/);
+assert.match(apiSource, /outputDirectory: string \| null/);
+const functions = new Set(['escapeHtml', 'formatAudioNumber', 'isTerminalAudioJob', 'asObject', 'resultMetric', 'renderDiagnosticResult', 'renderBatchResult', 'renderScalarResult', 'renderAbAudioResult', 'sourceDirectory', 'renderWorkflowPanel', 'renderAudioPlanDialog', 'renderCopilot', 'renderMessage']);
 const ast = parse(source, { sourceType: 'module', plugins: ['typescript'] });
 const implementations = ast.program.body.filter((node) => node.type === 'FunctionDeclaration' && functions.has(node.id.name)).map((node) => source.slice(node.start, node.end)).join('\n');
 assert.doesNotMatch(implementations, /\p{Script=Han}/u, 'Static workflow wording must come from the dictionaries');
 assert.doesNotMatch(implementations, /t\(['"]['"]\)/, 'No empty lookups');
 const ids = ['audio-preparation', 'cover', 'tuning-learning', 'media-import', 'source-separation', 'audio-insight', 'score-to-synthv', 'project-tools', 'audio-to-project', 'project-doctor', 'batch-recipes', 'selective-sync', 'retake-compare', 'ab-audition', 'pronunciation-doctor', 'render-review', 'future-tool'];
 const state = {
-  t, locale: () => i18n.global.locale.value, icon: () => '',
+  t, locale: () => i18n.global.locale.value, icon: () => '', busy: false,
   conversation: undefined, conversations: [], fileApprovals: [], activeAiProvider: () => undefined, aiProviderDisplayName: (provider) => provider.displayName,
   app: { mode: 'ai', bridgeConnected: true, components: [], downloads: [] }, features: [], toolGroups: [], workflowResult: undefined,
   audioRuntime: { available: true, version: '8', detail: 'Runtime detail', source: 'system' },
@@ -30,7 +35,7 @@ const state = {
   audioProbe: undefined, audioLoudness: undefined, audioPrepareForm: { inputPath: '', sampleFormat: 's24' },
   audioNormalizeForm: { integratedLufs: -16, truePeakDbtp: -1.5, loudnessRange: 11 }, audioUiNotice: '', audioUiError: '',
   audioInputGeneration: 0, audioArtifactActionInFlight: false, audioPreviewUrl: '', audioSourcePreviewUrl: '', audioCancelInFlight: false,
-  synthvProcesses: [], mediaTasks: [], tuningProfiles: [], mediaSourcePreview: undefined, mediaSourceInput: '',
+  synthvProcesses: [], mediaTasks: [], tuningProfiles: [], mediaSourcePreview: undefined, mediaSourceInput: '', audioToProjectVocalPath: '', audioToProjectInstrumentalPath: '', audioToProjectOutputDirectory: '', audioToProjectOutputDirectoryWasChosen: false, audioToProjectOutputName: 'audio_to_project.mid', audioToProjectTolerance: 0.08, audioToProjectAdvanced: true, audioToProjectImportToSynthv: false, audioToProjectRightsConfirmed: false, audioToProjectTrackIndex: 1, audioToProjectGroupName: 'Toolbox Audio Import',
   profiles: { slots: [] }, syncSourceSlotId: '', syncTargetSlotId: '', syncCategories: [], syncSelectedCategories: [], syncManifest: undefined, syncOverwrite: false,
   workflowRecipes: [], audioCaptureCapability: undefined, audioCaptureTargets: [], abProcessId: undefined,
   abStartSeconds: 0, abEndSeconds: 5, abPreRollSeconds: 0, abPostRollSeconds: 0, abBaselinePath: '', abCandidatePath: '', pendingAudioPlan: undefined,
@@ -77,6 +82,15 @@ for (const preview of ['', 'blob:preview']) { state.audioPreviewUrl = preview; s
 for (const id of ['tuning-learning', 'ab-audition']) rendered(id);
 assert.equal(rendered('audio-preparation').querySelector('#audio-prep-format').value, 's24');
 assert.match(rendered('batch-recipes').querySelector('#batch-options').placeholder, /For example \{"suffix":"_delivery"\}/);
+const audioToProject = rendered('audio-to-project');
+assert.equal(audioToProject.querySelector('#pipeline-inst').required, false, 'Instrumental input is optional');
+assert.equal(audioToProject.querySelector('[data-pick-pipeline-vocal]').tagName, 'BUTTON');
+assert.equal(audioToProject.querySelector('[data-pick-pipeline-output-directory]').tagName, 'BUTTON');
+assert.equal(audioToProject.querySelector('#pipeline-vocal').getAttribute('data-pipeline-drop-target'), 'vocal');
+assert.equal(audioToProject.querySelector('#pipeline-vocal').readOnly, false, 'Vocal path remains pasteable');
+assert.equal(audioToProject.querySelector('[data-clear-pipeline-instrumental]').disabled, true, 'Empty optional instrumental can be cleared safely');
+assert.equal(state.sourceDirectory('/song.wav'), '/');
+assert.equal(state.sourceDirectory('C:\\song.wav'), 'C:\\');
 state.pendingAudioPlan = { kind: 'prepare', plan: { inputPath: 'C:/项目/<source>.wav', outputPath: 'output.wav', expiresAt: '2026-09-06T12:00:00Z', parameters: [], warnings: [] } };
 const dialog = new JSDOM(state.renderAudioPlanDialog()).window.document;
 assert.equal(dialog.querySelector('#audio-plan-title').textContent, 'Confirm: Generate PCM WAV');

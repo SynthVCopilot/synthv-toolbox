@@ -1246,6 +1246,9 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .audio-drop-zone:disabled { cursor: not-allowed; opacity: .62; }
 .audio-drop-zone strong { color: var(--text); font-size: 13px; }
 .audio-drop-zone small { max-width: 460px; font-size: 11px; }
+.input-action { display: flex; gap: 8px; align-items: center; }
+.input-action input { min-width: 0; flex: 1; }
+.optional-field { color: var(--muted); font-size: 12px; font-weight: 400; }
 .audio-probe-card { display: grid; gap: 12px; }
 .audio-probe-heading, .audio-job-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .audio-probe-heading > div, .audio-job-heading > div { display: grid; gap: 2px; }

@@ -1355,8 +1355,8 @@ export const api = {
     call<WorkflowResult>("run_pronunciation_diagnostics", { projectPath: projectPath || null, lyrics: lyrics || null }),
   runRenderReview: (audioPath: string, expectedDurationSec?: number, expectedBpm?: number, requireNotes = false, advanced = false) =>
     call<WorkflowResult>("run_render_review", { audioPath, expectedDurationSec: expectedDurationSec ?? null, expectedBpm: expectedBpm ?? null, requireNotes, advanced }),
-  runAudioToProject: (vocalPath: string, instrumentalPath: string, outputName: string, tolerance: number, advanced: boolean, importToSynthv: boolean, rightsConfirmed: boolean, trackIndex: number, groupName: string) =>
-    call<WorkflowResult>("run_audio_to_project", { vocalPath, instrumentalPath, outputName, tolerance, advanced, importToSynthv, rightsConfirmed, trackIndex, groupName }),
+  runAudioToProject: (vocalPath: string, instrumentalPath: string | null, outputName: string, outputDirectory: string | null, tolerance: number, advanced: boolean, importToSynthv: boolean, rightsConfirmed: boolean, trackIndex: number, groupName: string) =>
+    call<WorkflowResult>("run_audio_to_project", { vocalPath, instrumentalPath, outputName, outputDirectory, tolerance, advanced, importToSynthv, rightsConfirmed, trackIndex, groupName }),
   runScoreToSynthv: (scorePath: string, trackIndex: number, groupName: string, rightsConfirmed: boolean) =>
     call<WorkflowResult>("run_score_to_synthv", { scorePath, trackIndex, groupName, rightsConfirmed }),
   runRetakeWorkbench: (trackIndex: number, groupIndex: number, noteIndex: number, operation: string, takeId: number | undefined, newDuration: boolean, newPitch: boolean, newTimbre: boolean, activate: boolean) =>
