@@ -14,6 +14,7 @@ const bridgeEntries = [
 const buildDependencies = [
   resolve(componentDirectory, "node_modules/typescript/bin/tsc"),
   resolve(componentDirectory, "node_modules/@types/node/package.json"),
+  resolve(componentDirectory, "node_modules/esbuild/package.json"),
 ];
 const npmCli = process.env.npm_execpath ?? resolve(dirname(process.execPath), "node_modules/npm/bin/npm-cli.js");
 

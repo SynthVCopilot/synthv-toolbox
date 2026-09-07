@@ -9,7 +9,7 @@ const lib = fs.readFileSync(path.join(root, "src/PiDesktop.Tauri/src-tauri/src/l
 const commands = fs.readFileSync(path.join(root, "src/PiDesktop.Tauri/src-tauri/src/commands.rs"), "utf8");
 
 assert.match(main, /api\.getAutostart\(\)/);
-assert.match(main, /app\.autostartEnabled === undefined/);
+assert.match(main, /app\.autostartEnabled == null/);
 assert.match(main, /api\.setAutostart\(enabled\)/);
 assert.match(main, /autostartError/);
 assert.match(api, /set_autostart/);

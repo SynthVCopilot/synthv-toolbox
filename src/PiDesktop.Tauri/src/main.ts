@@ -141,6 +141,7 @@ let abPostRollSeconds = 0.25;
 let abBaselinePath = "";
 let abCandidatePath = "";
 let toolboxUpdate: ToolboxUpdateCheck | undefined;
+let autostartQueryGeneration = 0;
 let workflowRecipes: WorkflowRecipe[] = [];
 let creativeHistory: CreativeHistoryEntry[] = [];
 let projectCheckpoints: ProjectCheckpoint[] = [];
@@ -659,6 +660,7 @@ async function refresh(): Promise<void> {
     api.listTuningProfiles(),
     api.getHttpApiStatus(),
   ]);
+  if (page === "settings") await refreshAutostartStatus();
 }
 
 async function refreshAccountUsage(slotId?: string, pageGeneration = accountPageGeneration): Promise<void> {
@@ -2515,7 +2517,7 @@ function renderSettings(): string {
         ? t("settings.registered")
         : t("settings.unregistered");
   return `<div class="settings-layout"><section class="panel language-settings"><div class="section-heading"><div><h2>${t("settings.language")}</h2></div><label><select id="language-select" aria-label="${t("settings.language")}"><option value="zh-CN" ${locale() === "zh-CN" ? "selected" : ""}>${t("settings.chinese")}</option><option value="en" ${locale() === "en" ? "selected" : ""}>${t("settings.english")}</option></select></label></div></section>
-    <section class="panel"><div class="section-heading"><div><h2>${t("settings.autostart")}</h2><p>${t("settings.autostartDescription")}</p>${app.autostartError ? `<p class="error-text">${escapeHtml(app.autostartError)}</p>` : ""}</div><label class="fluent-switch large"><input id="autostart-enabled" type="checkbox" ${app.autostartEnabled === true ? "checked" : ""} ${app.autostartEnabled === undefined ? "disabled" : ""} aria-label="${t("settings.autostart")}" /><span></span>${app.autostartEnabled === undefined ? t("settings.unknown") : app.autostartEnabled ? t("settings.enabled") : t("settings.disabled")}</label></div></section>
+    <section class="panel"><div class="section-heading"><div><h2>${t("settings.autostart")}</h2><p>${t("settings.autostartDescription")}</p>${app.autostartError ? `<p class="error-text">${escapeHtml(app.autostartError)}</p>` : ""}</div><label class="fluent-switch large"><input id="autostart-enabled" type="checkbox" ${app.autostartEnabled === true ? "checked" : ""} ${busy || app.autostartEnabled == null ? "disabled" : ""} aria-label="${t("settings.autostart")}" /><span></span>${app.autostartEnabled == null ? t("settings.unknown") : app.autostartEnabled ? t("settings.enabled") : t("settings.disabled")}</label></div></section>
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.mode")}</h2><p>${t("settings.modeDescription")}</p></div></div><div class="mode-setting"><button class="setting-choice ${app.mode === "toolbox" ? "active" : ""}" data-set-mode="toolbox"><span class="mode-icon slate">${icon("toolbox", 23)}</span><span><strong>${t("settings.toolbox")}</strong><small>${t("settings.toolboxDescription")}</small></span>${app.mode === "toolbox" ? icon("check", 20) : ""}</button><button class="setting-choice ${app.mode === "ai" ? "active" : ""}" data-set-mode="ai"><span class="mode-icon purple">${icon("sparkles", 23)}</span><span><strong>${t("settings.ai")}</strong><small>${t("settings.aiDescription")}</small></span>${app.mode === "ai" ? icon("check", 20) : ""}</button></div></section>
     ${app.mode === "ai" ? renderAiProviderSettings() : `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("bot", 24)}</span><div><h2>${t("settings.aiDisabled")}</h2><p>${t("settings.aiDisabledDescription")}</p></div></section>`}
     ${showSvpRouting ? `<section class="panel smart-route-settings"><div class="section-heading"><div><h2>${t("settings.smartRoute")}</h2><p>${t("settings.smartRouteDescription")}</p></div><label class="fluent-switch large"><input id="svp-routing-enabled" type="checkbox" ${app.smartSvpLaunchEnabled ? "checked" : ""} ${association.supported ? "" : "disabled"} aria-label="${t("settings.smartRoute")}" /><span></span>${app.smartSvpLaunchEnabled ? t("settings.enabled") : t("settings.disabled")}</label></div><div class="smart-route-state ${association.isDefault ? "ready" : "pending"}"><span class="feature-icon ${association.isDefault ? "emerald" : "blue"}">${icon("file", 20)}</span><div><strong>${escapeHtml(associationLabel)}</strong><p>${escapeHtml(association.detail)}</p></div><button class="secondary compact" data-open-svp-default-apps ${association.supported ? "" : "disabled"}>${t("settings.openDefaults")}</button></div><div class="smart-route-boundary">${icon("shield", 17)}<span><strong>${t("accountUi.smartRoutingWorksOnlyWhileToolboxIsAlreadyRunning")}</strong><small>${t("accountUi.onAColdStartOrWhenThisFeatureIs")}</small></span></div></section>` : ""}
@@ -2523,20 +2525,41 @@ function renderSettings(): string {
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.dataPlatform")}</h2><p>${t("settings.dataPlatformDescription")}</p></div></div><dl class="detail-list"><div><dt>${t("settings.platform")}</dt><dd>${escapeHtml(app.platform)}</dd></div><div><dt>${t("settings.config")}</dt><dd><code>${escapeHtml(app.configPath)}</code></dd></div><div><dt>${t("settings.appVersion")}</dt><dd>${escapeHtml(app.appVersion)}</dd></div></dl></section></div>`;
 }
 
-function wireForms(): void {
-  if (page === "settings" && app) {
-    void api.getAutostart().then((status) => {
-      if (!app || page !== "settings") return;
-      const changed = app.autostartEnabled !== status.enabled || app.autostartError !== status.error;
-      app.autostartEnabled = status.enabled;
-      app.autostartError = status.error;
-      if (changed) render();
-    }).catch((reason) => {
-      if (!app || page !== "settings") return;
-      app.autostartError = String(reason);
-      render();
-    });
+async function refreshAutostartStatus(): Promise<void> {
+  const snapshot = app;
+  if (!snapshot || page !== "settings") return;
+  const generation = ++autostartQueryGeneration;
+  snapshot.autostartEnabled = undefined;
+  snapshot.autostartError = undefined;
+  render();
+  try {
+    const status = await api.getAutostart();
+    if (app !== snapshot || page !== "settings" || generation !== autostartQueryGeneration) return;
+    snapshot.autostartEnabled = status.enabled ?? undefined;
+    snapshot.autostartError = status.error ?? undefined;
+  } catch (reason) {
+    if (app !== snapshot || page !== "settings" || generation !== autostartQueryGeneration) return;
+    snapshot.autostartError = formatError(reason);
   }
+  if (app === snapshot && page === "settings" && generation === autostartQueryGeneration) render();
+}
+
+async function changeAutostart(enabled: boolean): Promise<void> {
+  autostartQueryGeneration += 1;
+  try {
+    const actual = await api.setAutostart(enabled);
+    if (app) {
+      app.autostartEnabled = actual;
+      app.autostartError = undefined;
+    }
+    notice = actual ? t("accountNotice.autostartEnabled") : t("accountNotice.autostartDisabled");
+  } catch (reason) {
+    await refreshAutostartStatus();
+    throw reason;
+  }
+}
+
+function wireForms(): void {
   document.querySelector<HTMLSelectElement>("#language-select")?.addEventListener("change", (event) => {
     setLocale((event.currentTarget as HTMLSelectElement).value === "en" ? "en" : "zh-CN");
     render();
@@ -2894,11 +2917,7 @@ function wireForms(): void {
   });
   document.querySelector<HTMLInputElement>("#autostart-enabled")?.addEventListener("change", (event) => {
     const enabled = (event.currentTarget as HTMLInputElement).checked;
-    void run(async () => {
-      const actual = await api.setAutostart(enabled);
-      if (app) app.autostartEnabled = actual;
-      notice = actual ? t("accountNotice.autostartEnabled") : t("accountNotice.autostartDisabled");
-    });
+    void run(() => changeAutostart(enabled));
   });
   document.querySelector<HTMLFormElement>("#http-api-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -3546,6 +3565,8 @@ document.addEventListener("click", (event) => {
     instanceRefreshGeneration += 1;
     if (enteringAccounts || leavingAccounts) accountPageGeneration += 1;
     page = targetPage;
+    autostartQueryGeneration += 1;
+    if (page === "settings") void refreshAutostartStatus();
     if (enteringComponents) {
       void loadFfmpegConfiguration();
     }

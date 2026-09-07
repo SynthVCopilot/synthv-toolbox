@@ -1206,7 +1206,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 export const api = {
   bootstrap: () => call<BootstrapState>("bootstrap"),
   setAutostart: (enabled: boolean) => call<boolean>("set_autostart", { enabled }),
-  getAutostart: () => call<{ enabled?: boolean; error?: string }>("get_autostart"),
+  getAutostart: () => call<{ enabled?: boolean | null; error?: string | null }>("get_autostart"),
   completeOnboarding: (mode: AppMode) => call<BootstrapState>("complete_onboarding", { mode }),
   setMode: (mode: AppMode) => call<BootstrapState>("set_mode", { mode }),
   setAgentWorkMode: (mode: AgentWorkMode) => call<BootstrapState>("set_agent_work_mode", { mode }),

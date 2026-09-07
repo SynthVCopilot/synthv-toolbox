@@ -113,9 +113,7 @@ pub fn run() {
                 Ok(settings) => settings,
                 Err(error) => {
                     eprintln!("{error}");
-                    // Keep the UI available as a read-only recovery surface.
-                    // save_settings independently blocks every write while the
-                    // original file is invalid.
+                    // Keep the UI available while save_settings blocks writes to invalid settings.
                     crate::config::ToolboxSettings::default()
                 }
             };

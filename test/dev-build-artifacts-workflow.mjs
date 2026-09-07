@@ -32,7 +32,7 @@ assert.equal((workflow.match(/actions\/download-artifact@v5/g) ?? []).length, 2)
 assert.equal((release.match(/actions\/download-artifact@v5/g) ?? []).length, 3);
 assert.equal((workflow.match(/npm run build/g) ?? []).length, 0);
 assert.equal((workflow.match(/npm run tauri build/g) ?? []).length, 1);
-assert.match(workflow, /npm ci --omit=dev --no-audit --no-fund/);
+assert.doesNotMatch(workflow, /npm ci --omit=dev/);
 assert.match(workflow, /--config \.\.\/\.\.\/\.github\/tauri-ci\.conf\.json/);
 assert.match(ciConfig, /"beforeBuildCommand": ""/);
 assert.match(viteConfig, /target: \["chrome111", "safari15"\]/);
