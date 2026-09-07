@@ -1240,7 +1240,7 @@ export const api = {
     call<BootstrapState>("update_ai_provider_strategy", { provider, strategy }),
   scanSynthV: () => call<SynthVInstallation[]>("scan_synthv"),
   checkToolboxUpdate: () => call<ToolboxUpdateCheck>("check_toolbox_update"),
-  openToolboxReleases: () => call<OperationResult>("open_toolbox_releases"),
+  openToolboxReleases: (releaseUrl?: string) => call<OperationResult>("open_toolbox_releases", { releaseUrl }),
   sv2ProfileState: () => call<Sv2ProfilesState>("sv2_profile_state"),
   sv2CachedProfileState: () => call<Sv2ProfilesState>("sv2_cached_profile_state"),
   sv2VoiceCatalog: () => call<import("./types").Sv2CachedVoice[]>("sv2_voice_catalog"),

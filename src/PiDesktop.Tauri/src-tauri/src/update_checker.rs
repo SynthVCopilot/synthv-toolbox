@@ -74,11 +74,11 @@ pub fn check_for_update(
     }
 }
 
-pub fn open_releases_page(channel: UpdateChannel) -> Result<(), String> {
-    let url = match channel {
-        UpdateChannel::Stable => RELEASES_PAGE.to_string(),
-        UpdateChannel::Nightly => nightly_release_tag(env!("CARGO_PKG_VERSION")),
-    };
+pub fn open_releases_page(url: Option<&str>) -> Result<(), String> {
+    let url = url.unwrap_or(RELEASES_PAGE);
+    if !is_official_release_url(url) && url != RELEASES_PAGE {
+        return Err("发布地址不是官方 GitHub Releases 地址。".to_string());
+    }
     #[cfg(target_os = "windows")]
     let mut command = Command::new("explorer.exe");
     #[cfg(target_os = "macos")]
@@ -202,6 +202,9 @@ fn build_nightly_update_check(
         return Err("nightly 更新清单包含非官方发布地址，已拒绝显示。".to_string());
     }
     let latest = nightly_version(&manifest.version, "nightly 最新版本")?;
+    if !manifest.version.trim().ends_with(&format!("-dev.{}", manifest.commit)) {
+        return Err("nightly 更新清单的版本与提交标识不一致。".to_string());
+    }
     let current = nightly_version(current_version, "当前应用版本").ok();
     let source_committed_at = DateTime::parse_from_rfc3339(&manifest.source_committed_at_utc)
         .map_err(|error| format!("nightly 更新清单的提交时间无效：{error}"))?
@@ -209,14 +212,18 @@ fn build_nightly_update_check(
     let update_available = if manifest.version == current_version.trim() {
         false
     } else if let Some(current) = current {
+        if latest.base != current.base {
+            latest.base > current.base
+        } else {
         source_committed_at > current.published_at
+        }
     } else {
         latest.base >= parse_version(current_version, "当前应用版本")?
     };
     let notes = manifest
         .changes
         .into_iter()
-        .map(|change| format!("- {} ({})", change.title.trim(), change.commit.trim()))
+        .map(|change| format!("- {} (#{})", change.title.trim(), change.commit.trim()))
         .collect::<Vec<_>>()
         .join("\n");
     Ok(ToolboxUpdateCheck {
@@ -239,9 +246,12 @@ struct ParsedNightlyVersion {
 
 fn nightly_version(value: &str, label: &str) -> Result<ParsedNightlyVersion, String> {
     let value = value.trim().trim_start_matches(['v', 'V']);
-    let (base, _) = value
+    let (base, commit) = value
         .rsplit_once("-dev.")
         .ok_or_else(|| format!("{label}“{value}”不是有效的 nightly 版本。"))?;
+    if commit.len() != 7 || !commit.chars().all(|value| value.is_ascii_hexdigit()) {
+        return Err(format!("{label}“{value}”没有有效的短提交标识。"));
+    }
     let published_at = option_env!("SYNTHV_TOOLBOX_SOURCE_COMMITTED_AT_UTC")
         .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
         .map(|value| value.with_timezone(&Utc))
@@ -252,18 +262,6 @@ fn nightly_version(value: &str, label: &str) -> Result<ParsedNightlyVersion, Str
     })
 }
 
-fn nightly_release_tag(version: &str) -> String {
-    format!("{RELEASES_TAG_PREFIX}v{}-nightly", base_version(version))
-}
-fn base_version(value: &str) -> String {
-    value
-        .trim()
-        .trim_start_matches(['v', 'V'])
-        .split("-dev.")
-        .next()
-        .unwrap_or(env!("CARGO_PKG_VERSION"))
-        .to_string()
-}
 fn parse_version(value: &str, label: &str) -> Result<Version, String> {
     Version::parse(value.trim().trim_start_matches(['v', 'V']))
         .map_err(|error| format!("{label}“{value}”不是有效的语义化版本：{error}"))
@@ -298,3 +296,7 @@ fn describe_nightly_request_error(error: ureq::Error) -> String {
         other => describe_request_error(other),
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../test/update_checker.rs"]
+mod tests;

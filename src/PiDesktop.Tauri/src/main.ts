@@ -142,6 +142,7 @@ let abPostRollSeconds = 0.25;
 let abBaselinePath = "";
 let abCandidatePath = "";
 let toolboxUpdate: ToolboxUpdateCheck | undefined;
+let updateCheckGeneration = 0;
 let autostartQueryGeneration = 0;
 let workflowRecipes: WorkflowRecipe[] = [];
 let creativeHistory: CreativeHistoryEntry[] = [];
@@ -2567,7 +2568,7 @@ function wireForms(): void {
   });
   document.querySelector<HTMLSelectElement>("#update-channel")?.addEventListener("change", (event) => {
     const channel = (event.currentTarget as HTMLSelectElement).value === "nightly" ? "nightly" : "stable";
-    void run(async () => { app = await api.setUpdateChannel(channel); toolboxUpdate = undefined; });
+    void run(async () => { updateCheckGeneration += 1; app = await api.setUpdateChannel(channel); toolboxUpdate = undefined; });
   });
   document.querySelector<HTMLFormElement>("#audio-prepare-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -3610,7 +3611,10 @@ document.addEventListener("click", (event) => {
   if (agentWorkMode) { void run(async () => { app = await api.setAgentWorkMode(agentWorkMode); notice = t("system.agentModeChanged", { mode: agentWorkMode === "solo" ? "Solo" : "Edit" }); }); return; }
   if (target.hasAttribute("data-check-toolbox-update")) {
     void run(async () => {
-      toolboxUpdate = await api.checkToolboxUpdate();
+      const generation = ++updateCheckGeneration;
+      const result = await api.checkToolboxUpdate();
+      if (generation !== updateCheckGeneration) return;
+      toolboxUpdate = result;
       notice = toolboxUpdate.updateAvailable
         ? t("system.updateFound", { version: toolboxUpdate.latestVersion })
         : toolboxUpdate.latestVersion === toolboxUpdate.currentVersion
@@ -3620,7 +3624,7 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (target.hasAttribute("data-open-toolbox-releases")) {
-    void run(async () => { setFeedback(await api.openToolboxReleases()); });
+    void run(async () => { setFeedback(await api.openToolboxReleases(toolboxUpdate?.releaseUrl)); });
     return;
   }
   if (target.dataset.feature) {

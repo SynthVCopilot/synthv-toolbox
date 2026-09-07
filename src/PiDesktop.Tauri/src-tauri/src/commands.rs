@@ -1507,9 +1507,8 @@ pub async fn check_toolbox_update(
 }
 
 #[tauri::command]
-pub async fn open_toolbox_releases(state: State<'_, AppState>) -> Result<OperationResult, String> {
-    let channel = state.settings.read().await.update_channel;
-    match crate::update_checker::open_releases_page(channel) {
+pub async fn open_toolbox_releases(release_url: Option<String>) -> Result<OperationResult, String> {
+    match crate::update_checker::open_releases_page(release_url.as_deref()) {
         Ok(()) => Ok(succeeded(
             "已打开 Synthesizer V Toolbox 官方发布页。",
             RELEASES_PAGE_DETAIL,
