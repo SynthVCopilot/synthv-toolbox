@@ -83,6 +83,7 @@ export interface SynthVAddNote {
   readonly pitch: number;
   readonly lyrics?: string;
   readonly languageOverride?: "mandarin" | "english";
+  readonly phonemes?: string;
 }
 
 export interface ScoreTempoPoint {
@@ -252,6 +253,7 @@ interface RawNote {
   pitch: number;
   lyric?: string;
   languageOverride?: "mandarin" | "english";
+  phonemes?: string;
   voice?: string;
   staff?: number;
   sourceMeasure?: string;
@@ -564,10 +566,15 @@ function buildImport(
     }
     const lyric = raw.lyric === undefined || raw.lyric.length === 0 ? settings.defaultLyric : raw.lyric;
     const languageOverride = raw.languageOverride;
+    const phonemes = raw.phonemes;
     const note = lyric === undefined
       ? { onset, duration, pitch }
       : { onset, duration, pitch, lyrics: lyric };
-    return languageOverride === undefined ? note : { ...note, languageOverride };
+    return {
+      ...note,
+      ...(languageOverride === undefined ? {} : { languageOverride }),
+      ...(phonemes === undefined ? {} : { phonemes }),
+    };
   });
 
   const previewNotes = notes.map(
@@ -1743,6 +1750,11 @@ interface MidiPhonemeMarker {
 }
 
 const SYNTHV_PHONEME_MARKER_PREFIX = "SynthVPhoneme\0";
+const ENGLISH_ARPABET_PHONEMES = new Set([
+  "aa", "ae", "ah", "ao", "aw", "ax", "ay", "b", "ch", "d", "dx", "dr", "dh", "eh", "er",
+  "ey", "f", "g", "hh", "ih", "iy", "jh", "k", "l", "m", "n", "ng", "ow", "oy", "p", "q",
+  "r", "s", "sh", "t", "tr", "th", "uh", "uw", "v", "w", "y", "z", "zh", "pau", "sil", "cl", "br",
+]);
 
 function midiPhonemeMarker(bytes: Uint8Array): MidiPhonemeMarker | undefined {
   const text = midiText(bytes);
@@ -1765,6 +1777,17 @@ function languageFromPhoneset(phoneset: string): "mandarin" | "english" | undefi
     default:
       return undefined;
   }
+}
+
+function normalizeEnglishArpabet(value: string): string | undefined {
+  const phonemes = value
+    .trim()
+    .split(/\s+/u)
+    .map((phoneme) => phoneme.replace(/[0-2]$/u, "").toLowerCase());
+  if (phonemes.length === 0 || phonemes.some((phoneme) => !ENGLISH_ARPABET_PHONEMES.has(phoneme))) {
+    return undefined;
+  }
+  return phonemes.join(" ");
 }
 
 interface MidiParseBudget {
@@ -2194,11 +2217,19 @@ function attachMidiLanguageOverrides(
       unsupported += 1;
     } else {
       note.languageOverride = language;
+      if (marker.phoneset === "arpabet") {
+        const phonemes = normalizeEnglishArpabet(marker.phoneme);
+        if (phonemes === undefined) {
+          unsupported += 1;
+        } else {
+          note.phonemes = phonemes;
+        }
+      }
     }
   }
   return unsupported === 0
     ? []
-    : [`Ignored ${unsupported} MIDI phoneme marker(s) with an unsupported phoneset.`];
+    : [`Ignored ${unsupported} MIDI phoneme marker(s) with an unsupported phoneset or phoneme sequence.`];
 }
 
 function unambiguousMetadataLyrics(

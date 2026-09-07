@@ -71,3 +71,46 @@ test("does not borrow lyrics from another melodic track", () => {
     { onset: 0, duration: SYNTHV_QUARTER_BLICKS, pitch: 60 },
   ]);
 });
+
+test("normalizes verified English ARPAbet markers into SynthV phoneme overrides", () => {
+  const track = [
+    ...meta(0, 0x05, "hello"),
+    ...meta(0, 0x7f, "SynthVPhoneme\0arpabet\0HH AH0 L OW1"),
+    0x00, 0x90, 60, 100,
+    ...variableLength(480), 60, 0,
+    ...meta(0, 0x2f, ""),
+  ];
+
+  assert.deepEqual(importMidiMonophonic(midiFile([track]), { trackIndex: 1, channel: 1 }).notes, [
+    {
+      onset: 0,
+      duration: SYNTHV_QUARTER_BLICKS,
+      pitch: 60,
+      lyrics: "hello",
+      languageOverride: "english",
+      phonemes: "hh ah l ow",
+    },
+  ]);
+});
+
+test("rejects an English phoneme override containing a symbol outside the installed phoneset", () => {
+  const track = [
+    ...meta(0, 0x05, "hello"),
+    ...meta(0, 0x7f, "SynthVPhoneme\0arpabet\0HH INVALID"),
+    0x00, 0x90, 60, 100,
+    ...variableLength(480), 60, 0,
+    ...meta(0, 0x2f, ""),
+  ];
+  const imported = importMidiMonophonic(midiFile([track]), { trackIndex: 1, channel: 1 });
+
+  assert.deepEqual(imported.notes, [{
+    onset: 0,
+    duration: SYNTHV_QUARTER_BLICKS,
+    pitch: 60,
+    lyrics: "hello",
+    languageOverride: "english",
+  }]);
+  assert.deepEqual(imported.warnings, [
+    "Ignored 1 MIDI phoneme marker(s) with an unsupported phoneset or phoneme sequence.",
+  ]);
+});
