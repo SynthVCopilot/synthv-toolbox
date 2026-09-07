@@ -51,6 +51,34 @@ export function createPublicationPlan({ developmentVersion, sha, runId, previous
   return { ...result, range: `${previous.commit}..${sha}` };
 }
 
+export function parseVersionsIndex(value) {
+  if (value?.schemaVersion !== 1 || value?.channel !== "nightly" || !Array.isArray(value.builds)) {
+    throw new Error("Invalid nightly versions index");
+  }
+  const commits = new Set();
+  for (const build of value.builds) {
+    if (!/^[0-9a-f]{7}$/i.test(build?.commit ?? "") || commits.has(build.commit.toLowerCase())) {
+      throw new Error("Nightly versions index must contain unique short commit hashes");
+    }
+    commits.add(build.commit.toLowerCase());
+  }
+  if (!commits.has(value.latest?.toLowerCase())) {
+    throw new Error("Nightly versions index latest must identify a build");
+  }
+  return value;
+}
+
+export function mergeVersionsIndex(index, build) {
+  const current = index ? parseVersionsIndex(index) : { schemaVersion: 1, channel: "nightly", latest: "", builds: [] };
+  if (!/^[0-9a-f]{7}$/i.test(build?.commit ?? "")) throw new Error("Nightly build must have a short commit hash");
+  const existing = current.builds.find((entry) => entry.commit.toLowerCase() === build.commit.toLowerCase());
+  if (existing) {
+    if (JSON.stringify(existing) !== JSON.stringify(build)) throw new Error("Nightly build commit already exists with different details");
+    return current;
+  }
+  return { schemaVersion: 1, channel: "nightly", latest: build.commit.toLowerCase(), builds: [...current.builds, build] };
+}
+
 function git(...args) {
   return execFileSync("git", args, { encoding: "utf8" }).trim();
 }
@@ -67,14 +95,19 @@ function main() {
     process.stdout.write(`${JSON.stringify(parseChangesTsv(readFileSync(filename, "utf8")))}\n`);
     return;
   }
-  if (command !== "plan") throw new Error("Usage: nightly-release.mjs plan <version> <sha> <run-id> <latest-json>");
-  const [developmentVersion, sha, runId, latestPath] = args;
+  if (command === "merge") {
+    const [indexPath, buildPath] = args;
+    const index = indexPath && existsSync(indexPath) ? JSON.parse(readFileSync(indexPath, "utf8")) : undefined;
+    process.stdout.write(`${JSON.stringify(mergeVersionsIndex(index, JSON.parse(readFileSync(buildPath, "utf8"))))}\n`);
+    return;
+  }
+  if (command !== "plan") throw new Error("Usage: nightly-release.mjs plan <version> <sha> <run-id> <versions-json>");
+  const [developmentVersion, sha, runId, versionsPath] = args;
   let previous;
-  if (latestPath && existsSync(latestPath)) {
-    const manifest = JSON.parse(readFileSync(latestPath, "utf8"));
-    if (manifest.commit) {
-      previous = { commit: git("rev-parse", `${manifest.commit}^{commit}`), runId: manifest.runId };
-    }
+  if (versionsPath && existsSync(versionsPath)) {
+    const index = parseVersionsIndex(JSON.parse(readFileSync(versionsPath, "utf8")));
+    const latest = index.builds.find((entry) => entry.commit.toLowerCase() === index.latest.toLowerCase());
+    previous = { commit: git("rev-parse", `${latest.commit}^{commit}`), runId: latest.runId };
   }
   const plan = createPublicationPlan({
     developmentVersion,
