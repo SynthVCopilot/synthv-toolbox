@@ -2,9 +2,6 @@ name: Prepare Desktop Build
 
 on:
   workflow_call:
-    secrets:
-      PLATFORM_KIT_TOKEN:
-        required: true
     inputs:
       release:
         required: true
@@ -61,10 +58,6 @@ jobs:
           npm ci --no-audit --no-fund
           npm run build
 
-      - uses: ./.github/actions/prepare-model-auth
-        with:
-          token: ${{ secrets.PLATFORM_KIT_TOKEN }}
-          target: src/PiDesktop.Tauri
       - name: Install desktop dependencies
         working-directory: src/PiDesktop.Tauri
         run: npm ci --no-audit --no-fund

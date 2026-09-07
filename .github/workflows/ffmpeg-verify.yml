@@ -18,8 +18,6 @@ jobs:
     uses: ./.github/workflows/prepare-desktop.yml
     with:
       release: false
-    secrets:
-      PLATFORM_KIT_TOKEN: ${{ secrets.PLATFORM_KIT_TOKEN }}
 
   verify:
     needs: prepare
@@ -73,10 +71,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.target }}-cargo-
             ${{ runner.os }}-cargo-
-      - uses: ./.github/actions/prepare-model-auth
-        with:
-          token: ${{ secrets.PLATFORM_KIT_TOKEN }}
-          target: src/PiDesktop.Tauri
       - name: Install platform dependencies
         working-directory: src/PiDesktop.Tauri
         run: npm ci --no-audit --no-fund
@@ -216,10 +210,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.target }}-cargo-tests-
             ${{ runner.os }}-${{ matrix.target }}-cargo-
-      - uses: ./.github/actions/prepare-model-auth
-        with:
-          token: ${{ secrets.PLATFORM_KIT_TOKEN }}
-          target: src/PiDesktop.Tauri
       - name: Install platform dependencies
         working-directory: src/PiDesktop.Tauri
         run: npm ci --no-audit --no-fund
