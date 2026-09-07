@@ -9,6 +9,8 @@ pub mod async_runtime {
 pub mod mcp {
     use std::path::PathBuf;
 
+    use serde_json::Value;
+
     pub struct McpManager;
 
     impl McpManager {
@@ -21,6 +23,32 @@ pub mod mcp {
         ) -> Result<Vec<String>, String> {
             Ok(Vec::new())
         }
+
+        pub async fn call_bridge_tool(
+            &self,
+            _name: &str,
+            _arguments: Value,
+        ) -> Result<Value, String> {
+            Err(
+                "Bridge calls are unavailable in the process-control regression harness"
+                    .to_string(),
+            )
+        }
+    }
+
+    pub fn extract_mcp_json(_value: &Value) -> Result<Value, String> {
+        Err(
+            "Bridge responses are unavailable in the process-control regression harness"
+                .to_string(),
+        )
+    }
+}
+
+pub mod synthv_unified {
+    use serde_json::Value;
+
+    pub fn bridge_session_token(_status: &Value) -> Result<String, String> {
+        Err("Bridge sessions are unavailable in the process-control regression harness".to_string())
     }
 }
 
