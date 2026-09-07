@@ -155,29 +155,6 @@ function sha256(content) {
     : null;
 }
 
-async function collectFiles(directory, predicate) {
-  const entries = await readdir(directory, { withFileTypes: true }).catch(
-    () => [],
-  );
-  const files = [];
-  for (const entry of entries) {
-    const entryPath = path.join(directory, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await collectFiles(entryPath, predicate)));
-    } else if (entry.isFile() && predicate(entryPath)) {
-      files.push(entryPath);
-    }
-  }
-  return files;
-}
-
-async function newestMtimeMs(files) {
-  const mtimes = await Promise.all(
-    files.map((filePath) => stat(filePath).then((value) => value.mtimeMs)),
-  );
-  return mtimes.length === 0 ? null : Math.max(...mtimes);
-}
-
 record(
   "package-version",
   expectedVersion === "0.3.1" ? "ok" : "error",
@@ -217,40 +194,28 @@ record(
   }; expected ${EXPECTED_PROTOCOL_VERSION}.`,
 );
 
-const runtimeSourceFiles = await collectFiles(
-  path.join(repositoryRoot, "src"),
-  (filePath) => filePath.endsWith(".ts"),
-);
-const buildInputs = [
-  ...runtimeSourceFiles,
-  path.join(repositoryRoot, "package.json"),
-  path.join(repositoryRoot, "tsconfig.json"),
-];
 const buildInfoFile = path.join(repositoryRoot, "dist", "src", "build-info.js");
-const [newestBuildInputMtimeMs, buildInfoStat] = await Promise.all([
-  newestMtimeMs(buildInputs),
-  stat(buildInfoFile).catch(() => null),
-]);
-const buildFresh =
-  newestBuildInputMtimeMs !== null &&
-  buildInfoStat !== null &&
-  buildInfoStat.mtimeMs + 1_000 >= newestBuildInputMtimeMs;
-record(
-  "mcp-build",
-  buildFresh ? "ok" : "error",
-  buildFresh
-    ? "Compiled MCP build is present and newer than its runtime source inputs."
-    : "Compiled MCP build is missing or stale; run npm run build, then restart or reconnect the MCP host.",
-  {
-    buildInfoFile,
-    buildMtimeMs: buildInfoStat?.mtimeMs ?? null,
-    newestBuildInputMtimeMs,
-  },
-);
+const requiredRuntimeFiles = [
+  "dist/src/cli.js",
+  "dist/legacy-sv1/src/cli.js",
+  "dist/src/score-import.js",
+  "dist/src/build-info.js",
+  "dist/src/generated-build-metadata.js",
+  "dist/THIRD_PARTY_NOTICES.txt",
+];
+const missingRuntimeFiles = (
+  await Promise.all(
+    requiredRuntimeFiles.map(async (relativePath) =>
+      (await stat(path.join(repositoryRoot, relativePath)).catch(() => null)) === null
+        ? relativePath
+        : null,
+    ),
+  )
+).filter((relativePath) => relativePath !== null);
 
 let expectedCapabilityFingerprint = null;
 let expectedBuildFingerprint = null;
-if (buildInfoStat !== null) {
+if (missingRuntimeFiles.length === 0) {
   try {
     const buildInfo = await import(pathToFileURL(buildInfoFile).href);
     expectedBuildFingerprint =
@@ -262,9 +227,24 @@ if (buildInfoStat !== null) {
         ? buildInfo.SERVER_CAPABILITY_FINGERPRINT
         : null;
   } catch {
-    // The build check above already reports a missing or unreadable build.
+    // The runtime check below reports an unreadable build identity.
   }
 }
+const runtimeBuildReady =
+  missingRuntimeFiles.length === 0 &&
+  expectedBuildFingerprint !== null &&
+  expectedCapabilityFingerprint !== null;
+record(
+  "mcp-build",
+  runtimeBuildReady ? "ok" : "error",
+  runtimeBuildReady
+    ? "Bundled MCP runtime and build fingerprints are present."
+    : "Bundled MCP runtime is incomplete or its build identity cannot be read; reinstall the application.",
+  {
+    missingRuntimeFiles,
+    buildInfoFile,
+  },
+);
 
 const bridgeStatus = await readJson(`${prefix}.status.json`);
 const bridgeAgeMs =
