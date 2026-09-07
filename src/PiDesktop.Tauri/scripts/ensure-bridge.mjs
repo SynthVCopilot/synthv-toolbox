@@ -8,6 +8,8 @@ const componentDirectory = resolve(scriptDirectory, "../src-tauri/components/syn
 const bridgeEntries = [
   resolve(componentDirectory, "dist/src/cli.js"),
   resolve(componentDirectory, "dist/legacy-sv1/src/cli.js"),
+  resolve(componentDirectory, "dist/src/score-import.js"),
+  resolve(componentDirectory, "dist/THIRD_PARTY_NOTICES.txt"),
 ];
 const buildDependencies = [
   resolve(componentDirectory, "node_modules/typescript/bin/tsc"),

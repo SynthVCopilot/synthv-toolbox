@@ -59,9 +59,6 @@ jobs:
       - name: Install platform dependencies
         working-directory: src/PiDesktop.Tauri
         run: npm ci --no-audit --no-fund
-      - name: Install Bridge production dependencies
-        working-directory: src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge
-        run: npm ci --omit=dev --no-audit --no-fund
       - name: Build desktop bundle from prepared frontend
         working-directory: src/PiDesktop.Tauri
         run: npm run tauri build -- --config ../../.github/tauri-ci.conf.json --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
@@ -123,9 +120,6 @@ jobs:
       - name: Install platform dependencies
         working-directory: src/PiDesktop.Tauri
         run: npm ci --no-audit --no-fund
-      - name: Install Bridge production dependencies
-        working-directory: src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge
-        run: npm ci --omit=dev --no-audit --no-fund
       - name: Test Rust core
         run: cargo test --manifest-path src/PiDesktop.Tauri/src-tauri/Cargo.toml --all-targets -- --test-threads=1
       - name: Lint Rust core

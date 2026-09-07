@@ -23,7 +23,8 @@
   },
   "scripts": {
     "clean": "node scripts/clean.mjs",
-    "build": "npm run clean && node scripts/write-build-metadata.mjs && tsc -p tsconfig.json",
+    "build": "npm run clean && node scripts/write-build-metadata.mjs && tsc -p tsconfig.json --sourceMap false --declarationMap false && npm run bundle",
+    "bundle": "node scripts/bundle.mjs",
     "dev": "node scripts/write-build-metadata.mjs && tsx src/cli.ts",
     "typecheck": "node scripts/write-build-metadata.mjs && tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node scripts/run-tests.mjs",
@@ -51,7 +52,8 @@
   "devDependencies": {
     "@types/node": "22.15.30",
     "tsx": "4.20.3",
-    "typescript": "5.8.3"
+    "typescript": "5.8.3",
+    "esbuild": "0.25.12"
   },
   "overrides": {
     "@modelcontextprotocol/sdk": {

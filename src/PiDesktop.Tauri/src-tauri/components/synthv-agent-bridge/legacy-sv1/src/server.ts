@@ -36,7 +36,7 @@ const success = (value: unknown): ToolResult => ({ content: [{ type: "text", tex
 
 export function createLegacyServer(client = new LegacyIpcClient(loadLegacyConfig())): McpServer {
   const server = new McpServer({ name: "synthv-agent-bridge-sv1-legacy", version: "1.0.0" });
-  const registerTool = server.tool as unknown as RegisterTool;
+  const registerTool = server.tool.bind(server) as unknown as RegisterTool;
   for (const name of legacyToolNames) {
     registerTool(name, `SV1 standard operation: ${name}`, toolInputs[name], async (args) => {
       try {
