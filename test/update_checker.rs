@@ -1,5 +1,34 @@
 use super::*;
 
+#[test]
+fn installer_matches_platform_version_release_and_digest() {
+    if !cfg!(any(windows, target_os = "macos")) {
+        return;
+    }
+    let suffix = if cfg!(windows) {
+        "_x64-setup.exe"
+    } else {
+        "_universal.dmg"
+    };
+    let name = format!("SynthV.Toolbox_0.1.7_dev.abcdef0{suffix}");
+    let url = format!("{NIGHTLY_DOWNLOAD_PREFIX}v0.1.7-nightly/{name}");
+    let asset = ToolboxUpdateAsset {
+        name,
+        url,
+        sha256: "a".repeat(64),
+        size: 1024,
+    };
+    let release = format!("{RELEASES_TAG_PREFIX}v0.1.7-nightly");
+    assert!(select_installer(vec![asset.clone()], &release, "0.1.7-dev.abcdef0").is_some());
+    assert!(select_installer(vec![asset.clone()], &release, "0.1.7-dev.0000000").is_none());
+    let mut wrong = asset.clone();
+    wrong.url = wrong.url.replace("v0.1.7-nightly", "v0.1.6-nightly");
+    assert!(select_installer(vec![wrong], &release, "0.1.7-dev.abcdef0").is_none());
+    let mut wrong = asset;
+    wrong.sha256 = "invalid".into();
+    assert!(select_installer(vec![wrong], &release, "0.1.7-dev.abcdef0").is_none());
+}
+
 fn stable(tag: &str) -> GitHubRelease {
     GitHubRelease {
         tag_name: tag.into(),
@@ -13,8 +42,6 @@ fn stable(tag: &str) -> GitHubRelease {
 
 fn nightly(version: &str, committed: &str) -> NightlyManifest {
     NightlyManifest {
-        schema_version: 1,
-        channel: "nightly".into(),
         version: version.into(),
         commit: "abcdef0".into(),
         source_committed_at_utc: committed.into(),
@@ -86,10 +113,29 @@ fn nightly_exact_version_never_prompts() {
 }
 
 #[test]
-fn nightly_manifest_rejects_bad_shape() {
-    let mut manifest = nightly("0.2.0-dev.abcdef0", "2026-01-01T00:00:00Z");
-    manifest.channel = "stable".into();
-    assert!(build_nightly_update_check("0.1.0", manifest).is_err());
+fn nightly_index_rejects_bad_shape() {
+    let mut index = nightly_index("abcdef0", vec![]);
+    index.channel = "stable".into();
+    assert!(select_latest_nightly_build(index).is_err());
+}
+
+#[test]
+fn published_versions_json_deserializes_and_selects_update() {
+    let json = serde_json::json!({
+        "schemaVersion": 1, "channel": "nightly", "latest": "abcdef0",
+        "builds": [{
+            "version": "0.2.0-dev.abcdef0", "commit": "abcdef0",
+            "sourceCommittedAtUtc": "2026-09-07T00:00:00Z",
+            "publishedAtUtc": "2026-09-07T01:00:00Z", "runId": 42,
+            "releaseUrl": "https://github.com/SynthVCopilot/synthv-toolbox/releases/tag/v0.2.0-nightly",
+            "changes": [{"title": "Fix startup", "commit": "abcdef0"}], "assets": []
+        }]
+    });
+    let index: NightlyIndex = serde_json::from_str(&json.to_string()).unwrap();
+    let result =
+        build_nightly_update_check("0.1.7", select_latest_nightly_build(index).unwrap()).unwrap();
+    assert!(result.update_available);
+    assert_eq!(result.latest_version, "0.2.0-dev.abcdef0");
 }
 
 #[test]

@@ -61,8 +61,6 @@ struct GitHubAsset {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct NightlyManifest {
-    schema_version: u32,
-    channel: String,
     version: String,
     commit: String,
     source_committed_at_utc: String,
@@ -74,6 +72,7 @@ struct NightlyManifest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct NightlyIndex {
     schema_version: u32,
     channel: String,
@@ -106,7 +105,11 @@ pub fn check_for_update(
 
 pub fn open_releases_page(url: Option<&str>) -> Result<(), String> {
     let url = url.unwrap_or(RELEASES_PAGE);
-    if !is_official_release_url(url) && !url.starts_with(PROJECT_PAGE) && url != RELEASES_PAGE {
+    if !is_official_release_url(url)
+        && url != PROJECT_PAGE
+        && !url.starts_with(&format!("{PROJECT_PAGE}/"))
+        && url != RELEASES_PAGE
+    {
         return Err("发布地址不是官方 GitHub Releases 地址。".to_string());
     }
     #[cfg(target_os = "windows")]
@@ -247,6 +250,8 @@ fn build_stable_update_check(
                 })
             })
             .collect(),
+        &release.html_url,
+        &latest.to_string(),
     );
     Ok(ToolboxUpdateCheck {
         channel: UpdateChannel::Stable,
@@ -266,9 +271,6 @@ fn build_nightly_update_check(
     current_version: &str,
     manifest: NightlyManifest,
 ) -> Result<ToolboxUpdateCheck, String> {
-    if manifest.schema_version != 1 || manifest.channel != "nightly" {
-        return Err("nightly 更新清单版本或渠道无效。".to_string());
-    }
     if manifest.commit.len() != 7
         || !manifest
             .commit
@@ -312,7 +314,11 @@ fn build_nightly_update_check(
         .map(|change| format!("- {} (#{})", change.title.trim(), change.commit.trim()))
         .collect::<Vec<_>>()
         .join("\n");
-    let installer = select_installer(manifest.assets.clone());
+    let installer = select_installer(
+        manifest.assets.clone(),
+        &manifest.release_url,
+        &manifest.version,
+    );
     Ok(ToolboxUpdateCheck {
         channel: UpdateChannel::Nightly,
         current_version: current_version.trim().to_string(),
@@ -327,7 +333,11 @@ fn build_nightly_update_check(
     })
 }
 
-fn select_installer(assets: Vec<ToolboxUpdateAsset>) -> Option<ToolboxUpdateAsset> {
+fn select_installer(
+    assets: Vec<ToolboxUpdateAsset>,
+    release_url: &str,
+    version: &str,
+) -> Option<ToolboxUpdateAsset> {
     let suffix = if cfg!(windows) {
         "_x64-setup.exe"
     } else if cfg!(target_os = "macos") {
@@ -335,15 +345,18 @@ fn select_installer(assets: Vec<ToolboxUpdateAsset>) -> Option<ToolboxUpdateAsse
     } else {
         return None;
     };
+    let tag = release_url.strip_prefix(RELEASES_TAG_PREFIX)?;
+    let name = format!(
+        "SynthV.Toolbox_{}{suffix}",
+        version.replace("-dev.", "_dev.")
+    );
     assets.into_iter().find(|asset| {
-        asset.name.ends_with(suffix)
-            && !asset.name.contains(['/', '\\'])
+        asset.name == name
             && asset.size > 0
             && asset.size <= 4 * 1024 * 1024 * 1024
             && asset.sha256.len() == 64
             && asset.sha256.chars().all(|value| value.is_ascii_hexdigit())
-            && asset.url.starts_with(NIGHTLY_DOWNLOAD_PREFIX)
-            && asset.url.ends_with(&format!("/{}", asset.name))
+            && asset.url == format!("{NIGHTLY_DOWNLOAD_PREFIX}{tag}/{name}")
     })
 }
 

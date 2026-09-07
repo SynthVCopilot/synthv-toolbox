@@ -68,6 +68,7 @@ import type {
 const preview = import.meta.env.DEV && !isTauri();
 const AUDIO_FILE_EXTENSIONS = ["wav", "flac", "mp3", "m4a", "aac", "ogg", "opus", "aif", "aiff"];
 let previewMode: AppMode = "toolbox";
+let previewUpdateChannel: "stable" | "nightly" = "stable";
 let previewAgentWorkMode: AgentWorkMode = "edit";
 let previewOnboarding = false;
 let previewConcurrentDisclaimerAccepted = false;
@@ -365,7 +366,7 @@ const previewState = (): BootstrapState => ({
   onboardingCompleted: previewOnboarding,
   mode: previewMode,
   agentWorkMode: previewAgentWorkMode,
-  updateChannel: "stable",
+  updateChannel: previewUpdateChannel,
   platform: "preview",
   appVersion: packageJson.version,
   configPath: "~/.SynthVcopilot/config.json",
@@ -675,7 +676,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     return previewState() as T;
   }
   if (command === "set_update_channel") {
-    return { ...previewState(), updateChannel: args?.channel === "nightly" ? "nightly" : "stable" } as T;
+    previewUpdateChannel = args?.channel === "nightly" ? "nightly" : "stable";
+    return previewState() as T;
   }
   if (command === "scan_synthv") return previewState().installations as T;
   if (command === "install_bridge" || command === "diagnose_bridge") {
@@ -746,9 +748,9 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     installer: { name: "SynthV.Toolbox_0.2.0_x64-setup.exe", url: "https://github.com/SynthVCopilot/synthv-toolbox/releases/download/v0.2.0/SynthV.Toolbox_0.2.0_x64-setup.exe", sha256: "0".repeat(64), size: 1 },
   } as T;
   if (command === "get_toolbox_update_download" || command === "cancel_toolbox_update_download") return { status: "idle", downloadedBytes: 0, totalBytes: null, error: null, fileName: null } as T;
-  if (command === "download_toolbox_update") return { status: "ready", downloadedBytes: 1, totalBytes: 1, error: null, fileName: "SynthV.Toolbox_0.2.0_x64-setup.exe" } as T;
+  if (command === "download_toolbox_update") throw new Error("浏览器预览不下载更新安装包，请在桌面应用中使用。 / Update downloads are available in the desktop app.");
   if (command === "install_toolbox_update") return { succeeded: false, summary: "Preview cannot install updates.", detail: "" } as T;
-  if (command === "open_toolbox_releases") return {
+  if (command === "open_toolbox_releases" || command === "open_toolbox_project") return {
     succeeded: true,
     summary: "已打开 Synthesizer V Toolbox 官方发布页。",
     detail: "预览模式不会启动外部浏览器。",

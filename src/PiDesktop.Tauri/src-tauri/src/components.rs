@@ -494,7 +494,7 @@ fn rollback_staged_component(staged: Option<&Path>, target: &Path) -> Result<(),
     fs::rename(staged, target).map_err(|error| error.to_string())
 }
 
-fn reject_symlink_or_reparse(path: &Path, label: &str) -> Result<(), String> {
+pub(crate) fn reject_symlink_or_reparse(path: &Path, label: &str) -> Result<(), String> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),

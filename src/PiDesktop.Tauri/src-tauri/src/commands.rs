@@ -1533,11 +1533,14 @@ pub fn cancel_toolbox_update_download() -> crate::update_download::ToolboxUpdate
     crate::update_download::cancel()
 }
 #[tauri::command]
-pub fn install_toolbox_update() -> OperationResult {
-    match crate::update_download::install() {
+pub async fn install_toolbox_update() -> Result<OperationResult, String> {
+    let result = tauri::async_runtime::spawn_blocking(crate::update_download::install)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(match result {
         Ok(()) => succeeded("已启动更新安装程序。", "安装程序会在系统界面继续执行。"),
         Err(error) => failed("无法启动更新安装程序。", error),
-    }
+    })
 }
 
 #[tauri::command]
