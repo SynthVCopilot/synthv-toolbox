@@ -386,6 +386,9 @@ function applyLyricProject(project: LyricProject): void {
   lyricProjectVersions = [...(project.versions ?? [])];
   lyricSectionCounter = Math.max(lyricSectionCounter, lyricSections.length + 100);
   lyricCandidates = undefined;
+  lyricBridgeSelection = undefined;
+  lyricBridgePreview = undefined;
+  lyricBridgeSlots = [];
   workflowResult = undefined;
   lyricSavedSnapshot = lyricWorkspaceSnapshot();
   persistLyricWorkspace();
@@ -400,6 +403,9 @@ function startNewLyricProject(): void {
   lyricSections = createLyricPreset("compact");
   lyricCandidateSection = lyricSections.find((section) => section.kind === "chorus")?.label ?? lyricSections[0]?.label ?? "";
   lyricCandidates = undefined;
+  lyricBridgeSelection = undefined;
+  lyricBridgePreview = undefined;
+  lyricBridgeSlots = [];
   lyricCandidateHistory = [];
   lyricProjectVersions = [];
   workflowResult = undefined;
@@ -1947,12 +1953,13 @@ function renderRhymeLookupResult(): string {
 
 function renderLyricCandidates(): string {
   const candidates = lyricCandidates ? `<div class="lyric-candidate-list">${lyricCandidates.candidates.map((candidate, index) => `<article class="lyric-candidate ${candidate.rhymeMatched === false ? "off-rhyme" : ""}"><div><span>${candidate.rhymeMatched == null ? t("lyrics.unlimitedRhyme") : candidate.rhymeMatched ? t("lyrics.rhymeMatch", { rhyme: escapeHtml(lyricCandidates?.targetRhyme ?? t("lyrics.targetRhyme")) }) : t("lyrics.rhymeMiss")}</span>${candidate.rhymeFoot ? `<code>${escapeHtml(candidate.rhymeFoot)}</code>` : ""}</div><strong>${escapeHtml(candidate.text)}</strong>${candidate.note ? `<p>${escapeHtml(candidate.note)}</p>` : ""}<button type="button" class="secondary" data-use-lyric-candidate="${index}">${icon("plus", 14)} ${t("lyrics.useCandidate")}</button></article>`).join("")}</div>` : `<div class="lyric-empty">${t("lyrics.emptyCandidates")}</div>`;
-  return `${candidates}${renderLyricBridgeFit()}`;
+  const history = lyricCandidateHistory.slice(-5).reverse().map((set, index) => `<button type="button" class="secondary compact" data-select-lyric-history="${index}">${escapeHtml(set.sectionLabel || t("lyrics.continueWriting"))}</button>`).join("");
+  return `${history ? `<div class="button-row">${history}</div>` : ""}${candidates}${renderLyricBridgeFit()}`;
 }
 
 function renderLyricBridgeFit(): string {
   if (!lyricBridgeSelection) return `<section class="lyric-copilot panel-inset"><button type="button" class="secondary" data-read-lyric-bridge-selection>${t("lyrics.readSelection")}</button><p>${t("lyrics.selectedNotesHint")}</p></section>`;
-  const preview = lyricBridgePreview ? `<div class="lyric-candidate-list">${lyricBridgePreview.notes.map((note) => `<p>${escapeHtml(`${note.noteIndex}: ${note.currentLyric} → ${note.text}`)}</p>`).join("")}</div>` : "";
+  const preview = lyricBridgePreview ? `<div class="lyric-candidate-list" data-lyric-bridge-preview>${lyricBridgePreview.notes.map((note) => `<p>${escapeHtml(`${note.noteIndex}: ${note.currentLyric} → ${note.text}`)}</p>`).join("")}</div>` : "";
   return `<section class="lyric-copilot panel-inset"><div class="lyric-subhead"><h3>${t("lyrics.selectedNotesCount", { count: lyricBridgeSelection.noteCount })} · ${t("lyrics.trackGroup", { track: lyricBridgeSelection.target.trackIndex, group: lyricBridgeSelection.target.groupIndex })}</h3><button type="button" class="secondary compact" data-read-lyric-bridge-selection>${t("lyrics.readSelection")}</button></div><button type="button" class="secondary compact" data-fill-lyric-bridge-from-selection>${t("lyrics.fillFromDraftSelection")}</button><div class="lyric-candidate-list">${lyricBridgeSelection.notes.map((note, index) => `<label>${index + 1}<input data-lyric-bridge-slot="${index}" value="${escapeHtml(lyricBridgeSlots[index] ?? note.lyric)}" maxlength="160" /></label>`).join("")}</div><button type="button" class="secondary" data-preview-lyric-bridge-fit>${t("lyrics.previewWrite")}</button>${preview}${lyricBridgePreview ? `<button type="button" class="primary" data-confirm-lyric-bridge-fit>${t("lyrics.confirmWrite")}</button>` : ""}</section>`;
 }
 
@@ -3197,6 +3204,8 @@ document.addEventListener("input", (event) => {
   if (target.dataset.lyricBridgeSlot !== undefined) {
     lyricBridgeSlots = lyricBridgeSelection?.notes.map((note, index) => document.querySelector<HTMLInputElement>(`[data-lyric-bridge-slot="${index}"]`)?.value ?? note.lyric) ?? [];
     lyricBridgePreview = undefined;
+    document.querySelector<HTMLElement>("[data-lyric-bridge-preview]")?.remove();
+    document.querySelector<HTMLElement>("[data-confirm-lyric-bridge-fit]")?.remove();
   }
   if (lyricPersistTimer !== undefined) window.clearTimeout(lyricPersistTimer);
   lyricPersistTimer = window.setTimeout(() => {
@@ -3456,6 +3465,15 @@ document.addEventListener("click", (event) => {
       lyricBridgeSlots = lyricBridgeSelection.notes.map((note) => note.lyric);
       lyricBridgePreview = undefined;
     });
+    return;
+  }
+  if (target.dataset.selectLyricHistory !== undefined) {
+    const index = Number(target.dataset.selectLyricHistory);
+    const set = lyricCandidateHistory[lyricCandidateHistory.length - 1 - index];
+    if (set) {
+      lyricCandidates = set;
+      render();
+    }
     return;
   }
   if (target.hasAttribute("data-preview-lyric-bridge-fit") && lyricBridgeSelection) {
