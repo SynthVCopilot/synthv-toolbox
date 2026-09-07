@@ -3662,6 +3662,10 @@ document.addEventListener("click", (event) => {
     void run(async () => { setFeedback(await api.installToolboxUpdate()); });
     return;
   }
+  if (target.hasAttribute("data-open-toolbox-releases")) {
+    void run(async () => { setFeedback(await api.openToolboxReleases(toolboxUpdate?.releaseUrl)); });
+    return;
+  }
   if (target.dataset.feature) {
     const featureId = target.dataset.feature;
     const feature = features.find((item) => item.id === featureId);

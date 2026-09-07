@@ -847,6 +847,9 @@ button.full { width: 100%; }
 .about-download-state strong { font-size: 11px; }
 .about-download-state small, .about-empty-update { color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
 .about-download-state button { flex: 0 0 auto; min-height: 32px; padding: 5px 9px; font-size: 10px; white-space: nowrap; }
+.about-download-actions, .about-release-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
+.about-release-actions { margin-top: 12px; }
+.about-release-actions button { min-height: 31px; padding: 5px 9px; font-size: 10px; }
 .about-download-state.failed { border-color: color-mix(in srgb,var(--danger) 42%,var(--line)); }
 .about-download-state.ready { border-color: color-mix(in srgb,var(--success) 42%,var(--line)); }
 .about-download-state.downloading { display: grid; grid-template-columns: minmax(0,1fr) auto; }
