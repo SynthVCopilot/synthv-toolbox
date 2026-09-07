@@ -7,6 +7,7 @@ fn stable(tag: &str) -> GitHubRelease {
         html_url: format!("https://github.com/SynthVCopilot/synthv-toolbox/releases/tag/{tag}"),
         published_at: None,
         body: None,
+        assets: vec![],
     }
 }
 
@@ -21,6 +22,7 @@ fn nightly(version: &str, committed: &str) -> NightlyManifest {
         release_url: "https://github.com/SynthVCopilot/synthv-toolbox/releases/tag/v0.2.0-nightly"
             .into(),
         changes: vec![],
+        assets: vec![],
     }
 }
 

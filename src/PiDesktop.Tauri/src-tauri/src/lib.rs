@@ -43,6 +43,7 @@ mod synthv_hosts;
 mod synthv_unified;
 mod tuning_profiles;
 mod update_checker;
+mod update_download;
 mod workbuddy_store;
 mod workflows;
 
@@ -229,6 +230,11 @@ pub fn run() {
             commands::scan_synthv,
             commands::check_toolbox_update,
             commands::open_toolbox_releases,
+            commands::open_toolbox_project,
+            commands::get_toolbox_update_download,
+            commands::download_toolbox_update,
+            commands::cancel_toolbox_update_download,
+            commands::install_toolbox_update,
             commands::sv2_profile_state,
             commands::sv2_cached_profile_state,
             commands::sv2_voice_catalog,

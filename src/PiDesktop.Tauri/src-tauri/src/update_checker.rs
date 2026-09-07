@@ -10,6 +10,7 @@ use crate::config::UpdateChannel;
 const LATEST_RELEASE_API: &str =
     "https://api.github.com/repos/SynthVCopilot/synthv-toolbox/releases/latest";
 const RELEASES_PAGE: &str = "https://github.com/SynthVCopilot/synthv-toolbox/releases/latest";
+const PROJECT_PAGE: &str = "https://github.com/SynthVCopilot/synthv-toolbox";
 const RELEASES_TAG_PREFIX: &str = "https://github.com/SynthVCopilot/synthv-toolbox/releases/tag/";
 const NIGHTLY_DOWNLOAD_PREFIX: &str =
     "https://github.com/SynthVCopilot/synthv-toolbox/releases/download/";
@@ -27,6 +28,16 @@ pub struct ToolboxUpdateCheck {
     pub published_at_utc: Option<String>,
     pub release_notes: String,
     pub checked_at_utc: String,
+    pub installer: Option<ToolboxUpdateAsset>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolboxUpdateAsset {
+    pub name: String,
+    pub url: String,
+    pub sha256: String,
+    pub size: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -36,6 +47,15 @@ struct GitHubRelease {
     html_url: String,
     published_at: Option<String>,
     body: Option<String>,
+    #[serde(default)]
+    assets: Vec<GitHubAsset>,
+}
+#[derive(Debug, Deserialize)]
+struct GitHubAsset {
+    name: String,
+    browser_download_url: String,
+    size: u64,
+    digest: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -49,6 +69,8 @@ struct NightlyManifest {
     published_at_utc: String,
     release_url: String,
     changes: Vec<NightlyChange>,
+    #[serde(default)]
+    assets: Vec<ToolboxUpdateAsset>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,7 +106,7 @@ pub fn check_for_update(
 
 pub fn open_releases_page(url: Option<&str>) -> Result<(), String> {
     let url = url.unwrap_or(RELEASES_PAGE);
-    if !is_official_release_url(url) && url != RELEASES_PAGE {
+    if !is_official_release_url(url) && !url.starts_with(PROJECT_PAGE) && url != RELEASES_PAGE {
         return Err("发布地址不是官方 GitHub Releases 地址。".to_string());
     }
     #[cfg(target_os = "windows")]
@@ -98,6 +120,11 @@ pub fn open_releases_page(url: Option<&str>) -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|error| format!("无法打开官方发布页：{error}"))
+}
+
+pub fn open_project_page(target: &str) -> Result<(), String> {
+    let url = match target { "project" => PROJECT_PAGE, "issues" => "https://github.com/SynthVCopilot/synthv-toolbox/issues", "guide" => "https://github.com/SynthVCopilot/synthv-toolbox/blob/main/docs/lyric-and-audio-workflow-guide.zh-CN.md", _ => return Err("未知的官方页面。".to_string()) };
+    open_releases_page(Some(url))
 }
 
 fn agent() -> ureq::Agent {
@@ -206,6 +233,21 @@ fn build_stable_update_check(
         .name
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| format!("Synthesizer V Toolbox v{latest}"));
+    let installer = select_installer(
+        release
+            .assets
+            .into_iter()
+            .filter_map(|asset| {
+                let sha256 = asset.digest?.strip_prefix("sha256:")?.to_string();
+                Some(ToolboxUpdateAsset {
+                    name: asset.name,
+                    url: asset.browser_download_url,
+                    sha256,
+                    size: asset.size,
+                })
+            })
+            .collect(),
+    );
     Ok(ToolboxUpdateCheck {
         channel: UpdateChannel::Stable,
         current_version: current.to_string(),
@@ -216,6 +258,7 @@ fn build_stable_update_check(
         published_at_utc: release.published_at,
         release_notes: truncate_notes(release.body.as_deref().unwrap_or("")),
         checked_at_utc: Utc::now().to_rfc3339(),
+        installer,
     })
 }
 
@@ -269,6 +312,7 @@ fn build_nightly_update_check(
         .map(|change| format!("- {} (#{})", change.title.trim(), change.commit.trim()))
         .collect::<Vec<_>>()
         .join("\n");
+    let installer = select_installer(manifest.assets.clone());
     Ok(ToolboxUpdateCheck {
         channel: UpdateChannel::Nightly,
         current_version: current_version.trim().to_string(),
@@ -279,6 +323,27 @@ fn build_nightly_update_check(
         published_at_utc: Some(manifest.published_at_utc),
         release_notes: truncate_notes(&notes),
         checked_at_utc: Utc::now().to_rfc3339(),
+        installer,
+    })
+}
+
+fn select_installer(assets: Vec<ToolboxUpdateAsset>) -> Option<ToolboxUpdateAsset> {
+    let suffix = if cfg!(windows) {
+        "_x64-setup.exe"
+    } else if cfg!(target_os = "macos") {
+        "_universal.dmg"
+    } else {
+        return None;
+    };
+    assets.into_iter().find(|asset| {
+        asset.name.ends_with(suffix)
+            && !asset.name.contains(['/', '\\'])
+            && asset.size > 0
+            && asset.size <= 4 * 1024 * 1024 * 1024
+            && asset.sha256.len() == 64
+            && asset.sha256.chars().all(|value| value.is_ascii_hexdigit())
+            && asset.url.starts_with(NIGHTLY_DOWNLOAD_PREFIX)
+            && asset.url.ends_with(&format!("/{}", asset.name))
     })
 }
 
