@@ -3,6 +3,9 @@ pub mod agent_files;
 mod api_keys;
 mod audio_capture;
 mod audio_prep;
+#[cfg(test)]
+#[path = "../../../../test/bridge_session_flow.rs"]
+mod bridge_session_flow_tests;
 mod bridge_workflows;
 mod commands;
 mod components;

@@ -5,6 +5,7 @@ use std::time::Duration;
 use std::process::Stdio;
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::mcp::McpManager;
 #[cfg(target_os = "macos")]
@@ -191,20 +192,24 @@ async fn connect_started_bridge(
     node: String,
     bridge_dir: PathBuf,
 ) -> Result<(SynthVProcess, Vec<String>), String> {
-    let mut last_error = "Bridge 尚未就绪。".to_string();
+    manager.disconnect("synthv").await;
+    let tools = manager.connect_bridge(node, bridge_dir).await?;
+    let mut last_error = "Bridge 尚未写入可用心跳。".to_string();
     for _ in 0..16 {
-        manager.disconnect("synthv").await;
         match manager
-            .connect_bridge(node.clone(), bridge_dir.clone())
+            .call_bridge_tool("sv_status", json!({ "operation": "bridge" }))
             .await
+            .and_then(|response| crate::mcp::extract_mcp_json(&response))
+            .and_then(|status| crate::synthv_unified::bridge_session_token(&status))
         {
-            Ok(tools) => return Ok((process, tools)),
+            Ok(_) => return Ok((process, tools)),
             Err(error) => last_error = error,
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
+    manager.disconnect("synthv").await;
     Err(format!(
-        "已向 PID {} 发送 {}，但 Bridge 未在 4 秒内就绪：{last_error}",
+        "已向 PID {} 发送 {}，但 Bridge 未在 4 秒内写入新鲜运行心跳：{last_error}",
         process.process_id,
         BridgeShortcutAction::Start.label(),
     ))

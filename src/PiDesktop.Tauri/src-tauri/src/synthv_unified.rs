@@ -63,6 +63,21 @@ pub async fn official_bridge_session_status(
         json!({ "operation": "bridge" }),
     )
     .await?;
+    let session_token = bridge_session_token(&status)?;
+    let requested_process_id = manager
+        .observe_official_bridge_session(session_token.clone(), requested_process_id)
+        .await;
+    Ok(BridgeSessionStatus {
+        connected: true,
+        session_token: Some(session_token),
+        requested_process_id,
+        instance_ownership: "unverified",
+        detail: "Bridge 会话已连接；官方 Bridge 协议未提供宿主 PID，因此实例归属未验证。"
+            .to_string(),
+    })
+}
+
+pub(crate) fn bridge_session_token(status: &Value) -> Result<String, String> {
     let status_record = status
         .get("status")
         .and_then(Value::as_object)
@@ -73,22 +88,12 @@ pub async fn official_bridge_session_status(
     if !connected {
         return Err("Bridge 心跳未处于新鲜运行状态，无法确认当前会话。".to_string());
     }
-    let session_token = status_record
+    status_record
         .get("sessionToken")
         .and_then(Value::as_str)
         .filter(|token| !token.trim().is_empty())
-        .ok_or_else(|| "Bridge 状态未提供有效会话令牌，无法确认当前会话。".to_string())?;
-    let requested_process_id = manager
-        .observe_official_bridge_session(session_token.to_string(), requested_process_id)
-        .await;
-    Ok(BridgeSessionStatus {
-        connected: true,
-        session_token: Some(session_token.to_string()),
-        requested_process_id,
-        instance_ownership: "unverified",
-        detail: "Bridge 会话已连接；官方 Bridge 协议未提供宿主 PID，因此实例归属未验证。"
-            .to_string(),
-    })
+        .map(str::to_string)
+        .ok_or_else(|| "Bridge 状态未提供有效会话令牌，无法确认当前会话。".to_string())
 }
 
 #[derive(Debug, Deserialize)]
