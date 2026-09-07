@@ -322,6 +322,8 @@ pub fn run() {
             commands::read_lyric_bridge_selection,
             commands::preview_lyric_bridge_fit,
             commands::confirm_lyric_bridge_fit,
+            commands::export_lyric_project_text,
+            commands::restore_lyric_project_version,
             commands::run_project_doctor,
             commands::run_pronunciation_diagnostics,
             commands::run_render_review,

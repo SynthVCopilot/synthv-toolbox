@@ -654,9 +654,44 @@ export interface LyricProject {
   draft: string;
   rhymeTargets: Record<string, string>;
   sections: LyricSectionRequest[];
+  candidateHistory: LyricCandidateSet[];
+  versions: LyricProjectVersion[];
   revision: number;
   createdAtUtc: string;
   updatedAtUtc: string;
+}
+
+export interface LyricProjectVersion {
+  revision: number;
+  title: string;
+  draft: string;
+  rhymeTargets: Record<string, string>;
+  sections: LyricSectionRequest[];
+  candidateHistory: LyricCandidateSet[];
+  savedAtUtc: string;
+}
+
+export interface LyricBridgeSelection {
+  selectionToken: string;
+  sessionToken: string;
+  target: { trackIndex: number; groupIndex: number };
+  notes: Array<{ noteIndex: number; lyric: string; onset?: number; duration?: number; pitch?: number }>;
+  noteCount: number;
+}
+
+export interface LyricBridgePreview {
+  previewToken: string;
+  sessionToken: string;
+  target: { trackIndex: number; groupIndex: number };
+  notes: Array<{ noteIndex: number; currentLyric: string; text: string; phoneme?: string; onset?: number; duration?: number; pitch?: number }>;
+  slotCount: number;
+  expiresInSeconds: number;
+}
+
+export interface LyricBridgeConfirm {
+  applied: boolean;
+  target: { trackIndex: number; groupIndex: number };
+  noteCount: number;
 }
 
 export interface LyricProjectSummary {

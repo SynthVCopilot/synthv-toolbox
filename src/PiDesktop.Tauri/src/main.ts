@@ -42,8 +42,11 @@ import type {
   ConversationSummary,
   CreativeHistoryEntry,
   LyricCandidateSet,
+  LyricBridgePreview,
+  LyricBridgeSelection,
   LyricProject,
   LyricProjectSummary,
+  LyricProjectVersion,
   LyricSectionRequest,
   LoudnessNormalizeRequest,
   LoudnessReport,
@@ -189,11 +192,16 @@ let lyricCandidateTone = t("lyrics.defaultTone");
 let lyricCandidateRhyme = "ang";
 let lyricCandidateCount = 4;
 let lyricCandidates: LyricCandidateSet | undefined;
+let lyricCandidateHistory: LyricCandidateSet[] = [];
 let lyricSectionCounter = 0;
 let lyricSections: LyricSectionRequest[] = createLyricPreset("compact");
 let lyricProjects: LyricProjectSummary[] = [];
 let lyricProjectId: string | undefined;
 let lyricProjectRevision = 0;
+let lyricProjectVersions: LyricProjectVersion[] = [];
+let lyricBridgeSelection: LyricBridgeSelection | undefined;
+let lyricBridgePreview: LyricBridgePreview | undefined;
+let lyricBridgeSlots: string[] = [];
 let lyricSavedSnapshot = "";
 let pendingBlockedSwitchSlot: string | undefined;
 let pendingConcurrentLaunchSlot: string | undefined;
@@ -310,6 +318,7 @@ function persistLyricWorkspace(): void {
       rhymeTargets: lyricRhymeTargets,
       draft: lyricDraft,
       sections: lyricSections,
+      candidateHistory: typeof lyricCandidateHistory === "undefined" ? [] : lyricCandidateHistory,
     }));
   } catch { /* workspace remains available for this session */ }
 }
@@ -323,6 +332,7 @@ function restoreLyricWorkspace(): void {
     if (typeof saved.projectRevision === "number" && Number.isInteger(saved.projectRevision) && saved.projectRevision > 0) lyricProjectRevision = saved.projectRevision;
     if (typeof saved.title === "string") lyricSongTitle = saved.title.slice(0, 120);
     if (typeof saved.draft === "string") lyricDraft = saved.draft.slice(0, 200_000);
+    if (Array.isArray(saved.candidateHistory)) lyricCandidateHistory = saved.candidateHistory.slice(-20) as LyricCandidateSet[];
     if (saved.rhymeTargets && typeof saved.rhymeTargets === "object" && !Array.isArray(saved.rhymeTargets)) {
       for (const label of ["A", "B", "C", "D"]) {
         const value = (saved.rhymeTargets as Record<string, unknown>)[label];
@@ -357,6 +367,7 @@ function lyricWorkspaceSnapshot(): string {
     draft: lyricDraft,
     rhymeTargets: lyricRhymeTargets,
     sections: lyricSections,
+    candidateHistory: typeof lyricCandidateHistory === "undefined" ? [] : lyricCandidateHistory,
   });
 }
 
@@ -371,6 +382,8 @@ function applyLyricProject(project: LyricProject): void {
   lyricDraft = project.draft;
   lyricRhymeTargets = { A: "", B: "", C: "", D: "", ...project.rhymeTargets };
   lyricSections = project.sections.map((section) => ({ ...section }));
+  lyricCandidateHistory = [...(project.candidateHistory ?? [])];
+  lyricProjectVersions = [...(project.versions ?? [])];
   lyricSectionCounter = Math.max(lyricSectionCounter, lyricSections.length + 100);
   lyricCandidates = undefined;
   workflowResult = undefined;
@@ -387,6 +400,8 @@ function startNewLyricProject(): void {
   lyricSections = createLyricPreset("compact");
   lyricCandidateSection = lyricSections.find((section) => section.kind === "chorus")?.label ?? lyricSections[0]?.label ?? "";
   lyricCandidates = undefined;
+  lyricCandidateHistory = [];
+  lyricProjectVersions = [];
   workflowResult = undefined;
   lyricSavedSnapshot = lyricWorkspaceSnapshot();
   persistLyricWorkspace();
@@ -1931,8 +1946,13 @@ function renderRhymeLookupResult(): string {
 }
 
 function renderLyricCandidates(): string {
-  if (!lyricCandidates) return `<div class="lyric-empty">${t("lyrics.emptyCandidates")}</div>`;
-  return `<div class="lyric-candidate-list">${lyricCandidates.candidates.map((candidate, index) => `<article class="lyric-candidate ${candidate.rhymeMatched === false ? "off-rhyme" : ""}"><div><span>${candidate.rhymeMatched == null ? t("lyrics.unlimitedRhyme") : candidate.rhymeMatched ? t("lyrics.rhymeMatch", { rhyme: escapeHtml(lyricCandidates?.targetRhyme ?? t("lyrics.targetRhyme")) }) : t("lyrics.rhymeMiss")}</span>${candidate.rhymeFoot ? `<code>${escapeHtml(candidate.rhymeFoot)}</code>` : ""}</div><strong>${escapeHtml(candidate.text)}</strong>${candidate.note ? `<p>${escapeHtml(candidate.note)}</p>` : ""}<button type="button" class="secondary" data-use-lyric-candidate="${index}">${icon("plus", 14)} ${t("lyrics.useCandidate")}</button></article>`).join("")}</div>`;
+  const candidates = lyricCandidates ? `<div class="lyric-candidate-list">${lyricCandidates.candidates.map((candidate, index) => `<article class="lyric-candidate ${candidate.rhymeMatched === false ? "off-rhyme" : ""}"><div><span>${candidate.rhymeMatched == null ? t("lyrics.unlimitedRhyme") : candidate.rhymeMatched ? t("lyrics.rhymeMatch", { rhyme: escapeHtml(lyricCandidates?.targetRhyme ?? t("lyrics.targetRhyme")) }) : t("lyrics.rhymeMiss")}</span>${candidate.rhymeFoot ? `<code>${escapeHtml(candidate.rhymeFoot)}</code>` : ""}</div><strong>${escapeHtml(candidate.text)}</strong>${candidate.note ? `<p>${escapeHtml(candidate.note)}</p>` : ""}<button type="button" class="secondary" data-use-lyric-candidate="${index}">${icon("plus", 14)} ${t("lyrics.useCandidate")}</button></article>`).join("")}</div>` : `<div class="lyric-empty">${t("lyrics.emptyCandidates")}</div>`;
+  return `${candidates}${renderLyricBridgeFit()}`;
+}
+
+function renderLyricBridgeFit(): string {
+  if (!lyricBridgeSelection) return `<section class="lyric-copilot panel-inset"><button type="button" class="secondary" data-read-lyric-bridge-selection>${t("lyrics.readSelection")}</button><p>${t("lyrics.selectedNotesHint")}</p></section>`;
+  return `<section class="lyric-copilot panel-inset"><div class="lyric-subhead"><h3>${t("lyrics.selectedNotesCount", { count: lyricBridgeSelection.noteCount })}</h3><button type="button" class="secondary compact" data-read-lyric-bridge-selection>${t("lyrics.readSelection")}</button></div><div class="lyric-candidate-list">${lyricBridgeSelection.notes.map((note, index) => `<label>${index + 1}<input data-lyric-bridge-slot="${index}" value="${escapeHtml(lyricBridgeSlots[index] ?? note.lyric)}" maxlength="160" /></label>`).join("")}</div><button type="button" class="secondary" data-preview-lyric-bridge-fit>${t("lyrics.previewWrite")}</button>${lyricBridgePreview ? `<button type="button" class="primary" data-confirm-lyric-bridge-fit>${t("lyrics.confirmWrite")}</button>` : ""}</section>`;
 }
 
 function renderLyricStudio(ai: boolean): string {
@@ -1944,7 +1964,12 @@ function renderLyricStudio(ai: boolean): string {
     : lyricProjectHasUnsavedChanges()
       ? t("lyrics.localProjectUnsaved", { revision: lyricProjectRevision })
       : t("lyrics.localProjectSaved", { revision: lyricProjectRevision });
-  const projectToolbar = `<section class="lyric-project-toolbar panel-inset"><div><span class="eyebrow">${t("lyrics.localProject")}</span><strong>${escapeHtml(projectStatus)}</strong><small>${t("lyrics.projectLocalDescription")}</small></div><div class="lyric-project-actions"><button type="button" class="secondary compact" data-new-lyric-project>${t("lyrics.newProject")}</button><select id="lyric-project-select" ${lyricProjects.length ? "" : "disabled"}><option value="">${lyricProjects.length ? t("lyrics.chooseProject") : t("lyrics.noProjects")}</option>${projectOptions}</select><button type="button" class="secondary compact" data-load-lyric-project ${lyricProjects.length ? "" : "disabled"}>${t("lyrics.open")}</button><button type="button" class="primary compact" data-save-lyric-project>${lyricProjectId === undefined ? t("lyrics.saveAsProject") : t("lyrics.save")}</button></div></section>`;
+  const savedVersions = lyricProjectId ? (typeof lyricProjectVersions === "undefined" ? [] : lyricProjectVersions) : [];
+  const versionOptions = savedVersions.map((version) => `<option value="${version.revision}">r${version.revision} · ${escapeHtml(version.savedAtUtc.slice(0, 16))}</option>`).join("");
+  const projectToolbar = `<section class="lyric-project-toolbar panel-inset"><div><span class="eyebrow">${t("lyrics.localProject")}</span><strong>${escapeHtml(projectStatus)}</strong><small>${t("lyrics.projectLocalDescription")}</small></div><div class="lyric-project-actions"><button type="button" class="secondary compact" data-new-lyric-project>${t("lyrics.newProject")}</button><select id="lyric-project-select" ${lyricProjects.length ? "" : "disabled"}><option value="">${lyricProjects.length ? t("lyrics.chooseProject") : t("lyrics.noProjects")}</option>${projectOptions}</select><button type="button" class="secondary compact" data-load-lyric-project ${lyricProjects.length ? "" : "disabled"}>${t("lyrics.open")}</button><button type="button" class="secondary compact" data-export-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>${t("lyrics.export")}</button><button type="button" class="primary compact" data-save-lyric-project>${lyricProjectId === undefined ? t("lyrics.saveAsProject") : t("lyrics.save")}</button>${versionOptions ? `<select id="lyric-version-select"><option value="">${t("lyrics.versionHistory")}</option>${versionOptions}</select><button type="button" class="secondary compact" data-restore-lyric-version>${t("lyrics.restoreVersion")}</button>` : ""}</div></section>`;
+  const bridgeSelection = lyricBridgeSelection;
+  const bridgeFit = `<section class="lyric-copilot panel-inset"><div class="lyric-subhead"><div><span class="eyebrow">SYNTHV</span><h3>${icon("lyrics", 17)} ${t("lyrics.selectedNotes")}</h3></div><button type="button" class="secondary compact" data-read-lyric-bridge-selection>${t("lyrics.readSelection")}</button></div>${bridgeSelection ? `<p>${t("lyrics.selectedNotesCount", { count: bridgeSelection.noteCount })}</p><div class="lyric-candidate-list">${bridgeSelection.notes.map((note, index) => `<label>${index + 1}<input data-lyric-bridge-slot="${index}" value="${escapeHtml(lyricBridgeSlots[index] ?? note.lyric)}" maxlength="160" /></label>`).join("")}</div><button type="button" class="secondary" data-preview-lyric-bridge-fit>${t("lyrics.previewWrite")}</button>${lyricBridgePreview ? `<div class="lyric-empty">${t("lyrics.previewReady", { count: lyricBridgePreview.slotCount })}<button type="button" class="primary" data-confirm-lyric-bridge-fit>${t("lyrics.confirmWrite")}</button></div>` : ""}` : `<p>${t("lyrics.selectedNotesHint")}</p>`}</section>`;
+  void bridgeFit;
   const structureRows = lyricSections.map((section, index) => `<article class="lyric-section-row" data-lyric-section-id="${escapeHtml(section.id)}"><span class="section-index">${index + 1}</span><label>${t("lyrics.sectionName")}<input data-lyric-section-field="label" maxlength="60" value="${escapeHtml(section.label)}" /></label><label>${t("lyrics.lineCount")}<input data-lyric-section-field="lineCount" type="number" min="1" max="32" value="${section.lineCount}" /></label><label>${t("lyrics.scheme")}<input data-lyric-section-field="rhymeScheme" maxlength="32" value="${escapeHtml(section.rhymeScheme)}" placeholder="${t("lyrics.schemeHint")}" /></label><input type="hidden" data-lyric-section-field="kind" value="${escapeHtml(section.kind)}" /><div class="lyric-row-actions"><button type="button" class="icon-plain" data-move-lyric-section="up" data-section-id="${escapeHtml(section.id)}" title="${t("lyrics.moveUp")}" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" class="icon-plain" data-move-lyric-section="down" data-section-id="${escapeHtml(section.id)}" title="${t("lyrics.moveDown")}" ${index === lyricSections.length - 1 ? "disabled" : ""}>↓</button><button type="button" class="icon-plain danger" data-remove-lyric-section="${escapeHtml(section.id)}" title="${t("lyrics.delete")}">×</button></div></article>`).join("");
   const copilot = ai ? `<section class="lyric-copilot panel-inset"><div class="lyric-subhead"><div><span class="eyebrow">COPILOT</span><h3>${icon("sparkles", 17)} ${t("lyrics.continueWriting")}</h3></div><span class="availability ready">${t("lyrics.suggestionsOnly")}</span></div><form id="lyric-candidate-form" class="lyric-candidate-form"><label class="wide">${t("lyrics.brief")}<textarea id="lyric-brief" rows="3" maxlength="2000" placeholder="${t("lyrics.briefHint")}">${escapeHtml(lyricCandidateBrief)}</textarea></label><label class="wide">${t("lyrics.imagery")}<input id="lyric-imagery" maxlength="1000" value="${escapeHtml(lyricCandidateImagery)}" placeholder="${t("lyrics.imageryHint")}" /></label><label>${t("lyrics.targetSection")}<select id="lyric-candidate-section">${sectionOptions}</select></label><label>${t("lyrics.tone")}<input id="lyric-candidate-tone" maxlength="80" value="${escapeHtml(lyricCandidateTone)}" placeholder="${t("lyrics.toneHint")}" /></label><label>${t("lyrics.endingHintLabel")}<input id="lyric-candidate-rhyme" maxlength="24" value="${escapeHtml(lyricCandidateRhyme)}" placeholder="${t("lyrics.endingHint")}" /></label><label>${t("lyrics.candidateCount")}<select id="lyric-candidate-count">${[2, 3, 4, 5, 6].map((count) => `<option value="${count}" ${lyricCandidateCount === count ? "selected" : ""}>${t("lyrics.suggestionCount", { count })}</option>`).join("")}</select></label><button class="primary wide">${icon("sparkles", 16)} ${t("lyrics.suggest")}</button></form>${renderLyricCandidates()}</section>` : `<section class="lyric-copilot locked panel-inset"><div class="lyric-subhead"><div><span class="eyebrow">COPILOT</span><h3>${icon("sparkles", 17)} ${t("lyrics.continueWriting")}</h3></div><span class="availability blocked">${t("lyrics.aiMode")}</span></div><p>${t("lyrics.copilotDescription")}</p><button type="button" class="secondary" data-enable-ai>${t("lyrics.enableCopilot")}</button></section>`;
   return `<div class="lyric-mode-banner"><span class="feature-icon ${ai ? "violet" : "emerald"}">${icon(ai ? "sparkles" : "lyrics", 21)}</span><div><strong>${t("lyrics.focus")}</strong><p>${t("lyrics.autosaveDescription")}</p></div><span class="lyric-save-state">${t("lyrics.localAutosave")}</span></div>${projectToolbar}<div class="lyric-workbench-grid lyric-writing-layout"><main class="lyric-editor panel-inset"><div class="lyric-editor-head"><label class="lyric-title">${t("lyrics.songTitle")}<input id="lyric-song-title" maxlength="120" value="${escapeHtml(lyricSongTitle)}" placeholder="${t("lyrics.untitledLyrics")}" /></label><div class="lyric-editor-actions"><button type="button" class="secondary compact" data-copy-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>${t("lyrics.copyButton")}</button><button type="button" class="secondary compact" data-clear-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>${t("lyrics.clearButton")}</button></div></div><label class="lyric-draft-label">${t("lyrics.draftLabel")}<textarea id="lyric-draft" rows="22" spellcheck="false" placeholder="${t("lyrics.draftHint")}">${escapeHtml(lyricDraft)}</textarea></label><footer class="lyric-editor-footer"><span>${t("lyrics.draftStats", { lines: lineCount, characters: lyricDraft.length.toLocaleString(locale()) })}</span><span>${t("lyrics.autosaveTyping")}</span></footer></main><aside class="lyric-helper-stack">${copilot}<details class="lyric-tools panel-inset"><summary><span><span class="eyebrow">${t("lyrics.optionalTools")}</span><strong>${icon("recipe", 16)} ${t("lyrics.structure")}</strong></span><small>${t("lyrics.structureStats", { sections: lyricSections.length, lines: lyricSections.reduce((sum, section) => sum + section.lineCount, 0) })}</small></summary><form id="lyric-structure-form"><div class="lyric-presets"><span>${t("lyrics.quickStart")}</span><button type="button" data-lyric-preset="compact">${t("lyrics.presetCompact")}</button><button type="button" data-lyric-preset="pop">${t("lyrics.presetPop")}</button><button type="button" data-lyric-preset="rap">${t("lyrics.presetRap")}</button><button type="button" data-lyric-preset="blank">${t("lyrics.presetBlank")}</button></div><div class="lyric-section-list">${structureRows}</div><div class="lyric-structure-actions"><button type="button" class="secondary" data-add-lyric-section>${icon("plus", 15)} ${t("lyrics.addSection")}</button><button class="primary">${icon("recipe", 15)} ${t("lyrics.insertStructure")}</button></div></form></details><details class="lyric-tools panel-inset"><summary><span><span class="eyebrow">${t("lyrics.optionalTools")}</span><strong>${icon("pronunciation", 16)} ${t("lyrics.rhymeHelper")}</strong></span><small>${t("lyrics.rhymeOnDemand")}</small></summary><form id="rhyme-lookup-form" class="rhyme-search"><input id="rhyme-query" required maxlength="24" value="${escapeHtml(lyricRhymeQuery)}" placeholder="${t("lyrics.rhymeHint")}" /><select id="rhyme-match-mode"><option value="family" ${lyricRhymeMode === "family" ? "selected" : ""}>${t("lyrics.familyLabel")}</option><option value="exact" ${lyricRhymeMode === "exact" ? "selected" : ""}>${t("lyrics.exactLabel")}</option></select><button class="secondary">${t("lyrics.findRhymes")}</button></form>${renderRhymeLookupResult()}</details></aside></div>`;
@@ -2942,6 +2967,8 @@ function wireForms(): void {
         targetRhyme: lyricCandidateRhyme,
         candidateCount: lyricCandidateCount,
       }));
+      lyricCandidateHistory = [...lyricCandidateHistory, lyricCandidates].slice(-20);
+      persistLyricWorkspace();
       notice = t("lyrics.candidatesReady", { count: lyricCandidates.candidates.length });
     });
   });
@@ -3403,11 +3430,62 @@ document.addEventListener("click", (event) => {
     void run(async () => {
       syncLyricDraftFromDom();
       const project = lyricProjectId
-        ? await api.saveLyricProject(lyricProjectId, lyricSongTitle, lyricDraft, lyricSections, lyricRhymeTargets)
-        : await api.createLyricProject(lyricSongTitle, lyricDraft, lyricSections, lyricRhymeTargets);
+        ? await api.saveLyricProject(lyricProjectId, lyricSongTitle, lyricDraft, lyricSections, lyricRhymeTargets, lyricCandidateHistory)
+        : await api.createLyricProject(lyricSongTitle, lyricDraft, lyricSections, lyricRhymeTargets, lyricCandidateHistory);
       applyLyricProject(project);
       lyricProjects = await api.listLyricProjects();
       notice = t("lyrics.projectSaved", { title: project.title, revision: project.revision });
+    });
+    return;
+  }
+  if (target.hasAttribute("data-export-lyric-draft")) {
+    syncLyricDraftFromDom();
+    void run(async () => {
+      setFeedback(await api.exportLyricProjectText(lyricSongTitle, lyricDraft));
+    });
+    return;
+  }
+  if (target.hasAttribute("data-read-lyric-bridge-selection")) {
+    void run(async () => {
+      lyricBridgeSelection = await api.readLyricBridgeSelection();
+      lyricBridgeSlots = lyricBridgeSelection.notes.map((note) => note.lyric);
+      lyricBridgePreview = undefined;
+    });
+    return;
+  }
+  if (target.hasAttribute("data-preview-lyric-bridge-fit") && lyricBridgeSelection) {
+    const slots = lyricBridgeSelection.notes.map((note, index) => ({
+      text: document.querySelector<HTMLInputElement>(`[data-lyric-bridge-slot="${index}"]`)?.value.trim() ?? note.lyric,
+    }));
+    void run(async () => {
+      lyricBridgePreview = await api.previewLyricBridgeFit(lyricBridgeSelection!.selectionToken, lyricBridgeSelection!.sessionToken, slots);
+      lyricBridgeSlots = slots.map((slot) => slot.text);
+    });
+    return;
+  }
+  if (target.hasAttribute("data-confirm-lyric-bridge-fit") && lyricBridgePreview) {
+    void run(async () => {
+      const result = await api.confirmLyricBridgeFit(lyricBridgePreview!.previewToken);
+      notice = t("lyrics.writtenToSynthv", { count: result.noteCount });
+      lyricBridgePreview = undefined;
+      lyricBridgeSelection = undefined;
+      lyricBridgeSlots = [];
+    });
+    return;
+  }
+  if (target.hasAttribute("data-restore-lyric-version")) {
+    const revision = Number(document.querySelector<HTMLSelectElement>("#lyric-version-select")?.value);
+    if (!lyricProjectId || !Number.isInteger(revision) || revision < 1) {
+      error = t("lyrics.versionHistory");
+      render();
+      return;
+    }
+    if (lyricProjectHasUnsavedChanges() && !window.confirm(t("lyrics.restoreDiscardConfirm"))) return;
+    void run(async () => {
+      const project = await api.restoreLyricProjectVersion(lyricProjectId!, revision);
+      applyLyricProject(project);
+      lyricProjects = await api.listLyricProjects();
+      notice = t("lyrics.restoreVersion");
     });
     return;
   }
@@ -3505,7 +3583,13 @@ document.addEventListener("click", (event) => {
     syncLyricDraftFromDom();
     const candidate = lyricCandidates.candidates[Number(target.dataset.useLyricCandidate)];
     if (candidate) {
-      lyricDraft = `${lyricDraft.trimEnd()}${lyricDraft.trim() ? "\n" : ""}${candidate.text}`;
+      const draft = document.querySelector<HTMLTextAreaElement>("#lyric-draft");
+      if (draft && draft.selectionStart !== draft.selectionEnd) {
+        draft.setRangeText(candidate.text, draft.selectionStart, draft.selectionEnd, "end");
+        lyricDraft = draft.value;
+      } else {
+        lyricDraft = `${lyricDraft.trimEnd()}${lyricDraft.trim() ? "\n" : ""}${candidate.text}`;
+      }
       persistLyricWorkspace();
       notice = t("lyrics.candidateAdded");
       render();
