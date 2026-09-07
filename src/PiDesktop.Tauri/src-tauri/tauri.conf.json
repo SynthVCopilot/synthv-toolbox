@@ -50,8 +50,6 @@
       "components/synthv-agent-bridge/scripts": "components/synthv-agent-bridge/scripts",
       "components/synthv-agent-bridge/synthv": "components/synthv-agent-bridge/synthv",
       "components/synthv-agent-bridge/package.json": "components/synthv-agent-bridge/package.json",
-      "components/synthv-agent-bridge/tsconfig.json": "components/synthv-agent-bridge/tsconfig.json",
-      "components/synthv-agent-bridge/src": "components/synthv-agent-bridge/src",
       "components/synthv-agent-bridge/LICENSE": "components/synthv-agent-bridge/LICENSE",
       "components/synthv-agent-bridge/legacy-sv1": "components/synthv-agent-bridge/legacy-sv1",
       "components/cvrs/cvrs.py": "components/cvrs/cvrs.py",

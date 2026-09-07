@@ -14,17 +14,13 @@ assert.match(notices, /@modelcontextprotocol\/sdk 1\.29\.0/u);
 assert.match(notices, /zod 4\.4\.3/u);
 
 try {
+  await cp(join(component, "dist"), join(runtime, "dist"), { recursive: true });
   for (const entry of bundledEntries) {
     await mkdir(dirname(join(runtime, entry)), { recursive: true });
-    await cp(join(component, entry), join(runtime, entry));
   }
   await cp(join(component, "package.json"), join(runtime, "package.json"));
   await cp(join(component, "scripts"), join(runtime, "scripts"), { recursive: true });
   await cp(join(component, "synthv"), join(runtime, "synthv"), { recursive: true });
-  await cp(join(component, "src"), join(runtime, "src"), { recursive: true });
-  await cp(join(component, "tsconfig.json"), join(runtime, "tsconfig.json"));
-  await cp(join(component, "dist", "src", "build-info.js"), join(runtime, "dist", "src", "build-info.js"));
-  await cp(join(component, "dist", "src", "generated-build-metadata.js"), join(runtime, "dist", "src", "generated-build-metadata.js"));
 
   for (const entry of bundledEntries) {
     const source = await readFile(join(runtime, entry), "utf8");

@@ -17,8 +17,6 @@ for (const path of [
   "components/synthv-agent-bridge/scripts",
   "components/synthv-agent-bridge/synthv",
   "components/synthv-agent-bridge/package.json",
-  "components/synthv-agent-bridge/tsconfig.json",
-  "components/synthv-agent-bridge/src",
   "components/synthv-agent-bridge/LICENSE",
   "components/synthv-agent-bridge/legacy-sv1",
 ]) {
@@ -28,6 +26,8 @@ for (const path of [
 for (const path of [
   "components/synthv-agent-bridge/node_modules",
   "components/synthv-agent-bridge/package-lock.json",
+  "components/synthv-agent-bridge/tsconfig.json",
+  "components/synthv-agent-bridge/src",
 ]) {
   assert.equal(resources[path], undefined, `${path} must not ship in the desktop bundle`);
 }
