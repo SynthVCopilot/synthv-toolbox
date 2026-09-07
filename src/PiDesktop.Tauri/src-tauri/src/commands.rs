@@ -687,7 +687,7 @@ pub fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<bool, Strin
             manager.disable().map_err(|error| error.to_string())?;
         }
         let actual = manager.is_enabled().map_err(|error| error.to_string())?;
-        return Ok(actual);
+        Ok(actual)
     }
     #[cfg(not(desktop))]
     {
@@ -707,7 +707,7 @@ pub struct AutostartStatus {
 pub fn get_autostart(app: tauri::AppHandle) -> AutostartStatus {
     #[cfg(desktop)]
     {
-        return match app.autolaunch().is_enabled() {
+        match app.autolaunch().is_enabled() {
             Ok(enabled) => AutostartStatus {
                 enabled: Some(enabled),
                 error: None,
@@ -716,7 +716,7 @@ pub fn get_autostart(app: tauri::AppHandle) -> AutostartStatus {
                 enabled: None,
                 error: Some(error.to_string()),
             },
-        };
+        }
     }
     #[cfg(not(desktop))]
     {
