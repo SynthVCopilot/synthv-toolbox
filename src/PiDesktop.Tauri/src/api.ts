@@ -89,6 +89,7 @@ let previewHttpApiStatus: HttpApiStatus = {
   lastError: null,
 };
 let previewBridgeConnected = true;
+let previewBridgeRequestedProcessId: number | null = null;
 const previewBridgeTargets = new Set<string>();
 let previewSynthvPid = 4203;
 let previewSynthvProcesses: SynthVProcess[] = [
@@ -700,7 +701,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "bridge_session_status") return {
     connected: previewBridgeConnected,
     sessionToken: previewBridgeConnected ? "preview-bridge-session" : null,
-    requestedProcessId: null,
+    requestedProcessId: previewBridgeRequestedProcessId,
     instanceOwnership: "unverified",
     detail: previewBridgeConnected ? "Bridge session connected; instance ownership is unverified in preview." : "Bridge session is disconnected.",
   } as T;
@@ -710,7 +711,13 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "send_synthv_bridge_shortcut") return { succeeded: true, summary: `已向预览 SynthV 进程发送 ${String(args?.action === "stop" ? "F14" : "F13")}。`, detail: "预览模式" } as T;
   if (command === "auto_connect_synthv_bridge") {
     previewBridgeConnected = true;
+    previewBridgeRequestedProcessId = Number(args?.processId) || null;
     return { succeeded: true, summary: "已连接预览 SynthV Bridge。", detail: "F13 已触发。" } as T;
+  }
+  if (command === "stop_synthv_bridge") {
+    previewBridgeConnected = false;
+    previewBridgeRequestedProcessId = null;
+    return { succeeded: true, summary: "预览 Bridge 已停止。", detail: "本地 MCP 客户端已清理。" } as T;
   }
   if (command === "audio_capture_capability") return {
     supported: true,
