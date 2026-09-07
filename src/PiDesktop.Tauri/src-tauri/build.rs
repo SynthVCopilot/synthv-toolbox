@@ -1,5 +1,15 @@
 fn main() {
     println!("cargo:rerun-if-changed=icons");
+    println!("cargo:rerun-if-env-changed=GITHUB_SHA");
+    if let Ok(output) = std::process::Command::new("git")
+        .args(["log", "-1", "--format=%cI"])
+        .output()
+    {
+        let committed_at = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if output.status.success() && !committed_at.is_empty() {
+            println!("cargo:rustc-env=SYNTHV_TOOLBOX_SOURCE_COMMITTED_AT_UTC={committed_at}");
+        }
+    }
     let attributes = tauri_build::Attributes::new();
     #[cfg(windows)]
     {

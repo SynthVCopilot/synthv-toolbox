@@ -364,6 +364,7 @@ const previewState = (): BootstrapState => ({
   onboardingCompleted: previewOnboarding,
   mode: previewMode,
   agentWorkMode: previewAgentWorkMode,
+  updateChannel: "stable",
   platform: "preview",
   appVersion: "0.1.1",
   configPath: "~/.SynthVcopilot/config.json",
@@ -672,6 +673,9 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     previewAgentWorkMode = args?.mode === "solo" ? "solo" : "edit";
     return previewState() as T;
   }
+  if (command === "set_update_channel") {
+    return { ...previewState(), updateChannel: args?.channel === "nightly" ? "nightly" : "stable" } as T;
+  }
   if (command === "scan_synthv") return previewState().installations as T;
   if (command === "install_bridge" || command === "diagnose_bridge") {
     const targets = (args?.targets ?? []) as { scriptsPath: string; bridgeProfile: SynthVInstallation["bridgeProfile"] }[];
@@ -729,6 +733,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     },
   } as T;
   if (command === "check_toolbox_update") return {
+    channel: previewState().updateChannel,
     currentVersion: previewState().appVersion,
     latestVersion: "0.2.0",
     updateAvailable: true,
@@ -1210,6 +1215,7 @@ export const api = {
   completeOnboarding: (mode: AppMode) => call<BootstrapState>("complete_onboarding", { mode }),
   setMode: (mode: AppMode) => call<BootstrapState>("set_mode", { mode }),
   setAgentWorkMode: (mode: AgentWorkMode) => call<BootstrapState>("set_agent_work_mode", { mode }),
+  setUpdateChannel: (channel: import("./types").UpdateChannel) => call<BootstrapState>("set_update_channel", { channel }),
   authorizeAiProvider: (provider: AiProviderId, credentialId?: string, operationId?: string) =>
     call<BootstrapState>("authorize_ai_provider", { provider, credentialId, operationId }),
   cancelAiAuthorization: (operationId: string) =>
@@ -1234,7 +1240,7 @@ export const api = {
     call<BootstrapState>("update_ai_provider_strategy", { provider, strategy }),
   scanSynthV: () => call<SynthVInstallation[]>("scan_synthv"),
   checkToolboxUpdate: () => call<ToolboxUpdateCheck>("check_toolbox_update"),
-  openToolboxReleases: () => call<OperationResult>("open_toolbox_releases"),
+  openToolboxReleases: (releaseUrl?: string) => call<OperationResult>("open_toolbox_releases", { releaseUrl }),
   sv2ProfileState: () => call<Sv2ProfilesState>("sv2_profile_state"),
   sv2CachedProfileState: () => call<Sv2ProfilesState>("sv2_cached_profile_state"),
   sv2VoiceCatalog: () => call<import("./types").Sv2CachedVoice[]>("sv2_voice_catalog"),
