@@ -82,6 +82,9 @@ export interface SynthVAddNote {
   readonly duration: number;
   readonly pitch: number;
   readonly lyrics?: string;
+  readonly languageOverride?: "mandarin" | "english";
+  readonly phonemes?: string;
+  readonly attributes?: Readonly<Record<string, unknown>>;
 }
 
 export interface ScoreTempoPoint {
@@ -250,6 +253,9 @@ interface RawNote {
   durationQuarter: number;
   pitch: number;
   lyric?: string;
+  languageOverride?: "mandarin" | "english";
+  phonemes?: string;
+  phonesetOverride?: string;
   voice?: string;
   staff?: number;
   sourceMeasure?: string;
@@ -285,6 +291,7 @@ interface ParsedMidiTrack {
   name?: string;
   notes: RawNote[];
   lyrics: MidiLyric[];
+  phonemeMarkers: MidiPhonemeMarker[];
   danglingNoteOnCount: number;
   orphanNoteOffCount: number;
   warnings: string[];
@@ -560,9 +567,20 @@ function buildImport(
       });
     }
     const lyric = raw.lyric === undefined || raw.lyric.length === 0 ? settings.defaultLyric : raw.lyric;
-    return lyric === undefined
+    const languageOverride = raw.languageOverride;
+    const phonemes = raw.phonemes;
+    const attributes = raw.phonesetOverride === undefined
+      ? undefined
+      : { phonesetOverride: raw.phonesetOverride };
+    const note = lyric === undefined
       ? { onset, duration, pitch }
       : { onset, duration, pitch, lyrics: lyric };
+    return {
+      ...note,
+      ...(languageOverride === undefined ? {} : { languageOverride }),
+      ...(phonemes === undefined ? {} : { phonemes }),
+      ...(attributes === undefined ? {} : { attributes }),
+    };
   });
 
   const previewNotes = notes.map(
@@ -1731,6 +1749,53 @@ interface MidiLyric {
   text: string;
 }
 
+interface MidiPhonemeMarker {
+  tick: number;
+  phoneset: string;
+  phoneme: string;
+}
+
+const SYNTHV_PHONEME_MARKER_PREFIX = "SynthVPhoneme\0";
+const ENGLISH_ARPABET_PHONEMES = new Set([
+  "aa", "ae", "ah", "ao", "aw", "ax", "ay", "b", "ch", "d", "dx", "dr", "dh", "eh", "er",
+  "ey", "f", "g", "hh", "ih", "iy", "jh", "k", "l", "m", "n", "ng", "ow", "oy", "p", "q",
+  "r", "s", "sh", "t", "tr", "th", "uh", "uw", "v", "w", "y", "z", "zh", "pau", "sil", "cl", "br",
+]);
+
+function midiPhonemeMarker(bytes: Uint8Array): MidiPhonemeMarker | undefined {
+  const text = midiText(bytes);
+  if (!text.startsWith(SYNTHV_PHONEME_MARKER_PREFIX)) {
+    return undefined;
+  }
+  const [phoneset, phoneme] = text.slice(SYNTHV_PHONEME_MARKER_PREFIX.length).split("\0", 2);
+  if (phoneset === undefined || phoneme === undefined || phoneset.length === 0 || phoneme.length === 0) {
+    return undefined;
+  }
+  return { tick: 0, phoneset, phoneme };
+}
+
+function languageFromPhoneset(phoneset: string): "mandarin" | "english" | undefined {
+  switch (phoneset) {
+    case "pinyin-tone3":
+      return "mandarin";
+    case "arpabet":
+      return "english";
+    default:
+      return undefined;
+  }
+}
+
+function normalizeEnglishArpabet(value: string): string | undefined {
+  const phonemes = value
+    .trim()
+    .split(/\s+/u)
+    .map((phoneme) => phoneme.replace(/[0-2]$/u, "").toLowerCase());
+  if (phonemes.length === 0 || phonemes.some((phoneme) => !ENGLISH_ARPABET_PHONEMES.has(phoneme))) {
+    return undefined;
+  }
+  return phonemes.join(" ");
+}
+
 interface MidiParseBudget {
   eventCount: number;
   noteCount: number;
@@ -1747,6 +1812,7 @@ function parseMidiTrack(
   const notes: RawNote[] = [];
   const tempos: RawTempo[] = [];
   const lyrics: MidiLyric[] = [];
+  const phonemeMarkers: MidiPhonemeMarker[] = [];
   const warnings: string[] = [];
   const active = new Map<string, ActiveMidiQueue>();
   let runningStatus: number | undefined;
@@ -1883,6 +1949,11 @@ function parseMidiTrack(
           });
         }
         lyrics.push({ tick, text: midiText(data) });
+      } else if (metaType === 0x7f) {
+        const marker = midiPhonemeMarker(data);
+        if (marker !== undefined) {
+          phonemeMarkers.push({ ...marker, tick });
+        }
       }
       continue;
     }
@@ -1956,6 +2027,7 @@ function parseMidiTrack(
     trackIndex,
     notes,
     lyrics,
+    phonemeMarkers,
     danglingNoteOnCount,
     orphanNoteOffCount,
     warnings,
@@ -2126,6 +2198,110 @@ function attachMidiLyrics(
     : [`Ignored ${unmatched} MIDI lyric event(s) without a selected note at the same tick.`];
 }
 
+function attachMidiLanguageOverrides(
+  notes: RawNote[],
+  markers: readonly MidiPhonemeMarker[],
+): string[] {
+  const markersByTick = new Map<number, MidiPhonemeMarker[]>();
+  for (const marker of markers) {
+    const entries = markersByTick.get(marker.tick) ?? [];
+    entries.push(marker);
+    markersByTick.set(marker.tick, entries);
+  }
+  const cursors = new Map<number, number>();
+  let unsupported = 0;
+  for (const note of sortedNotes(notes)) {
+    const tick = note.sourceTick ?? 0;
+    const cursor = cursors.get(tick) ?? 0;
+    const marker = markersByTick.get(tick)?.[cursor];
+    if (marker === undefined) {
+      continue;
+    }
+    cursors.set(tick, cursor + 1);
+    const language = languageFromPhoneset(marker.phoneset);
+    if (language === undefined) {
+      unsupported += 1;
+    } else {
+      note.languageOverride = language;
+      if (marker.phoneset === "arpabet") {
+        const phonemes = normalizeEnglishArpabet(marker.phoneme);
+        if (phonemes === undefined) {
+          unsupported += 1;
+        } else {
+          note.phonemes = phonemes;
+          note.phonesetOverride = "arpabet";
+        }
+      }
+    }
+  }
+  return unsupported === 0
+    ? []
+    : [`Ignored ${unsupported} MIDI phoneme marker(s) with an unsupported phoneset or phoneme sequence.`];
+}
+
+function unambiguousMetadataLyrics(
+  tracks: readonly ParsedMidiTrack[],
+): { lyrics: MidiLyric[]; warnings: string[] } {
+  const byTick = new Map<number, MidiLyric[]>();
+  for (const track of tracks) {
+    for (const lyric of track.lyrics) {
+      const entries = byTick.get(lyric.tick) ?? [];
+      entries.push(lyric);
+      byTick.set(lyric.tick, entries);
+    }
+  }
+  const lyrics: MidiLyric[] = [];
+  let ambiguous = 0;
+  for (const [tick, entries] of byTick) {
+    const texts = new Set(entries.map((entry) => entry.text));
+    if (texts.size !== 1) {
+      ambiguous += 1;
+    } else {
+      lyrics.push({ tick, text: entries[0]?.text ?? "" });
+    }
+  }
+  return {
+    lyrics,
+    warnings:
+      ambiguous === 0
+        ? []
+        : [`Ignored ${ambiguous} ambiguous MIDI metadata lyric tick(s).`],
+  };
+}
+
+function unambiguousMetadataPhonemeMarkers(
+  tracks: readonly ParsedMidiTrack[],
+): { markers: MidiPhonemeMarker[]; warnings: string[] } {
+  const byTick = new Map<number, MidiPhonemeMarker[]>();
+  for (const track of tracks) {
+    for (const marker of track.phonemeMarkers) {
+      const entries = byTick.get(marker.tick) ?? [];
+      entries.push(marker);
+      byTick.set(marker.tick, entries);
+    }
+  }
+  const markers: MidiPhonemeMarker[] = [];
+  let ambiguous = 0;
+  for (const [tick, entries] of byTick) {
+    const phonesets = new Set(entries.map((entry) => entry.phoneset));
+    if (phonesets.size !== 1) {
+      ambiguous += 1;
+    } else {
+      const marker = entries[0];
+      if (marker !== undefined) {
+        markers.push({ ...marker, tick });
+      }
+    }
+  }
+  return {
+    markers,
+    warnings:
+      ambiguous === 0
+        ? []
+        : [`Ignored ${ambiguous} ambiguous MIDI metadata phoneme-marker tick(s).`],
+  };
+}
+
 export function importMidiMonophonic(
   source: Uint8Array,
   selection: MidiSelection,
@@ -2157,7 +2333,24 @@ export function importMidiMonophonic(
       ? track.notes
       : track.notes.filter((note) => note.sourceChannel === selection.channel)
   ).map((note) => ({ ...note }));
-  const lyricWarnings = attachMidiLyrics(notes, track.lyrics);
+  const selectedTrackLyrics = attachMidiLyrics(notes, track.lyrics);
+  const metadataTracks = parsed.tracks.filter(
+    (candidate) => candidate.trackIndex !== track.trackIndex && candidate.notes.length === 0,
+  );
+  const metadataLyrics = unambiguousMetadataLyrics(metadataTracks);
+  const crossTrackLyrics = attachMidiLyrics(
+    notes.filter((note) => note.lyric === undefined),
+    metadataLyrics.lyrics,
+  );
+  const selectedMarkerWarnings = attachMidiLanguageOverrides(
+    notes,
+    track.phonemeMarkers,
+  );
+  const metadataMarkers = unambiguousMetadataPhonemeMarkers(metadataTracks);
+  const metadataMarkerWarnings = attachMidiLanguageOverrides(
+    notes.filter((note) => note.languageOverride === undefined),
+    metadataMarkers.markers,
+  );
   const converted = buildImport(notes, parsed.tempos, options);
   const normalizedSelection =
     selection.channel === undefined
@@ -2169,7 +2362,15 @@ export function importMidiMonophonic(
     notes: converted.notes,
     preview: converted.preview,
     tempoMap: converted.tempoMap,
-    warnings: [...track.warnings, ...lyricWarnings],
+    warnings: [
+      ...track.warnings,
+      ...selectedTrackLyrics,
+      ...metadataLyrics.warnings,
+      ...crossTrackLyrics,
+      ...selectedMarkerWarnings,
+      ...metadataMarkers.warnings,
+      ...metadataMarkerWarnings,
+    ],
   };
 }
 
