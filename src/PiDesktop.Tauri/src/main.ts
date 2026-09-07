@@ -200,6 +200,7 @@ let lyricProjectVersions: LyricProjectVersion[] = [];
 let lyricBridgeSelection: LyricBridgeSelection | undefined;
 let lyricBridgePreview: LyricBridgePreview | undefined;
 let lyricBridgeSlots: string[] = [];
+let lyricBridgeGeneration = 0;
 let lyricSavedSnapshot = "";
 let pendingBlockedSwitchSlot: string | undefined;
 let pendingConcurrentLaunchSlot: string | undefined;
@@ -387,6 +388,7 @@ function applyLyricProject(project: LyricProject): void {
   lyricBridgeSelection = undefined;
   lyricBridgePreview = undefined;
   lyricBridgeSlots = [];
+  lyricBridgeGeneration += 1;
   workflowResult = undefined;
   lyricSavedSnapshot = lyricWorkspaceSnapshot();
   persistLyricWorkspace();
@@ -404,6 +406,7 @@ function startNewLyricProject(): void {
   lyricBridgeSelection = undefined;
   lyricBridgePreview = undefined;
   lyricBridgeSlots = [];
+  lyricBridgeGeneration += 1;
   lyricCandidateHistory = [];
   lyricProjectVersions = [];
   workflowResult = undefined;
@@ -3190,6 +3193,7 @@ document.addEventListener("input", (event) => {
   if (target.dataset.lyricBridgeSlot !== undefined) {
     lyricBridgeSlots = lyricBridgeSelection?.notes.map((note, index) => document.querySelector<HTMLInputElement>(`[data-lyric-bridge-slot="${index}"]`)?.value ?? note.lyric) ?? [];
     lyricBridgePreview = undefined;
+    lyricBridgeGeneration += 1;
     document.querySelector<HTMLElement>("[data-lyric-bridge-preview]")?.remove();
     document.querySelector<HTMLElement>("[data-confirm-lyric-bridge-fit]")?.remove();
   }
@@ -3446,8 +3450,11 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (target.hasAttribute("data-read-lyric-bridge-selection")) {
+    const generation = ++lyricBridgeGeneration;
     void run(async () => {
-      lyricBridgeSelection = await api.readLyricBridgeSelection();
+      const selection = await api.readLyricBridgeSelection();
+      if (generation !== lyricBridgeGeneration) return;
+      lyricBridgeSelection = selection;
       lyricBridgeSlots = lyricBridgeSelection.notes.map((note) => note.lyric);
       lyricBridgePreview = undefined;
     });
@@ -3463,13 +3470,18 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (target.hasAttribute("data-preview-lyric-bridge-fit") && lyricBridgeSelection) {
+    const generation = lyricBridgeGeneration;
+    const selectionToken = lyricBridgeSelection.selectionToken;
     const slots = lyricBridgeSelection.notes.map((note, index) => ({
       text: document.querySelector<HTMLInputElement>(`[data-lyric-bridge-slot="${index}"]`)?.value.trim() ?? note.lyric,
     }));
     lyricBridgeSlots = slots.map((slot) => slot.text);
     lyricBridgePreview = undefined;
+    lyricBridgeGeneration += 1;
     void run(async () => {
-      lyricBridgePreview = await api.previewLyricBridgeFit(lyricBridgeSelection!.selectionToken, lyricBridgeSelection!.sessionToken, slots);
+      const preview = await api.previewLyricBridgeFit(selectionToken, lyricBridgeSelection!.sessionToken, slots);
+      if (generation !== lyricBridgeGeneration || lyricBridgeSelection?.selectionToken !== selectionToken) return;
+      lyricBridgePreview = preview;
       lyricBridgeSlots = slots.map((slot) => slot.text);
     });
     return;
@@ -3489,12 +3501,17 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (target.hasAttribute("data-confirm-lyric-bridge-fit") && lyricBridgePreview) {
+    const generation = lyricBridgeGeneration;
+    const previewToken = lyricBridgePreview.previewToken;
+    lyricBridgePreview = undefined;
     void run(async () => {
-      const result = await api.confirmLyricBridgeFit(lyricBridgePreview!.previewToken);
+      const result = await api.confirmLyricBridgeFit(previewToken);
+      if (generation !== lyricBridgeGeneration) return;
       notice = t("lyrics.writtenToSynthv", { count: result.noteCount });
       lyricBridgePreview = undefined;
       lyricBridgeSelection = undefined;
       lyricBridgeSlots = [];
+      lyricBridgeGeneration += 1;
     });
     return;
   }
