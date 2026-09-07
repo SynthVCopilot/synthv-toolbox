@@ -35,6 +35,7 @@ import type {
   AudioSampleFormat,
   AudioWritePlan,
   BootstrapState,
+  BridgeSessionStatus,
   ChatMessage,
   ChineseRhymeLookup,
   ConversationSnapshot,
@@ -135,6 +136,7 @@ let instanceRefreshGeneration = 0;
 const instanceRefreshInterval = 3000;
 let instanceRefreshTimer: number | undefined;
 let synthvShortcutProfile: SynthVShortcutProfile | undefined;
+let bridgeSession: BridgeSessionStatus | undefined;
 let bridgeManualScriptsPath = "";
 let bridgeManualProfile: BridgeProfile = "sv2";
 const bridgeTargetResults = new Map<string, OperationResult>();
@@ -696,10 +698,11 @@ async function run(task: () => Promise<void>): Promise<void> {
 
 async function refresh(): Promise<void> {
   app = await api.bootstrap();
-  [lyricProjects, synthvProcesses, synthvShortcutProfile, mediaTasks, tuningProfiles, httpApiStatus] = await Promise.all([
+  [lyricProjects, synthvProcesses, synthvShortcutProfile, bridgeSession, mediaTasks, tuningProfiles, httpApiStatus] = await Promise.all([
     api.listLyricProjects(),
     api.listSynthvProcesses(),
     api.synthvShortcutProfile(),
+    api.bridgeSessionStatus().catch(() => ({ connected: false, instanceOwnership: "unverified" as const, detail: "" })),
     api.mediaTasks(),
     api.listTuningProfiles(),
     api.getHttpApiStatus(),
@@ -799,19 +802,27 @@ async function refreshVisibleSynthvInstances(): Promise<void> {
   const generation = instanceRefreshGeneration;
   instanceRefreshInFlight = true;
   try {
-    const [nextProcesses, nextProfiles] = await Promise.all([
+    const [nextProcesses, nextProfiles, nextBridgeSession] = await Promise.all([
       api.listSynthvProcesses(),
       page === "accounts" ? api.sv2ProfileState() : Promise.resolve(profiles),
+      page === "bridge"
+        ? api.bridgeSessionStatus().catch(() => ({ connected: false, instanceOwnership: "unverified" as const, detail: "" }))
+        : Promise.resolve(bridgeSession),
     ]);
     if (busy || page !== refreshPage || generation !== instanceRefreshGeneration) return;
     const previousRows = refreshPage === "accounts" ? renderSv2InstanceRows() : renderBridgeProcessRows();
+    const bridgeSessionChanged = refreshPage === "bridge"
+      && JSON.stringify(bridgeSession) !== JSON.stringify(nextBridgeSession);
     synthvProcesses = nextProcesses;
+    bridgeSession = nextBridgeSession;
     if (nextProfiles) {
       profiles = nextProfiles;
       refreshAuthorizedVoiceEntries();
     }
     const nextRows = refreshPage === "accounts" ? renderSv2InstanceRows() : renderBridgeProcessRows();
-    if (previousRows !== nextRows) {
+    if (bridgeSessionChanged) {
+      render();
+    } else if (previousRows !== nextRows) {
       const list = document.querySelector<HTMLElement>(refreshPage === "accounts"
         ? ".account-instances-panel .synthv-process-list" : ".bridge-instances-panel .synthv-process-list");
       if (list) {
@@ -2314,7 +2325,7 @@ function renderComponents(): string {
 
 function renderBridgeProcessRows(): string {
   return synthvProcesses.length
-    ? synthvProcesses.map((process) => `<article class="synthv-process-row"><div><strong>${escapeHtml(process.name)}</strong><small>PID ${process.processId} · ${escapeHtml(process.command)}</small></div><div class="button-row"><button class="primary compact" data-auto-connect-synthv="${process.processId}">${t("bridge.startConnect")}</button><button class="secondary compact" data-send-synthv-stop="${process.processId}">${t("bridge.stop")}</button></div></article>`).join("")
+    ? synthvProcesses.map((process) => `<article class="synthv-process-row"><div><strong>${escapeHtml(process.productName || process.name)}</strong><small>PID ${process.processId} · ${escapeHtml(process.windowTitle || process.command)}</small>${bridgeSession?.requestedProcessId === process.processId ? `<small class="bridge-session-request">${t("bridge.requestedInstance")}</small>` : ""}</div><div class="button-row"><button class="primary compact" data-auto-connect-synthv="${process.processId}" data-process-identity="${escapeHtml(process.processIdentity)}" ${busy || !process.processIdentity ? "disabled" : ""}>${t("bridge.startConnect")}</button><button class="secondary compact" data-send-synthv-stop="${process.processId}" data-process-identity="${escapeHtml(process.processIdentity)}" ${busy || !process.processIdentity ? "disabled" : ""}>${t("bridge.stop")}</button></div></article>`).join("")
     : `<div class="empty-inline compact-empty">${t("bridge.noProcesses")}</div>`;
 }
 
@@ -2379,7 +2390,10 @@ function renderBridge(): string {
     : "";
   const shortcuts = synthvShortcutProfile ?? { bridgeStart: "F13", bridgeStop: "F14", detail: t("bridge.shortcutsLoading") };
   const processList = renderBridgeProcessRows();
-  const processControls = `<section class="panel bridge-instances-panel"><div class="panel-heading"><span class="feature-icon violet">${icon("bridge", 25)}</span><div><h2>${t("bridge.instances")}</h2><p>${escapeHtml(synthvShortcutProfile ? t("bridge.shortcuts", { start: shortcuts.bridgeStart, stop: shortcuts.bridgeStop, save: synthvShortcutProfile.projectSave }) : t("bridge.shortcutsLoading"))}</p></div></div><div class="shortcut-tags"><span>${t("bridge.start", { shortcut: shortcuts.bridgeStart })}</span><span>${t("bridge.stopShortcut", { shortcut: shortcuts.bridgeStop })}</span></div><div class="synthv-process-list">${processList}</div></section>`;
+  const sessionState = bridgeSession?.connected
+    ? `<div class="inline-status"><span class="status-dot online"></span><span><strong>${t("bridge.sessionConnected")}</strong><small>${t("bridge.sessionOwnershipUnknown")}</small></span></div>`
+    : `<div class="inline-status"><span class="status-dot"></span><span>${t("bridge.sessionDisconnected")}</span></div>`;
+  const processControls = `<section class="panel bridge-instances-panel"><div class="panel-heading"><span class="feature-icon violet">${icon("bridge", 25)}</span><div><h2>${t("bridge.instances")}</h2><p>${escapeHtml(synthvShortcutProfile ? t("bridge.shortcuts", { start: shortcuts.bridgeStart, stop: shortcuts.bridgeStop, save: synthvShortcutProfile.projectSave }) : t("bridge.shortcutsLoading"))}</p></div></div>${sessionState}<div class="shortcut-tags"><span>${t("bridge.start", { shortcut: shortcuts.bridgeStart })}</span><span>${t("bridge.stopShortcut", { shortcut: shortcuts.bridgeStop })}</span></div><div class="synthv-process-list">${processList}</div></section>`;
   return `<div class="bridge-grid"><section class="panel"><div class="panel-heading"><span class="feature-icon orange">${icon("bridge", 25)}</span><div><h2>${t("bridge.detection")}</h2><p>${t("bridge.detectionDescription")}</p></div><button class="secondary compact" data-scan>${icon("sync", 16)} ${t("bridge.rescan")}</button></div>
     <div class="detection-groups">
       <section class="detection-group"><div class="detection-group-title"><strong>${t("bridge.applications")}</strong><span>${applicationLocations.length}</span></div><div class="installation-list">${applicationList}</div></section>
@@ -3849,9 +3863,10 @@ document.addEventListener("click", (event) => {
   }
   if (target.dataset.autoConnectSynthv) {
     const processId = Number(target.dataset.autoConnectSynthv);
-    if (Number.isInteger(processId) && processId > 0) {
+    const identity = target.dataset.processIdentity ?? "";
+    if (Number.isInteger(processId) && processId > 0 && identity) {
       void run(async () => {
-        setFeedback(await api.autoConnectSynthvBridge(processId));
+        setFeedback(await api.autoConnectSynthvBridge(processId, identity));
         await refresh();
       });
     }
@@ -3859,10 +3874,11 @@ document.addEventListener("click", (event) => {
   }
   if (target.dataset.sendSynthvStop) {
     const processId = Number(target.dataset.sendSynthvStop);
-    if (Number.isInteger(processId) && processId > 0) {
+    const identity = target.dataset.processIdentity ?? "";
+    if (Number.isInteger(processId) && processId > 0 && identity) {
       void run(async () => {
-        setFeedback(await api.sendSynthvBridgeShortcut(processId, "stop"));
-        synthvProcesses = await api.listSynthvProcesses();
+        setFeedback(await api.stopSynthvBridge(processId, identity));
+        await refresh();
       });
     }
     return;

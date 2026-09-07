@@ -21,6 +21,7 @@ import type {
   AudioCaptureTarget,
   BatchWorkflowResult,
   BootstrapState,
+  BridgeSessionStatus,
   ChatMessage,
   ChineseRhymeLookup,
   ComponentDownload,
@@ -693,6 +694,13 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     previewBridgeConnected = true;
     return { succeeded: true, summary: "SynthV Bridge 已连接。", detail: "预览模式" } as T;
   }
+  if (command === "bridge_session_status") return {
+    connected: previewBridgeConnected,
+    sessionToken: previewBridgeConnected ? "preview-bridge-session" : null,
+    requestedProcessId: null,
+    instanceOwnership: "unverified",
+    detail: previewBridgeConnected ? "Bridge session connected; instance ownership is unverified in preview." : "Bridge session is disconnected.",
+  } as T;
   if (command === "list_synthv_processes") return previewSynthvProcesses as T;
   if (command === "preview_media_source") return { sourceUrl: String(args?.source ?? ""), canonicalUrl: String(args?.source ?? ""), platform: "BiliBili", mediaId: "BV1Preview", title: "预览媒体", uploader: "预览作者", durationSeconds: 183.2, thumbnailUrl: null } as T;
   if (command === "synthv_shortcut_profile") return { bridgeStart: "F13", bridgeStop: "F14", projectSave: "⌘S", detail: "F13 触发 Bridge 启动或重连，F14 触发停止；Cover 保存使用标准快捷键。" } as T;
@@ -1307,16 +1315,19 @@ export const api = {
   installBridge: (targets: { scriptsPath: string; bridgeProfile: "sv2" | "sv1" | "flat" | "unsupported" }[]) => call<{ scriptsPath: string; bridgeProfile: string; result: OperationResult }[]>("install_bridge", { targets }),
   diagnoseBridge: (targets: { scriptsPath: string; bridgeProfile: "sv2" | "sv1" | "flat" | "unsupported" }[]) => call<{ scriptsPath: string; bridgeProfile: string; result: OperationResult }[]>("diagnose_bridge", { targets }),
   connectBridge: () => call<OperationResult>("connect_bridge"),
+  bridgeSessionStatus: () => call<BridgeSessionStatus>("bridge_session_status"),
   listSynthvProcesses: () => call<SynthVProcess[]>("list_synthv_processes"),
   focusSv2Instance: (processId: number, processIdentity: string) =>
     call<OperationResult>("focus_sv2_instance", { processId, processIdentity }),
   terminateSv2Instance: (processId: number, processIdentity: string) =>
     call<OperationResult>("terminate_sv2_instance", { processId, processIdentity }),
   synthvShortcutProfile: () => call<SynthVShortcutProfile>("synthv_shortcut_profile"),
-  sendSynthvBridgeShortcut: (processId: number, action: "start" | "stop") =>
-    call<OperationResult>("send_synthv_bridge_shortcut", { processId, action }),
-  autoConnectSynthvBridge: (processId: number) =>
-    call<OperationResult>("auto_connect_synthv_bridge", { processId }),
+  sendSynthvBridgeShortcut: (processId: number, processIdentity: string, action: "start" | "stop") =>
+    call<OperationResult>("send_synthv_bridge_shortcut", { processId, processIdentity, action }),
+  autoConnectSynthvBridge: (processId: number, processIdentity: string) =>
+    call<OperationResult>("auto_connect_synthv_bridge", { processId, processIdentity }),
+  stopSynthvBridge: (processId: number, processIdentity: string) =>
+    call<OperationResult>("stop_synthv_bridge", { processId, processIdentity }),
   audioCaptureCapability: () => call<AudioCaptureCapability>("audio_capture_capability"),
   listSynthvCaptureTargets: () => call<AudioCaptureTarget[]>("list_synthv_capture_targets"),
   captureSynthvClip: (processId: number | undefined, startSeconds: number, endSeconds: number, preRollSeconds: number, postRollSeconds: number, label: string) =>
