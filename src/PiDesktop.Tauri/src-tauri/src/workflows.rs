@@ -142,6 +142,7 @@ pub fn game_to_midi(
     tolerance: f64,
     advanced: bool,
     resource_dir: &Path,
+    components_dir: &Path,
 ) -> Result<WorkflowResult, String> {
     let vocal = validate_input(&vocal_path, "有词/演唱音频", AUDIO_EXTENSIONS)?;
     let instrumental = validate_input(&instrumental_path, "无词/伴奏音频", AUDIO_EXTENSIONS)?;
@@ -164,6 +165,63 @@ pub fn game_to_midi(
         args.push("--advanced".to_string());
     }
     let data = run_python(&runtime, &args, "Game → MIDI", resource_dir)?;
+    game_midi_result(data, advanced)
+}
+
+pub fn audio_to_midi(
+    vocal_path: String,
+    instrumental_path: Option<String>,
+    output_name: String,
+    output_directory: Option<String>,
+    tolerance: f64,
+    advanced: bool,
+    resource_dir: &Path,
+) -> Result<WorkflowResult, String> {
+    let vocal = validate_input(&vocal_path, "演唱音频", AUDIO_EXTENSIONS)?;
+    let output_name = validate_output_name(&output_name, "mid")?;
+    if !(0.02..=0.25).contains(&tolerance) {
+        return Err("匹配容差必须在 0.02–0.25 秒之间。".to_string());
+    }
+    let output_directory = match output_directory.filter(|value| !value.trim().is_empty()) {
+        Some(value) => PathBuf::from(value.trim()),
+        None => vocal
+            .parent()
+            .ok_or_else(|| "输入音频没有父目录。".to_string())?
+            .to_path_buf(),
+    };
+    if !output_directory.is_absolute() || !output_directory.is_dir() {
+        return Err("输出目录不存在。".to_string());
+    }
+    let output_path = output_directory.join(output_name);
+    if output_path.exists() {
+        return Err("输出文件已存在；请改名或选择其他输出目录。".to_string());
+    }
+    crate::components::ensure_audio_transcription_component(components_dir, resource_dir)?;
+    crate::downloads::ensure_ffmpeg_blocking(resource_dir, None)?;
+    let runtime = python_component("audio", None)?;
+    let mut args = vec![
+        "pair-diff".to_string(),
+        vocal.to_string_lossy().into_owned(),
+    ];
+    if let Some(path) = instrumental_path.filter(|value| !value.trim().is_empty()) {
+        args.push(
+            validate_input(&path, "伴奏音频", AUDIO_EXTENSIONS)?
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    args.extend([
+        "--midi".to_string(),
+        output_path.to_string_lossy().into_owned(),
+        "--output-external".to_string(),
+        "--transcribe".to_string(),
+        "--tol".to_string(),
+        format!("{tolerance:.3}"),
+    ]);
+    if advanced {
+        args.push("--advanced".to_string());
+    }
+    let data = run_python(&runtime, &args, "音频歌词与旋律识别", resource_dir)?;
     game_midi_result(data, advanced)
 }
 

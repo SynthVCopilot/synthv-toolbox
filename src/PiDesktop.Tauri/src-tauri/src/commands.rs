@@ -2609,8 +2609,9 @@ pub async fn run_render_review(
 #[allow(clippy::too_many_arguments)]
 pub async fn run_audio_to_project(
     vocal_path: String,
-    instrumental_path: String,
+    instrumental_path: Option<String>,
     output_name: String,
+    output_directory: Option<String>,
     tolerance: f64,
     advanced: bool,
     import_to_synthv: bool,
@@ -2630,14 +2631,17 @@ pub async fn run_audio_to_project(
     let vocal_for_run = vocal_path.clone();
     let instrumental_for_run = instrumental_path.clone();
     let output_for_run = output_name.clone();
+    let output_directory_for_run = output_directory.clone();
     let mut result = tauri::async_runtime::spawn_blocking(move || {
-        workflows::game_to_midi(
+        workflows::audio_to_midi(
             vocal_for_run,
             instrumental_for_run,
             output_for_run,
+            output_directory_for_run,
             tolerance,
             advanced,
             &resource_dir,
+            &state.components_dir,
         )
     })
     .await
@@ -2661,20 +2665,39 @@ pub async fn run_audio_to_project(
         None
     };
     let original = result.data;
+    let lyric_markers = original
+        .get("lyric_markers")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let phoneme_markers = original
+        .get("phoneme_markers")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let unaligned_words = original
+        .get("unaligned_words")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let dictionary_missing_words = original
+        .get("dictionary_missing_words")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
     result.data = json!({
         "stages": [
             { "id": "pairDiff", "status": "completed", "label": "配对音频差分与单音提取" },
             { "id": "midi", "status": "completed", "label": "受管理 MIDI 输出" },
-            { "id": "lyrics", "status": "deferred", "label": "歌词转写将在 Whisper 组件启用后提供" },
+            { "id": "lyrics", "status": "completed", "label": "自动歌词识别与词典音素标记" },
             { "id": "synthvImport", "status": if import_to_synthv { "completed" } else { "ready" }, "label": "SynthV Bridge 导入" }
         ],
         "extraction": original,
         "bridge": bridge_result
     });
+    let marker_summary = format!(
+        "已写入 {lyric_markers} 个歌词标记和 {phoneme_markers} 个词典音素标记；{unaligned_words} 个识别词未映射，{dictionary_missing_words} 个词没有词典音素。"
+    );
     result.summary = if import_to_synthv {
-        "音频旋律已提取为 MIDI，并通过 Bridge 导入当前 SynthV 工程。".to_string()
+        format!("音频旋律已写入 MIDI 并通过 Bridge 导入当前 SynthV 工程。{marker_summary}")
     } else {
-        "音频旋律已提取为受管理 MIDI；连接 Bridge 后可继续导入当前工程。".to_string()
+        format!("音频旋律已写入 MIDI；连接 Bridge 后可继续导入当前工程。{marker_summary}")
     };
     Ok(record_workflow_result(
         "音频到 SynthV 工程",
@@ -2682,6 +2705,7 @@ pub async fn run_audio_to_project(
             "vocalPath": vocal_path,
             "instrumentalPath": instrumental_path,
             "outputName": output_name,
+            "outputDirectory": output_directory,
             "tolerance": tolerance,
             "advanced": advanced,
             "importToSynthv": import_to_synthv,

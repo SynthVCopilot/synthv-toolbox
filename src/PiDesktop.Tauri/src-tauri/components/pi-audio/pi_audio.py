@@ -19,6 +19,7 @@
 torch(CPU 即可) + panns-inference。Python ≤3.11（basic-pitch 生态限制）。
 """
 import argparse
+from functools import lru_cache
 import json
 import sys
 
@@ -62,11 +63,13 @@ def data_root():
     return pathlib.Path.home() / ".SynthVcopilot"
 
 
-def safe_output_path(name_or_rel: str, subdir: str = "output", suffix: str | None = None):
+def safe_output_path(name_or_rel: str, subdir: str = "output", suffix: str | None = None,
+                     allow_external: bool = False):
     """把（可能来自外部的）输出路径安全落到 ~/.SynthVcopilot/ 数据根下。
 
     规则：硬禁止 `..` 穿透；相对路径落到 `<root>/<subdir>/` 下；
-    绝对路径仅当**已在数据根内**时放行（供 FFI 侧传入已圈定的路径），否则拒绝。
+    绝对路径默认仅当**已在数据根内**时放行；经受信任调用方验证的
+    `allow_external` 路径可写到用户选择的目录。
     可选强制扩展名。
     """
     import pathlib
@@ -77,6 +80,11 @@ def safe_output_path(name_or_rel: str, subdir: str = "output", suffix: str | Non
         raise ValueError(f"路径含 '..'，禁止穿透: {name_or_rel}")
     if p.is_absolute():
         resolved = pathlib.Path(name_or_rel).resolve()
+        if allow_external:
+            if suffix and resolved.suffix.lower() != suffix:
+                resolved = resolved.with_suffix(suffix)
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            return resolved
         try:
             resolved.relative_to(root.resolve())
         except ValueError:
@@ -534,6 +542,125 @@ def map_lyrics_to_notes(lyrics_file: str, notes):
     }
 
 
+def transcribe_words(audio_path: str):
+    """Use local Whisper word timestamps; the model is cached after first download."""
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError as exc:
+        raise RuntimeError("自动歌词识别依赖缺失；请更新 pi-audio 组件。") from exc
+    model = WhisperModel("small", device="cpu", compute_type="int8")
+    segments, info = model.transcribe(
+        audio_path, beam_size=5, word_timestamps=True, vad_filter=False,
+        condition_on_previous_text=False,
+    )
+    words = []
+    for segment in segments:
+        for word in segment.words or []:
+            text = word.word.strip()
+            if text and word.start is not None and word.end is not None:
+                words.append({"text": text, "start": float(word.start), "end": float(word.end)})
+    if not words:
+        raise RuntimeError("自动歌词识别没有返回带时间戳的词；未写入猜测的歌词或音素。")
+    return words, str(info.language or "unknown")
+
+
+@lru_cache(maxsize=1)
+def _cmudict():
+    import cmudict
+    return cmudict.dict()
+
+
+def _english_phonemes(word: str):
+    spelling = "".join(char for char in word.lower() if char.isalpha() or char == "'")
+    pronunciations = _cmudict().get(spelling)
+    if not pronunciations:
+        return None
+    return " ".join(pronunciations[0])
+
+
+def _word_marker(word: str, language: str):
+    if language.startswith("zh"):
+        from pypinyin import Style, lazy_pinyin
+        chars = [char for char in word if _is_cjk(char)]
+        phones = lazy_pinyin(chars, style=Style.TONE3, neutral_tone_with_five=True)
+        return [(char, "pinyin-tone3", phone) for char, phone in zip(chars, phones)]
+    if language.startswith("en"):
+        phonemes = _english_phonemes(word)
+        return [(word, "arpabet", phonemes)] if phonemes else [(word, None, None)]
+    return [(word, None, None)]
+
+
+def map_transcription_to_notes(words, notes, language):
+    """Assign each note to its greatest-overlap recognized word before lyric expansion."""
+    groups = [[] for _ in words]
+    for note_index, note in enumerate(notes):
+        overlaps = [max(0.0, min(note["end"], word["end"]) - max(note["start"], word["start"])) for word in words]
+        if max(overlaps, default=0.0) > 0.0:
+            groups[overlaps.index(max(overlaps))].append(note_index)
+    assigned = [None] * len(notes)
+    unaligned_words = 0
+    dictionary_missing_words = 0
+    dictionary_phoneme_words = 0
+    for word, slots in zip(words, groups):
+        syllables = _word_marker(word["text"], language)
+        if not slots or not syllables:
+            unaligned_words += 1
+            continue
+        if len(syllables) > 1:
+            for ordinal, index in enumerate(slots):
+                lyric, phoneset, phoneme = syllables[min(ordinal, len(syllables) - 1)]
+                assigned[index] = {"lyric": lyric if ordinal < len(syllables) else "-", "phoneset": None, "phoneme": None}
+            dictionary_phoneme_words += 1
+            continue
+        lyric, phoneset, phoneme = syllables[0]
+        if phoneset is None:
+            dictionary_missing_words += 1
+        assigned[slots[0]] = {"lyric": lyric, "phoneset": phoneset if len(slots) == 1 else None, "phoneme": phoneme if len(slots) == 1 else None}
+        for index in slots[1:]:
+            assigned[index] = {"lyric": "+" if len(slots) == 2 else "-", "phoneset": None, "phoneme": None}
+        if phoneme and len(slots) > 1:
+            dictionary_phoneme_words += 1
+    markers = [entry or {"lyric": None, "phoneset": None, "phoneme": None} for entry in assigned]
+    return markers, {
+        "recognized_words": len(words),
+        "lyric_markers": sum(entry["lyric"] is not None for entry in markers),
+        "phoneme_markers": sum(entry["phoneme"] is not None for entry in markers),
+        "unmarked_notes": sum(entry["lyric"] is None for entry in markers),
+        "unaligned_words": unaligned_words,
+        "dictionary_missing_words": dictionary_missing_words,
+        "dictionary_phoneme_words": dictionary_phoneme_words,
+        "language": language,
+    }
+
+
+def write_midi(path, notes, markers):
+    import mido
+    midi = mido.MidiFile(ticks_per_beat=480)
+    midi.charset = "utf-8"
+    track = mido.MidiTrack()
+    midi.tracks.append(track)
+    track.append(mido.MetaMessage("track_name", name="vocal-mono", time=0))
+    track.append(mido.MetaMessage("set_tempo", tempo=500000, time=0))
+    events = []
+    for index, note in enumerate(notes):
+        start, end = round(note["start"] * 960), max(round(note["end"] * 960), round(note["start"] * 960) + 1)
+        marker = markers[index] if markers else None
+        events.append((end, 0, mido.Message("note_off", note=note["pitch"], velocity=0)))
+        events.append((start, 1, mido.Message("note_on", note=note["pitch"], velocity=max(1, min(127, int(note.get("velocity", 90)))))))
+        if marker and marker["lyric"] is not None:
+            events.append((start, 2, mido.MetaMessage("lyrics", text=marker["lyric"])))
+        if marker and marker["phoneme"]:
+            payload = ("SynthVPhoneme\0" + marker["phoneset"] + "\0" + marker["phoneme"]).encode("ascii")
+            events.append((start, 3, mido.MetaMessage("sequencer_specific", data=payload)))
+    previous = 0
+    for tick, _order, event in sorted(events, key=lambda value: (value[0], value[1])):
+        event.time, previous = tick - previous, tick
+        track.append(event)
+    track.append(mido.MetaMessage("end_of_track", time=0))
+    with open(path, "xb") as output:
+        midi.save(file=output)
+
+
 def automatic_correct(notes):
     """Conservative melody cleanup used by the AI-mode advanced workflow.
 
@@ -636,9 +763,9 @@ def advanced_pair_diff(vnotes, inotes, requested_tol):
 
 def cmd_pair_diff(args) -> dict:
     vnotes = extract_notes(args.vocal)
-    inotes = extract_notes(args.inst)
+    inotes = extract_notes(args.inst) if args.inst else []
     advanced = None
-    if args.advanced:
+    if args.advanced and args.inst:
         selected, confidence, trials = advanced_pair_diff(vnotes, inotes, args.tol)
         residual = selected["residual"]
         matched = selected["matched"]
@@ -652,11 +779,16 @@ def cmd_pair_diff(args) -> dict:
             "confidence": confidence,
             "parameter_trials": trials,
         }
-    else:
+    elif args.inst:
         residual, matched = diff_notes(vnotes, inotes, args.tol)
         in_range = [n for n in residual if 48 <= n["pitch"] <= 84]  # C3–C6
         mono = mono_collapse(in_range)
         selected_tolerance = args.tol
+    else:
+        residual, matched = vnotes, 0
+        in_range = [n for n in vnotes if 48 <= n["pitch"] <= 84]
+        mono = mono_collapse(in_range)
+        selected_tolerance = None
 
     lyric_texts = None
     lyric_result = {
@@ -666,6 +798,13 @@ def cmd_pair_diff(args) -> dict:
     }
     if args.lyrics_file:
         lyric_texts, lyric_result = map_lyrics_to_notes(args.lyrics_file, mono)
+        markers = [{"lyric": lyric, "phoneset": None, "phoneme": None} for lyric in lyric_texts]
+    elif args.transcribe:
+        words, language = transcribe_words(args.vocal)
+        markers, lyric_result = map_transcription_to_notes(words, mono, language)
+        lyric_texts = [marker["lyric"] for marker in markers]
+    else:
+        markers = None
 
     result = {
         "tool": "pi-audio/pair-diff",
@@ -681,7 +820,7 @@ def cmd_pair_diff(args) -> dict:
         "mono_notes": len(mono),
         "mono_rate": round(monophony_rate(mono), 2),
         "sv_importable_whole": len(mono) <= 512,  # import_monophonic_score 上限
-        "note": "残差含和声/混音差异；单音化保留最高声部，低声部和声会被丢弃",
+        "note": "歌词来自词级时间戳识别；词典音素不是声学对齐。未提供伴奏时直接提取演唱旋律。",
     }
     result.update(lyric_result)
     if args.lyrics_file:
@@ -693,28 +832,8 @@ def cmd_pair_diff(args) -> dict:
         result["mono_range"] = f"{note_name(min(ps))}-{note_name(max(ps))}"
 
     if args.midi:
-        import pretty_midi
-
-        # 统一写入纪律：MIDI 只落 ~/.SynthVcopilot/output/ 下，禁止 .. 穿透与绝对路径。
-        out_path = safe_output_path(args.midi, subdir="output", suffix=".mid")
-        pm = pretty_midi.PrettyMIDI()
-        instr = pretty_midi.Instrument(program=54, name="vocal-mono")
-        for n in mono:
-            instr.notes.append(
-                pretty_midi.Note(
-                    velocity=max(1, min(127, int(n.get("velocity", 90)))),
-                    pitch=n["pitch"],
-                    start=n["start"],
-                    end=n["end"],
-                )
-            )
-        pm.instruments.append(instr)
-        if lyric_texts is not None:
-            pm.lyrics.extend(
-                pretty_midi.Lyric(text, n["start"])
-                for text, n in zip(lyric_texts, mono)
-            )
-        pm.write(str(out_path))
+        out_path = safe_output_path(args.midi, subdir="output", suffix=".mid", allow_external=args.output_external)
+        write_midi(out_path, mono, markers)
         result["midi_out"] = str(out_path)
 
     return result
@@ -732,7 +851,7 @@ def main():
 
     d = sub.add_parser("pair-diff", help="有词/无词配对差分 → 单音人声轨")
     d.add_argument("vocal")
-    d.add_argument("inst")
+    d.add_argument("inst", nargs="?", help="可选伴奏；省略时直接提取演唱旋律")
     d.add_argument("--midi", help="导出单音化 MIDI 路径")
     d.add_argument("--tol", type=float, default=0.08, help="起始时间匹配容差秒 (默认 0.08)")
     d.add_argument("--advanced", action="store_true", help="多容差寻优、保守自动纠正与置信度检查")
@@ -740,6 +859,8 @@ def main():
         "--lyrics-file",
         help="UTF-8 歌词文本（普通文件、非符号链接，最大 256 KiB）",
     )
+    d.add_argument("--output-external", action="store_true", help="允许调用方验证过的外部输出路径")
+    d.add_argument("--transcribe", action="store_true", help="自动识别歌词并写入词典音素标记")
     d.set_defaults(fn=cmd_pair_diff)
 
     s = sub.add_parser("source-style", help="离线提取参考演唱特征")

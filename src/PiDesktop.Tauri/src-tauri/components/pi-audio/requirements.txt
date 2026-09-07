@@ -4,8 +4,12 @@ numpy
 basic-pitch
 onnxruntime
 pretty-midi
+mido
 scipy
 setuptools<81
+faster-whisper
+pypinyin
+cmudict
 
 # 可选：PANNs 判别（probe --panns 需要；CPU 即可）
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu
