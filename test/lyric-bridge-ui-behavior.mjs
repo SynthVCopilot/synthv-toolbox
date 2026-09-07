@@ -15,6 +15,12 @@ function deferred() {
   return { promise, resolve };
 }
 
+async function settleUi() {
+  await Promise.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  await Promise.resolve();
+}
+
 function handler(name) {
   const start = source.indexOf(`document.addEventListener("${name}"`);
   assert.notEqual(start, -1, `missing ${name} listener`);
@@ -84,7 +90,7 @@ function click(document, selector) {
   click(ui.document, "[data-preview-lyric-bridge-fit]");
   click(ui.document, "[data-read-lyric-bridge-selection]");
   pending.resolve({ previewToken: "late" });
-  await Promise.resolve(); await Promise.resolve();
+  await settleUi();
   assert.equal(ui.state().lyricBridgePreview, undefined, "a late preview must not overwrite a newer selection");
 }
 
@@ -93,7 +99,7 @@ function click(document, selector) {
   const ui = harness({ previewLyricBridgeFit: () => pending.promise });
   click(ui.document, "[data-preview-lyric-bridge-fit]");
   pending.resolve({ previewToken: "current-preview" });
-  await Promise.resolve(); await Promise.resolve();
+  await settleUi();
   assert.equal(ui.state().lyricBridgePreview?.previewToken, "current-preview", "the current preview response must remain confirmable");
 }
 
@@ -105,7 +111,7 @@ function click(document, selector) {
   input.value = "改";
   input.dispatchEvent(new ui.document.defaultView.Event("input", { bubbles: true }));
   pending.resolve({ previewToken: "stale-after-edit" });
-  await Promise.resolve(); await Promise.resolve();
+  await settleUi();
   assert.equal(ui.state().lyricBridgePreview, undefined, "editing a slot must invalidate an in-flight preview response");
 }
 
@@ -114,7 +120,7 @@ function click(document, selector) {
   const ui = harness({ confirmLyricBridgeFit: async () => { confirmations += 1; return { noteCount: 2 }; } });
   click(ui.document, "[data-confirm-lyric-bridge-fit]");
   click(ui.document, "[data-confirm-lyric-bridge-fit]");
-  await Promise.resolve(); await Promise.resolve();
+  await settleUi();
   assert.equal(confirmations, 1, "a preview token may be confirmed only once from the UI");
 }
 
