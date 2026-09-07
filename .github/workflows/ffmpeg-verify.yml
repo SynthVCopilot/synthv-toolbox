@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: toolbox-dev-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   prepare:
     uses: ./.github/workflows/prepare-desktop.yml
@@ -213,3 +217,119 @@ jobs:
         run: cargo test --manifest-path src/PiDesktop.Tauri/src-tauri/Cargo.toml --all-targets -- --test-threads=1
       - name: Test precise SynthV instance controls
         run: cargo test --manifest-path test/synthv-control-regression/Cargo.toml
+
+  publish_nightly:
+    name: Publish nightly prerelease
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [prepare, verify, rust_tests]
+    runs-on: ubuntu-latest
+    concurrency:
+      group: synthv-toolbox-nightly-publication
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: synthv-toolbox-*
+          path: release-assets
+          merge-multiple: true
+      - name: Publish distinct nightly assets and update manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEVELOPMENT_VERSION: ${{ needs.prepare.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_stamp="$(date -u +%Y%m%d.%H%M%S)"
+          windows_source="$(find release-assets -maxdepth 1 -type f -name '*x86_64-pc-windows-msvc-nsis.exe' -print -quit)"
+          macos_source="$(find release-assets -maxdepth 1 -type f -name '*universal-apple-darwin.dmg' -print -quit)"
+          test -n "$windows_source" && test -n "$macos_source"
+          test "$(find release-assets -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 2
+
+          mkdir -p nightly-assets
+          base_version="${DEVELOPMENT_VERSION%-dev.*}"
+          tag="v${base_version}-nightly"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            if [[ "$(gh release view "$tag" --json isImmutable --jq .isImmutable)" == "true" ]]; then
+              echo "Nightly release ${tag} is immutable and cannot accept another build. Disable immutable releases or publish a new base version."
+              exit 1
+            fi
+            if [[ "$(gh release view "$tag" --json assets --jq '[.assets[].name] | index("latest.json") != null')" == "true" ]]; then
+              gh release download "$tag" --pattern latest.json --dir nightly-assets --clobber
+            fi
+          else
+            gh release create "$tag" --target "$GITHUB_SHA" --prerelease --latest=false --title "SynthV Toolbox v${base_version} Pre-release" --notes "## 更新内容"
+          fi
+
+          node .github/scripts/nightly-release.mjs plan "$DEVELOPMENT_VERSION" "$GITHUB_SHA" "$GITHUB_RUN_ID" nightly-assets/latest.json > nightly-assets/plan.json
+          if [[ "$(jq -r .publish nightly-assets/plan.json)" != "true" ]]; then
+            echo "Skipping nightly publication: $(jq -r .reason nightly-assets/plan.json)"
+            exit 0
+          fi
+          base_version="$(jq -r .baseVersion nightly-assets/plan.json)"
+          short_commit="$(jq -r .commit nightly-assets/plan.json)"
+          range="$(jq -r .range nightly-assets/plan.json)"
+          source_committed_at="$(jq -r .sourceCommittedAtUtc nightly-assets/plan.json)"
+          windows_asset="SynthV.Toolbox_${base_version}_dev.${short_commit}_x64-setup.exe"
+          macos_asset="SynthV.Toolbox_${base_version}_dev.${short_commit}_universal.dmg"
+
+          git log "$range" --reverse --pretty=format:'%s%x09%h' > nightly-assets/changes.tsv
+          test -s nightly-assets/changes.tsv
+          git log "$range" --reverse --pretty=format:'- %s (#%h)' > nightly-assets/new-release-notes.md
+          mv "$windows_source" "nightly-assets/$windows_asset"
+          mv "$macos_source" "nightly-assets/$macos_asset"
+          windows_sha="$(sha256sum "nightly-assets/$windows_asset" | awk '{print $1}')"
+          macos_sha="$(sha256sum "nightly-assets/$macos_asset" | awk '{print $1}')"
+          release_url="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}"
+          published_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          node .github/scripts/nightly-release.mjs changes nightly-assets/changes.tsv > nightly-assets/changes.json
+          jq -n \
+            --arg version "$DEVELOPMENT_VERSION" \
+            --arg commit "$short_commit" \
+            --arg sourceCommittedAtUtc "$source_committed_at" \
+            --arg publishedAtUtc "$published_at" \
+            --argjson runId "$GITHUB_RUN_ID" \
+            --arg releaseUrl "$release_url" \
+            --slurpfile changes nightly-assets/changes.json \
+            --arg windowsName "$windows_asset" \
+            --arg windowsUrl "https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${windows_asset}" \
+            --arg windowsSha "$windows_sha" \
+            --arg macosName "$macos_asset" \
+            --arg macosUrl "https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${macos_asset}" \
+            --arg macosSha "$macos_sha" \
+            '{schemaVersion: 1, channel: "nightly", version: $version, commit: $commit, sourceCommittedAtUtc: $sourceCommittedAtUtc, publishedAtUtc: $publishedAtUtc, runId: $runId, releaseUrl: $releaseUrl, changes: $changes[0], assets: [{name: $windowsName, url: $windowsUrl, sha256: $windowsSha}, {name: $macosName, url: $macosUrl, sha256: $macosSha}]}' > nightly-assets/latest.json
+          cp nightly-assets/latest.json "nightly-assets/build-${build_stamp}-${short_commit}.json"
+          gh release view "$tag" --json assets > nightly-assets/release-assets.json
+          upload_immutable_asset() {
+            local asset_path="$1"
+            local asset_name expected_digest existing_digest
+            asset_name="$(basename "$asset_path")"
+            expected_digest="sha256:$(sha256sum "$asset_path" | awk '{print $1}')"
+            existing_digest="$(jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .digest // empty' nightly-assets/release-assets.json)"
+            if [[ -n "$existing_digest" ]]; then
+              if [[ "$existing_digest" != "$expected_digest" ]]; then
+                echo "Historical nightly asset $asset_name already exists with a different digest."
+                exit 1
+              fi
+              return
+            fi
+            gh release upload "$tag" "$asset_path"
+          }
+          upload_immutable_asset "nightly-assets/$windows_asset"
+          upload_immutable_asset "nightly-assets/$macos_asset"
+          upload_immutable_asset "nightly-assets/build-${build_stamp}-${short_commit}.json"
+          existing_notes="$(gh release view "$tag" --json body --jq .body)"
+          note_marker="<!-- nightly-commit:${GITHUB_SHA} -->"
+          if [[ "$existing_notes" != *"$note_marker"* ]]; then
+            {
+              printf '%s\n' "$existing_notes"
+              cat nightly-assets/new-release-notes.md
+              printf '%s\n' "$note_marker"
+            } > nightly-assets/release-notes.md
+            gh release edit "$tag" --title "SynthV Toolbox v${base_version} Pre-release" --notes-file nightly-assets/release-notes.md
+          fi
+          gh release upload "$tag" nightly-assets/latest.json --clobber
