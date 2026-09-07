@@ -1518,6 +1518,29 @@ pub async fn open_toolbox_releases(release_url: Option<String>) -> Result<Operat
 }
 
 #[tauri::command]
+pub fn get_toolbox_update_download() -> crate::update_download::ToolboxUpdateDownload {
+    crate::update_download::snapshot()
+}
+#[tauri::command]
+pub async fn download_toolbox_update(
+    state: State<'_, AppState>,
+) -> Result<crate::update_download::ToolboxUpdateDownload, String> {
+    let channel = state.settings.read().await.update_channel;
+    crate::update_download::start(env!("CARGO_PKG_VERSION"), channel)
+}
+#[tauri::command]
+pub fn cancel_toolbox_update_download() -> crate::update_download::ToolboxUpdateDownload {
+    crate::update_download::cancel()
+}
+#[tauri::command]
+pub fn install_toolbox_update() -> OperationResult {
+    match crate::update_download::install() {
+        Ok(()) => succeeded("已启动更新安装程序。", "安装程序会在系统界面继续执行。"),
+        Err(error) => failed("无法启动更新安装程序。", error),
+    }
+}
+
+#[tauri::command]
 pub fn open_toolbox_project(target: String) -> OperationResult {
     match crate::update_checker::open_project_page(&target) {
         Ok(()) => succeeded("已打开官方页面。", RELEASES_PAGE_DETAIL),

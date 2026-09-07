@@ -358,7 +358,9 @@ export interface ToolboxUpdateCheck {
   publishedAtUtc?: string;
   releaseNotes: string;
   checkedAtUtc: string;
+  installer?: { name: string; url: string; sha256: string; size: number } | null;
 }
+export interface ToolboxUpdateDownload { status: "idle" | "downloading" | "ready" | "failed" | "cancelled"; downloadedBytes: number; totalBytes?: number | null; error?: string | null; fileName?: string | null; }
 
 export interface WorkflowResult {
   kind: string;

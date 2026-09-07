@@ -328,20 +328,22 @@ fn build_nightly_update_check(
 }
 
 fn select_installer(assets: Vec<ToolboxUpdateAsset>) -> Option<ToolboxUpdateAsset> {
-    let extension = if cfg!(windows) {
-        ".exe"
+    let suffix = if cfg!(windows) {
+        "_x64-setup.exe"
     } else if cfg!(target_os = "macos") {
-        ".dmg"
+        "_universal.dmg"
     } else {
         return None;
     };
     assets.into_iter().find(|asset| {
-        asset.name.ends_with(extension)
+        asset.name.ends_with(suffix)
+            && !asset.name.contains(['/', '\\'])
             && asset.size > 0
             && asset.size <= 4 * 1024 * 1024 * 1024
             && asset.sha256.len() == 64
             && asset.sha256.chars().all(|value| value.is_ascii_hexdigit())
             && asset.url.starts_with(NIGHTLY_DOWNLOAD_PREFIX)
+            && asset.url.ends_with(&format!("/{}", asset.name))
     })
 }
 
