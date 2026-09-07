@@ -23,8 +23,9 @@ const pageOrder: ShellPage[] = [
   "copilot",
   "components",
   "bridge",
-  "mcp",
+  "connections",
   "settings",
+  "about",
 ];
 
 const pageMotion = ref("");
