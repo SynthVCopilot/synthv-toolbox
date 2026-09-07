@@ -30,7 +30,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "licenseFile": "./TERMS-OF-USE.md",
+    "licenseFile": "./TERMS-OF-USE.txt",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -60,7 +60,7 @@
     },
     "macOS": {
       "files": {
-        "SharedSupport/TERMS-OF-USE.md": "./TERMS-OF-USE.md",
+        "SharedSupport/TERMS-OF-USE.txt": "./TERMS-OF-USE.txt",
         "SharedSupport/LICENSE": "../../../LICENSE"
       }
     },
