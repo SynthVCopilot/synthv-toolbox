@@ -2632,6 +2632,7 @@ pub async fn run_audio_to_project(
     let instrumental_for_run = instrumental_path.clone();
     let output_for_run = output_name.clone();
     let output_directory_for_run = output_directory.clone();
+    let components_dir = state.components_dir.clone();
     let mut result = tauri::async_runtime::spawn_blocking(move || {
         workflows::audio_to_midi(
             vocal_for_run,
@@ -2641,7 +2642,7 @@ pub async fn run_audio_to_project(
             tolerance,
             advanced,
             &resource_dir,
-            &state.components_dir,
+            &components_dir,
         )
     })
     .await
@@ -2681,10 +2682,14 @@ pub async fn run_audio_to_project(
         .get("dictionary_missing_words")
         .and_then(Value::as_u64)
         .unwrap_or_default();
+    let unmarked_notes = original
+        .get("unmarked_notes")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
     result.data = json!({
         "stages": [
-            { "id": "pairDiff", "status": "completed", "label": "配对音频差分与单音提取" },
-            { "id": "midi", "status": "completed", "label": "受管理 MIDI 输出" },
+            { "id": "pairDiff", "status": "completed", "label": "演唱旋律提取" },
+            { "id": "midi", "status": "completed", "label": "MIDI 文件输出" },
             { "id": "lyrics", "status": "completed", "label": "自动歌词识别与词典音素标记" },
             { "id": "synthvImport", "status": if import_to_synthv { "completed" } else { "ready" }, "label": "SynthV Bridge 导入" }
         ],
@@ -2692,7 +2697,7 @@ pub async fn run_audio_to_project(
         "bridge": bridge_result
     });
     let marker_summary = format!(
-        "已写入 {lyric_markers} 个歌词标记和 {phoneme_markers} 个词典音素标记；{unaligned_words} 个识别词未映射，{dictionary_missing_words} 个词没有词典音素。"
+        "已写入 {lyric_markers} 个歌词标记和 {phoneme_markers} 个词典音素标记；{unaligned_words} 个识别词未映射，{unmarked_notes} 个音符没有对应歌词，{dictionary_missing_words} 个词没有词典音素。跨音符词由 SynthV 根据歌词续唱标记计算音素，请复核识别结果。"
     );
     result.summary = if import_to_synthv {
         format!("音频旋律已写入 MIDI 并通过 Bridge 导入当前 SynthV 工程。{marker_summary}")

@@ -43,7 +43,7 @@ assert.match(agent, /name: "create_cover_from_audio"/);
 assert.match(media, /pub fn adopt_managed_audio/);
 assert.match(media, /canonical\.starts_with\(&managed_root\)/);
 assert.match(audio, /def tokenize_lyrics/);
-assert.match(audio, /pretty_midi\.Lyric/);
+assert.match(audio, /mido\.MetaMessage\("lyrics"/);
 assert.match(audio, /lyric_fill_hyphens/);
 assert.match(features, /id: "cover"/);
 assert.match(main, /id="cover-form"/);

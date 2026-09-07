@@ -142,7 +142,6 @@ pub fn game_to_midi(
     tolerance: f64,
     advanced: bool,
     resource_dir: &Path,
-    components_dir: &Path,
 ) -> Result<WorkflowResult, String> {
     let vocal = validate_input(&vocal_path, "有词/演唱音频", AUDIO_EXTENSIONS)?;
     let instrumental = validate_input(&instrumental_path, "无词/伴奏音频", AUDIO_EXTENSIONS)?;
@@ -168,6 +167,7 @@ pub fn game_to_midi(
     game_midi_result(data, advanced)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn audio_to_midi(
     vocal_path: String,
     instrumental_path: Option<String>,
@@ -176,6 +176,7 @@ pub fn audio_to_midi(
     tolerance: f64,
     advanced: bool,
     resource_dir: &Path,
+    components_dir: &Path,
 ) -> Result<WorkflowResult, String> {
     let vocal = validate_input(&vocal_path, "演唱音频", AUDIO_EXTENSIONS)?;
     let output_name = validate_output_name(&output_name, "mid")?;
@@ -190,15 +191,12 @@ pub fn audio_to_midi(
             .to_path_buf(),
     };
     if !output_directory.is_absolute() || !output_directory.is_dir() {
-        return Err("输出目录不存在。".to_string());
+        return Err("请选择存在的绝对输出目录。".to_string());
     }
     let output_path = output_directory.join(output_name);
     if output_path.exists() {
         return Err("输出文件已存在；请改名或选择其他输出目录。".to_string());
     }
-    crate::components::ensure_audio_transcription_component(components_dir, resource_dir)?;
-    crate::downloads::ensure_ffmpeg_blocking(resource_dir, None)?;
-    let runtime = python_component("audio", None)?;
     let mut args = vec![
         "pair-diff".to_string(),
         vocal.to_string_lossy().into_owned(),
@@ -210,6 +208,9 @@ pub fn audio_to_midi(
                 .into_owned(),
         );
     }
+    crate::components::ensure_audio_transcription_component(components_dir, resource_dir)?;
+    crate::downloads::ensure_ffmpeg_blocking(resource_dir, None)?;
+    let runtime = python_component("audio", None)?;
     args.extend([
         "--midi".to_string(),
         output_path.to_string_lossy().into_owned(),

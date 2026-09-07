@@ -210,6 +210,78 @@ fn component_info_at(
     }
 }
 
+pub(crate) fn ensure_audio_transcription_component(
+    components_dir: &Path,
+    resource_root: &Path,
+) -> Result<(), String> {
+    let source = components_dir.join("pi-audio");
+    if audio_transcription_component_ready(&source) {
+        return Ok(());
+    }
+    let result = install_component("pi-audio", components_dir, resource_root, |_, _, _| {});
+    if !result.succeeded {
+        return Err(format!(
+            "音频识别组件更新失败：{} {}",
+            result.summary, result.detail
+        ));
+    }
+    if !audio_transcription_component_ready(&source) {
+        return Err("音频识别组件更新后校验失败，请在组件中心重新安装 pi-audio。".to_string());
+    }
+    Ok(())
+}
+
+fn audio_transcription_component_ready(source: &Path) -> bool {
+    let Ok(_guard) = component_usage_guard() else {
+        return false;
+    };
+    let Some(config) = fs::read(model_config_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+    else {
+        return false;
+    };
+    let Some(python) = config["audio"]["python"].as_str() else {
+        return false;
+    };
+    let Some(script) = config["audio"]["script"].as_str() else {
+        return false;
+    };
+    if !audio_component_payload_current(Path::new(script), source) {
+        return false;
+    }
+    quiet_command(python)
+        .args(["-c", "import faster_whisper, cmudict, pypinyin, mido"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn audio_component_payload_current(script: &Path, source: &Path) -> bool {
+    let Some(directory) = script.parent() else {
+        return false;
+    };
+    for (installed, bundled) in [
+        (script.to_path_buf(), source.join("pi_audio.py")),
+        (
+            directory.join("requirements.txt"),
+            source.join("requirements.txt"),
+        ),
+    ] {
+        match (fs::read(installed), fs::read(bundled)) {
+            (Ok(actual), Ok(expected)) if actual == expected => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+#[path = "../../../../test/audio_component_update.rs"]
+mod audio_component_update_tests;
+
 pub fn install_component<F>(
     id: &str,
     components_dir: &Path,

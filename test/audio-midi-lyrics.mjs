@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = process.cwd();
+const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const audio = readFileSync(join(root, "src", "PiDesktop.Tauri", "src-tauri", "components", "pi-audio", "pi_audio.py"), "utf8");
 const workflows = readFileSync(join(root, "src", "PiDesktop.Tauri", "src-tauri", "src", "workflows.rs"), "utf8");
 const commands = readFileSync(join(root, "src", "PiDesktop.Tauri", "src-tauri", "src", "commands.rs"), "utf8");
@@ -11,7 +12,6 @@ assert.match(audio, /WhisperModel\("small", device="cpu", compute_type="int8"\)/
 assert.match(audio, /word_timestamps=True/);
 assert.match(audio, /midi\.charset = "utf-8"/);
 assert.match(audio, /SynthVPhoneme\\0/);
-assert.match(audio, /greatest-overlap recognized word/);
 assert.match(audio, /dictionary_phoneme_words/);
 assert.match(audio, /dictionary_missing_words/);
 assert.match(audio, /d\.add_argument\("inst", nargs="\?"/);

@@ -451,9 +451,10 @@ def mono_collapse(notes):
             continue
         last = out[-1]
         if n["start"] >= last["end"] - 0.02:
+            last["end"] = min(last["end"], n["start"])
             out.append(n)
         elif n["pitch"] > last["pitch"]:
-            last["end"] = max(last["start"] + 0.05, n["start"])
+            last["end"] = n["start"]
             out.append(n)
     return [n for n in out if n["end"] - n["start"] >= 0.06]
 
@@ -462,7 +463,7 @@ def monophony_rate(ns):
     if len(ns) < 2:
         return 1.0
     ns = sorted(ns, key=lambda n: n["start"])
-    ok = sum(1 for a, b in zip(ns, ns[1:]) if a["end"] <= b["start"] + 0.02)
+    ok = sum(1 for a, b in zip(ns, ns[1:]) if a["end"] <= b["start"])
     return ok / (len(ns) - 1)
 
 
@@ -616,8 +617,9 @@ def map_transcription_to_notes(words, notes, language):
         if phoneset is None:
             dictionary_missing_words += 1
         assigned[slots[0]] = {"lyric": lyric, "phoneset": phoneset if len(slots) == 1 else None, "phoneme": phoneme if len(slots) == 1 else None}
-        for index in slots[1:]:
-            assigned[index] = {"lyric": "+" if len(slots) == 2 else "-", "phoneset": None, "phoneme": None}
+        syllable_count = sum(phone[-1:].isdigit() for phone in phoneme.split()) if phoneme else 1
+        for ordinal, index in enumerate(slots[1:], start=1):
+            assigned[index] = {"lyric": "+" if ordinal < syllable_count else "-", "phoneset": None, "phoneme": None}
         if phoneme and len(slots) > 1:
             dictionary_phoneme_words += 1
     markers = [entry or {"lyric": None, "phoneset": None, "phoneme": None} for entry in assigned]
