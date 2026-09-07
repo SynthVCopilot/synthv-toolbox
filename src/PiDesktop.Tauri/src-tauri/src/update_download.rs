@@ -60,7 +60,16 @@ pub fn snapshot() -> ToolboxUpdateDownload {
         })
 }
 pub fn cancel() -> ToolboxUpdateDownload {
-    manager().cancel.store(true, Ordering::SeqCst);
+    let manager = manager();
+    manager.cancel.store(true, Ordering::SeqCst);
+    if let Ok(mut file) = manager.file.lock() {
+        *file = None;
+    }
+    if let Ok(mut state) = manager.state.lock() {
+        if state.status == "ready" {
+            state.status = "cancelled".into();
+        }
+    }
     snapshot()
 }
 
@@ -192,6 +201,7 @@ fn download(manager: &Manager, asset: ToolboxUpdateAsset) -> Result<(), String> 
             let _ = fs::remove_file(&partial);
             return Err("更新文件校验失败。".into());
         }
+        drop(file);
         if target.exists() {
             let _ = fs::remove_file(&target);
         }
