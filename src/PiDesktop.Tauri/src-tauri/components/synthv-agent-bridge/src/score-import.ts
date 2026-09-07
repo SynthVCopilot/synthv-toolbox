@@ -84,7 +84,6 @@ export interface SynthVAddNote {
   readonly lyrics?: string;
   readonly languageOverride?: "mandarin" | "english";
   readonly phonemes?: string;
-  readonly attributes?: Readonly<Record<string, unknown>>;
 }
 
 export interface ScoreTempoPoint {
@@ -255,7 +254,6 @@ interface RawNote {
   lyric?: string;
   languageOverride?: "mandarin" | "english";
   phonemes?: string;
-  phonesetOverride?: string;
   voice?: string;
   staff?: number;
   sourceMeasure?: string;
@@ -569,9 +567,6 @@ function buildImport(
     const lyric = raw.lyric === undefined || raw.lyric.length === 0 ? settings.defaultLyric : raw.lyric;
     const languageOverride = raw.languageOverride;
     const phonemes = raw.phonemes;
-    const attributes = raw.phonesetOverride === undefined
-      ? undefined
-      : { phonesetOverride: raw.phonesetOverride };
     const note = lyric === undefined
       ? { onset, duration, pitch }
       : { onset, duration, pitch, lyrics: lyric };
@@ -579,7 +574,6 @@ function buildImport(
       ...note,
       ...(languageOverride === undefined ? {} : { languageOverride }),
       ...(phonemes === undefined ? {} : { phonemes }),
-      ...(attributes === undefined ? {} : { attributes }),
     };
   });
 
@@ -2229,7 +2223,6 @@ function attachMidiLanguageOverrides(
           unsupported += 1;
         } else {
           note.phonemes = phonemes;
-          note.phonesetOverride = "arpabet";
         }
       }
     }

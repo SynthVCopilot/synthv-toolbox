@@ -89,7 +89,6 @@ test("normalizes verified English ARPAbet markers into SynthV phoneme overrides"
       lyrics: "hello",
       languageOverride: "english",
       phonemes: "hh ah l ow",
-      attributes: { phonesetOverride: "arpabet" },
     },
   ]);
 });
