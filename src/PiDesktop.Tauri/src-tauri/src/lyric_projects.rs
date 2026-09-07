@@ -242,11 +242,25 @@ fn normalize_candidate_history(
         history.drain(..history.len() - MAX_CANDIDATE_SETS);
     }
     for set in &history {
+        lyric_tools::validate_candidate_request(&lyric_tools::LyricCandidateRequest {
+            language: set.language.clone(),
+            brief: set.brief.clone(),
+            imagery: set.imagery.clone(),
+            section_label: set.section_label.clone(),
+            tone: String::new(),
+            target_rhyme: set.target_rhyme.clone().unwrap_or_default(),
+            candidate_count: set.candidates.len(),
+        })?;
         if set.candidates.len() < 2 || set.candidates.len() > 8 {
             return Err("歌词候选记录无效。".to_string());
         }
         if set.candidates.iter().any(|candidate| {
-            candidate.text.chars().count() > 160 || candidate.note.chars().count() > 240
+            candidate.text.chars().count() > 160
+                || candidate.note.chars().count() > 240
+                || candidate
+                    .rhyme_foot
+                    .as_ref()
+                    .is_some_and(|value| value.chars().count() > 24)
         }) {
             return Err("歌词候选记录超出限制。".to_string());
         }
@@ -255,7 +269,7 @@ fn normalize_candidate_history(
 }
 
 fn limit_project_size(project: &mut LyricProject) -> Result<(), String> {
-    while serde_json::to_vec(project)
+    while serde_json::to_vec_pretty(project)
         .map_err(|error| error.to_string())?
         .len()
         > MAX_PROJECT_BYTES as usize
@@ -299,6 +313,9 @@ fn write_project(project: &LyricProject) -> Result<(), String> {
     }
     let temporary = path.with_file_name(format!(".{}.{}.tmp", project.id, Uuid::new_v4()));
     let serialized = serde_json::to_vec_pretty(project).map_err(|error| error.to_string())?;
+    if serialized.len() > MAX_PROJECT_BYTES as usize {
+        return Err("歌词项目超过 1 MiB 限制。".to_string());
+    }
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)

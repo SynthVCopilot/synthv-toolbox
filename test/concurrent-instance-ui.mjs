@@ -57,7 +57,7 @@ let voiceRefreshCalls = 0;
 const list = new JSDOM('<div id="instances">old rows</div>').window.document.querySelector('#instances');
 const context = vm.createContext({
   busy: false, page: 'accounts', instanceRefreshInFlight: false, instanceRefreshGeneration: 0,
-  synthvProcesses: [{ processId: 30 }], profiles: { activeSlotId: 'first' },
+  synthvProcesses: [{ processId: 30 }], profiles: { activeSlotId: 'first' }, bridgeSession: undefined,
   document: { hidden: false, querySelector: () => list },
   refreshAuthorizedVoiceEntries: () => { voiceRefreshCalls++; },
   api: {

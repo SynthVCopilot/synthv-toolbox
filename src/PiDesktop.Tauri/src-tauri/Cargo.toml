@@ -26,6 +26,10 @@ path = "../../../test/provider_runtime_adapters.rs"
 name = "models-dev-runtime-catalog"
 path = "../../../test/models_dev_runtime_catalog.rs"
 
+[[test]]
+name = "lyric-project-storage"
+path = "../../../test/lyric_project_storage.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 cc = "1"

@@ -148,7 +148,7 @@ pub async fn read_selection(manager: &McpManager) -> Result<LyricBridgeSelection
 }
 
 pub fn preview(request: LyricBridgePreviewRequest) -> Result<LyricBridgePreview, String> {
-    let selection = take_selection(&request.selection_token)?;
+    let selection = get_selection(&request.selection_token)?;
     if request.session_token != selection.session_token {
         return Err("当前 SynthV 会话已变化；请重新读取选中的音符。".to_string());
     }
@@ -352,12 +352,9 @@ fn parse_note(value: &Value) -> Result<GuardedNote, String> {
     Ok(GuardedNote {
         view: LyricBridgeNote {
             note_index,
-            lyric: string_field(value, "lyric")
-                .or_else(|| string_field(value, "lyrics"))
-                .unwrap_or_default(),
-            onset: integer(value.get("onset")).or_else(|| integer(value.get("onsetBlick"))),
-            duration: integer(value.get("duration"))
-                .or_else(|| integer(value.get("durationBlick"))),
+            lyric: string_field(value, "lyrics").unwrap_or_default(),
+            onset: integer(value.get("onset")),
+            duration: integer(value.get("duration")),
             pitch: integer(value.get("pitch")),
         },
     })
@@ -383,20 +380,7 @@ fn string_field(value: &Value, key: &str) -> Option<String> {
 
 async fn bridge_session_token(manager: &McpManager) -> Result<String, String> {
     let status = call_json(manager, "sv_status", json!({ "operation": "bridge" })).await?;
-    if status.get("connected").and_then(Value::as_bool) != Some(true)
-        || status.get("fresh").and_then(Value::as_bool) != Some(true)
-        || status
-            .get("status")
-            .and_then(|value| value.get("state"))
-            .and_then(Value::as_str)
-            != Some("running")
-    {
-        return Err("SynthV Bridge 未连接、状态过期或尚未运行。".to_string());
-    }
-    status
-        .get("status")
-        .and_then(|value| string_field(value, "sessionToken"))
-        .ok_or_else(|| "Bridge 没有返回当前会话身份；请确认实例已连接。".to_string())
+    crate::synthv_unified::bridge_session_token(&status)
 }
 async fn call_json(manager: &McpManager, tool: &str, arguments: Value) -> Result<Value, String> {
     let response = tokio::time::timeout(
@@ -420,13 +404,14 @@ fn store_selection(token: String, selection: StoredSelection) -> Result<(), Stri
     store.insert(token, selection);
     Ok(())
 }
-fn take_selection(token: &str) -> Result<StoredSelection, String> {
-    let mut store = SELECTIONS
+fn get_selection(token: &str) -> Result<StoredSelection, String> {
+    let store = SELECTIONS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .map_err(|_| "选区服务暂时不可用。".to_string())?;
     let value = store
-        .remove(token)
+        .get(token)
+        .cloned()
         .ok_or_else(|| "选区身份已失效；请重新读取选中的音符。".to_string())?;
     if value.expires_at <= Instant::now() {
         Err("选区身份已过期；请重新读取选中的音符。".to_string())

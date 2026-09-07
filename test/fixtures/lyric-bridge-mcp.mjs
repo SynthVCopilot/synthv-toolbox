@@ -26,8 +26,8 @@ function selection() {
     selectedNoteCount: 2,
     current: { trackIndex: 2, groupIndex: 3 },
     selectedNotes: changed
-      ? [{ noteIndex: 1, lyric: "旧", onset: 0, duration: 480, pitch: 60 }, { noteIndex: 3, lyric: "词", onset: 480, duration: 480, pitch: 62 }]
-      : [{ noteIndex: 2, lyric: "词", onset: 480, duration: 480, pitch: 62 }, { noteIndex: 1, lyric: "旧", onset: 0, duration: 480, pitch: 60 }],
+      ? [{ noteIndex: 1, lyrics: "旧", onset: 0, duration: 480, pitch: 60 }, { noteIndex: 3, lyrics: "词", onset: 480, duration: 480, pitch: 62 }]
+      : [{ noteIndex: 2, lyrics: "词", onset: 480, duration: 480, pitch: 62 }, { noteIndex: 1, lyrics: "旧", onset: 0, duration: 480, pitch: 60 }],
   };
 }
 

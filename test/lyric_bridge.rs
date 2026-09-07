@@ -261,3 +261,26 @@ async fn changed_session_or_selection_rejects_before_writing() {
         let _ = fs::remove_file(log);
     }
 }
+
+#[test]
+fn selection_can_be_previewed_again_after_a_text_correction() {
+    let selection_token = Uuid::new_v4().to_string();
+    store_selection(
+        selection_token.clone(),
+        parse_selection(&selection(json!([{ "noteIndex": 1 }])), "session-a".into()).unwrap(),
+    )
+    .unwrap();
+    let request = |text: &str| LyricBridgePreviewRequest {
+        selection_token: selection_token.clone(),
+        session_token: "session-a".into(),
+        slots: vec![LyricBridgeSlot {
+            text: text.into(),
+            phoneme: None,
+        }],
+    };
+    assert!(preview(request("")).is_err());
+    let first = preview(request("晨")).unwrap();
+    let corrected = preview(request("风")).unwrap();
+    assert_ne!(first.preview_token, corrected.preview_token);
+    assert_eq!(corrected.notes[0].text, "风");
+}
