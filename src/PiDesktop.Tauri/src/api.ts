@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import packageJson from "../package.json";
 import type {
   AiProviderId,
   AgentWorkMode,
@@ -366,7 +367,7 @@ const previewState = (): BootstrapState => ({
   agentWorkMode: previewAgentWorkMode,
   updateChannel: "stable",
   platform: "preview",
-  appVersion: "0.1.1",
+  appVersion: packageJson.version,
   configPath: "~/.SynthVcopilot/config.json",
   settingsLoadError: undefined,
   model: previewMode === "ai" ? previewAiModel() : undefined,
@@ -742,7 +743,11 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     publishedAtUtc: new Date().toISOString(),
     releaseNotes: "## 更新内容\n\n- 新增更新检查工具\n- 修复若干问题",
     checkedAtUtc: new Date().toISOString(),
+    installer: { name: "SynthV.Toolbox_0.2.0_x64-setup.exe", url: "https://github.com/SynthVCopilot/synthv-toolbox/releases/download/v0.2.0/SynthV.Toolbox_0.2.0_x64-setup.exe", sha256: "0".repeat(64), size: 1 },
   } as T;
+  if (command === "get_toolbox_update_download" || command === "cancel_toolbox_update_download") return { status: "idle", downloadedBytes: 0, totalBytes: null, error: null, fileName: null } as T;
+  if (command === "download_toolbox_update") return { status: "ready", downloadedBytes: 1, totalBytes: 1, error: null, fileName: "SynthV.Toolbox_0.2.0_x64-setup.exe" } as T;
+  if (command === "install_toolbox_update") return { succeeded: false, summary: "Preview cannot install updates.", detail: "" } as T;
   if (command === "open_toolbox_releases") return {
     succeeded: true,
     summary: "已打开 Synthesizer V Toolbox 官方发布页。",
