@@ -404,7 +404,7 @@ const previewState = (): BootstrapState => ({
   sv2ConcurrentEnabled: previewSv2ConcurrentEnabled,
   sv2AccountIndicatorEnabled: previewSv2AccountIndicatorEnabled,
   smartSvpLaunchEnabled: previewSmartSvpLaunchEnabled,
-  autostartEnabled: false,
+  autostartEnabled: undefined,
   autostartError: undefined,
   svpAssociation: {
     supported: true,
@@ -1181,6 +1181,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     },
   } as T;
   if (command === "set_autostart") return Boolean(args?.enabled) as T;
+  if (command === "get_autostart") return { enabled: undefined, error: undefined } as T;
   if (command === "list_conversations") return [] as T;
   if (command === "new_conversation") return { id: "preview", title: "新对话", messages: [] } as T;
   if (command === "open_conversation") return { id: "preview", title: "预览对话", messages: [] } as T;
@@ -1205,6 +1206,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 export const api = {
   bootstrap: () => call<BootstrapState>("bootstrap"),
   setAutostart: (enabled: boolean) => call<boolean>("set_autostart", { enabled }),
+  getAutostart: () => call<{ enabled?: boolean; error?: string }>("get_autostart"),
   completeOnboarding: (mode: AppMode) => call<BootstrapState>("complete_onboarding", { mode }),
   setMode: (mode: AppMode) => call<BootstrapState>("set_mode", { mode }),
   setAgentWorkMode: (mode: AgentWorkMode) => call<BootstrapState>("set_agent_work_mode", { mode }),

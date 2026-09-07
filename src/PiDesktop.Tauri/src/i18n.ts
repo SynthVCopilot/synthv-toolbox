@@ -32,9 +32,11 @@ const messages = {
 const settingsMessages = messages["zh-CN"].settings as Record<string, string>;
 settingsMessages.autostart = "开机启动";
 settingsMessages.autostartDescription = "登录系统时在后台启动 Toolbox；需要时可从托盘打开窗口。";
+settingsMessages.unknown = "状态未知";
 const englishSettingsMessages = messages.en.settings as Record<string, string>;
 englishSettingsMessages.autostart = "Launch at login";
 englishSettingsMessages.autostartDescription = "Start Toolbox in the background when you sign in; open the window from the tray when needed.";
+englishSettingsMessages.unknown = "Status unavailable";
 const options = { legacy: false as const, locale: savedLocale(), fallbackLocale, messages };
 export const i18n = createI18n<typeof messages["zh-CN"], AppLocale, false, typeof options>(options);
 

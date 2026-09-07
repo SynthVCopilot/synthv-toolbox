@@ -58,7 +58,7 @@ use tauri::menu::MenuBuilder;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
 #[cfg(desktop)]
-use tauri_plugin_autostart::{MacosLauncher, ManagerExt as AutostartManagerExt};
+use tauri_plugin_autostart::MacosLauncher;
 
 const TRAY_ID: &str = "main-tray";
 const TRAY_SHOW_ID: &str = "tray-show";
@@ -81,7 +81,10 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--autostart"])))
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec!["--autostart"]),
+        ))
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             handle_svp_activation(app.clone(), args, Some(cwd));
         }))
@@ -124,13 +127,6 @@ pub fn run() {
                 passthrough_only,
                 settings,
             ));
-            #[cfg(desktop)]
-            match app.autolaunch().is_enabled() {
-                Ok(enabled) => app.state::<AppState>().autostart_enabled.store(enabled, Ordering::Release),
-                Err(error) => {
-                    *app.state::<AppState>().autostart_error.blocking_write() = Some(error.to_string());
-                }
-            }
             crate::project_backups::start();
             tauri::async_runtime::spawn(async {
                 let _ = tauri::async_runtime::spawn_blocking(|| {
@@ -216,6 +212,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
             commands::set_autostart,
+            commands::get_autostart,
             commands::complete_onboarding,
             commands::set_mode,
             commands::set_agent_work_mode,

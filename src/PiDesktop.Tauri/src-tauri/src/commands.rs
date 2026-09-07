@@ -179,7 +179,7 @@ pub struct BootstrapState {
     sv2_concurrent_enabled: bool,
     sv2_account_indicator_enabled: bool,
     smart_svp_launch_enabled: bool,
-    autostart_enabled: bool,
+    autostart_enabled: Option<bool>,
     autostart_error: Option<String>,
     svp_association: SvpAssociationView,
     http_api: HttpApiStatus,
@@ -677,11 +677,7 @@ pub async fn bootstrap(state: State<'_, AppState>) -> Result<BootstrapState, Str
 }
 
 #[tauri::command]
-pub fn set_autostart(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    enabled: bool,
-) -> Result<bool, String> {
+pub fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<bool, String> {
     #[cfg(desktop)]
     {
         let manager = app.autolaunch();
@@ -691,14 +687,44 @@ pub fn set_autostart(
             manager.disable().map_err(|error| error.to_string())?;
         }
         let actual = manager.is_enabled().map_err(|error| error.to_string())?;
-        state.autostart_enabled.store(actual, Ordering::Release);
-        *state.autostart_error.blocking_write() = None;
         return Ok(actual);
     }
     #[cfg(not(desktop))]
     {
-        let _ = (app, state, enabled);
+        let _ = (app, enabled);
         Err("自动启动在此平台不可用。".to_string())
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutostartStatus {
+    enabled: Option<bool>,
+    error: Option<String>,
+}
+
+#[tauri::command]
+pub fn get_autostart(app: tauri::AppHandle) -> AutostartStatus {
+    #[cfg(desktop)]
+    {
+        return match app.autolaunch().is_enabled() {
+            Ok(enabled) => AutostartStatus {
+                enabled: Some(enabled),
+                error: None,
+            },
+            Err(error) => AutostartStatus {
+                enabled: None,
+                error: Some(error.to_string()),
+            },
+        };
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = app;
+        AutostartStatus {
+            enabled: None,
+            error: Some("自动启动在此平台不可用。".to_string()),
+        }
     }
 }
 
@@ -3627,8 +3653,8 @@ async fn build_bootstrap(state: &State<'_, AppState>) -> Result<BootstrapState, 
         sv2_concurrent_enabled: settings.sv2_concurrent_enabled,
         sv2_account_indicator_enabled: settings.sv2_account_indicator_enabled,
         smart_svp_launch_enabled: settings.smart_svp_launch_enabled,
-        autostart_enabled: state.autostart_enabled.load(Ordering::Acquire),
-        autostart_error: state.autostart_error.read().await.clone(),
+        autostart_enabled: None,
+        autostart_error: None,
         svp_association,
         http_api: state
             .http_api
