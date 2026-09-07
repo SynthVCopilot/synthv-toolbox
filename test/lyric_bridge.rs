@@ -1,9 +1,9 @@
 use serde_json::json;
+use std::fs;
+use std::path::PathBuf;
 
-use crate::lyric_bridge::{
-    consume_preview_token, preview, seed_selection, selection_from_value, selections_match,
-    slots_are_valid, LyricBridgePreviewRequest, LyricBridgeSlot,
-};
+use super::*;
+use crate::mcp::McpManager;
 
 fn selection(notes: serde_json::Value) -> serde_json::Value {
     json!({
@@ -15,7 +15,7 @@ fn selection(notes: serde_json::Value) -> serde_json::Value {
 
 #[test]
 fn selection_requires_at_least_one_note() {
-    assert!(selection_from_value(&selection(json!([])), "session-a").is_err());
+    assert!(parse_selection(&selection(json!([])), "session-a".to_string()).is_err());
 }
 
 #[test]
@@ -26,7 +26,7 @@ fn unfinished_edits_are_refused() {
         "current": { "trackIndex": 2, "groupIndex": 1 },
         "selectedNotes": [{ "noteIndex": 1 }],
     });
-    assert!(selection_from_value(&unfinished, "session-a").is_err());
+    assert!(parse_selection(&unfinished, "session-a".to_string()).is_err());
 }
 
 #[test]
@@ -37,24 +37,24 @@ fn inconsistent_or_duplicate_selection_is_refused() {
         "current": { "trackIndex": 2, "groupIndex": 1 },
         "selectedNotes": [{ "noteIndex": 1 }],
     });
-    assert!(selection_from_value(&inconsistent, "session-a").is_err());
+    assert!(parse_selection(&inconsistent, "session-a".to_string()).is_err());
     let duplicate = selection(json!([{ "noteIndex": 1 }, { "noteIndex": 1 }]));
-    assert!(selection_from_value(&duplicate, "session-a").is_err());
+    assert!(parse_selection(&duplicate, "session-a".to_string()).is_err());
 }
 
 #[test]
 fn selection_change_invalidates_an_existing_preview_snapshot() {
-    let original = selection_from_value(
+    let original = parse_selection(
         &selection(json!([{ "noteIndex": 1 }, { "noteIndex": 2 }])),
-        "session-a",
+        "session-a".to_string(),
     )
     .unwrap();
-    let changed = selection_from_value(
+    let changed = parse_selection(
         &selection(json!([{ "noteIndex": 1 }, { "noteIndex": 3 }])),
-        "session-a",
+        "session-a".to_string(),
     )
     .unwrap();
-    assert!(!selections_match(&original, &changed));
+    assert!(!same_selection(&original, &changed));
 }
 
 #[test]
@@ -63,8 +63,8 @@ fn slots_must_match_the_selected_note_count() {
         text: "你".to_string(),
         phoneme: None,
     }];
-    assert!(slots_are_valid(&slots, 2).is_err());
-    assert!(slots_are_valid(
+    assert!(validate_slots(&slots, 2).is_err());
+    assert!(validate_slots(
         &[LyricBridgeSlot {
             text: " ".to_string(),
             phoneme: None
@@ -72,13 +72,21 @@ fn slots_must_match_the_selected_note_count() {
         1
     )
     .is_err());
-    assert!(slots_are_valid(&slots, 1).is_ok());
+    assert!(validate_slots(&slots, 1).is_ok());
 }
 
 #[test]
 fn preview_token_is_single_use_for_confirmation() {
-    let selection_token =
-        seed_selection(&selection(json!([{ "noteIndex": 1 }])), "session-a").unwrap();
+    let selection_token = Uuid::new_v4().to_string();
+    store_selection(
+        selection_token.clone(),
+        parse_selection(
+            &selection(json!([{ "noteIndex": 1 }])),
+            "session-a".to_string(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let preview = preview(LyricBridgePreviewRequest {
         selection_token,
         session_token: "session-a".to_string(),
@@ -88,6 +96,168 @@ fn preview_token_is_single_use_for_confirmation() {
         }],
     })
     .unwrap();
-    assert!(consume_preview_token(&preview.preview_token).is_ok());
-    assert!(consume_preview_token(&preview.preview_token).is_err());
+    assert!(take_preview(&preview.preview_token).is_ok());
+    assert!(take_preview(&preview.preview_token).is_err());
+}
+
+#[test]
+fn expired_preview_token_is_rejected() {
+    let selection_token = Uuid::new_v4().to_string();
+    store_selection(
+        selection_token.clone(),
+        parse_selection(
+            &selection(json!([{ "noteIndex": 1 }])),
+            "session-a".to_string(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let preview = preview(LyricBridgePreviewRequest {
+        selection_token,
+        session_token: "session-a".to_string(),
+        slots: vec![LyricBridgeSlot {
+            text: "你".to_string(),
+            phoneme: None,
+        }],
+    })
+    .unwrap();
+    PREVIEWS
+        .get()
+        .unwrap()
+        .lock()
+        .unwrap()
+        .get_mut(&preview.preview_token)
+        .unwrap()
+        .expires_at = Instant::now() - Duration::from_secs(1);
+    assert!(take_preview(&preview.preview_token).is_err());
+}
+
+fn fixture_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../test/fixtures/lyric-bridge-mcp.mjs")
+}
+
+fn log_path(mode: &str) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "lyric-bridge-{mode}-{}.jsonl",
+        uuid::Uuid::new_v4()
+    ))
+}
+
+async fn connected_fixture(mode: &str) -> (McpManager, PathBuf) {
+    let manager = McpManager::default();
+    let log = log_path(mode);
+    manager
+        .connect_stdio_host(
+            "synthv".to_string(),
+            "fixture".to_string(),
+            "node".to_string(),
+            vec![
+                fixture_path().to_string_lossy().into_owned(),
+                mode.to_string(),
+                log.to_string_lossy().into_owned(),
+            ],
+            None,
+        )
+        .await
+        .expect("connect fixture");
+    (manager, log)
+}
+
+fn calls(log: &PathBuf) -> Vec<serde_json::Value> {
+    fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("fixture log JSON"))
+        .collect()
+}
+
+#[tokio::test]
+async fn confirm_uses_the_original_context_and_omits_empty_phonemes() {
+    let (manager, log) = connected_fixture("stable").await;
+    let selection = read_selection(&manager).await.unwrap();
+    assert_eq!(selection.notes[0].note_index, 1);
+    let preview = preview(LyricBridgePreviewRequest {
+        selection_token: selection.selection_token,
+        session_token: selection.session_token,
+        slots: vec![
+            LyricBridgeSlot {
+                text: "新".to_string(),
+                phoneme: None,
+            },
+            LyricBridgeSlot {
+                text: "词".to_string(),
+                phoneme: None,
+            },
+        ],
+    })
+    .unwrap();
+    confirm(
+        &manager,
+        LyricBridgeConfirmRequest {
+            preview_token: preview.preview_token.clone(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(confirm(
+        &manager,
+        LyricBridgeConfirmRequest {
+            preview_token: preview.preview_token,
+        },
+    )
+    .await
+    .is_err());
+    manager.disconnect("synthv").await;
+    let commands = calls(&log)
+        .into_iter()
+        .filter(|call| call["name"] == "sv_command")
+        .collect::<Vec<_>>();
+    assert_eq!(commands.len(), 1);
+    let command = &commands[0];
+    assert_eq!(command["args"]["contextId"], "old-selection-context");
+    assert_eq!(command["args"]["action"], "fit_lyrics");
+    assert_eq!(
+        command["args"]["args"]["notes"],
+        json!([{ "noteIndex": 1 }, { "noteIndex": 2 }])
+    );
+    assert_eq!(command["args"]["args"]["syllables"], json!(["新", "词"]));
+    assert!(command["args"]["args"].get("phonemes").is_none());
+    assert_eq!(command["args"]["args"]["sharedGroupPolicy"], "reject");
+    let _ = fs::remove_file(log);
+}
+
+#[tokio::test]
+async fn changed_session_or_selection_rejects_before_writing() {
+    for mode in ["session-change", "selection-change"] {
+        let (manager, log) = connected_fixture(mode).await;
+        let selection = read_selection(&manager).await.unwrap();
+        let preview = preview(LyricBridgePreviewRequest {
+            selection_token: selection.selection_token,
+            session_token: selection.session_token,
+            slots: vec![
+                LyricBridgeSlot {
+                    text: "新".to_string(),
+                    phoneme: None,
+                },
+                LyricBridgeSlot {
+                    text: "词".to_string(),
+                    phoneme: None,
+                },
+            ],
+        })
+        .unwrap();
+        assert!(confirm(
+            &manager,
+            LyricBridgeConfirmRequest {
+                preview_token: preview.preview_token
+            }
+        )
+        .await
+        .is_err());
+        manager.disconnect("synthv").await;
+        assert!(calls(&log)
+            .into_iter()
+            .all(|call| call["name"] != "sv_command"));
+        let _ = fs::remove_file(log);
+    }
 }

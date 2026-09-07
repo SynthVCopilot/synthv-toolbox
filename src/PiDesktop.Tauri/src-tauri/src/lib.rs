@@ -16,9 +16,6 @@ mod downloads;
 mod ffmpeg_local_source_tests;
 mod http_api;
 mod lyric_bridge;
-#[cfg(test)]
-#[path = "../../../../test/lyric_bridge.rs"]
-mod lyric_bridge_tests;
 mod lyric_projects;
 mod lyric_tools;
 mod managed_process;

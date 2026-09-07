@@ -11,6 +11,7 @@ use crate::mcp::{extract_mcp_json, McpManager};
 const PREVIEW_LIFETIME: Duration = Duration::from_secs(300);
 const MAX_NOTES: usize = 512;
 const MAX_STORED_TOKENS: usize = 128;
+const BRIDGE_CALL_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -398,7 +399,13 @@ async fn bridge_session_token(manager: &McpManager) -> Result<String, String> {
         .ok_or_else(|| "Bridge 没有返回当前会话身份；请确认实例已连接。".to_string())
 }
 async fn call_json(manager: &McpManager, tool: &str, arguments: Value) -> Result<Value, String> {
-    extract_mcp_json(&manager.call_bridge_tool(tool, arguments).await?)
+    let response = tokio::time::timeout(
+        BRIDGE_CALL_TIMEOUT,
+        manager.call_bridge_tool(tool, arguments),
+    )
+    .await
+    .map_err(|_| "SynthV Bridge 调用超时。".to_string())??;
+    extract_mcp_json(&response)
 }
 
 fn store_selection(token: String, selection: StoredSelection) -> Result<(), String> {
@@ -455,27 +462,5 @@ fn take_preview(token: &str) -> Result<StoredPreview, String> {
 }
 
 #[cfg(test)]
-pub(crate) fn selection_from_value(
-    value: &Value,
-    session: &str,
-) -> Result<StoredSelection, String> {
-    parse_selection(value, session.to_string())
-}
-#[cfg(test)]
-pub(crate) fn slots_are_valid(slots: &[LyricBridgeSlot], expected: usize) -> Result<(), String> {
-    validate_slots(slots, expected)
-}
-#[cfg(test)]
-pub(crate) fn selections_match(left: &StoredSelection, right: &StoredSelection) -> bool {
-    same_selection(left, right)
-}
-#[cfg(test)]
-pub(crate) fn seed_selection(value: &Value, session: &str) -> Result<String, String> {
-    let token = Uuid::new_v4().to_string();
-    store_selection(token.clone(), parse_selection(value, session.to_string())?)?;
-    Ok(token)
-}
-#[cfg(test)]
-pub(crate) fn consume_preview_token(token: &str) -> Result<(), String> {
-    take_preview(token).map(|_| ())
-}
+#[path = "../../../../test/lyric_bridge.rs"]
+mod tests;
