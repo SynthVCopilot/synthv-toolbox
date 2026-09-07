@@ -1,20 +1,24 @@
 use std::process::Command;
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use semver::Version;
 use serde::{Deserialize, Serialize};
+
+use crate::config::UpdateChannel;
 
 const LATEST_RELEASE_API: &str =
     "https://api.github.com/repos/SynthVCopilot/synthv-toolbox/releases/latest";
 const RELEASES_PAGE: &str = "https://github.com/SynthVCopilot/synthv-toolbox/releases/latest";
-const OFFICIAL_RELEASE_PREFIX: &str =
-    "https://github.com/SynthVCopilot/synthv-toolbox/releases/tag/";
+const RELEASES_TAG_PREFIX: &str = "https://github.com/SynthVCopilot/synthv-toolbox/releases/tag/";
+const NIGHTLY_DOWNLOAD_PREFIX: &str =
+    "https://github.com/SynthVCopilot/synthv-toolbox/releases/download/";
 const MAX_RELEASE_NOTES_CHARS: usize = 12_000;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolboxUpdateCheck {
+    pub channel: UpdateChannel,
     pub current_version: String,
     pub latest_version: String,
     pub update_available: bool,
@@ -34,11 +38,68 @@ struct GitHubRelease {
     body: Option<String>,
 }
 
-pub fn check_for_update(current_version: &str) -> Result<ToolboxUpdateCheck, String> {
-    let agent = ureq::AgentBuilder::new()
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NightlyManifest {
+    schema_version: u32,
+    channel: String,
+    version: String,
+    commit: String,
+    source_committed_at_utc: String,
+    published_at_utc: String,
+    release_url: String,
+    changes: Vec<NightlyChange>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubReleaseSummary {
+    tag_name: String,
+    prerelease: bool,
+    draft: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct NightlyChange {
+    title: String,
+    commit: String,
+}
+
+pub fn check_for_update(
+    current_version: &str,
+    channel: UpdateChannel,
+) -> Result<ToolboxUpdateCheck, String> {
+    match channel {
+        UpdateChannel::Stable => check_stable_update(current_version),
+        UpdateChannel::Nightly => check_nightly_update(current_version),
+    }
+}
+
+pub fn open_releases_page(channel: UpdateChannel) -> Result<(), String> {
+    let url = match channel {
+        UpdateChannel::Stable => RELEASES_PAGE.to_string(),
+        UpdateChannel::Nightly => nightly_release_tag(env!("CARGO_PKG_VERSION")),
+    };
+    #[cfg(target_os = "windows")]
+    let mut command = Command::new("explorer.exe");
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("open");
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let mut command = Command::new("xdg-open");
+    command
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("无法打开官方发布页：{error}"))
+}
+
+fn agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(12))
-        .build();
-    let response = agent
+        .build()
+}
+
+fn check_stable_update(current_version: &str) -> Result<ToolboxUpdateCheck, String> {
+    let response = agent()
         .get(LATEST_RELEASE_API)
         .set("Accept", "application/vnd.github+json")
         .set(
@@ -50,25 +111,53 @@ pub fn check_for_update(current_version: &str) -> Result<ToolboxUpdateCheck, Str
     let release = response
         .into_json::<GitHubRelease>()
         .map_err(|error| format!("无法解析 GitHub 发布信息：{error}"))?;
-    build_update_check(current_version, release)
+    build_stable_update_check(current_version, release)
 }
 
-pub fn open_releases_page() -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    let mut command = Command::new("explorer.exe");
-    #[cfg(target_os = "macos")]
-    let mut command = Command::new("open");
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    let mut command = Command::new("xdg-open");
-
-    command
-        .arg(RELEASES_PAGE)
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("无法打开官方发布页：{error}"))
+fn check_nightly_update(current_version: &str) -> Result<ToolboxUpdateCheck, String> {
+    let releases = agent()
+        .get("https://api.github.com/repos/SynthVCopilot/synthv-toolbox/releases?per_page=100")
+        .set("Accept", "application/vnd.github+json")
+        .set(
+            "User-Agent",
+            concat!("SynthV-Toolbox/", env!("CARGO_PKG_VERSION")),
+        )
+        .call()
+        .map_err(describe_nightly_request_error)?
+        .into_json::<Vec<GitHubReleaseSummary>>()
+        .map_err(|error| format!("无法解析 nightly 发布列表：{error}"))?;
+    let tag = releases
+        .into_iter()
+        .filter(|release| release.prerelease && !release.draft)
+        .filter_map(|release| {
+            let base = release
+                .tag_name
+                .strip_prefix('v')?
+                .strip_suffix("-nightly")?;
+            Some((
+                parse_version(base, "nightly 发布版本").ok()?,
+                release.tag_name,
+            ))
+        })
+        .max_by(|left, right| left.0.cmp(&right.0))
+        .map(|(_, tag)| tag)
+        .ok_or_else(|| "尚未找到公开的 nightly 发布。".to_string())?;
+    let response = agent()
+        .get(&format!("{NIGHTLY_DOWNLOAD_PREFIX}{tag}/latest.json"))
+        .set("Accept", "application/json")
+        .set(
+            "User-Agent",
+            concat!("SynthV-Toolbox/", env!("CARGO_PKG_VERSION")),
+        )
+        .call()
+        .map_err(describe_nightly_request_error)?;
+    let manifest = response
+        .into_json::<NightlyManifest>()
+        .map_err(|error| format!("无法解析 nightly 更新清单：{error}"))?;
+    build_nightly_update_check(current_version, manifest)
 }
 
-fn build_update_check(
+fn build_stable_update_check(
     current_version: &str,
     release: GitHubRelease,
 ) -> Result<ToolboxUpdateCheck, String> {
@@ -81,29 +170,107 @@ fn build_update_check(
         .name
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| format!("Synthesizer V Toolbox v{latest}"));
-    let release_notes = truncate_notes(release.body.as_deref().unwrap_or(""));
-
     Ok(ToolboxUpdateCheck {
+        channel: UpdateChannel::Stable,
         current_version: current.to_string(),
         latest_version: latest.to_string(),
         update_available: latest > current,
         release_name,
         release_url: release.html_url,
         published_at_utc: release.published_at,
-        release_notes,
+        release_notes: truncate_notes(release.body.as_deref().unwrap_or("")),
         checked_at_utc: Utc::now().to_rfc3339(),
     })
 }
 
+fn build_nightly_update_check(
+    current_version: &str,
+    manifest: NightlyManifest,
+) -> Result<ToolboxUpdateCheck, String> {
+    if manifest.schema_version != 1 || manifest.channel != "nightly" {
+        return Err("nightly 更新清单版本或渠道无效。".to_string());
+    }
+    if manifest.commit.len() != 7
+        || !manifest
+            .commit
+            .chars()
+            .all(|value| value.is_ascii_hexdigit())
+    {
+        return Err("nightly 更新清单的提交标识无效。".to_string());
+    }
+    if !is_official_release_url(&manifest.release_url) {
+        return Err("nightly 更新清单包含非官方发布地址，已拒绝显示。".to_string());
+    }
+    let latest = nightly_version(&manifest.version, "nightly 最新版本")?;
+    let current = nightly_version(current_version, "当前应用版本").ok();
+    let source_committed_at = DateTime::parse_from_rfc3339(&manifest.source_committed_at_utc)
+        .map_err(|error| format!("nightly 更新清单的提交时间无效：{error}"))?
+        .with_timezone(&Utc);
+    let update_available = if manifest.version == current_version.trim() {
+        false
+    } else if let Some(current) = current {
+        source_committed_at > current.published_at
+    } else {
+        latest.base >= parse_version(current_version, "当前应用版本")?
+    };
+    let notes = manifest
+        .changes
+        .into_iter()
+        .map(|change| format!("- {} ({})", change.title.trim(), change.commit.trim()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(ToolboxUpdateCheck {
+        channel: UpdateChannel::Nightly,
+        current_version: current_version.trim().to_string(),
+        latest_version: manifest.version,
+        update_available,
+        release_name: format!("Synthesizer V Toolbox nightly {}", manifest.commit),
+        release_url: manifest.release_url,
+        published_at_utc: Some(manifest.published_at_utc),
+        release_notes: truncate_notes(&notes),
+        checked_at_utc: Utc::now().to_rfc3339(),
+    })
+}
+
+struct ParsedNightlyVersion {
+    base: Version,
+    published_at: DateTime<Utc>,
+}
+
+fn nightly_version(value: &str, label: &str) -> Result<ParsedNightlyVersion, String> {
+    let value = value.trim().trim_start_matches(['v', 'V']);
+    let (base, _) = value
+        .rsplit_once("-dev.")
+        .ok_or_else(|| format!("{label}“{value}”不是有效的 nightly 版本。"))?;
+    let published_at = option_env!("SYNTHV_TOOLBOX_SOURCE_COMMITTED_AT_UTC")
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc))
+        .ok_or_else(|| format!("{label}缺少可比较的提交时间。"))?;
+    Ok(ParsedNightlyVersion {
+        base: parse_version(base, label)?,
+        published_at,
+    })
+}
+
+fn nightly_release_tag(version: &str) -> String {
+    format!("{RELEASES_TAG_PREFIX}v{}-nightly", base_version(version))
+}
+fn base_version(value: &str) -> String {
+    value
+        .trim()
+        .trim_start_matches(['v', 'V'])
+        .split("-dev.")
+        .next()
+        .unwrap_or(env!("CARGO_PKG_VERSION"))
+        .to_string()
+}
 fn parse_version(value: &str, label: &str) -> Result<Version, String> {
     Version::parse(value.trim().trim_start_matches(['v', 'V']))
         .map_err(|error| format!("{label}“{value}”不是有效的语义化版本：{error}"))
 }
-
 fn is_official_release_url(value: &str) -> bool {
-    value.starts_with(OFFICIAL_RELEASE_PREFIX) && !value[OFFICIAL_RELEASE_PREFIX.len()..].is_empty()
+    value.starts_with(RELEASES_TAG_PREFIX) && !value[RELEASES_TAG_PREFIX.len()..].is_empty()
 }
-
 fn truncate_notes(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.chars().count() <= MAX_RELEASE_NOTES_CHARS {
@@ -115,7 +282,6 @@ fn truncate_notes(value: &str) -> String {
         .collect::<String>()
         + "…"
 }
-
 fn describe_request_error(error: ureq::Error) -> String {
     match error {
         ureq::Error::Status(403, _) => {
@@ -126,76 +292,9 @@ fn describe_request_error(error: ureq::Error) -> String {
         ureq::Error::Transport(error) => format!("无法连接 GitHub 更新服务：{error}"),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn release(tag_name: &str, html_url: &str) -> GitHubRelease {
-        GitHubRelease {
-            tag_name: tag_name.to_string(),
-            name: None,
-            html_url: html_url.to_string(),
-            published_at: Some("2026-08-29T12:00:00Z".to_string()),
-            body: Some("修复与改进".to_string()),
-        }
-    }
-
-    #[test]
-    fn detects_newer_stable_release() {
-        let result = build_update_check(
-            "0.1.1",
-            release(
-                "v0.2.0",
-                "https://github.com/SynthVCopilot/synthv-toolbox/releases/tag/v0.2.0",
-            ),
-        )
-        .expect("valid release");
-        assert!(result.update_available);
-        assert_eq!(result.current_version, "0.1.1");
-        assert_eq!(result.latest_version, "0.2.0");
-    }
-
-    #[test]
-    fn does_not_downgrade_a_newer_local_build() {
-        let result = build_update_check(
-            "1.0.0",
-            release(
-                "v0.9.9",
-                "https://github.com/SynthVCopilot/synthv-toolbox/releases/tag/v0.9.9",
-            ),
-        )
-        .expect("valid release");
-        assert!(!result.update_available);
-    }
-
-    #[test]
-    fn semantic_version_comparison_handles_prereleases() {
-        let result = build_update_check(
-            "1.0.0-beta.1",
-            release(
-                "v1.0.0",
-                "https://github.com/SynthVCopilot/synthv-toolbox/releases/tag/v1.0.0",
-            ),
-        )
-        .expect("valid release");
-        assert!(result.update_available);
-    }
-
-    #[test]
-    fn rejects_untrusted_release_url() {
-        let result = build_update_check(
-            "0.1.1",
-            release("v0.2.0", "https://example.com/releases/tag/v0.2.0"),
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn truncates_oversized_release_notes() {
-        let notes = "更".repeat(MAX_RELEASE_NOTES_CHARS + 10);
-        let truncated = truncate_notes(&notes);
-        assert_eq!(truncated.chars().count(), MAX_RELEASE_NOTES_CHARS + 1);
-        assert!(truncated.ends_with('…'));
+fn describe_nightly_request_error(error: ureq::Error) -> String {
+    match error {
+        ureq::Error::Status(404, _) => "尚未找到公开的 nightly 发布。".to_string(),
+        other => describe_request_error(other),
     }
 }

@@ -1,5 +1,6 @@
 export type AppMode = "toolbox" | "ai";
 export type AgentWorkMode = "edit" | "solo";
+export type UpdateChannel = "stable" | "nightly";
 export interface AgentFileApproval { id: string; path: string; purpose: string; createdAtUtc: string; }
 
 export type AiProviderId = "anthropic" | "openai-codex" | "workbuddy" | "traecode";
@@ -301,6 +302,7 @@ export interface BootstrapState {
   onboardingCompleted: boolean;
   mode: AppMode;
   agentWorkMode: AgentWorkMode;
+  updateChannel: UpdateChannel;
   platform: string;
   appVersion: string;
   configPath: string;
@@ -347,6 +349,7 @@ export interface OperationResult {
 }
 
 export interface ToolboxUpdateCheck {
+  channel: UpdateChannel;
   currentVersion: string;
   latestVersion: string;
   updateAvailable: boolean;

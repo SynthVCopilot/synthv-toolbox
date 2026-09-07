@@ -40,7 +40,7 @@ use crate::components::{
 use crate::config::{
     model_summary, save_settings, settings_path, validate_ai_model, validate_mcp_server,
     AgentWorkMode, AiAuthMethod, AiLoadStrategy, ApiKeyMetadata, AppMode, McpServerConfig,
-    ModelSummary, ToolboxSettings,
+    ModelSummary, ToolboxSettings, UpdateChannel,
 };
 use crate::creative_history::{
     self, CreativeHistoryEntry, ProjectCheckpoint, WorkflowRecipe, WorkflowReportFormat,
@@ -163,6 +163,7 @@ pub struct BootstrapState {
     onboarding_completed: bool,
     mode: AppMode,
     agent_work_mode: AgentWorkMode,
+    update_channel: UpdateChannel,
     platform: String,
     app_version: String,
     config_path: String,
@@ -819,6 +820,19 @@ pub async fn set_agent_work_mode(
     {
         let mut settings = state.settings.write().await;
         settings.agent_work_mode = mode;
+        save_settings(&settings)?;
+    }
+    build_bootstrap(&state).await
+}
+
+#[tauri::command]
+pub async fn set_update_channel(
+    channel: UpdateChannel,
+    state: State<'_, AppState>,
+) -> Result<BootstrapState, String> {
+    {
+        let mut settings = state.settings.write().await;
+        settings.update_channel = channel;
         save_settings(&settings)?;
     }
     build_bootstrap(&state).await
@@ -1481,22 +1495,26 @@ pub fn scan_synthv() -> Vec<SynthVInstallation> {
 }
 
 #[tauri::command]
-pub async fn check_toolbox_update() -> Result<crate::update_checker::ToolboxUpdateCheck, String> {
-    tauri::async_runtime::spawn_blocking(|| {
-        crate::update_checker::check_for_update(env!("CARGO_PKG_VERSION"))
+pub async fn check_toolbox_update(
+    state: State<'_, AppState>,
+) -> Result<crate::update_checker::ToolboxUpdateCheck, String> {
+    let channel = state.settings.read().await.update_channel;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::update_checker::check_for_update(env!("CARGO_PKG_VERSION"), channel)
     })
     .await
     .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-pub fn open_toolbox_releases() -> OperationResult {
-    match crate::update_checker::open_releases_page() {
-        Ok(()) => succeeded(
+pub async fn open_toolbox_releases(state: State<'_, AppState>) -> Result<OperationResult, String> {
+    let channel = state.settings.read().await.update_channel;
+    match crate::update_checker::open_releases_page(channel) {
+        Ok(()) => Ok(succeeded(
             "已打开 Synthesizer V Toolbox 官方发布页。",
             RELEASES_PAGE_DETAIL,
-        ),
-        Err(error) => failed("无法打开 Synthesizer V Toolbox 官方发布页。", error),
+        )),
+        Err(error) => Ok(failed("无法打开 Synthesizer V Toolbox 官方发布页。", error)),
     }
 }
 
@@ -3634,6 +3652,7 @@ async fn build_bootstrap(state: &State<'_, AppState>) -> Result<BootstrapState, 
         onboarding_completed: settings.onboarding_completed,
         mode: settings.mode,
         agent_work_mode: settings.agent_work_mode,
+        update_channel: settings.update_channel,
         platform: std::env::consts::OS.to_string(),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         config_path: settings_path().to_string_lossy().into_owned(),

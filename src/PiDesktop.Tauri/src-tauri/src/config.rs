@@ -42,6 +42,14 @@ pub enum AgentWorkMode {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateChannel {
+    #[default]
+    Stable,
+    Nightly,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AiAuthMethod {
     #[default]
@@ -89,6 +97,8 @@ pub struct ToolboxSettings {
     pub mode: AppMode,
     #[serde(default)]
     pub agent_work_mode: AgentWorkMode,
+    #[serde(default)]
+    pub update_channel: UpdateChannel,
     #[serde(default)]
     pub scripts_path: Option<String>,
     #[serde(default)]
@@ -226,6 +236,7 @@ impl Default for ToolboxSettings {
             onboarding_completed: false,
             mode: AppMode::Toolbox,
             agent_work_mode: AgentWorkMode::Edit,
+            update_channel: UpdateChannel::Stable,
             scripts_path: None,
             ffmpeg_directory: None,
             mcp_servers: Vec::new(),

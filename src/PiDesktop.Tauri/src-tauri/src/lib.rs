@@ -214,6 +214,7 @@ pub fn run() {
             commands::complete_onboarding,
             commands::set_mode,
             commands::set_agent_work_mode,
+            commands::set_update_channel,
             commands::authorize_ai_provider,
             commands::cancel_ai_authorization,
             commands::select_ai_provider,
