@@ -735,10 +735,10 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "check_toolbox_update") return {
     channel: previewState().updateChannel,
     currentVersion: previewState().appVersion,
-    latestVersion: "0.2.0",
+    latestVersion: previewState().updateChannel === "nightly" ? "0.2.0-dev.abcdef0" : "0.2.0",
     updateAvailable: true,
-    releaseName: "Synthesizer V Toolbox v0.2.0",
-    releaseUrl: "https://github.com/SynthVCopilot/synthv-toolbox/releases/tag/v0.2.0",
+    releaseName: previewState().updateChannel === "nightly" ? "SynthV Toolbox v0.2.0 Pre-release" : "Synthesizer V Toolbox v0.2.0",
+    releaseUrl: `https://github.com/SynthVCopilot/synthv-toolbox/releases/tag/v0.2.0${previewState().updateChannel === "nightly" ? "-nightly" : ""}`,
     publishedAtUtc: new Date().toISOString(),
     releaseNotes: "## 更新内容\n\n- 新增更新检查工具\n- 修复若干问题",
     checkedAtUtc: new Date().toISOString(),

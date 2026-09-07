@@ -27,6 +27,7 @@ writeFileSync(changesFixture, "CLI title\t0123456\n");
 assert.deepEqual(JSON.parse(execFileSync(process.execPath, [".github/scripts/nightly-release.mjs", "changes", changesFixture], { encoding: "utf8" })), [{ title: "CLI title", commit: "0123456" }]);
 
 const initial = createPublicationPlan(common);
+assert.throws(() => createPublicationPlan({ ...common, developmentVersion: "0.1.6-dev.abcdef0" }), /must identify/);
 assert.equal(initial.publish, true);
 assert.equal(initial.version, common.developmentVersion);
 assert.equal(initial.commit, "0123456");

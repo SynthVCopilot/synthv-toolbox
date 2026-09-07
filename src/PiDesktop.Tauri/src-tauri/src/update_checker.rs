@@ -126,7 +126,27 @@ fn check_nightly_update(current_version: &str) -> Result<ToolboxUpdateCheck, Str
         .map_err(describe_nightly_request_error)?
         .into_json::<Vec<GitHubReleaseSummary>>()
         .map_err(|error| format!("无法解析 nightly 发布列表：{error}"))?;
-    let tag = releases
+    let tag = latest_nightly_tag(releases)?;
+    let response = agent()
+        .get(&format!("{NIGHTLY_DOWNLOAD_PREFIX}{tag}/latest.json"))
+        .set("Accept", "application/json")
+        .set(
+            "User-Agent",
+            concat!("SynthV-Toolbox/", env!("CARGO_PKG_VERSION")),
+        )
+        .call()
+        .map_err(describe_nightly_request_error)?;
+    let manifest = response
+        .into_json::<NightlyManifest>()
+        .map_err(|error| format!("无法解析 nightly 更新清单：{error}"))?;
+    if manifest.release_url != format!("{RELEASES_TAG_PREFIX}{tag}") {
+        return Err("nightly 清单与发布标签不一致。".to_string());
+    }
+    build_nightly_update_check(current_version, manifest)
+}
+
+fn latest_nightly_tag(releases: Vec<GitHubReleaseSummary>) -> Result<String, String> {
+    releases
         .into_iter()
         .filter(|release| release.prerelease && !release.draft)
         .filter_map(|release| {
@@ -141,20 +161,7 @@ fn check_nightly_update(current_version: &str) -> Result<ToolboxUpdateCheck, Str
         })
         .max_by(|left, right| left.0.cmp(&right.0))
         .map(|(_, tag)| tag)
-        .ok_or_else(|| "尚未找到公开的 nightly 发布。".to_string())?;
-    let response = agent()
-        .get(&format!("{NIGHTLY_DOWNLOAD_PREFIX}{tag}/latest.json"))
-        .set("Accept", "application/json")
-        .set(
-            "User-Agent",
-            concat!("SynthV-Toolbox/", env!("CARGO_PKG_VERSION")),
-        )
-        .call()
-        .map_err(describe_nightly_request_error)?;
-    let manifest = response
-        .into_json::<NightlyManifest>()
-        .map_err(|error| format!("无法解析 nightly 更新清单：{error}"))?;
-    build_nightly_update_check(current_version, manifest)
+        .ok_or_else(|| "尚未找到公开的 nightly 发布。".to_string())
 }
 
 fn build_stable_update_check(
@@ -202,7 +209,14 @@ fn build_nightly_update_check(
         return Err("nightly 更新清单包含非官方发布地址，已拒绝显示。".to_string());
     }
     let latest = nightly_version(&manifest.version, "nightly 最新版本")?;
-    if !manifest.version.trim().ends_with(&format!("-dev.{}", manifest.commit)) {
+    if manifest.release_url != format!("{RELEASES_TAG_PREFIX}v{}-nightly", latest.base) {
+        return Err("nightly 清单的版本与发布地址不一致。".to_string());
+    }
+    if !manifest
+        .version
+        .trim()
+        .ends_with(&format!("-dev.{}", manifest.commit))
+    {
         return Err("nightly 更新清单的版本与提交标识不一致。".to_string());
     }
     let current = nightly_version(current_version, "当前应用版本").ok();
@@ -215,7 +229,7 @@ fn build_nightly_update_check(
         if latest.base != current.base {
             latest.base > current.base
         } else {
-        source_committed_at > current.published_at
+            source_committed_at > current.published_at
         }
     } else {
         latest.base >= parse_version(current_version, "当前应用版本")?

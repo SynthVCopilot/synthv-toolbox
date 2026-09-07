@@ -232,7 +232,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           pattern: synthv-toolbox-*
           path: release-assets
@@ -328,7 +328,7 @@ jobs:
             {
               printf '%s\n' "$existing_notes"
               cat nightly-assets/new-release-notes.md
-              printf '%s\n' "$note_marker"
+              printf '\n%s\n' "$note_marker"
             } > nightly-assets/release-notes.md
             gh release edit "$tag" --title "SynthV Toolbox v${base_version} Pre-release" --notes-file nightly-assets/release-notes.md
           fi

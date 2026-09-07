@@ -27,6 +27,9 @@ export function createPublicationPlan({ developmentVersion, sha, runId, previous
   const versionMatch = /^(\d+\.\d+\.\d+)-dev\.([0-9a-f]{7})$/i.exec(version);
   if (!versionMatch) throw new Error(`Unexpected development version: ${version}`);
   if (!/^[0-9a-f]{40}$/i.test(sha)) throw new Error(`Expected a full commit SHA: ${sha}`);
+  if (versionMatch[2].toLowerCase() !== sha.slice(0, 7).toLowerCase()) {
+    throw new Error("Development version must identify the published source commit");
+  }
   if (!/^\d+$/.test(String(runId))) throw new Error(`Expected a numeric workflow run id: ${runId}`);
   if (!/^\d{4}-\d{2}-\d{2}T/.test(sourceCommittedAtUtc ?? "")) {
     throw new Error("Expected an RFC3339 source commit timestamp");

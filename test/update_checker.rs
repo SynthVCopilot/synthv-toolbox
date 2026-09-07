@@ -82,15 +82,92 @@ fn nightly_release_filter_uses_highest_non_draft_prerelease() {
             draft: false,
         },
     ];
-    let tag = releases
-        .into_iter()
-        .filter(|r| r.prerelease && !r.draft)
-        .filter_map(|r| {
-            let base = r.tag_name.strip_prefix('v')?.strip_suffix("-nightly")?;
-            Some((parse_version(base, "test").ok()?, r.tag_name))
-        })
-        .max_by(|a, b| a.0.cmp(&b.0))
-        .unwrap()
-        .1;
+    let tag = latest_nightly_tag(releases).unwrap();
     assert_eq!(tag, "v1.0.0-nightly");
+}
+
+#[test]
+fn nightly_orders_source_time_without_ordering_hashes() {
+    assert!(
+        build_nightly_update_check(
+            "0.2.0-dev.fffffff",
+            nightly("0.2.0-dev.abcdef0", "2099-01-01T00:00:00Z")
+        )
+        .unwrap()
+        .update_available
+    );
+    assert!(
+        !build_nightly_update_check(
+            "0.2.0-dev.0000000",
+            nightly("0.2.0-dev.abcdef0", "2000-01-01T00:00:00Z")
+        )
+        .unwrap()
+        .update_available
+    );
+}
+
+#[test]
+fn nightly_orders_base_versions_before_source_time() {
+    assert!(
+        build_nightly_update_check(
+            "0.1.0-dev.fffffff",
+            nightly("0.2.0-dev.abcdef0", "2000-01-01T00:00:00Z")
+        )
+        .unwrap()
+        .update_available
+    );
+    assert!(
+        !build_nightly_update_check(
+            "0.3.0-dev.0000000",
+            nightly("0.2.0-dev.abcdef0", "2099-01-01T00:00:00Z")
+        )
+        .unwrap()
+        .update_available
+    );
+    assert!(
+        build_nightly_update_check(
+            "0.2.0",
+            nightly("0.2.0-dev.abcdef0", "2000-01-01T00:00:00Z")
+        )
+        .unwrap()
+        .update_available
+    );
+}
+
+#[test]
+fn nightly_validates_manifest_identity_and_formats_changes() {
+    let mut manifest = nightly("0.2.0-dev.abcdef0", "2026-01-01T00:00:00Z");
+    manifest.commit = "0000000".into();
+    assert!(build_nightly_update_check("0.1.0", manifest).is_err());
+    let mut manifest = nightly("0.2.0-dev.abcdef0", "2026-01-01T00:00:00Z");
+    manifest.release_url = format!("{RELEASES_TAG_PREFIX}v0.1.0-nightly");
+    assert!(build_nightly_update_check("0.1.0", manifest).is_err());
+    assert!(build_nightly_update_check(
+        "0.1.0",
+        nightly("0.2.0-dev.invalid", "2026-01-01T00:00:00Z")
+    )
+    .is_err());
+    let mut manifest = nightly("0.2.0-dev.abcdef0", "2026-01-01T00:00:00Z");
+    manifest.changes.push(NightlyChange {
+        title: "Fix startup".into(),
+        commit: "abcdef0".into(),
+    });
+    assert_eq!(
+        build_nightly_update_check("0.1.0", manifest)
+            .unwrap()
+            .release_notes,
+        "- Fix startup (#abcdef0)"
+    );
+}
+
+#[test]
+fn stable_prerelease_comparison_and_unicode_notes_are_preserved() {
+    assert!(
+        build_stable_update_check("1.0.0-beta.1", stable("v1.0.0"))
+            .unwrap()
+            .update_available
+    );
+    let result = truncate_notes(&"更".repeat(MAX_RELEASE_NOTES_CHARS + 10));
+    assert_eq!(result.chars().count(), MAX_RELEASE_NOTES_CHARS + 1);
+    assert!(result.ends_with('…'));
 }

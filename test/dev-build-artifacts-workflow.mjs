@@ -29,7 +29,8 @@ assert.match(workflow, /name: prepared-desktop\n          path: src\/PiDesktop\.
 assert.match(release, /name: prepared-desktop\n          path: src\/PiDesktop\.Tauri/);
 assert.equal((workflow.match(/needs: prepare/g) ?? []).length, 2);
 assert.equal((release.match(/needs: prepare/g) ?? []).length, 2);
-assert.equal((workflow.match(/actions\/download-artifact@v5/g) ?? []).length, 3);
+assert.equal((workflow.match(/actions\/download-artifact@v5/g) ?? []).length, 2);
+assert.match(workflow, /actions\/download-artifact@v8\n        with:\n          pattern: synthv-toolbox-\*/);
 assert.equal((release.match(/actions\/download-artifact@v5/g) ?? []).length, 3);
 assert.equal((workflow.match(/npm run build/g) ?? []).length, 0);
 assert.equal((workflow.match(/npm run tauri build/g) ?? []).length, 1);
@@ -91,3 +92,4 @@ assert.match(release, /test "\$\{#assets\[@\]\}" -ge 2/);
 
 console.log("Shared preparation workflow contracts passed.");
 execFileSync(process.execPath, [join(root, "test", "dev-build-version.mjs")], { stdio: "inherit" });
+execFileSync(process.execPath, [join(root, "test", "nightly-release.mjs")], { stdio: "inherit", cwd: root });

@@ -69,7 +69,6 @@ import type {
   SynthVProcess,
   SynthVShortcutProfile,
   ToolboxUpdateCheck,
-  UpdateChannel,
   TuningProfile,
   WorkflowRecipe,
   WorkflowResult,

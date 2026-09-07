@@ -1,6 +1,41 @@
 fn main() {
     println!("cargo:rerun-if-changed=icons");
     println!("cargo:rerun-if-env-changed=GITHUB_SHA");
+    for reference in ["HEAD", "packed-refs"] {
+        if let Ok(output) = std::process::Command::new("git")
+            .args(["rev-parse", "--git-path", reference])
+            .output()
+        {
+            if output.status.success() {
+                println!(
+                    "cargo:rerun-if-changed={}",
+                    String::from_utf8_lossy(&output.stdout).trim()
+                );
+            }
+        }
+    }
+    if let Ok(reference) = std::process::Command::new("git")
+        .args(["symbolic-ref", "-q", "HEAD"])
+        .output()
+    {
+        if reference.status.success() {
+            if let Ok(output) = std::process::Command::new("git")
+                .args([
+                    "rev-parse",
+                    "--git-path",
+                    String::from_utf8_lossy(&reference.stdout).trim(),
+                ])
+                .output()
+            {
+                if output.status.success() {
+                    println!(
+                        "cargo:rerun-if-changed={}",
+                        String::from_utf8_lossy(&output.stdout).trim()
+                    );
+                }
+            }
+        }
+    }
     if let Ok(output) = std::process::Command::new("git")
         .args(["log", "-1", "--format=%cI"])
         .output()
