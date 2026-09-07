@@ -39,6 +39,12 @@ jobs:
         with:
           components: rustfmt
 
+      - name: Validate release notes
+        if: inputs.release
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: test -s "docs/releases/${RELEASE_TAG}.md"
+
       - name: Apply version from release tag
         id: release-version
         if: inputs.release

@@ -92,8 +92,13 @@ assert.match(workflow, /sha256: \$windowsSha, size: \$windowsSize/);
 assert.match(workflow, /--json isImmutable/);
 assert.match(workflow, /Historical nightly asset \$asset_name already exists with a different digest/);
 assert.doesNotMatch(release, /\.app\.zip/);
-assert.match(release, /gh release list --exclude-drafts --exclude-pre-releases/);
-assert.match(release, /test "\$\{#assets\[@\]\}" -ge 2/);
+assert.match(prepare, /test -s "docs\/releases\/\$\{RELEASE_TAG\}\.md"/);
+assert.match(release, /notes="docs\/releases\/\$\{GITHUB_REF_NAME\}\.md"/);
+assert.doesNotMatch(release, /git log|gh release list/);
+assert.match(release, /test "\$\{#assets\[@\]\}" -eq 2/);
+assert.match(release, /SynthV\.Toolbox_\$\{\{ needs\.prepare\.outputs\.version \}\}_x64-setup\.exe/);
+assert.match(release, /SynthV\.Toolbox_\$\{\{ needs\.prepare\.outputs\.version \}\}_universal\.dmg/);
+assert.match(release, /cargo test --manifest-path test\/synthv-control-regression\/Cargo\.toml/);
 
 console.log("Shared preparation workflow contracts passed.");
 execFileSync(process.execPath, [join(root, "test", "dev-build-version.mjs")], { stdio: "inherit" });
