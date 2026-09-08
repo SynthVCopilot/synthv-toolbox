@@ -50,7 +50,7 @@ const groupDefinitions: ToolGroup[] = [
     id: "import",
     title: "导入",
     description: "从一个来源开始完成 Cover 工作流。",
-    icon: "pipeline",
+    icon: "import",
     accent: "violet",
     featureIds: ["cover"],
   },

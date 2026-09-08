@@ -1246,8 +1246,6 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .audio-drop-zone:disabled { cursor: not-allowed; opacity: .62; }
 .audio-drop-zone strong { color: var(--text); font-size: 13px; }
 .audio-drop-zone small { max-width: 460px; font-size: 11px; }
-.input-action { display: flex; gap: 8px; align-items: center; }
-.input-action input { min-width: 0; flex: 1; }
 .path-picker-control { display: flex; align-items: center; gap: 8px; min-width: 0; margin-top: 7px; }
 .path-picker-control > input { flex: 1 1 0; min-width: 0; margin-top: 0; }
 button.path-picker-button { display: inline-flex; flex: 0 0 34px; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; }
