@@ -234,9 +234,6 @@ export interface Sv2AccountUsageSnapshot {
 }
 
 export type SvpLaunchMode = "normal" | "concurrent";
-export type SvpDetectedFormat = "sv1" | "sv2" | "unknown";
-export interface SvpLaunchHost { id: string; label: string; available: boolean; detail?: string | null; generation?: SvpDetectedFormat | null; }
-export interface PendingSvpRoute { projectPath: string; detectedFormat: SvpDetectedFormat; candidates: SvpLaunchHost[]; reason: string; }
 export type SvpAuthorizationSource = "session" | "unknown";
 
 export interface SvpVoiceRequirement {
@@ -325,7 +322,7 @@ export interface BootstrapState {
   sv2ConcurrentEnabled: boolean;
   sv2AccountIndicatorEnabled: boolean;
   smartSvpLaunchEnabled: boolean;
-  smartSvpLaunchAlwaysAsk: boolean;
+  smartSvpAlwaysAsk: boolean;
   autostartEnabled?: boolean | null;
   autostartError?: string | null;
   svpAssociation: SvpAssociationState;
