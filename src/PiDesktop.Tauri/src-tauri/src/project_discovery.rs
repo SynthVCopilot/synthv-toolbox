@@ -50,7 +50,7 @@ fn recent_project_paths(bytes: &[u8]) -> Result<Vec<String>, ()> {
     reader.config_mut().trim_text(true);
     let mut buffer = Vec::new();
     let mut document_depth = 0usize;
-    let mut recent_files_depth = None;
+    let mut recent_files_depth: Option<usize> = None;
     let mut paths = Vec::new();
 
     loop {
@@ -100,15 +100,14 @@ fn project_path_from_item(
     decoder: quick_xml::Decoder,
 ) -> Result<Option<String>, ()> {
     let mut value = None;
-    for attribute in event.attributes().with_checks(false) {
+    for attribute in event.attributes() {
         let attribute = attribute.map_err(|_| ())?;
         if attribute.key.as_ref() == b"path" {
             value = Some(
                 attribute
-                    .decode_and_unescape_value(decoder)
+                    .decoded_and_normalized_value(quick_xml::XmlVersion::Implicit1_0, decoder)
                     .map_err(|_| ())?,
             );
-            break;
         }
     }
     let Some(value) = value else {
