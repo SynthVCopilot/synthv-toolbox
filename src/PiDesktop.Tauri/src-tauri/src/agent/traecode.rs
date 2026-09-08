@@ -348,10 +348,12 @@ async fn models(client: &reqwest::Client, credential: &TraeCredential) -> Result
     Ok(names)
 }
 
+type CallbackSender = tokio::sync::oneshot::Sender<Result<(String, String)>>;
+
 struct CallbackState {
     authority: String,
     trace: String,
-    sender: Mutex<Option<tokio::sync::oneshot::Sender<Result<(String, String)>>>>,
+    sender: Mutex<Option<CallbackSender>>,
 }
 fn callback_value(
     method: &str,

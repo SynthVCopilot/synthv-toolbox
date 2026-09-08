@@ -138,7 +138,14 @@ fn account_country_routes_without_default_region() {
 #[test]
 fn wire_encryption_matches_protocol_and_rejects_tool_history() {
     let message = ChatMessage::user("hello");
-    let encoded = encrypted_messages(&[message.clone()], &[], &[0; 8], &[0; 12], "123").unwrap();
+    let encoded = encrypted_messages(
+        std::slice::from_ref(&message),
+        &[],
+        &[0; 8],
+        &[0; 12],
+        "123",
+    )
+    .unwrap();
     assert_eq!(encoded, "AAAAAAAAAAAAAAAAV1Rw1Z1yra+YsIgatPaf3/FMvz0MYTL+Mp+MVF4rO6ZoHr67j/+dR/NT2XaDIgXaZSAkF9ysfLCfAYllbbpm1qO2ICLIcDd4kJls0A==");
     let bytes = STANDARD.decode(encoded).unwrap();
     let key = [
