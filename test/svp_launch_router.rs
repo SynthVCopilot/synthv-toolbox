@@ -17,6 +17,7 @@ fn write_project(project: Value) -> (PathBuf, PathBuf) {
 
 fn voice_project(name: &str) -> (PathBuf, PathBuf) {
     write_project(serde_json::json!({
+        "version": 153,
         "tracks": [{
             "mainRef": {
                 "database": {"name": name, "version": 100, "backendType": "sv2"}
@@ -538,7 +539,7 @@ fn extracts_main_and_group_voice_requirements_without_instrumentals() {
         }]
     }));
 
-    let (_, voices) = analyze_svp_project(path.to_str().unwrap()).unwrap();
+    let (_, _, _, voices) = analyze_svp_project(path.to_str().unwrap()).unwrap();
 
     assert_eq!(voices.len(), 2);
     assert_eq!(voices[0].name, "Mai 2");
@@ -546,6 +547,53 @@ fn extracts_main_and_group_voice_requirements_without_instrumentals() {
     assert_eq!(voices[1].name, "SOLARIA");
     assert_eq!(voices[1].version, Some(101));
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sv2_backend_is_classified_without_guessing_from_project_version() {
+    let (root, path) = write_project(serde_json::json!({
+        "version": 153,
+        "tracks": [{"mainRef": {"database": {"name": "Mai 2", "backendType": "sv2"}}}]
+    }));
+
+    let (_, version, format, _) = analyze_svp_project(path.to_str().unwrap()).unwrap();
+
+    assert_eq!(version, Some(153));
+    assert_eq!(format, SvpProjectFormat::Generation2);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn boundary_version_without_backend_evidence_stays_ambiguous() {
+    let (root, path) = write_project(serde_json::json!({"version": 140, "tracks": []}));
+
+    let (_, version, format, _) = analyze_svp_project(path.to_str().unwrap()).unwrap();
+
+    assert_eq!(version, Some(140));
+    assert_eq!(format, SvpProjectFormat::Ambiguous);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn newer_unverified_format_stays_on_generation_two_but_requires_confirmation() {
+    let (root, path) = write_project(serde_json::json!({"version": 197, "tracks": []}));
+    let plan = build_route_plan(path.to_str().unwrap(), &route_state(Vec::new())).unwrap();
+
+    assert_eq!(plan.project_format, SvpProjectFormat::Generation2);
+    assert!(plan.requires_confirmation);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn host_candidate_ids_are_stable_for_the_same_executable() {
+    assert_eq!(
+        discovered_host_id(BridgeProfile::Flat, r"C:\\SynthV\\flat.exe"),
+        discovered_host_id(BridgeProfile::Flat, r"C:\\SynthV\\flat.exe")
+    );
+    assert_ne!(
+        discovered_host_id(BridgeProfile::Flat, r"C:\\SynthV\\flat.exe"),
+        discovered_host_id(BridgeProfile::Flat, r"C:\\SynthV\\other.exe")
+    );
 }
 
 #[test]

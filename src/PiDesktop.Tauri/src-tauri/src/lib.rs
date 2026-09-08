@@ -56,7 +56,6 @@ mod workbuddy_store;
 mod workflows;
 
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use state::AppState;
@@ -82,7 +81,6 @@ pub fn run() {
     let initial_activation = parse_svp_activation(&initial_args, initial_cwd.as_deref())
         .ok()
         .flatten();
-    let passthrough_only = initial_activation.is_some();
     let autostart_launch = initial_args.iter().any(|arg| arg == "--autostart");
 
     let mut context = tauri::generate_context!();
@@ -126,12 +124,10 @@ pub fn run() {
                     crate::config::ToolboxSettings::default()
                 }
             };
-            let original_svp_prog_id = settings.original_svp_prog_id.clone();
             app.manage(AppState::new(
                 resource_dir,
                 bridge_dir,
                 components_dir,
-                passthrough_only,
                 settings,
             ));
             crate::project_backups::start();
@@ -176,28 +172,8 @@ pub fn run() {
             });
             if let Some(activation) = initial_activation.clone() {
                 crate::project_backups::observe_path_and_wait(&activation.project_path);
-                match open_original_svp_project(
-                    &activation.project_path,
-                    original_svp_prog_id.as_deref(),
-                ) {
-                    Ok(()) => {
-                        let handle = app.handle().clone();
-                        std::thread::spawn(move || {
-                            std::thread::sleep(Duration::from_millis(750));
-                            if handle
-                                .state::<AppState>()
-                                .svp_passthrough_only
-                                .load(Ordering::Acquire)
-                            {
-                                handle.exit(0);
-                            }
-                        });
-                    }
-                    Err(error) => {
-                        promote_to_interactive(app.handle());
-                        let _ = app.emit("svp-route-error", error);
-                    }
-                }
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(route_hot_activation(handle, activation));
             } else if autostart_launch {
                 if let Err(error) = setup_tray(app.handle()) {
                     eprintln!("failed to create Synthesizer V Toolbox tray icon: {error}");
@@ -260,7 +236,9 @@ pub fn run() {
             commands::delete_sv2_profile,
             commands::preview_svp_route,
             commands::launch_svp_route,
+            commands::pending_svp_route,
             commands::set_svp_launch_routing,
+            commands::set_svp_always_ask,
             commands::open_svp_default_apps_settings,
             commands::update_sv2_concurrent_defaults,
             commands::update_sv2_concurrent_content,
@@ -412,9 +390,6 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 }
 
 fn promote_to_interactive(app: &tauri::AppHandle) {
-    app.state::<AppState>()
-        .svp_passthrough_only
-        .store(false, Ordering::Release);
     if let Err(error) = setup_tray(app) {
         eprintln!("failed to create Synthesizer V Toolbox tray icon: {error}");
     }
@@ -433,7 +408,7 @@ fn handle_svp_activation(app: tauri::AppHandle, args: Vec<String>, cwd: Option<S
         }
         Err(error) => {
             promote_to_interactive(&app);
-            let _ = app.emit("svp-route-error", error);
+            emit_svp_route_error(&app, error);
             return;
         }
     };
@@ -443,21 +418,21 @@ fn handle_svp_activation(app: tauri::AppHandle, args: Vec<String>, cwd: Option<S
 async fn route_hot_activation(app: tauri::AppHandle, activation: SvpActivation) {
     crate::project_backups::observe_path(&activation.project_path);
     let state = app.state::<AppState>();
-    let passthrough_only = state.svp_passthrough_only.load(Ordering::Acquire);
-    let (enabled, original_prog_id, concurrent_disclaimer_accepted) = {
+    let (enabled, original_prog_id, concurrent_disclaimer_accepted, always_ask) = {
         let settings = state.settings.read().await;
         (
             settings.smart_svp_launch_enabled,
             settings.original_svp_prog_id.clone(),
             settings.concurrent_disclaimer_accepted,
+            settings.smart_svp_always_ask,
         )
     };
-    if passthrough_only || !enabled {
+    if !enabled {
         if let Err(error) =
             open_original_svp_project(&activation.project_path, original_prog_id.as_deref())
         {
             promote_to_interactive(&app);
-            let _ = app.emit("svp-route-error", error);
+            emit_svp_route_error(&app, error);
         }
         return;
     }
@@ -472,20 +447,14 @@ async fn route_hot_activation(app: tauri::AppHandle, activation: SvpActivation) 
     let plan = match plan_result {
         Ok(plan) => plan,
         Err(error) => {
-            if let Err(passthrough_error) =
-                open_original_svp_project(&activation.project_path, original_prog_id.as_deref())
-            {
-                promote_to_interactive(&app);
-                let _ = app.emit(
-                    "svp-route-error",
-                    format!("智能路由失败：{error}\n透明转交也失败：{passthrough_error}"),
-                );
-            }
+            promote_to_interactive(&app);
+            emit_svp_route_error(&app, format!("智能路由失败：{error}"));
             return;
         }
     };
 
-    let can_auto_launch = !plan.requires_confirmation
+    let can_auto_launch = !always_ask
+        && !plan.requires_confirmation
         && plan.selected_slot_id.is_some()
         && plan.selected_launch_mode.is_some()
         && (plan.selected_launch_mode != Some(SvpLaunchMode::Concurrent)
@@ -494,16 +463,22 @@ async fn route_hot_activation(app: tauri::AppHandle, activation: SvpActivation) 
         let slot_id = plan.selected_slot_id.clone().unwrap_or_default();
         let mode = plan.selected_launch_mode.unwrap_or(SvpLaunchMode::Normal);
         let project_path = plan.project_path.clone();
-        let profiles = state.sv2_profiles.clone();
-        let result = tauri::async_runtime::spawn_blocking(move || {
-            profiles.launch_svp_route(slot_id, project_path, mode)
-        })
-        .await
-        .map_err(|error| error.to_string())
-        .and_then(|result| result);
+        let result = if slot_id.starts_with("host:") {
+            crate::svp_launch_router::launch_discovered_host(&slot_id, &project_path)
+        } else {
+            let profiles = state.sv2_profiles.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                profiles.launch_svp_route(slot_id, project_path, mode)
+            })
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(|result| result)
+        };
         if let Err(error) = result {
             promote_to_interactive(&app);
-            let _ = app.emit("svp-route-error", error);
+            emit_svp_route_error(&app, error);
+        } else if let Err(error) = setup_tray(&app) {
+            eprintln!("failed to create Synthesizer V Toolbox tray icon: {error}");
         }
         return;
     }
@@ -513,7 +488,20 @@ async fn route_hot_activation(app: tauri::AppHandle, activation: SvpActivation) 
 }
 
 fn emit_svp_route_request(app: &tauri::AppHandle, plan: SvpRoutePlan) {
+    if let Ok(mut pending) = app.state::<AppState>().pending_svp_route.lock() {
+        *pending = Some(plan.clone());
+    }
+    if let Ok(mut pending_error) = app.state::<AppState>().pending_svp_route_error.lock() {
+        *pending_error = None;
+    }
     let _ = app.emit("svp-route-request", plan);
+}
+
+fn emit_svp_route_error(app: &tauri::AppHandle, error: String) {
+    if let Ok(mut pending) = app.state::<AppState>().pending_svp_route_error.lock() {
+        *pending = Some(error.clone());
+    }
+    let _ = app.emit("svp-route-error", error);
 }
 
 fn show_main_window(app: &tauri::AppHandle) {
