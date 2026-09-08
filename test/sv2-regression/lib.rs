@@ -19,6 +19,27 @@ mod svp_launch_router;
 mod synthv {
     use std::{path::PathBuf, process::Command};
 
+    use serde::Serialize;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+    #[serde(rename_all = "lowercase")]
+    pub enum BridgeProfile {
+        Sv2,
+        Sv1,
+        Flat,
+        Unsupported,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct SynthVInstallation {
+        pub display_name: String,
+        pub install_path: Option<String>,
+        pub executable_path: Option<String>,
+        pub scripts_path: Option<String>,
+        pub source: String,
+        pub bridge_profile: BridgeProfile,
+    }
+
     pub struct OperationResult {
         pub succeeded: bool,
         pub summary: String,
@@ -46,5 +67,9 @@ mod synthv {
 
     pub fn find_sv2_executable() -> Option<PathBuf> {
         None
+    }
+
+    pub fn scan_installations() -> Vec<SynthVInstallation> {
+        Vec::new()
     }
 }
