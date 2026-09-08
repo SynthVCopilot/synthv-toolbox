@@ -130,7 +130,7 @@ impl Store {
 
 fn read_key(path: &Path) -> std::io::Result<Zeroizing<Vec<u8>>> {
     let mut key = Zeroizing::new(Vec::with_capacity(KEY_BYTES));
-    File::open(path)
+    File::open(path)?
         .take((KEY_BYTES + 1) as u64)
         .read_to_end(&mut key)?;
     if key.len() == KEY_BYTES {

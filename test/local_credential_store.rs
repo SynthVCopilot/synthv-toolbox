@@ -244,6 +244,22 @@ fn api_key_save_replace_rollback_and_remove_use_local_store() {
     assert!(api_keys::load(Anthropic, &id).is_err());
     let empty_backup = api_keys::replace(Anthropic, &id, &first).unwrap();
     assert_eq!(&*api_keys::load(Anthropic, &id).unwrap(), &*first);
+    let manager = agent_files::FileApprovalManager::default();
+    let root = agent::data_root().join("credentials");
+    for mode in [config::AgentWorkMode::Edit, config::AgentWorkMode::Solo] {
+        assert!(manager.list(root.to_str().unwrap(), mode).is_err());
+        for entry in fs::read_dir(&root).unwrap() {
+            assert!(manager
+                .admit_or_request(
+                    entry.unwrap().path().to_str().unwrap(),
+                    "read",
+                    mode,
+                    "test-session"
+                )
+                .is_err());
+        }
+    }
+
     let backup = api_keys::replace(Anthropic, &id, &second).unwrap();
     assert_eq!(&*api_keys::load(Anthropic, &id).unwrap(), &*second);
     api_keys::restore(Anthropic, &id, backup).unwrap();
@@ -256,3 +272,13 @@ fn api_key_save_replace_rollback_and_remove_use_local_store() {
     assert!(api_keys::load(Anthropic, &id).is_err());
     fs::remove_dir_all(agent::data_root()).unwrap();
 }
+
+mod config {
+    #[derive(Clone, Copy, PartialEq)]
+    pub enum AgentWorkMode {
+        Edit,
+        Solo,
+    }
+}
+#[path = "../src/PiDesktop.Tauri/src-tauri/src/agent_files.rs"]
+mod agent_files;

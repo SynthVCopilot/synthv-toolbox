@@ -1345,3 +1345,7 @@ mod tests {
         assert!(!models.contains("../../invalid"));
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../test/oauth_local_storage.rs"]
+mod local_storage_tests;
