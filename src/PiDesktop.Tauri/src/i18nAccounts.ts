@@ -224,7 +224,7 @@ addMessages("en", { accountUi: {
   "chooseAnAccountToOpenTheProject": "Choose an account to open the project",
   "voicesRequiredByTheProject": "Voices required by the project",
   "cancelOpening": "Cancel opening",
-  "yourConfirmationIsRequired": "Your confirmation is required",
+  "yourConfirmationIsRequired": "Confirm the launch choice",
   "toolboxWillNotSilentlyChooseAnAccountWhenAccount": "Toolbox will not silently choose an account when account usage or authorization is unknown. The official SV2 service still verifies the final result.",
   "noAccountsAreAvailableCloseRunningSvInstancesOr": "No accounts are available. Close running SV2 instances or prepare an isolated slot first.",
   "sandboxieConcurrent": "Sandboxie concurrent",

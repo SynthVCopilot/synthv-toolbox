@@ -79,7 +79,7 @@ let previewConcurrentDisclaimerAccepted = false;
 let previewSv2ConcurrentEnabled = true;
 let previewSv2AccountIndicatorEnabled = false;
 let previewSmartSvpLaunchEnabled = false;
-let previewSmartSvpLaunchAlwaysAsk = false;
+let previewSmartSvpAlwaysAsk = false;
 let previewHttpApiStatus: HttpApiStatus = {
   enabled: false,
   agentEnabled: false,
@@ -415,7 +415,7 @@ const previewState = (): BootstrapState => ({
   sv2ConcurrentEnabled: previewSv2ConcurrentEnabled,
   sv2AccountIndicatorEnabled: previewSv2AccountIndicatorEnabled,
   smartSvpLaunchEnabled: previewSmartSvpLaunchEnabled,
-  smartSvpLaunchAlwaysAsk: previewSmartSvpLaunchAlwaysAsk,
+  smartSvpAlwaysAsk: previewSmartSvpAlwaysAsk,
   autostartEnabled: undefined,
   autostartError: undefined,
   svpAssociation: {
@@ -470,7 +470,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     previewSmartSvpLaunchEnabled = Boolean(args?.enabled);
     return previewState() as T;
   }
-  if (command === "set_svp_always_ask") { previewSmartSvpLaunchAlwaysAsk = Boolean(args?.alwaysAsk); return previewState() as T; }
+  if (command === "set_svp_always_ask") { previewSmartSvpAlwaysAsk = Boolean(args?.alwaysAsk); return previewState() as T; }
+  if (command === "pending_svp_route") return null as T;
   if (command === "get_http_api_status") return { ...previewHttpApiStatus } as T;
   if (command === "get_ffmpeg_configuration") return { directory: previewFfmpegDirectory } as T;
   if (command === "set_ffmpeg_directory") {
