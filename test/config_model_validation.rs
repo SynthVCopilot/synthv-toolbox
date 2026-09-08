@@ -2,13 +2,13 @@ use super::*;
 
 #[test]
 fn oauth_model_requires_account_and_available_catalog() {
-    let model = "fixture-model";
+    let model = "gpt-6-astra";
     let mut settings = ToolboxSettings::default();
     let unavailable = RuntimeModelCatalog::unavailable(None);
     let catalog = crate::opencode_catalog::runtime_catalog_from_bytes(
         br#"{
         "openai": {"name":"OpenAI","npm":"@ai-sdk/openai","models":{
-            "fixture-model":{"tool_call":true,"modalities":{"output":["text"]}}
+            "gpt-6-astra":{"tool_call":true,"modalities":{"output":["text"]}}
         }}
     }"#,
     )

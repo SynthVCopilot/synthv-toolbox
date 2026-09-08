@@ -18,8 +18,10 @@ const FIXTURE: &[u8] = br#"{
     "npm": "@ai-sdk/openai",
     "models": {
       "gpt-5.6-terra": {"tool_call": true, "release_date": "2026-07-09", "modalities": {"output": ["text"]}},
+      "gpt-6-astra": {"tool_call": true, "release_date": "2026-09-04", "modalities": {"output": ["text"]}},
       "gpt-5.3-chat-latest": {"tool_call": true, "status": "deprecated", "modalities": {"output": ["text"]}},
       "gpt-4.1": {"tool_call": true, "modalities": {"output": ["text"]}},
+      "gpt-image-2": {"tool_call": false, "modalities": {"output": ["image"]}},
       "unsafe/model": {"tool_call": true, "modalities": {"output": ["text"]}}
     }
   }
@@ -39,7 +41,7 @@ fn parses_agent_capable_models_from_models_dev_schema() {
         .iter()
         .find(|provider| provider.id == "openai")
         .expect("openai provider");
-    assert_eq!(openai.models, ["gpt-5.6-terra", "gpt-4.1"]);
+    assert_eq!(openai.models, ["gpt-6-astra", "gpt-5.6-terra", "gpt-4.1"]);
 }
 
 #[test]
@@ -73,7 +75,7 @@ fn binds_models_dev_catalog_to_implemented_runtime_providers() {
     );
     assert_eq!(
         runtime.models_for(AiProviderId::OpenaiCodex),
-        ["gpt-5.6-terra", "gpt-4.1"]
+        ["gpt-6-astra", "gpt-5.6-terra", "gpt-4.1"]
     );
     assert!(runtime.models_for(AiProviderId::Traecode).is_empty());
 }
