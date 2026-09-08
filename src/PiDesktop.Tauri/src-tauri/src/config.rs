@@ -1046,41 +1046,6 @@ mod tests {
     }
 
     #[test]
-    fn codex_model_must_come_from_the_subscription_catalog() {
-        let mut settings = ToolboxSettings::default();
-        let catalog = RuntimeModelCatalog::unavailable(None);
-        assert!(validate_ai_model(
-            &settings,
-            AiProviderId::OpenaiCodex,
-            "gpt-5.6-terra",
-            &catalog
-        )
-        .is_err());
-        settings.oauth_accounts.push(OAuthAccountMetadata {
-            id: "oauth:openai-codex:test".to_string(),
-            provider: AiProviderId::OpenaiCodex,
-            label: "Test account".to_string(),
-            expires_at: 0,
-            enabled: true,
-            weight: 1,
-        });
-        assert!(validate_ai_model(
-            &settings,
-            AiProviderId::OpenaiCodex,
-            "gpt-5.6-terra",
-            &catalog
-        )
-        .is_ok());
-        assert!(validate_ai_model(
-            &settings,
-            AiProviderId::OpenaiCodex,
-            "invented-model",
-            &catalog
-        )
-        .is_err());
-    }
-
-    #[test]
     fn auth_method_serializes_as_the_stable_frontend_contract() {
         assert_eq!(
             serde_json::to_string(&AiAuthMethod::OAuth).unwrap(),
@@ -1282,3 +1247,7 @@ mod tests {
 #[cfg(test)]
 #[path = "../../../../test/provider_auth_capability_config.rs"]
 mod provider_auth_capability_config;
+
+#[cfg(test)]
+#[path = "../../../../test/config_model_validation.rs"]
+mod model_validation_tests;
