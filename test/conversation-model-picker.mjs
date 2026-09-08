@@ -5,7 +5,7 @@ const main = await readFile(new URL("../src/PiDesktop.Tauri/src/main.ts", import
 assert.match(main, /registerModelAuthElement\(\)/);
 assert.match(main, /mountModelAuthDialog/);
 assert.match(main, /data-open-ai-provider-picker/);
-assert.match(main, /if \(target\.hasAttribute\("data-open-ai-provider-picker"\)\)\s*\{\s*aiProviderPickerOpen = true;\s*render\(\);\s*refreshAiCatalogLive\(\);\s*return;/);
+assert.match(main, /if \(target\.hasAttribute\("data-open-ai-provider-picker"\)\)\s*\{\s*modelAuthInitialConnection = null;\s*aiProviderPickerOpen = true;\s*render\(\);\s*refreshAiCatalogLive\(\);\s*return;/);
 assert.match(main, /reconnect-oauth/);
 assert.match(main, /executeModelAuthAction/);
 assert.doesNotMatch(main, /data-choose-ai-provider/);
