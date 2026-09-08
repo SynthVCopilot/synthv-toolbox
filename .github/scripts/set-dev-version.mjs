@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const commit = process.argv[2] ?? "";
+const [commit = "", ...options] = process.argv.slice(2);
 if (!/^[0-9a-f]{7,40}$/i.test(commit)) {
   throw new Error(`Development build commit must be a Git SHA: ${commit}`);
 }
 
-const repository = path.resolve(process.argv[3] ?? path.join(import.meta.dirname, "../.."));
+const nextMinor = options.includes("--next-minor");
+const repositoryOption = options.find((option) => option !== "--next-minor");
+const repository = path.resolve(repositoryOption ?? path.join(import.meta.dirname, "../.."));
 const desktop = path.join(repository, "src/PiDesktop.Tauri");
 const hash = commit.slice(0, 7).toLowerCase();
 
@@ -41,15 +43,24 @@ if (versions.some((current) => current !== packageJson.version)) {
   throw new Error("Desktop manifests must use the same base version before a development build");
 }
 
+const baseVersion = packageJson.version.replace(/-dev\.[0-9a-f]+$/i, "");
+const baseVersionMatch = /^(\d+)\.(\d+)\.(\d+)$/.exec(baseVersion);
+if (!baseVersionMatch) {
+  throw new Error(`Desktop manifests must use a stable semantic version: ${packageJson.version}`);
+}
+const developmentBaseVersion = nextMinor
+  ? `${baseVersionMatch[1]}.${Number(baseVersionMatch[2]) + 1}.0`
+  : baseVersion;
+
 const suffix = `-dev.${hash}`;
 let version;
-if (packageJson.version.includes("-dev.")) {
+if (!nextMinor && packageJson.version.includes("-dev.")) {
   if (!packageJson.version.endsWith(suffix)) {
     throw new Error(`Desktop manifests already contain a different development version: ${packageJson.version}`);
   }
   version = packageJson.version;
 } else {
-  version = `${packageJson.version}${suffix}`;
+  version = `${developmentBaseVersion}${suffix}`;
 }
 
 updateJson(packageFile, (value) => {

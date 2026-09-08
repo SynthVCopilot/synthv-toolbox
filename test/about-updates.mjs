@@ -30,8 +30,10 @@ assert.match(main, /api\.openToolboxReleases\(toolboxUpdate\?\.releaseUrl\)/);
 assert.match(main, /return page === "about" \|\| toolboxUpdateDownload\?\.status === "downloading"/);
 assert.match(styles, /\.fluent-select .*border-radius: 4px/);
 assert.match(styles, /\.about-download-progress/);
+assert.match(styles, /\.about-layout \{ display: grid; grid-template-columns: minmax\(240px,\.72fr\) minmax\(420px,1\.28fr\)/);
 assert.match(messages, /addMessages\("zh-CN", \{ about:/);
 assert.match(messages, /addMessages\("en", \{ about:/);
+assert.doesNotMatch(messages, /officialRelease/);
 
 const context = vm.createContext({});
 const moduleSource = stripTypeScriptTypes(
@@ -39,10 +41,10 @@ const moduleSource = stripTypeScriptTypes(
   { mode: "transform" },
 );
 vm.runInContext(moduleSource, context);
-const render = (download, installer = { name: "Toolbox.exe", url: "https://example.test/toolbox.exe", sha256: "a".repeat(64), size: 1024 }) => {
+const render = (download, installer = { name: "Toolbox.exe", url: "https://example.test/toolbox.exe", sha256: "a".repeat(64), size: 1024 }, updateOverrides = {}) => {
   const html = vm.runInContext("renderAboutPage", context)({
     app: { platform: "windows", appVersion: "0.1.7", updateChannel: "stable" },
-    update: { channel: "stable", currentVersion: "0.1.7", latestVersion: "0.1.8", updateAvailable: true, releaseName: "Toolbox 0.1.8", releaseUrl: "https://example.test/release", releaseNotes: "Release notes", checkedAtUtc: "2026-09-06T20:00:00Z", installer },
+    update: { channel: "stable", currentVersion: "0.1.7", latestVersion: "0.1.8", updateAvailable: true, releaseName: "Toolbox 0.1.8", releaseUrl: "https://example.test/release", releaseNotes: "Release notes", checkedAtUtc: "2026-09-06T20:00:00Z", installer, ...updateOverrides },
     download,
     busy: false,
     locale: "en",
@@ -72,5 +74,10 @@ const unsupported = render({ status: "idle", downloadedBytes: 0 }, null);
 assert.equal(unsupported.querySelector("[data-download-toolbox-update]"), null);
 assert.match(unsupported.body.textContent, /about\.noInstaller/);
 assert.ok(unsupported.querySelector("[data-open-toolbox-releases]"), "official release remains available without an installer");
+assert.doesNotMatch(unsupported.body.textContent, /officialRelease/);
+
+const newer = render({ status: "idle", downloadedBytes: 0 }, null, { currentVersion: "0.2.0", latestVersion: "0.1.9", updateAvailable: false });
+assert.equal(newer.querySelector("[data-open-toolbox-releases]"), null, "a lower release is not recommended");
+assert.equal(newer.querySelector(".about-notes"), null, "a lower release does not show downgrade notes");
 
 console.log("About page rendering covers ready discard, cancelled unlock, download progress, and unsupported installers.");
