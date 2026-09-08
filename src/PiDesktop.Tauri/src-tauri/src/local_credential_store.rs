@@ -130,7 +130,9 @@ impl Store {
 
 fn read_key(path: &Path) -> std::io::Result<Zeroizing<Vec<u8>>> {
     let mut key = Zeroizing::new(Vec::with_capacity(KEY_BYTES));
-    File::open(path)?.read_to_end(&mut key)?;
+    File::open(path)
+        .take((KEY_BYTES + 1) as u64)
+        .read_to_end(&mut key)?;
     if key.len() == KEY_BYTES {
         Ok(key)
     } else {
@@ -149,6 +151,58 @@ fn ensure_private_directory(path: &Path) -> Result<(), String> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))
             .map_err(|error| format!("无法保护本地凭据目录：{error}"))?;
+    }
+    #[cfg(windows)]
+    set_windows_owner_only_permissions(path)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn set_windows_owner_only_permissions(path: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
+    use windows_sys::Win32::Security::{
+        SetFileSecurityW, DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+        PSECURITY_DESCRIPTOR,
+    };
+
+    let mut name = path
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let descriptor = "D:P(A;OICI;FA;;;OW)\0".encode_utf16().collect::<Vec<_>>();
+    let mut security_descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    let converted = unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            descriptor.as_ptr(),
+            1,
+            &mut security_descriptor,
+            std::ptr::null_mut(),
+        )
+    };
+    if converted == 0 {
+        return Err(format!(
+            "无法创建本地凭据目录访问控制：{}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let result = unsafe {
+        SetFileSecurityW(
+            name.as_mut_ptr(),
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            security_descriptor,
+        )
+    };
+    unsafe {
+        LocalFree(security_descriptor);
+    }
+    if result == 0 {
+        return Err(format!(
+            "无法限制本地凭据目录访问控制：{}",
+            std::io::Error::last_os_error()
+        ));
     }
     Ok(())
 }

@@ -333,6 +333,7 @@ fn is_allowed_root(path: &Path) -> bool {
         home.join("AppData/Roaming/Microsoft/Protect"),
         home.join("AppData/Local/Google/Chrome/User Data"),
         home.join("AppData/Roaming/Mozilla/Firefox/Profiles"),
+        crate::agent::data_root().join("credentials"),
     ];
     !sensitive.iter().any(|root| path.starts_with(root))
 }
