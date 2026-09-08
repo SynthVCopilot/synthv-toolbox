@@ -231,20 +231,30 @@ pub fn analyze_svp_project(
 }
 
 pub fn build_route_plan(value: &str, state: &Sv2ProfilesState) -> Result<SvpRoutePlan, String> {
+    build_route_plan_with_installations(value, state, &synthv::scan_installations())
+}
+
+fn build_route_plan_with_installations(
+    value: &str,
+    state: &Sv2ProfilesState,
+    installations: &[synthv::SynthVInstallation],
+) -> Result<SvpRoutePlan, String> {
     let (project_path, format_version, project_format, required_voices) =
         analyze_svp_project(value)?;
-    let mut candidates = (project_format != SvpProjectFormat::Generation1)
-        .then(|| {
-            state
-                .slots
-                .iter()
-                .map(|slot| route_candidate(slot, state, &required_voices))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    if state.slots.is_empty() {
-        candidates.extend(discovered_host_candidates(project_format));
-    }
+    let mut candidates = if project_format != SvpProjectFormat::Generation1 {
+        state
+            .slots
+            .iter()
+            .map(|slot| route_candidate(slot, state, &required_voices))
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    candidates.extend(discovered_host_candidates(
+        project_format,
+        state.slots.is_empty(),
+        installations,
+    ));
     candidates.sort_by(|left, right| {
         right
             .idle
@@ -266,15 +276,27 @@ pub fn build_route_plan(value: &str, state: &Sv2ProfilesState) -> Result<SvpRout
         || !is_confirmed_project_format(format_version)
         || available_standalone_hosts > 1
         || selected.is_some_and(|candidate| {
-            candidate.host_profile.is_none()
-                && (candidate.remote_use != Sv2RemoteUseStatus::Clear
-                    || candidate.session_status != Sv2SessionInspectionStatus::Ready
-                    || (!required_voices.is_empty() && !candidate.verified_authorization_match))
+            candidate.host_profile == Some(BridgeProfile::Flat)
+                || (candidate.host_profile.is_none()
+                    && (candidate.remote_use != Sv2RemoteUseStatus::Clear
+                        || candidate.session_status != Sv2SessionInspectionStatus::Ready
+                        || (!required_voices.is_empty()
+                            && !candidate.verified_authorization_match)))
         });
     let (summary, detail) = match selected {
         None => (
-            "没有可用于打开该工程的空闲账号。".to_string(),
-            "所有账号均在使用中，或当前实例无法安全切换/隔离启动。".to_string(),
+            "没有发现可用于打开该工程的 SynthV 宿主。".to_string(),
+            "请安装与工程格式匹配的 Synthesizer V Studio，或在系统默认应用中选择处理器。"
+                .to_string(),
+        ),
+        Some(candidate) if candidate.host_profile.is_some() && requires_confirmation => (
+            format!("需要确认使用宿主“{}”。", candidate.display_name),
+            "工程格式或 Flat 兼容性无法由 .svp 数据完全证明；请选择已安装的宿主后继续。"
+                .to_string(),
+        ),
+        Some(candidate) if candidate.host_profile.is_some() => (
+            format!("将使用宿主“{}”打开工程。", candidate.display_name),
+            candidate.reason.clone(),
         ),
         Some(candidate) if requires_confirmation => (
             format!("需要确认使用账号“{}”。", candidate.display_name),
@@ -312,9 +334,13 @@ fn is_confirmed_project_format(format_version: Option<u32>) -> bool {
     matches!(format_version, Some(0..=134 | 153 | 187))
 }
 
-fn discovered_host_candidates(project_format: SvpProjectFormat) -> Vec<SvpRouteCandidate> {
-    synthv::scan_installations()
-        .into_iter()
+fn discovered_host_candidates(
+    project_format: SvpProjectFormat,
+    allow_direct_sv2: bool,
+    installations: &[synthv::SynthVInstallation],
+) -> Vec<SvpRouteCandidate> {
+    installations
+        .iter()
         .filter(|host| host.executable_path.is_some())
         .filter(|host| match project_format {
             SvpProjectFormat::Generation1 => {
@@ -323,12 +349,17 @@ fn discovered_host_candidates(project_format: SvpProjectFormat) -> Vec<SvpRouteC
                     BridgeProfile::Sv1 | BridgeProfile::Flat
                 )
             }
-            SvpProjectFormat::Generation2 => host.bridge_profile == BridgeProfile::Sv2,
-            SvpProjectFormat::Ambiguous => matches!(
-                host.bridge_profile,
-                BridgeProfile::Sv1 | BridgeProfile::Sv2 | BridgeProfile::Flat
-            ),
+            SvpProjectFormat::Generation2 => {
+                allow_direct_sv2 && host.bridge_profile == BridgeProfile::Sv2
+            }
+            SvpProjectFormat::Ambiguous => {
+                matches!(
+                    host.bridge_profile,
+                    BridgeProfile::Sv1 | BridgeProfile::Flat
+                ) || (allow_direct_sv2 && host.bridge_profile == BridgeProfile::Sv2)
+            }
         })
+        .cloned()
         .map(|host| SvpRouteCandidate {
             slot_id: discovered_host_id(
                 host.bridge_profile,
@@ -378,26 +409,32 @@ pub fn launch_discovered_host(
         _ => return Err("无效的已安装 SynthV 宿主类型。".to_string()),
     };
     let expected_id = format!("host:{profile:?}:{identity}").to_ascii_lowercase();
-    let host = synthv::scan_installations()
-        .into_iter()
-        .filter(|host| host.bridge_profile == profile)
-        .find(|host| {
-            host.executable_path
-                .as_deref()
-                .is_some_and(|executable| discovered_host_id(profile, executable) == expected_id)
-        })
+    let installations = synthv::scan_installations();
+    let host = find_discovered_host(&expected_id, &installations)
         .ok_or_else(|| "所选 SynthV 宿主已不可用；请刷新安装列表后重试。".to_string())?;
     let executable = host
         .executable_path
+        .as_deref()
         .ok_or_else(|| "所选 SynthV 宿主没有可执行文件。".to_string())?;
-    std::process::Command::new(&executable)
+    std::process::Command::new(executable)
         .arg(&project_path)
         .spawn()
         .map_err(|error| format!("无法启动所选 SynthV 宿主：{error}"))?;
     Ok(OperationResult {
         succeeded: true,
         summary: "已启动所选 SynthV 宿主。".to_string(),
-        detail: executable,
+        detail: executable.to_string(),
+    })
+}
+
+fn find_discovered_host<'a>(
+    candidate_id: &str,
+    installations: &'a [synthv::SynthVInstallation],
+) -> Option<&'a synthv::SynthVInstallation> {
+    installations.iter().find(|host| {
+        host.executable_path.as_deref().is_some_and(|executable| {
+            discovered_host_id(host.bridge_profile, executable) == candidate_id
+        })
     })
 }
 

@@ -5,6 +5,7 @@ use crate::sv2_concurrent::{
     Sv2ConcurrentSlotView,
 };
 use crate::sv2_session_guard::{Sv2SessionProtectionStatus, Sv2SessionProtectionView};
+use crate::synthv::SynthVInstallation;
 use uuid::Uuid;
 
 fn write_project(project: Value) -> (PathBuf, PathBuf) {
@@ -113,6 +114,17 @@ fn route_state(slots: Vec<Sv2ProfileSlotView>) -> Sv2ProfilesState {
             detail: String::new(),
         },
         concurrent_defaults: Sv2ConcurrentDefaults::default(),
+    }
+}
+
+fn installed_host(profile: BridgeProfile, name: &str) -> SynthVInstallation {
+    SynthVInstallation {
+        display_name: name.to_string(),
+        install_path: Some(format!("C:/SynthV/{name}")),
+        executable_path: Some(format!("C:/SynthV/{name}/synthv.exe")),
+        scripts_path: None,
+        source: "test".to_string(),
+        bridge_profile: profile,
     }
 }
 
@@ -594,6 +606,96 @@ fn host_candidate_ids_are_stable_for_the_same_executable() {
         discovered_host_id(BridgeProfile::Flat, r"C:\\SynthV\\flat.exe"),
         discovered_host_id(BridgeProfile::Flat, r"C:\\SynthV\\other.exe")
     );
+}
+
+#[test]
+fn generation_one_projects_keep_standalone_hosts_when_sv2_slots_exist() {
+    let (root, path) = write_project(serde_json::json!({"version": 134, "tracks": []}));
+    let state = route_state(vec![route_slot(
+        "managed",
+        "Managed SV2",
+        Sv2RemoteUseStatus::Clear,
+        Sv2AuthorizationStatus::Verified,
+        &[],
+    )]);
+    let hosts = vec![
+        installed_host(BridgeProfile::Sv1, "SV1"),
+        installed_host(BridgeProfile::Flat, "Flat"),
+    ];
+
+    let plan = build_route_plan_with_installations(path.to_str().unwrap(), &state, &hosts).unwrap();
+
+    assert_eq!(plan.candidates.len(), 2);
+    assert!(plan
+        .candidates
+        .iter()
+        .all(|candidate| candidate.host_profile.is_some()));
+    assert!(plan.requires_confirmation);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn standalone_sv2_is_available_without_managed_slots() {
+    let (root, path) = voice_project("Mai 2");
+    let hosts = vec![installed_host(BridgeProfile::Sv2, "SV2")];
+
+    let plan = build_route_plan_with_installations(
+        path.to_str().unwrap(),
+        &route_state(Vec::new()),
+        &hosts,
+    )
+    .unwrap();
+
+    assert_eq!(
+        plan.selected_slot_id.as_deref(),
+        Some(plan.candidates[0].slot_id.as_str())
+    );
+    assert_eq!(plan.candidates[0].host_profile, Some(BridgeProfile::Sv2));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sole_flat_host_always_requires_confirmation() {
+    let (root, path) = write_project(serde_json::json!({"version": 134, "tracks": []}));
+    let hosts = vec![installed_host(BridgeProfile::Flat, "Flat")];
+
+    let plan = build_route_plan_with_installations(
+        path.to_str().unwrap(),
+        &route_state(Vec::new()),
+        &hosts,
+    )
+    .unwrap();
+
+    assert_eq!(plan.candidates[0].host_profile, Some(BridgeProfile::Flat));
+    assert!(plan.requires_confirmation);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn missing_hosts_report_a_meaningful_route_error() {
+    let (root, path) = write_project(serde_json::json!({"version": 134, "tracks": []}));
+    let plan =
+        build_route_plan_with_installations(path.to_str().unwrap(), &route_state(Vec::new()), &[])
+            .unwrap();
+
+    assert!(plan.candidates.is_empty());
+    assert!(plan.selected_slot_id.is_none());
+    assert!(plan.summary.contains("SynthV 宿主"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn stable_host_candidate_resolves_only_the_matching_installation() {
+    let flat = installed_host(BridgeProfile::Flat, "Flat");
+    let sv1 = installed_host(BridgeProfile::Sv1, "SV1");
+    let id = discovered_host_id(
+        BridgeProfile::Flat,
+        flat.executable_path.as_deref().unwrap(),
+    );
+    let installations = [sv1, flat];
+    let found = find_discovered_host(&id, &installations).unwrap();
+
+    assert_eq!(found.bridge_profile, BridgeProfile::Flat);
 }
 
 #[test]
