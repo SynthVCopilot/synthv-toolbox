@@ -3672,6 +3672,7 @@ dependencies = [
  "keyring",
  "libc",
  "pinyin",
+ "quick-xml",
  "semver",
  "serde",
  "serde_json",

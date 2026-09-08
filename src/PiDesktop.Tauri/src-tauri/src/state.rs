@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::RwLock;
@@ -15,6 +14,7 @@ use crate::mcp::McpManager;
 use crate::media_tasks::MediaTaskManager;
 use crate::opencode_catalog::RuntimeModelCatalog;
 use crate::sv2_profiles::Sv2ProfileService;
+use crate::svp_launch_router::SvpRoutePlan;
 
 #[derive(Default)]
 pub struct AgentSession {
@@ -36,7 +36,8 @@ pub struct AppState {
     pub media_tasks: Arc<MediaTaskManager>,
     pub audio_preparation: Arc<AudioPreparationService>,
     pub sv2_profiles: Arc<Sv2ProfileService>,
-    pub svp_passthrough_only: AtomicBool,
+    pub pending_svp_route: Arc<Mutex<Option<SvpRoutePlan>>>,
+    pub pending_svp_route_error: Arc<Mutex<Option<String>>>,
     pub http_api: Arc<HttpApiManager>,
     pub credential_balancer: Arc<Mutex<CredentialBalancer>>,
 }
@@ -46,7 +47,6 @@ impl AppState {
         resource_dir: PathBuf,
         bridge_dir: PathBuf,
         components_dir: PathBuf,
-        svp_passthrough_only: bool,
         settings: ToolboxSettings,
     ) -> Self {
         let downloads = crate::downloads::shared_downloads();
@@ -71,7 +71,8 @@ impl AppState {
             media_tasks,
             audio_preparation,
             sv2_profiles: Arc::new(Sv2ProfileService::new()),
-            svp_passthrough_only: AtomicBool::new(svp_passthrough_only),
+            pending_svp_route: Arc::new(Mutex::new(None)),
+            pending_svp_route_error: Arc::new(Mutex::new(None)),
             http_api: Arc::new(HttpApiManager::default()),
             credential_balancer,
         }

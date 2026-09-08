@@ -254,6 +254,7 @@ export interface SvpRouteCandidate {
   missingOrUnknownVoices: string[];
   exactAuthorizationMatch: boolean;
   reason: string;
+  hostProfile?: "sv1" | "sv2" | "flat" | null;
 }
 
 export interface SvpRoutePlan {
@@ -265,6 +266,8 @@ export interface SvpRoutePlan {
   requiresConfirmation: boolean;
   summary: string;
   detail: string;
+  formatVersion?: number | null;
+  projectFormat?: "generation1" | "generation2" | "ambiguous" | null;
 }
 
 export interface SvpAssociationState {
@@ -319,6 +322,7 @@ export interface BootstrapState {
   sv2ConcurrentEnabled: boolean;
   sv2AccountIndicatorEnabled: boolean;
   smartSvpLaunchEnabled: boolean;
+  smartSvpAlwaysAsk: boolean;
   autostartEnabled?: boolean | null;
   autostartError?: string | null;
   svpAssociation: SvpAssociationState;

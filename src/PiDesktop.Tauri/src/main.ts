@@ -209,6 +209,7 @@ let pendingConcurrentLaunchSlot: string | undefined;
 let pendingConcurrentPrepare = false;
 let pendingConcurrentRoute: { slotId: string; projectPath: string; mode: SvpLaunchMode } | undefined;
 let pendingSvpRoute: SvpRoutePlan | undefined;
+let routeRequestGeneration = 0;
 let pendingComponentRemovalId: string | undefined;
 let pendingProfileDeletionId: string | undefined;
 let pendingInstanceTermination: SynthVProcess | undefined;
@@ -1130,14 +1131,15 @@ function renderSvpRouteDialog(): string {
     ? plan.requiredVoices.map((voice) => `<span title="${escapeHtml([voice.backendType, voice.version].filter(Boolean).join(" · "))}">${icon("audio", 14)} ${escapeHtml(voice.name)}${voice.version ? ` <small>v${voice.version}</small>` : ""}</span>`).join("")
     : `<span class="muted">${t("accountUi.noRecognizableVoiceRequirementsWereFoundInThisProject")}</span>`;
   const candidates = plan.candidates.map((candidate) => renderSvpRouteCandidate(candidate, plan)).join("");
+  const formatLabel = plan.projectFormat === "generation1" ? "SynthV Studio 1" : plan.projectFormat === "generation2" ? "SynthV Studio 2" : plan.projectFormat === "ambiguous" ? t("settings.svpFormatAmbiguous") : "";
   return `<div class="dialog-backdrop" role="presentation">
     <section class="fluent-dialog svp-route-dialog" role="dialog" aria-modal="true" aria-labelledby="svp-route-title">
       <span class="dialog-icon route">${icon("file", 24)}</span>
-      <div><span class="eyebrow">${t("settings.smartRoute")}</span><h2 id="svp-route-title">${t("accountUi.chooseAnAccountToOpenTheProject")}</h2><p class="dialog-subtitle" title="${escapeHtml(plan.projectPath)}">${escapeHtml(fileName)}</p></div>
-      <div class="svp-route-summary"><strong>${escapeHtml(plan.summary)}</strong><p>${escapeHtml(plan.detail)}</p></div>
+      <div><span class="eyebrow">${t("settings.smartRoute")}</span><h2 id="svp-route-title">${t("settings.chooseSynthVHost")}</h2><p class="dialog-subtitle" title="${escapeHtml(plan.projectPath)}">${escapeHtml(fileName)}</p></div>
+      <div class="svp-route-summary"><strong>${plan.formatVersion ? `SVP v${plan.formatVersion} · ` : ""}${formatLabel ? `${escapeHtml(formatLabel)} · ` : ""}${escapeHtml(plan.summary)}</strong><p>${escapeHtml(plan.detail)}</p></div>
       <div class="svp-route-requirements"><span>${t("accountUi.voicesRequiredByTheProject")}</span><div>${requirements}</div></div>
       ${plan.requiresConfirmation ? `<div class="route-confirmation-note">${icon("shield", 17)}<span><strong>${t("accountUi.yourConfirmationIsRequired")}</strong><small>${t("accountUi.toolboxWillNotSilentlyChooseAnAccountWhenAccount")}</small></span></div>` : ""}
-      <div class="svp-route-candidates">${candidates || `<div class="empty-inline">${t("accountUi.noAccountsAreAvailableCloseRunningSvInstancesOr")}</div>`}</div>
+      <div class="svp-route-candidates">${candidates || `<div class="empty-inline">${t("settings.noCompatibleHosts")}</div>`}</div>
       <div class="dialog-actions"><button class="secondary" data-cancel-svp-route>${t("accountUi.cancelOpening")}</button></div>
     </section>
   </div>`;
@@ -1146,8 +1148,10 @@ function renderSvpRouteDialog(): string {
 function renderSvpRouteCandidate(candidate: SvpRouteCandidate, plan: SvpRoutePlan): string {
   const selectable = candidate.idle && candidate.remoteUse !== "detected" && Boolean(candidate.launchMode);
   const selected = candidate.slotId === plan.selectedSlotId && candidate.launchMode === plan.selectedLaunchMode;
-  const modeLabel = candidate.launchMode === "concurrent" ? t("accountUi.sandboxieConcurrent") : candidate.launchMode === "normal" ? t("accountUi.standardSwitch") : t("accountUi.cannotLaunch");
-  const sessionLabel = candidate.remoteUse === "detected"
+  const hostLabel = candidate.hostProfile === "sv1" ? "SynthV Studio 1" : candidate.hostProfile === "sv2" ? "SynthV Studio 2" : candidate.hostProfile === "flat" ? "Flat" : "";
+  const modeLabel = hostLabel || (candidate.launchMode === "concurrent" ? t("accountUi.sandboxieConcurrent") : candidate.launchMode === "normal" ? t("accountUi.standardSwitch") : t("accountUi.cannotLaunch"));
+  const standalone = Boolean(candidate.hostProfile);
+  const sessionLabel = standalone ? t("settings.hostInstallation") : candidate.remoteUse === "detected"
     ? t("accountUi.theAccountServiceReportsThisAccountIsInUse")
     : candidate.remoteUse === "clear" && candidate.sessionStatus === "ready"
       ? t("accountUi.theAccountServiceReportsNoRemoteUsage")
@@ -1161,9 +1165,9 @@ function renderSvpRouteCandidate(candidate: SvpRouteCandidate, plan: SvpRoutePla
       ? t("accountUi.matchedUnknown", { p0: authorizationLabel, p1: candidate.matchedVoices.length, p2: candidate.missingOrUnknownVoices.length })
       : t("accountUi.authorizationUnknownManualConfirmationRequired");
   const needsConfirmation = candidate.remoteUse === "unknown" || candidate.sessionStatus !== "ready" || !candidate.exactAuthorizationMatch;
-  const actionLabel = plan.requiresConfirmation || needsConfirmation ? t("accountUi.confirmThisAccount") : t("accountUi.openWithThisAccount");
+  const actionLabel = standalone ? t("settings.openWithHost") : plan.requiresConfirmation || needsConfirmation ? t("accountUi.confirmThisAccount") : t("accountUi.openWithThisAccount");
   return `<article class="svp-route-candidate ${selected ? "recommended" : ""} ${selectable ? "" : "disabled"}">
-    <div class="route-candidate-heading"><span class="profile-avatar compact">${escapeHtml(Array.from(candidate.displayName)[0] ?? "S")}</span><div><strong>${escapeHtml(candidate.displayName)}</strong><small>${escapeHtml(modeLabel)} · ${escapeHtml(sessionLabel)}${selected ? t("accountUi.recommended") : ""}</small></div><span class="route-match ${candidate.exactAuthorizationMatch ? "exact" : "unknown"}">${matchLabel}</span></div>
+    <div class="route-candidate-heading"><span class="profile-avatar compact">${escapeHtml(Array.from(candidate.displayName)[0] ?? "S")}</span><div><strong>${escapeHtml(candidate.displayName)}</strong><small>${escapeHtml(modeLabel)} · ${escapeHtml(sessionLabel)}${selected ? t("accountUi.recommended") : ""}</small></div>${standalone ? "" : `<span class="route-match ${candidate.exactAuthorizationMatch ? "exact" : "unknown"}">${matchLabel}</span>`}</div>
     <p>${escapeHtml(candidate.reason)}</p>
     ${candidate.missingOrUnknownVoices.length ? `<div class="route-missing" title="${t("accountUi.unmatchedOrUnknown")}">${candidate.missingOrUnknownVoices.map((voice) => `<span>${escapeHtml(voice)}</span>`).join("")}</div>` : ""}
     <button class="${selected ? "primary" : "secondary"}" data-launch-svp-route="${escapeHtml(candidate.slotId)}" data-svp-route-mode="${escapeHtml(candidate.launchMode ?? "normal")}" ${selectable ? "" : "disabled"}>${candidate.launchMode === "concurrent" ? icon("boxes", 16) : icon("play", 16)} ${actionLabel}</button>
@@ -2659,7 +2663,7 @@ function renderSettings(): string {
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.autostart")}</h2><p>${t("settings.autostartDescription")}</p>${app.autostartError ? `<p class="error-text">${escapeHtml(app.autostartError)}</p>` : ""}</div><label class="fluent-switch large"><input id="autostart-enabled" type="checkbox" ${app.autostartEnabled === true ? "checked" : ""} ${busy || app.autostartEnabled == null ? "disabled" : ""} aria-label="${t("settings.autostart")}" /><span></span>${app.autostartEnabled == null ? t("settings.unknown") : app.autostartEnabled ? t("settings.enabled") : t("settings.disabled")}</label></div></section>
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.mode")}</h2><p>${t("settings.modeDescription")}</p></div></div><div class="mode-setting"><button class="setting-choice ${app.mode === "toolbox" ? "active" : ""}" data-set-mode="toolbox"><span class="mode-icon slate">${icon("toolbox", 23)}</span><span><strong>${t("settings.toolbox")}</strong><small>${t("settings.toolboxDescription")}</small></span>${app.mode === "toolbox" ? icon("check", 20) : ""}</button><button class="setting-choice ${app.mode === "ai" ? "active" : ""}" data-set-mode="ai"><span class="mode-icon purple">${icon("sparkles", 23)}</span><span><strong>${t("settings.ai")}</strong><small>${t("settings.aiDescription")}</small></span>${app.mode === "ai" ? icon("check", 20) : ""}</button></div></section>
     ${app.mode === "ai" ? renderAiProviderSettings() : `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("bot", 24)}</span><div><h2>${t("settings.aiDisabled")}</h2><p>${t("settings.aiDisabledDescription")}</p></div></section>`}
-    ${showSvpRouting ? `<section class="panel smart-route-settings"><div class="section-heading"><div><h2>${t("settings.smartRoute")}</h2><p>${t("settings.smartRouteDescription")}</p></div><label class="fluent-switch large"><input id="svp-routing-enabled" type="checkbox" ${app.smartSvpLaunchEnabled ? "checked" : ""} ${association.supported ? "" : "disabled"} aria-label="${t("settings.smartRoute")}" /><span></span>${app.smartSvpLaunchEnabled ? t("settings.enabled") : t("settings.disabled")}</label></div><div class="smart-route-state ${association.isDefault ? "ready" : "pending"}"><span class="feature-icon ${association.isDefault ? "emerald" : "blue"}">${icon("file", 20)}</span><div><strong>${escapeHtml(associationLabel)}</strong><p>${escapeHtml(association.detail)}</p></div><button class="secondary compact" data-open-svp-default-apps ${association.supported ? "" : "disabled"}>${t("settings.openDefaults")}</button></div><div class="smart-route-boundary">${icon("shield", 17)}<span><strong>${t("accountUi.smartRoutingWorksOnlyWhileToolboxIsAlreadyRunning")}</strong><small>${t("accountUi.onAColdStartOrWhenThisFeatureIs")}</small></span></div></section>` : ""}
+    ${showSvpRouting ? `<section class="panel smart-route-settings"><div class="section-heading"><div><h2>${t("settings.smartRoute")}</h2><p>${t("settings.smartRouteDescription")}</p></div><label class="fluent-switch large"><input id="svp-routing-enabled" type="checkbox" ${app.smartSvpLaunchEnabled ? "checked" : ""} ${association.supported ? "" : "disabled"} aria-label="${t("settings.smartRoute")}" /><span></span>${app.smartSvpLaunchEnabled ? t("settings.enabled") : t("settings.disabled")}</label></div><label class="fluent-switch large"><input id="svp-routing-always-ask" type="checkbox" ${app.smartSvpAlwaysAsk ? "checked" : ""} ${app.smartSvpLaunchEnabled && association.supported && !busy ? "" : "disabled"} aria-label="${t("settings.alwaysAsk")}" /><span></span>${t("settings.alwaysAsk")}</label><div class="smart-route-state ${association.isDefault ? "ready" : "pending"}"><span class="feature-icon ${association.isDefault ? "emerald" : "blue"}">${icon("file", 20)}</span><div><strong>${escapeHtml(associationLabel)}</strong><p>${escapeHtml(association.detail)}</p></div><button class="secondary compact" data-open-svp-default-apps ${association.supported ? "" : "disabled"}>${t("settings.openDefaults")}</button></div></section>` : ""}
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.dataPlatform")}</h2><p>${t("settings.dataPlatformDescription")}</p></div></div><dl class="detail-list"><div><dt>${t("settings.platform")}</dt><dd>${escapeHtml(app.platform)}</dd></div><div><dt>${t("settings.config")}</dt><dd><code>${escapeHtml(app.configPath)}</code></dd></div><div><dt>${t("settings.appVersion")}</dt><dd>${escapeHtml(app.appVersion)}</dd></div></dl></section></div>`;
 }
 
@@ -3064,6 +3068,10 @@ function wireForms(): void {
         ? t("accountNotice.routingEnabled")
         : t("accountNotice.routingDisabled");
     });
+  });
+  document.querySelector<HTMLInputElement>("#svp-routing-always-ask")?.addEventListener("change", (event) => {
+    const alwaysAsk = (event.currentTarget as HTMLInputElement).checked;
+    void run(async () => { app = await api.setSvpLaunchAlwaysAsk(alwaysAsk); notice = alwaysAsk ? t("accountNotice.routingAlwaysAskEnabled") : t("accountNotice.routingAlwaysAskDisabled"); });
   });
   document.querySelector<HTMLInputElement>("#autostart-enabled")?.addEventListener("change", (event) => {
     const enabled = (event.currentTarget as HTMLInputElement).checked;
@@ -3667,6 +3675,7 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (target.hasAttribute("data-cancel-svp-route")) {
+    routeRequestGeneration += 1;
     pendingSvpRoute = undefined;
     render();
     return;
@@ -3710,6 +3719,7 @@ document.addEventListener("click", (event) => {
     const mode = target.dataset.svpRouteMode as SvpLaunchMode | undefined;
     const candidate = plan?.candidates.find((item) => item.slotId === slotId && item.launchMode === mode);
     if (!plan || !candidate || !candidate.idle || !mode) return;
+    routeRequestGeneration += 1;
     pendingSvpRoute = undefined;
     if (mode === "concurrent" && !app?.concurrentDisclaimerAccepted) {
       pendingConcurrentLaunchSlot = slotId;
@@ -4172,6 +4182,7 @@ function svpRoutePlanFromPayload(payload: unknown): SvpRoutePlan | undefined {
 async function listenForSvpRouteRequests(): Promise<void> {
   if (!isTauri()) return;
   await Promise.all([listen<unknown>("svp-route-request", (event) => {
+    routeRequestGeneration += 1;
     const plan = svpRoutePlanFromPayload(event.payload);
     if (!plan) {
       error = t("accountNotice.invalidRouteRequest");
@@ -4183,11 +4194,19 @@ async function listenForSvpRouteRequests(): Promise<void> {
     error = "";
     render();
   }), listen<unknown>("svp-route-error", (event) => {
+    routeRequestGeneration += 1;
     pendingSvpRoute = undefined;
     error = formatError(event.payload);
     notice = "";
     render();
   })]);
+  const generation = routeRequestGeneration;
+  try {
+    const route = await api.getPendingSvpRoute();
+    if (generation === routeRequestGeneration && route) { pendingSvpRoute = svpRoutePlanFromPayload(route); render(); }
+  } catch (reason) {
+    if (generation === routeRequestGeneration) { error = formatError(reason); notice = ""; render(); }
+  }
 }
 
 async function listenForAudioPreparationDrops(): Promise<void> {

@@ -184,6 +184,7 @@ pub struct BootstrapState {
     sv2_concurrent_enabled: bool,
     sv2_account_indicator_enabled: bool,
     smart_svp_launch_enabled: bool,
+    smart_svp_always_ask: bool,
     autostart_enabled: Option<bool>,
     autostart_error: Option<String>,
     svp_association: SvpAssociationView,
@@ -1759,6 +1760,11 @@ pub async fn launch_svp_route(
     state: State<'_, AppState>,
 ) -> Result<OperationResult, String> {
     observe_workflow_path(&project_path);
+    if slot_id.starts_with("host:") {
+        let result = crate::svp_launch_router::launch_discovered_host(&slot_id, &project_path)?;
+        clear_pending_svp_route(&state);
+        return Ok(result);
+    }
     let settings = state.settings.read().await;
     if mode == SvpLaunchMode::Concurrent && !settings.sv2_concurrent_enabled {
         return Err("并发隔离功能已在全局设置中关闭。".to_string());
@@ -1769,11 +1775,52 @@ pub async fn launch_svp_route(
         );
     }
     let profiles = state.sv2_profiles.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         profiles.launch_svp_route(slot_id, project_path, mode)
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())??;
+    clear_pending_svp_route(&state);
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn pending_svp_route(state: State<'_, AppState>) -> Result<Option<SvpRoutePlan>, String> {
+    if let Some(error) = state
+        .pending_svp_route_error
+        .lock()
+        .map_err(|_| "SVP 启动路由错误状态锁已损坏。".to_string())?
+        .clone()
+    {
+        return Err(error);
+    }
+    state
+        .pending_svp_route
+        .lock()
+        .map(|route| route.clone())
+        .map_err(|_| "SVP 启动路由状态锁已损坏。".to_string())
+}
+
+fn clear_pending_svp_route(state: &AppState) {
+    if let Ok(mut pending) = state.pending_svp_route.lock() {
+        *pending = None;
+    }
+    if let Ok(mut pending_error) = state.pending_svp_route_error.lock() {
+        *pending_error = None;
+    }
+}
+
+#[tauri::command]
+pub async fn set_svp_always_ask(
+    always_ask: bool,
+    state: State<'_, AppState>,
+) -> Result<BootstrapState, String> {
+    {
+        let mut settings = state.settings.write().await;
+        settings.smart_svp_always_ask = always_ask;
+        save_settings(&settings)?;
+    }
+    build_bootstrap(&state).await
 }
 
 #[tauri::command]
@@ -1801,7 +1848,25 @@ pub async fn set_svp_launch_routing(
 }
 
 #[tauri::command]
-pub fn open_svp_default_apps_settings() -> Result<OperationResult, String> {
+pub async fn open_svp_default_apps_settings(
+    state: State<'_, AppState>,
+) -> Result<OperationResult, String> {
+    {
+        let mut settings = state.settings.write().await;
+        let association = svp_association_view(settings.original_svp_prog_id.as_deref())?;
+        if !association.registered {
+            let executable = std::env::current_exe()
+                .map_err(|error| format!("无法定位 Synthesizer V Toolbox 可执行文件：{error}"))?;
+            let registered = register_svp_open_with_candidate(
+                &executable,
+                settings.original_svp_prog_id.as_deref(),
+            )?;
+            if registered.original_prog_id.is_some() {
+                settings.original_svp_prog_id = registered.original_prog_id;
+            }
+            save_settings(&settings)?;
+        }
+    }
     open_svp_default_apps_settings_impl()?;
     Ok(succeeded(
         "已打开 Windows 默认应用设置。",
@@ -3849,6 +3914,7 @@ async fn build_bootstrap(state: &State<'_, AppState>) -> Result<BootstrapState, 
         sv2_concurrent_enabled: settings.sv2_concurrent_enabled,
         sv2_account_indicator_enabled: settings.sv2_account_indicator_enabled,
         smart_svp_launch_enabled: settings.smart_svp_launch_enabled,
+        smart_svp_always_ask: settings.smart_svp_always_ask,
         autostart_enabled: None,
         autostart_error: None,
         svp_association,
