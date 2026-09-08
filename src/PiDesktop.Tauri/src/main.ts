@@ -221,6 +221,8 @@ let ffmpegDirectoryDraft: string | undefined;
 let ffmpegConfigurationLoading = false;
 let ffmpegConfigurationGeneration = 0;
 let aiProviderPickerOpen = false;
+let aiModelPickerOpen = false;
+let aiModelPickerGeneration = 0;
 let modelAuthInitialConnection: { providerId: string; method: "oauth" | "api-key" } | null = null;
 let modelAuthDialog: ReturnType<typeof mountModelAuthDialog> | undefined;
 let downloadPollTimer: number | undefined;
@@ -979,7 +981,7 @@ function render(): void {
       }, 4200);
     }
   }
-  const overlayHtml = pendingInstanceTermination ? renderInstanceTerminationDialog() : pendingComponentRemovalId ? renderComponentRemovalDialog() : pendingProfileDeletionId ? renderProfileDeletionDialog() : pendingBlockedSwitchSlot ? renderBlockedSwitchDialog() : pendingConcurrentLaunchSlot ? renderConcurrentDisclaimer() : pendingSvpRoute ? renderSvpRouteDialog() : pendingAccountIndicatorConsent ? renderAccountIndicatorConsent() : accountManagerOpen && page === "accounts" ? renderAccountManager() : pendingAudioPlan ? renderAudioPlanDialog() : "";
+  const overlayHtml = pendingInstanceTermination ? renderInstanceTerminationDialog() : pendingComponentRemovalId ? renderComponentRemovalDialog() : pendingProfileDeletionId ? renderProfileDeletionDialog() : pendingBlockedSwitchSlot ? renderBlockedSwitchDialog() : pendingConcurrentLaunchSlot ? renderConcurrentDisclaimer() : pendingSvpRoute ? renderSvpRouteDialog() : pendingAccountIndicatorConsent ? renderAccountIndicatorConsent() : accountManagerOpen && page === "accounts" ? renderAccountManager() : pendingAudioPlan ? renderAudioPlanDialog() : renderAiModelPicker();
   const nextShellState = {
     page,
     sidebarCollapsed,
@@ -2467,6 +2469,51 @@ function activeAiProvider(): AiProviderSummary | undefined {
   return aiProviders().find(isActiveAiProvider);
 }
 
+function hasSelectableAiConnection(provider: AiProviderSummary): boolean {
+  return provider.connected && (
+    provider.oauthEnabled && provider.accounts.some((account) => account.authorized && account.enabled)
+      || provider.apiKeys.some((key) => key.enabled)
+  );
+}
+
+function selectableAiModels(provider: AiProviderSummary): string[] {
+  return [...new Set([...provider.models, provider.model].filter(Boolean))];
+}
+
+function renderAiModelPicker(): string {
+  if (!aiModelPickerOpen) return "";
+  const providers = aiProviders().filter(hasSelectableAiConnection);
+  const catalogError = app?.model?.catalogError;
+  if (!providers.length) {
+    return `<div class="dialog-backdrop ai-provider-picker-backdrop" role="presentation"><section class="fluent-dialog ai-provider-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="ai-model-picker-title"><header><div><span class="eyebrow">${escapeHtml(t("copilot.modelPickerEyebrow"))}</span><h2 id="ai-model-picker-title">${escapeHtml(t("copilot.modelPickerTitle"))}</h2><p>${escapeHtml(t("copilot.modelPickerNoConnection"))}</p></div><button type="button" class="icon-plain" data-close-ai-model-picker aria-label="${escapeHtml(t("copilot.closeModelPicker"))}">×</button></header><div class="ai-provider-picker-empty"><strong>${escapeHtml(t("accountUi.noConnectedProvider"))}</strong><p>${escapeHtml(t("accountUi.addCredentialsFirst"))}</p><button type="button" class="primary" data-open-ai-provider-connections>${escapeHtml(t("accountUi.addConnection"))}</button></div></section></div>`;
+  }
+  const providerOptions = providers.map((provider) => {
+    const models = selectableAiModels(provider);
+    const options = models.map((model) => {
+      const selected = isActiveAiProvider(provider) && provider.model === model;
+      return `<button type="button" class="ai-provider-model-option ${selected ? "active" : ""}" data-select-chat-model data-provider-id="${escapeHtml(provider.id)}" data-model-id="${escapeHtml(model)}" ${busy ? "disabled" : ""} aria-pressed="${selected}"><span><strong>${escapeHtml(model)}</strong><small>${escapeHtml(provider.displayName)}</small></span>${selected ? icon("check", 16) : ""}</button>`;
+    }).join("");
+    return `<section class="ai-provider-model-list"><div><strong>${escapeHtml(provider.displayName)}</strong><small>${escapeHtml(provider.description)}</small></div>${models.length ? `<div>${options}</div>` : `<div class="ai-provider-picker-empty"><p>${escapeHtml(t("copilot.modelPickerNoModels"))}</p><button type="button" class="secondary compact" data-open-ai-provider-connections>${escapeHtml(t("accountUi.addConnection"))}</button></div>`}</section>`;
+  }).join("");
+  return `<div class="dialog-backdrop ai-provider-picker-backdrop" role="presentation"><section class="fluent-dialog ai-provider-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="ai-model-picker-title"><header><div><span class="eyebrow">${escapeHtml(t("copilot.modelPickerEyebrow"))}</span><h2 id="ai-model-picker-title">${escapeHtml(t("copilot.modelPickerTitle"))}</h2><p>${escapeHtml(catalogError ? t("copilot.modelPickerCatalogUnavailable") : t("copilot.modelPickerDescription"))}</p></div><button type="button" class="icon-plain" data-close-ai-model-picker aria-label="${escapeHtml(t("copilot.closeModelPicker"))}">×</button></header><div class="ai-provider-picker-body">${providerOptions}</div></section></div>`;
+}
+
+function selectChatModel(provider: AiProviderId, model: string): void {
+  const generation = aiModelPickerGeneration;
+  const current = activeAiProvider();
+  if (current?.id === provider && current.model === model) {
+    aiModelPickerOpen = false;
+    aiModelPickerGeneration += 1;
+    render();
+    return;
+  }
+  void run(async () => {
+    app = await api.selectAiProvider(provider, model);
+    if (generation === aiModelPickerGeneration) aiModelPickerOpen = false;
+    notice = t("accountUi.currentAiProviderAndModelUpdated");
+  });
+}
+
 function aiConnectionSummary(): string {
   const provider = activeAiProvider();
   if (!provider) return t("accountUi.chooseAModelProvider");
@@ -3220,6 +3267,13 @@ document.addEventListener("keydown", (event) => {
     render();
     return;
   }
+  if (event.key === "Escape" && aiModelPickerOpen) {
+    event.preventDefault();
+    aiModelPickerOpen = false;
+    aiModelPickerGeneration += 1;
+    render();
+    return;
+  }
   if (event.key !== "Escape" || !aiProviderPickerOpen) return;
   event.preventDefault();
   modelAuthDialog?.close();
@@ -3229,10 +3283,32 @@ document.addEventListener("click", (event) => {
   const target = (event.target as HTMLElement).closest<HTMLElement>("button, [data-page], [data-onboarding], [data-audio-drop-zone]");
   if (!target || target.hasAttribute("disabled")) return;
   if (target.hasAttribute("data-open-ai-provider-picker")) {
+    aiModelPickerOpen = true;
+    aiModelPickerGeneration += 1;
+    render();
+    refreshAiCatalogLive();
+    return;
+  }
+  if (target.hasAttribute("data-close-ai-model-picker")) {
+    aiModelPickerOpen = false;
+    aiModelPickerGeneration += 1;
+    render();
+    return;
+  }
+  if (target.hasAttribute("data-open-ai-provider-connections")) {
+    aiModelPickerOpen = false;
+    aiModelPickerGeneration += 1;
     modelAuthInitialConnection = null;
     aiProviderPickerOpen = true;
     render();
     refreshAiCatalogLive();
+    return;
+  }
+  if (target.hasAttribute("data-select-chat-model")) {
+    const provider = target.dataset.providerId as AiProviderId | undefined;
+    const model = target.dataset.modelId;
+    if (!provider || !model) return;
+    selectChatModel(provider, model);
     return;
   }
   if (page === "lyrics" && document.querySelector(".lyric-workbench-grid")) syncLyricDraftFromDom();
