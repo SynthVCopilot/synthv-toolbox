@@ -55,16 +55,18 @@ function createHarness(api = {}) {
     { id: "ffmpeg", displayName: "FFmpeg", description: "音视频转码", installed: false, downloaded: true, installable: true, removable: false, status: "缓存" },
     { id: "sandboxie", displayName: "Sandboxie", description: "并发隔离", installed: false, downloaded: true, installable: true, removable: false, status: "安装包" },
   ] };
+  ${functionSource("pathPickerButton")}
+  ${functionSource("pickPathIntoInput")}
   ${functionSource("renderComponents")}
   ${functionSource("loadFfmpegConfiguration")}
   ${functionSource("saveFfmpegDirectory")}
-  ${functionSource("selectFfmpegDirectory")}
+  document.querySelector("#ffmpeg-directory").addEventListener("input", (event) => { ffmpegDirectoryDraft = event.currentTarget.value; });
   const render = () => { document.querySelector("main").innerHTML = renderComponents(); };
   module.exports = {
     render: () => renderComponents(),
     load: loadFfmpegConfiguration,
     save: saveFfmpegDirectory,
-    pick: selectFfmpegDirectory,
+    pick: () => pickPathIntoInput("ffmpeg-directory", "directory"),
     state: () => ({ saved: ffmpegDirectory, draft: ffmpegDirectoryDraft, loading: ffmpegConfigurationLoading, refreshes, runtimeRefreshes, error }),
     setDraft: (value) => { ffmpegDirectoryDraft = value; },
     setBusy: (value) => { busy = value; },
@@ -73,7 +75,7 @@ function createHarness(api = {}) {
 `;
 const transformed = stripTypeScriptTypes(harnessSource, { mode: "transform", sourceUrl: "installer-ui-harness.ts" });
 const module = { exports: {} };
-vm.runInNewContext(transformed, { module, exports: module.exports, console, api, t: key => key, document: dom.window.document });
+vm.runInNewContext(transformed, { module, exports: module.exports, console, api, t: key => key, document: dom.window.document, Event: dom.window.Event });
 return module.exports;
 }
 
