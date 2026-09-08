@@ -13,7 +13,7 @@ for (const name of ["core", "providers"]) {
     `${release}/model-auth-${name}-0.3.0.tgz`,
   );
 }
-assert.equal(manifest.dependencies["@model-auth/vue"], "https://github.com/lsy-404/platform-kit/releases/download/v0.3.0/model-auth-vue-0.4.0.tgz");
+assert.equal(manifest.dependencies["@model-auth/vue"], "https://github.com/lsy-404/platform-kit/releases/download/v0.3.1/model-auth-vue-0.4.1.tgz");
 const [lock, prepare, desktop, ffmpeg] = await Promise.all([
   readFile(path.join(packageRoot, "package-lock.json"), "utf8"),
   readFile(path.join(root, ".github/workflows/prepare-desktop.yml"), "utf8"),
