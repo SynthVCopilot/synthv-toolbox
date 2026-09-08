@@ -2051,20 +2051,25 @@ async function pickPathIntoInput(inputId: string, kind: "file" | "audio" | "dire
   originalInput.dispatchEvent(new Event("change", { bubbles: true }));
 }
 async function pickAudioToProjectInput(kind: "vocal" | "instrumental"): Promise<void> {
+  const inputId = kind === "vocal" ? "pipeline-vocal" : "pipeline-inst";
+  const originalInput = document.getElementById(inputId) as HTMLInputElement | null;
+  const selectionPage = page;
   const path = await api.pickAudioFile();
-  if (!path) return;
-  if (kind === "vocal") setAudioToProjectVocalPath(path);
-  else setAudioToProjectInstrumentalPath(path);
+  if (!path || !originalInput || page !== selectionPage || !originalInput.isConnected || document.getElementById(inputId) !== originalInput) return;
+  originalInput.value = path;
+  originalInput.dispatchEvent(new Event("input", { bubbles: true }));
+  originalInput.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 async function pickAudioToProjectOutputDirectory(): Promise<void> {
+  const originalInput = document.getElementById("pipeline-output-directory") as HTMLInputElement | null;
+  const selectionPage = page;
   const path = await api.pickDirectory();
-  if (!path) return;
-  audioToProjectOutputDirectory = path;
-  audioToProjectOutputDirectoryWasChosen = true;
-  render();
+  if (!path || !originalInput || page !== selectionPage || !originalInput.isConnected || document.getElementById("pipeline-output-directory") !== originalInput) return;
+  originalInput.value = path;
+  originalInput.dispatchEvent(new Event("input", { bubbles: true }));
+  originalInput.dispatchEvent(new Event("change", { bubbles: true }));
 }
-
 function dropAudioToProjectInput(paths: string[], position: { toLogical(scaleFactor: number): { x: number; y: number } }): void {
   if (paths.length !== 1) {
     error = t("workflowCopy.onlyOneAudioFileCanBeDropped");
@@ -2201,8 +2206,8 @@ function renderWorkflowPanel(id: string): string {
   } else if (id === "audio-to-project") {
     form = `<div class="mode-limit">${t("workflowCopy.thisToolCombinesMidiExportAndSynthv")}</div><div class="mode-limit">${busy ? t("workflowCopy.audioToProjectInProgress") : t("workflowCopy.audioToProjectRecognitionNote")}</div>
       <form id="audio-to-project-form" class="workflow-form workflow-wide">
-        <div class="workflow-pair"><label>${t("workflowCopy.vocalVersionAudioPath")}<div class="input-action"><input id="pipeline-vocal" required value="${escapeHtml(audioToProjectVocalPath)}" placeholder="${t("workflowCopy.audioContainingTheTargetVocals")}" data-pipeline-drop-target="vocal" /><button class="secondary compact" type="button" data-pick-pipeline-vocal>${t("workflowCopy.chooseFile")}</button></div><small>${t("workflowCopy.clickOrDropVocalAudio")}</small></label><label>${t("workflowCopy.instrumentalVersionAudioPath")} <span class="optional-field">${t("workflowCopy.optional")}</span><div class="input-action"><input id="pipeline-inst" value="${escapeHtml(audioToProjectInstrumentalPath)}" placeholder="${t("workflowCopy.instrumentalFromTheSameVersionAndTimeline")}" data-pipeline-drop-target="instrumental" /><button class="secondary compact" type="button" data-pick-pipeline-instrumental>${t("workflowCopy.chooseFile")}</button><button class="secondary compact" type="button" data-clear-pipeline-instrumental ${audioToProjectInstrumentalPath ? "" : "disabled"}>${t("workflowCopy.clear")}</button></div><small>${t("workflowCopy.optionalInstrumentalHelp")}</small></label></div>
-        <div class="workflow-pair"><label>${t("workflowCopy.outputDirectory")}<div class="input-action"><input id="pipeline-output-directory" value="${escapeHtml(audioToProjectOutputDirectory)}" placeholder="${t("workflowCopy.outputDirectoryDefaultsToSource")}" /><button class="secondary compact" type="button" data-pick-pipeline-output-directory>${t("workflowCopy.chooseDirectory")}</button></div><small>${t("workflowCopy.outputDirectoryDefaultsToSource")}</small></label><label>${t("workflowCopy.outputMidiFilename")}<input id="pipeline-output" required value="${escapeHtml(audioToProjectOutputName)}" /></label></div>
+        <div class="workflow-pair"><label>${t("workflowCopy.vocalVersionAudioPath")}<div class="input-action"><input id="pipeline-vocal" required value="${escapeHtml(audioToProjectVocalPath)}" placeholder="${t("workflowCopy.audioContainingTheTargetVocals")}" data-pipeline-drop-target="vocal" /><button class="secondary path-picker-button" type="button" data-pick-pipeline-vocal title="${t("workflowCopy.chooseFile")}" aria-label="${t("workflowCopy.chooseFile")}">${icon("file", 16)}</button></div><small>${t("workflowCopy.clickOrDropVocalAudio")}</small></label><label>${t("workflowCopy.instrumentalVersionAudioPath")} <span class="optional-field">${t("workflowCopy.optional")}</span><div class="input-action"><input id="pipeline-inst" value="${escapeHtml(audioToProjectInstrumentalPath)}" placeholder="${t("workflowCopy.instrumentalFromTheSameVersionAndTimeline")}" data-pipeline-drop-target="instrumental" /><button class="secondary path-picker-button" type="button" data-pick-pipeline-instrumental title="${t("workflowCopy.chooseFile")}" aria-label="${t("workflowCopy.chooseFile")}">${icon("file", 16)}</button><button class="secondary compact" type="button" data-clear-pipeline-instrumental ${audioToProjectInstrumentalPath ? "" : "disabled"}>${t("workflowCopy.clear")}</button></div><small>${t("workflowCopy.optionalInstrumentalHelp")}</small></label></div>
+        <div class="workflow-pair"><label>${t("workflowCopy.outputDirectory")}<div class="input-action"><input id="pipeline-output-directory" value="${escapeHtml(audioToProjectOutputDirectory)}" placeholder="${t("workflowCopy.outputDirectoryDefaultsToSource")}" /><button class="secondary path-picker-button" type="button" data-pick-pipeline-output-directory title="${t("workflowCopy.chooseDirectory")}" aria-label="${t("workflowCopy.chooseDirectory")}">${icon("folder", 16)}</button></div><small>${t("workflowCopy.outputDirectoryDefaultsToSource")}</small></label><label>${t("workflowCopy.outputMidiFilename")}<input id="pipeline-output" required value="${escapeHtml(audioToProjectOutputName)}" /></label></div>
         ${ai ? `<label>${t("workflowCopy.matchingToleranceSeconds")}<input id="pipeline-tolerance" type="number" min="0.02" max="0.25" step="0.01" value="${audioToProjectTolerance}" /></label>` : `<input id="pipeline-tolerance" type="hidden" value="${audioToProjectTolerance}" />`}
         ${ai ? `<label class="checkbox workflow-check"><input id="pipeline-advanced" type="checkbox" ${audioToProjectAdvanced ? "checked" : ""} /> ${t("workflowCopy.enableParameterOptimizationAndLowConfidenceNote")}</label>` : ""}
         <label class="checkbox workflow-check"><input id="pipeline-import" type="checkbox" ${audioToProjectImportToSynthv ? "checked" : ""} ${app.bridgeConnected ? "" : "disabled"} /> ${t("workflowCopy.importIntoTheCurrentSynthvProjectThrough")}${app.bridgeConnected ? "" : t("workflowCopy.bridgeDisconnected")}</label>
