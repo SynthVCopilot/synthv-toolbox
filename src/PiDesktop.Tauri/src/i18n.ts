@@ -84,5 +84,5 @@ export function addMessages(target: AppLocale, additions: Messages): void {
   i18n.global.mergeLocaleMessage(target, additions);
 }
 
-addMessages("zh-CN", { settings: { alwaysAsk: "始终询问启动方式", chooseSynthVHost: "选择 SynthV 打开方式", svpFormatUnknown: "工程格式未能确定", svpFormatAmbiguous: "工程格式存在歧义", available: "可用", unavailable: "不可用", openWithHost: "使用此方式打开", noCompatibleHosts: "没有检测到兼容的 SynthV 安装。" } });
-addMessages("en", { settings: { alwaysAsk: "Always ask how to open", chooseSynthVHost: "Choose a SynthV host", svpFormatUnknown: "Project format could not be determined", svpFormatAmbiguous: "Project format is ambiguous", available: "Available", unavailable: "Unavailable", openWithHost: "Open with this host", noCompatibleHosts: "No compatible SynthV installations were detected." } });
+addMessages("zh-CN", { settings: { alwaysAsk: "始终询问启动方式", chooseSynthVHost: "选择 SynthV 打开方式", svpFormatAmbiguous: "工程格式需要确认", hostInstallation: "本机安装", openWithHost: "使用此方式打开", noCompatibleHosts: "没有检测到可用于此工程的 SynthV 安装。" } });
+addMessages("en", { settings: { alwaysAsk: "Always ask how to open", chooseSynthVHost: "Choose a SynthV host", svpFormatAmbiguous: "Project format needs confirmation", hostInstallation: "Installed locally", openWithHost: "Open with this host", noCompatibleHosts: "No SynthV installations available for this project were detected." } });

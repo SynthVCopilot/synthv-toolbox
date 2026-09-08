@@ -1132,11 +1132,11 @@ function renderSvpRouteDialog(): string {
   return `<div class="dialog-backdrop" role="presentation">
     <section class="fluent-dialog svp-route-dialog" role="dialog" aria-modal="true" aria-labelledby="svp-route-title">
       <span class="dialog-icon route">${icon("file", 24)}</span>
-      <div><span class="eyebrow">${t("settings.smartRoute")}</span><h2 id="svp-route-title">${plan.candidates.some((item) => item.hostProfile) ? t("settings.chooseSynthVHost") : t("accountUi.chooseAnAccountToOpenTheProject")}</h2><p class="dialog-subtitle" title="${escapeHtml(plan.projectPath)}">${escapeHtml(fileName)}</p></div>
+      <div><span class="eyebrow">${t("settings.smartRoute")}</span><h2 id="svp-route-title">${t("settings.chooseSynthVHost")}</h2><p class="dialog-subtitle" title="${escapeHtml(plan.projectPath)}">${escapeHtml(fileName)}</p></div>
       <div class="svp-route-summary"><strong>${plan.formatVersion ? `SVP v${plan.formatVersion} · ` : ""}${formatLabel ? `${escapeHtml(formatLabel)} · ` : ""}${escapeHtml(plan.summary)}</strong><p>${escapeHtml(plan.detail)}</p></div>
       <div class="svp-route-requirements"><span>${t("accountUi.voicesRequiredByTheProject")}</span><div>${requirements}</div></div>
       ${plan.requiresConfirmation ? `<div class="route-confirmation-note">${icon("shield", 17)}<span><strong>${t("accountUi.yourConfirmationIsRequired")}</strong><small>${t("accountUi.toolboxWillNotSilentlyChooseAnAccountWhenAccount")}</small></span></div>` : ""}
-      <div class="svp-route-candidates">${candidates || `<div class="empty-inline">${plan.candidates.some((item) => item.hostProfile) ? t("settings.noCompatibleHosts") : t("accountUi.noAccountsAreAvailableCloseRunningSvInstancesOr")}</div>`}</div>
+      <div class="svp-route-candidates">${candidates || `<div class="empty-inline">${t("settings.noCompatibleHosts")}</div>`}</div>
       <div class="dialog-actions"><button class="secondary" data-cancel-svp-route>${t("accountUi.cancelOpening")}</button></div>
     </section>
   </div>`;
@@ -1162,9 +1162,9 @@ function renderSvpRouteCandidate(candidate: SvpRouteCandidate, plan: SvpRoutePla
       ? t("accountUi.matchedUnknown", { p0: authorizationLabel, p1: candidate.matchedVoices.length, p2: candidate.missingOrUnknownVoices.length })
       : t("accountUi.authorizationUnknownManualConfirmationRequired");
   const needsConfirmation = candidate.remoteUse === "unknown" || candidate.sessionStatus !== "ready" || !candidate.exactAuthorizationMatch;
-  const actionLabel = plan.requiresConfirmation || needsConfirmation ? t("accountUi.confirmThisAccount") : t("accountUi.openWithThisAccount");
+  const actionLabel = standalone ? t("settings.openWithHost") : plan.requiresConfirmation || needsConfirmation ? t("accountUi.confirmThisAccount") : t("accountUi.openWithThisAccount");
   return `<article class="svp-route-candidate ${selected ? "recommended" : ""} ${selectable ? "" : "disabled"}">
-    <div class="route-candidate-heading"><span class="profile-avatar compact">${escapeHtml(Array.from(candidate.displayName)[0] ?? "S")}</span><div><strong>${escapeHtml(candidate.displayName)}</strong><small>${escapeHtml(modeLabel)} · ${escapeHtml(sessionLabel)}${selected ? t("accountUi.recommended") : ""}</small></div><span class="route-match ${candidate.exactAuthorizationMatch ? "exact" : "unknown"}">${matchLabel}</span></div>
+    <div class="route-candidate-heading"><span class="profile-avatar compact">${escapeHtml(Array.from(candidate.displayName)[0] ?? "S")}</span><div><strong>${escapeHtml(candidate.displayName)}</strong><small>${escapeHtml(modeLabel)} · ${escapeHtml(sessionLabel)}${selected ? t("accountUi.recommended") : ""}</small></div>${standalone ? "" : `<span class="route-match ${candidate.exactAuthorizationMatch ? "exact" : "unknown"}">${matchLabel}</span>`}</div>
     <p>${escapeHtml(candidate.reason)}</p>
     ${candidate.missingOrUnknownVoices.length ? `<div class="route-missing" title="${t("accountUi.unmatchedOrUnknown")}">${candidate.missingOrUnknownVoices.map((voice) => `<span>${escapeHtml(voice)}</span>`).join("")}</div>` : ""}
     <button class="${selected ? "primary" : "secondary"}" data-launch-svp-route="${escapeHtml(candidate.slotId)}" data-svp-route-mode="${escapeHtml(candidate.launchMode ?? "normal")}" ${selectable ? "" : "disabled"}>${candidate.launchMode === "concurrent" ? icon("boxes", 16) : icon("play", 16)} ${actionLabel}</button>
@@ -3672,6 +3672,7 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (target.hasAttribute("data-cancel-svp-route")) {
+    routeRequestGeneration += 1;
     pendingSvpRoute = undefined;
     render();
     return;
@@ -3715,6 +3716,7 @@ document.addEventListener("click", (event) => {
     const mode = target.dataset.svpRouteMode as SvpLaunchMode | undefined;
     const candidate = plan?.candidates.find((item) => item.slotId === slotId && item.launchMode === mode);
     if (!plan || !candidate || !candidate.idle || !mode) return;
+    routeRequestGeneration += 1;
     pendingSvpRoute = undefined;
     if (mode === "concurrent" && !app?.concurrentDisclaimerAccepted) {
       pendingConcurrentLaunchSlot = slotId;
@@ -4198,6 +4200,7 @@ async function listenForSvpRouteRequests(): Promise<void> {
     error = "";
     render();
   }), listen<unknown>("svp-route-error", (event) => {
+    routeRequestGeneration += 1;
     pendingSvpRoute = undefined;
     error = formatError(event.payload);
     notice = "";
