@@ -32,6 +32,10 @@ pub mod project_backups;
 #[cfg(test)]
 #[path = "../../../../test/project_backups.rs"]
 mod project_backups_tests;
+mod project_discovery;
+#[cfg(test)]
+#[path = "../../../../test/project_discovery.rs"]
+mod project_discovery_tests;
 mod solo_tuning;
 mod state;
 mod sv2_account_probe;

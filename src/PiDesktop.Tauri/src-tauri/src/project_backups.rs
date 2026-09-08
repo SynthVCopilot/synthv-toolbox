@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 pub const INTERVAL_SECONDS: u64 = 60;
+const DISCOVERY_INTERVAL_SECONDS: u64 = 5;
 const MAX_PROJECT_BYTES: u64 = 128 * 1024 * 1024;
 const REGISTRY_NAME: &str = "project-backups.json";
 
@@ -153,6 +154,23 @@ impl ProjectBackupStore {
             }
         }
         self.last_error = self.save_registry().err();
+    }
+
+    fn discover_paths(&mut self, paths: Vec<String>) -> bool {
+        let mut discovered = false;
+        for path in paths {
+            let Ok(source) = accepted_source(&path, &self.root) else {
+                continue;
+            };
+            if !self
+                .registry
+                .projects
+                .contains_key(source.to_string_lossy().as_ref())
+            {
+                discovered |= self.observe_path(&path).unwrap_or(false);
+            }
+        }
+        discovered
     }
 
     pub(crate) fn state(&self) -> ProjectBackupState {
@@ -511,25 +529,44 @@ pub fn status() -> Result<ProjectBackupState, String> {
 }
 
 fn worker(receiver: mpsc::Receiver<Message>, state: Arc<Mutex<ProjectBackupState>>) {
-    worker_with_store(
+    worker_with_discovery(
         ProjectBackupStore::open(crate::agent::data_root()),
         receiver,
         state,
         Duration::from_secs(INTERVAL_SECONDS),
+        Duration::from_secs(DISCOVERY_INTERVAL_SECONDS),
+        crate::project_discovery::discover_project_paths,
     );
 }
 
+#[cfg(test)]
 pub(crate) fn worker_with_store(
-    mut store: ProjectBackupStore,
+    store: ProjectBackupStore,
     receiver: mpsc::Receiver<Message>,
     state: Arc<Mutex<ProjectBackupState>>,
     interval: Duration,
 ) {
+    worker_with_discovery(store, receiver, state, interval, interval, Vec::new);
+}
+
+pub(crate) fn worker_with_discovery(
+    mut store: ProjectBackupStore,
+    receiver: mpsc::Receiver<Message>,
+    state: Arc<Mutex<ProjectBackupState>>,
+    interval: Duration,
+    discovery_interval: Duration,
+    mut discover: impl FnMut() -> Vec<String>,
+) {
     let mut next_run = Instant::now() + interval;
+    let mut next_discovery = Instant::now();
     loop {
         let mut completed = Vec::new();
         let mut should_process = false;
-        match receiver.recv_timeout(next_run.saturating_duration_since(Instant::now())) {
+        match receiver.recv_timeout(
+            next_run
+                .min(next_discovery)
+                .saturating_duration_since(Instant::now()),
+        ) {
             Ok(Message::Observe {
                 path,
                 completed: done,
@@ -539,8 +576,12 @@ pub(crate) fn worker_with_store(
                     completed.push(done);
                 }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => should_process = true,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
+        }
+        if Instant::now() >= next_discovery {
+            should_process |= store.discover_paths(discover());
+            next_discovery = Instant::now() + discovery_interval;
         }
         for _ in 0..256 {
             let Ok(Message::Observe {
