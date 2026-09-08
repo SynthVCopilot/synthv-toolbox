@@ -99,4 +99,25 @@ panel.addEventListener("manage", (event) => { target = event.detail; });
 panel.shadowRoot.querySelector('[data-part="view-connection"]').click();
 assert.deepEqual(target, [{ providerId: "anthropic", method: "oauth" }]);
 
+const { mountModelAuthDialog } = await import("../src/PiDesktop.Tauri/src/modelAuthDialog.ts");
+const host = mountModelAuthDialog({
+  execute: async () => {}, cancelAuthorization: async () => {},
+  close() {}, updated() {}, formatError: String,
+});
+const mounted = document.body.lastElementChild;
+await new Promise(resolve => setTimeout(resolve, 0));
+for (const method of ["oauth", "api-key"]) {
+  host.update({ providers: dialog.providers, open: true, initialConnection: { providerId: "anthropic", method } });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.ok(mounted.shadowRoot.querySelector('[data-part="connection-info"]'), `${method} details must open saved connection info`);
+  assert.equal(mounted.shadowRoot.querySelector('[role="progressbar"]'), null);
+  host.close();
+  await new Promise(resolve => setTimeout(resolve, 250));
+  host.update({ providers: dialog.providers, open: true, initialConnection: null });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(mounted.shadowRoot.querySelector("h2").textContent, "选择方式");
+  host.close();
+  await new Promise(resolve => setTimeout(resolve, 250));
+}
+host.dispose();
 console.log("model-auth custom-element events passed");

@@ -70,7 +70,9 @@ export function mountModelAuthDialog(host: Host) {
     update(properties: Record<string, unknown> & { open: boolean }) {
       if (!properties.open && element.open) cancel();
       if (properties.open && !element.open) element.error = null;
-      Object.assign(element, properties);
+      const { open, ...configuration } = properties;
+      Object.assign(element, configuration);
+      element.open = open;
     },
     close,
     dispose() { cancel(); element.open = false; element.remove(); },
