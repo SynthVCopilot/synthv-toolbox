@@ -1475,7 +1475,12 @@ export const api = {
     if (Array.isArray(selected)) return selected[0];
     return typeof selected === "string" ? selected : undefined;
   },
-  pickAudioFile: async (): Promise<string | undefined> => {
+  pickProjectFile: async (): Promise<string | undefined> => {
+    if (preview) return undefined;
+    const selected = await open({ multiple: false, directory: false, filters: [{ name: "Synthesizer V Project", extensions: ["svp"] }] });
+    if (Array.isArray(selected)) return selected[0];
+    return typeof selected === "string" ? selected : undefined;
+  },  pickAudioFile: async (): Promise<string | undefined> => {
     if (preview) return undefined;
     const selected = await open({
       multiple: false,
