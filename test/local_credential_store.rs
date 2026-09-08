@@ -210,3 +210,49 @@ fn swapped_ciphertext_cannot_be_loaded_as_another_account() {
     fs::copy(first, second).unwrap();
     assert!(store.read("oauth", "two").is_err());
 }
+
+mod agent {
+    pub fn data_root() -> std::path::PathBuf {
+        static ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+        ROOT.get_or_init(|| {
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../.tmp")
+                .join(format!("api-storage-{}", uuid::Uuid::new_v4()))
+        })
+        .clone()
+    }
+}
+mod oauth {
+    #[derive(Clone, Copy)]
+    pub enum AiProviderId {
+        Anthropic,
+        OpenaiCodex,
+        Workbuddy,
+        Traecode,
+    }
+}
+#[path = "../src/PiDesktop.Tauri/src-tauri/src/api_keys.rs"]
+mod api_keys;
+
+#[test]
+fn api_key_save_replace_rollback_and_remove_use_local_store() {
+    use oauth::AiProviderId::Anthropic;
+    use zeroize::Zeroizing;
+    let id = uuid::Uuid::new_v4().to_string();
+    let first = Zeroizing::new("first-api-key".to_string());
+    let second = Zeroizing::new("second-api-key".to_string());
+    assert!(api_keys::load(Anthropic, &id).is_err());
+    let empty_backup = api_keys::replace(Anthropic, &id, &first).unwrap();
+    assert_eq!(&*api_keys::load(Anthropic, &id).unwrap(), &*first);
+    let backup = api_keys::replace(Anthropic, &id, &second).unwrap();
+    assert_eq!(&*api_keys::load(Anthropic, &id).unwrap(), &*second);
+    api_keys::restore(Anthropic, &id, backup).unwrap();
+    assert_eq!(&*api_keys::load(Anthropic, &id).unwrap(), &*first);
+    let removed = api_keys::take(Anthropic, &id).unwrap();
+    assert!(api_keys::load(Anthropic, &id).is_err());
+    api_keys::restore(Anthropic, &id, removed).unwrap();
+    assert_eq!(&*api_keys::load(Anthropic, &id).unwrap(), &*first);
+    api_keys::restore(Anthropic, &id, empty_backup).unwrap();
+    assert!(api_keys::load(Anthropic, &id).is_err());
+    fs::remove_dir_all(agent::data_root()).unwrap();
+}
