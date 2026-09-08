@@ -55,6 +55,7 @@ function createHarness(api = {}) {
     { id: "ffmpeg", displayName: "FFmpeg", description: "音视频转码", installed: false, downloaded: true, installable: true, removable: false, status: "缓存" },
     { id: "sandboxie", displayName: "Sandboxie", description: "并发隔离", installed: false, downloaded: true, installable: true, removable: false, status: "安装包" },
   ] };
+  ${functionSource("pathPickerButton")}
   ${functionSource("renderComponents")}
   ${functionSource("loadFfmpegConfiguration")}
   ${functionSource("saveFfmpegDirectory")}

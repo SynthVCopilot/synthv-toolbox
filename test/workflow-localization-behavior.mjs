@@ -20,7 +20,7 @@ assert.match(source, /position\.toLogical\(window\.devicePixelRatio\)/, 'Native 
 assert.match(source, /data-clear-pipeline-instrumental/, 'Optional instrumental input can be cleared');
 assert.match(apiSource, /instrumentalPath: string \| null/);
 assert.match(apiSource, /outputDirectory: string \| null/);
-const functions = new Set(['escapeHtml', 'formatAudioNumber', 'isTerminalAudioJob', 'asObject', 'resultMetric', 'renderDiagnosticResult', 'renderBatchResult', 'renderScalarResult', 'renderAbAudioResult', 'sourceDirectory', 'setAudioToProjectVocalPath', 'setAudioToProjectInstrumentalPath', 'pickAudioToProjectInput', 'pickAudioToProjectOutputDirectory', 'dropAudioToProjectInput', 'syncAudioToProjectForm', 'renderWorkflowPanel', 'renderAudioPlanDialog', 'renderCopilot', 'renderMessage', 'wireForms']);
+const functions = new Set(['escapeHtml', 'formatAudioNumber', 'isTerminalAudioJob', 'asObject', 'resultMetric', 'renderDiagnosticResult', 'renderBatchResult', 'renderScalarResult', 'renderAbAudioResult', 'sourceDirectory', 'setAudioToProjectVocalPath', 'setAudioToProjectInstrumentalPath', 'pathPickerButton', 'pickAudioToProjectInput', 'pickAudioToProjectOutputDirectory', 'dropAudioToProjectInput', 'syncAudioToProjectForm', 'renderWorkflowPanel', 'renderAudioPlanDialog', 'renderCopilot', 'renderMessage', 'wireForms']);
 const ast = parse(source, { sourceType: 'module', plugins: ['typescript'] });
 const implementations = ast.program.body.filter((node) => node.type === 'FunctionDeclaration' && functions.has(node.id.name)).map((node) => source.slice(node.start, node.end)).join('\n');
 assert.doesNotMatch(implementations, /\p{Script=Han}/u, 'Static workflow wording must come from the dictionaries');
