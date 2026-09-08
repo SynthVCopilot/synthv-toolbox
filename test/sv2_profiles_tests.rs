@@ -27,6 +27,32 @@ fn fixture() -> (PathBuf, SlotPaths) {
     (root, paths)
 }
 
+#[test]
+fn recent_project_settings_include_canonical_and_managed_slot_roots() {
+    let (root, paths) = fixture();
+    let slot_id = Uuid::new_v4().to_string();
+    let manifest = SlotManifest {
+        slots: vec![SlotRecord {
+            id: slot_id.clone(),
+            display_name: "Slot".to_string(),
+            color: "#6D5CE7".to_string(),
+            created_at_utc: Utc::now().to_rfc3339(),
+            last_activated_at_utc: None,
+            concurrent_content: Sv2ConcurrentContentPreferences::default(),
+        }],
+        ..SlotManifest::default()
+    };
+    let discovered = recent_project_settings_files_for(&paths, &manifest);
+    assert_eq!(
+        discovered,
+        vec![
+            paths.canonical.join("settings/settings.xml"),
+            paths.parked(&slot_id).join("settings/settings.xml"),
+        ]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_paths_stay_under_the_current_users_application_support() {
