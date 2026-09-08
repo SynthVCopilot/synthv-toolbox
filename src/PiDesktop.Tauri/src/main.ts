@@ -15,7 +15,7 @@ import { instanceAccount, instanceProjectTitle } from "./sv2Instances";
 import { findVoiceMetadata } from "./voiceCatalog";
 import { icon } from "./icons";
 import { renderAboutPage } from "./about";
-import { featureCatalog, toolGroups, type FeatureCatalogItem, type ToolGroup } from "./featureCatalog";
+import { guiFeatureCatalog, toolGroups, type FeatureCatalogItem, type ToolGroup } from "./featureCatalog";
 import { mountShell, type ShellController } from "./vue/shell";
 import { locale, setLocale, t } from "./i18n";
 import "./i18nHome";
@@ -86,7 +86,7 @@ registerModelAuthElement();
 const root = document.querySelector<HTMLDivElement>("#app")!;
 if (!root) throw new Error("Missing #app root");
 
-type Page = "home" | "accounts" | "import" | "quality" | "lyrics" | "history" | "copilot" | "components" | "bridge" | "connections" | "settings" | "about";
+type Page = "home" | "accounts" | "import" | "convert" | "analysis" | "quality" | "lyrics" | "history" | "copilot" | "components" | "bridge" | "connections" | "settings" | "about";
 type AccountManagerSection = "profile" | "global" | "add";
 
 interface PendingAccountIndicatorConsent {
@@ -96,7 +96,7 @@ interface PendingAccountIndicatorConsent {
 }
 
 type Feature = FeatureCatalogItem;
-const features: Feature[] = featureCatalog;
+const features: Feature[] = guiFeatureCatalog;
 
 type BridgeProfile = NonNullable<SynthVInstallation["bridgeProfile"]>;
 interface BridgeTarget {
@@ -917,8 +917,7 @@ function renderSidebar(): string {
       <span class="nav-label">${t("nav.workspace")}</span>
       ${navItem("home", t("nav.home"), "home")}
       ${app.platform === "windows" || app.platform === "macos" || app.platform === "preview" ? navItem("accounts", t("nav.accounts"), "users") : ""}
-      ${navItem("import", t("nav.import"), "pipeline")}
-      ${navItem("quality", t("nav.quality"), "doctor")}
+      ${toolGroups.map((group) => navItem(group.id, group.title, group.icon)).join("")}
       ${navItem("lyrics", t("nav.lyrics"), "lyrics")}
       ${navItem("history", t("nav.history"), "history")}
       ${app.mode === "ai" ? navItem("copilot", t("nav.copilot"), "bot") : ""}
@@ -1525,6 +1524,8 @@ function renderPage(): string {
     case "home": return renderHome();
     case "accounts": return renderAccounts();
     case "import": return renderToolCategory("import");
+    case "convert": return renderToolCategory("convert");
+    case "analysis": return renderToolCategory("analysis");
     case "quality": return renderToolCategory("quality");
     case "lyrics": return renderLyricsPage();
     case "history": return renderHistoryPage();
@@ -1832,13 +1833,13 @@ function renderToolCategory(groupId: ToolGroup["id"]): string {
   const selected = activeWorkflow && group.featureIds.includes(activeWorkflow)
     ? groupFeatureList.find((feature) => feature.id === activeWorkflow)
     : groupFeatureList.find((feature) => featureAvailability(feature, current).tone === "ready") ?? groupFeatureList[0];
-  const tabs = groupFeatureList.map((feature) => {
+  const tabs = groupFeatureList.length > 1 ? groupFeatureList.map((feature) => {
     const availability = featureAvailability(feature, current);
     return `<button class="tool-tab ${selected?.id === feature.id ? "active" : ""} ${availability.tone}" data-feature="${escapeHtml(feature.id)}" ${selected?.id === feature.id ? 'aria-current="page"' : ""}><span>${escapeHtml(feature.title)}</span><small>${escapeHtml(availability.label)}</small></button>`;
-  }).join("");
+  }).join("") : "";
   const selectedAvailability = selected ? featureAvailability(selected, current) : undefined;
   const blocked = selected && selectedAvailability?.tone !== "ready" ? `<section class="panel tool-unavailable"><span class="feature-icon orange">${icon(selected.icon, 22)}</span><div><h2>${escapeHtml(selected.title)}</h2><p>${escapeHtml(selected.description)}</p><p>${escapeHtml(selectedAvailability?.label ?? t("home.unavailableTool"))} ${t("home.resolveDependencies")}</p></div>${selectedAvailability?.route ? `<button class="secondary" data-page="${selectedAvailability.route}">${escapeHtml(selectedAvailability.actionLabel)} ${icon("arrow", 16)}</button>` : ""}</section>` : selected ? renderWorkflowPanel(selected.id) : `<div class="empty-inline">${t("home.noTools")}</div>`;
-  return `<section class="tool-category"><nav class="tool-tabs" aria-label="${escapeHtml(t("home.groupTools", { group: group.title }))}">${tabs}</nav>${blocked}</section>`;
+  return `<section class="tool-category">${tabs ? `<nav class="tool-tabs" aria-label="${escapeHtml(t("home.groupTools", { group: group.title }))}">${tabs}</nav>` : ""}${blocked}</section>`;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -3829,7 +3830,7 @@ document.addEventListener("click", (event) => {
     const enteringAccounts = targetPage === "accounts" && page !== "accounts";
     const leavingAccounts = page === "accounts" && targetPage !== "accounts";
     const enteringComponents = targetPage === "components" && page !== "components";
-    const enteringToolCategory = targetPage === "import" || targetPage === "quality";
+    const enteringToolCategory = toolGroups.some((group) => group.id === targetPage);
     const activeFeatureId = activeWorkflow;
     const activeGroup = activeFeatureId ? toolGroups.find((group) => group.featureIds.includes(activeFeatureId)) : undefined;
     instanceRefreshGeneration += 1;

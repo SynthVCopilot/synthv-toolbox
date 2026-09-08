@@ -39,12 +39,12 @@ for (const feature of featureCatalog) {
     assert.doesNotMatch(text, /^features\./, `Missing feature message: ${text}`);
   }
 }
-assert.equal(toolGroups[0].title, "Import & Convert");
+assert.deepEqual(toolGroups.map(group => group.title), ["Import", "Convert", "Analyze", "Quality check"]);
 setLocale("zh-CN");
 assert.equal(document.documentElement.lang, "zh-CN");
 assert.equal(values.get("synthv-toolbox.locale"), "zh-CN");
 assert.equal(vocalFeature.title, "音频准备");
-assert.equal(toolGroups[0].title, "导入与转换");
+assert.deepEqual(toolGroups.map(group => group.title), ["导入", "转换", "分析", "质检"]);
 setLocale("en");
 assert.equal(vocalFeature.title, "Audio preparation");
 assert.equal(values.get("synthv-toolbox.locale"), "en");

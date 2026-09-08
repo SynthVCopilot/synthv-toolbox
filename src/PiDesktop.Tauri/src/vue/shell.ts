@@ -2,7 +2,7 @@ import { createApp, nextTick, reactive } from "vue";
 import AppShell from "./AppShell.vue";
 import { i18n } from "../i18n";
 
-export type ShellPage = "home" | "accounts" | "import" | "quality" | "lyrics" | "history" | "copilot" | "components" | "bridge" | "connections" | "settings" | "about";
+export type ShellPage = "home" | "accounts" | "import" | "convert" | "analysis" | "quality" | "lyrics" | "history" | "copilot" | "components" | "bridge" | "connections" | "settings" | "about";
 
 export interface ShellState {
   page: ShellPage;
