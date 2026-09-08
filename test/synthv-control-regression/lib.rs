@@ -57,9 +57,19 @@ pub mod synthv {
     use std::process::Command;
 
     pub fn quiet_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+        #[cfg(test)]
+        if let Some(output) = crate::macos_enumeration::command_output(program.as_ref()) {
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", "printf '%s' \"$1\"", "fixture"]).arg(output);
+            return command;
+        }
         Command::new(program)
     }
 }
 
 #[path = "../../src/PiDesktop.Tauri/src-tauri/src/synthv_control.rs"]
 pub mod synthv_control;
+
+#[cfg(all(test, target_os = "macos"))]
+#[path = "macos_enumeration.rs"]
+mod macos_enumeration;

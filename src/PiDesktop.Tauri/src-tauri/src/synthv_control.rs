@@ -364,10 +364,11 @@ mod platform {
         }
         let mut processes = parse_macos_processes(&String::from_utf8_lossy(&output.stdout))
             .into_iter()
-            .filter_map(|(process_id, process_identity, command)| {
+            .filter(|(_, _, command)| is_synthv_process(&executable_name(command), command))
+            .map(|(process_id, process_identity, command)| {
                 let name = executable_name(&command);
                 let is_sv2 = is_sv2_executable_path(&command);
-                is_synthv_process(&name, &command).then_some(SynthVProcess {
+                SynthVProcess {
                     process_id,
                     process_identity,
                     name,
@@ -377,7 +378,7 @@ mod platform {
                     is_sv2,
                     command,
                     sandboxed: Some(false),
-                })
+                }
             })
             .collect::<Vec<_>>();
         processes.sort_by_key(|process| process.process_id);
