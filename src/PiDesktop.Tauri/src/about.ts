@@ -24,7 +24,7 @@ function renderDownload(options: AboutPageOptions): string {
   const fileName = state.fileName ? escapeHtml(state.fileName) : "";
   const installerAvailable = Boolean(options.update?.installer);
   if ((!options.update?.updateAvailable || !installerAvailable) && !["downloading", "ready", "failed"].includes(state.status)) {
-    return `<div class="about-empty-update">${t(options.update?.updateAvailable ? "about.noInstaller" : "about.noUpdateDownload")}</div>`;
+    return options.update?.updateAvailable ? `<div class="about-empty-update">${t("about.noInstaller")}</div>` : "";
   }
   if (state.status === "downloading") {
     const ratio = state.totalBytes && state.totalBytes > 0 ? Math.min(100, Math.round((state.downloadedBytes / state.totalBytes) * 100)) : undefined;
