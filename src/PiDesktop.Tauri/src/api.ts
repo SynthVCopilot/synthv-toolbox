@@ -1476,6 +1476,12 @@ export const api = {
     call<WorkflowResult>("export_project_lyrics", { projectPath, trackIndex, lineGapSeconds, outputName, wordOutputName }),
   reviewWorkflow: (kind: string, data: Record<string, unknown>) =>
     call<string>("review_workflow", { kind, data }),
+  pickProjectFile: async (): Promise<string | undefined> => {
+    if (preview) return undefined;
+    const selected = await open({ multiple: false, directory: false, filters: [{ name: "Synthesizer V Project", extensions: ["svp"] }] });
+    if (Array.isArray(selected)) return selected[0];
+    return typeof selected === "string" ? selected : undefined;
+  },
   pickAudioFile: async (): Promise<string | undefined> => {
     if (preview) return undefined;
     const selected = await open({

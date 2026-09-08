@@ -15,7 +15,7 @@ import { instanceAccount, instanceProjectTitle } from "./sv2Instances";
 import { findVoiceMetadata } from "./voiceCatalog";
 import { icon } from "./icons";
 import { renderAboutPage } from "./about";
-import { featureCatalog, toolGroups, type FeatureCatalogItem, type ToolGroup } from "./featureCatalog";
+import { guiFeatureCatalog, toolGroups, type FeatureCatalogItem, type ToolGroup } from "./featureCatalog";
 import { mountShell, type ShellController } from "./vue/shell";
 import { locale, setLocale, t } from "./i18n";
 import "./i18nHome";
@@ -86,7 +86,7 @@ registerModelAuthElement();
 const root = document.querySelector<HTMLDivElement>("#app")!;
 if (!root) throw new Error("Missing #app root");
 
-type Page = "home" | "accounts" | "import" | "quality" | "lyrics" | "history" | "copilot" | "components" | "bridge" | "connections" | "settings" | "about";
+type Page = "home" | "accounts" | "import" | "convert" | "analysis" | "quality" | "lyrics" | "history" | "copilot" | "components" | "bridge" | "connections" | "settings" | "about";
 type AccountManagerSection = "profile" | "global" | "add";
 
 interface PendingAccountIndicatorConsent {
@@ -96,7 +96,7 @@ interface PendingAccountIndicatorConsent {
 }
 
 type Feature = FeatureCatalogItem;
-const features: Feature[] = featureCatalog;
+const features: Feature[] = guiFeatureCatalog;
 
 type BridgeProfile = NonNullable<SynthVInstallation["bridgeProfile"]>;
 interface BridgeTarget {
@@ -918,8 +918,7 @@ function renderSidebar(): string {
       <span class="nav-label">${t("nav.workspace")}</span>
       ${navItem("home", t("nav.home"), "home")}
       ${app.platform === "windows" || app.platform === "macos" || app.platform === "preview" ? navItem("accounts", t("nav.accounts"), "users") : ""}
-      ${navItem("import", t("nav.import"), "pipeline")}
-      ${navItem("quality", t("nav.quality"), "doctor")}
+      ${toolGroups.map((group) => navItem(group.id, group.title, group.icon)).join("")}
       ${navItem("lyrics", t("nav.lyrics"), "lyrics")}
       ${navItem("history", t("nav.history"), "history")}
       ${app.mode === "ai" ? navItem("copilot", t("nav.copilot"), "bot") : ""}
@@ -1529,6 +1528,8 @@ function renderPage(): string {
     case "home": return renderHome();
     case "accounts": return renderAccounts();
     case "import": return renderToolCategory("import");
+    case "convert": return renderToolCategory("convert");
+    case "analysis": return renderToolCategory("analysis");
     case "quality": return renderToolCategory("quality");
     case "lyrics": return renderLyricsPage();
     case "history": return renderHistoryPage();
@@ -1836,13 +1837,13 @@ function renderToolCategory(groupId: ToolGroup["id"]): string {
   const selected = activeWorkflow && group.featureIds.includes(activeWorkflow)
     ? groupFeatureList.find((feature) => feature.id === activeWorkflow)
     : groupFeatureList.find((feature) => featureAvailability(feature, current).tone === "ready") ?? groupFeatureList[0];
-  const tabs = groupFeatureList.map((feature) => {
+  const tabs = groupFeatureList.length > 1 ? groupFeatureList.map((feature) => {
     const availability = featureAvailability(feature, current);
     return `<button class="tool-tab ${selected?.id === feature.id ? "active" : ""} ${availability.tone}" data-feature="${escapeHtml(feature.id)}" ${selected?.id === feature.id ? 'aria-current="page"' : ""}><span>${escapeHtml(feature.title)}</span><small>${escapeHtml(availability.label)}</small></button>`;
-  }).join("");
+  }).join("") : "";
   const selectedAvailability = selected ? featureAvailability(selected, current) : undefined;
   const blocked = selected && selectedAvailability?.tone !== "ready" ? `<section class="panel tool-unavailable"><span class="feature-icon orange">${icon(selected.icon, 22)}</span><div><h2>${escapeHtml(selected.title)}</h2><p>${escapeHtml(selected.description)}</p><p>${escapeHtml(selectedAvailability?.label ?? t("home.unavailableTool"))} ${t("home.resolveDependencies")}</p></div>${selectedAvailability?.route ? `<button class="secondary" data-page="${selectedAvailability.route}">${escapeHtml(selectedAvailability.actionLabel)} ${icon("arrow", 16)}</button>` : ""}</section>` : selected ? renderWorkflowPanel(selected.id) : `<div class="empty-inline">${t("home.noTools")}</div>`;
-  return `<section class="tool-category"><nav class="tool-tabs" aria-label="${escapeHtml(t("home.groupTools", { group: group.title }))}">${tabs}</nav>${blocked}</section>`;
+  return `<section class="tool-category">${tabs ? `<nav class="tool-tabs" aria-label="${escapeHtml(t("home.groupTools", { group: group.title }))}">${tabs}</nav>` : ""}${blocked}</section>`;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -2039,19 +2040,29 @@ function setAudioToProjectInstrumentalPath(path: string): void {
   render();
 }
 
+function pathPickerButton(inputId: string, kind: "project" | "audio" | "directory", disabled = false): string {
+  const label = kind === "directory" ? t("system.chooseDirectory") : t("workflowCopy.chooseFile");
+  return `<button class="secondary path-picker-button" type="button" data-pick-path="${inputId}" data-pick-path-kind="${kind}" ${disabled ? "disabled" : ""} title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${icon(kind === "directory" ? "folder" : "file", 16)}</button>`;
+}
+
+async function pickPathIntoInput(inputId: string, kind: "project" | "audio" | "directory"): Promise<void> {
+  const selectionPage = page;
+  const originalInput = document.getElementById(inputId) as HTMLInputElement | null;
+  if (!originalInput || originalInput.disabled) return;
+  const path = kind === "directory" ? await api.pickDirectory() : kind === "audio" ? await api.pickAudioFile() : await api.pickProjectFile();
+  if (!path || page !== selectionPage || originalInput.disabled || !originalInput.isConnected || document.getElementById(inputId) !== originalInput) return;
+  originalInput.value = path;
+  originalInput.dispatchEvent(new Event("input", { bubbles: true }));
+  originalInput.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
 async function pickAudioToProjectInput(kind: "vocal" | "instrumental"): Promise<void> {
-  const path = await api.pickAudioFile();
-  if (!path) return;
-  if (kind === "vocal") setAudioToProjectVocalPath(path);
-  else setAudioToProjectInstrumentalPath(path);
+  const inputId = kind === "vocal" ? "pipeline-vocal" : "pipeline-inst";
+  await pickPathIntoInput(inputId, "audio");
 }
 
 async function pickAudioToProjectOutputDirectory(): Promise<void> {
-  const path = await api.pickDirectory();
-  if (!path) return;
-  audioToProjectOutputDirectory = path;
-  audioToProjectOutputDirectoryWasChosen = true;
-  render();
+  await pickPathIntoInput("pipeline-output-directory", "directory");
 }
 
 function dropAudioToProjectInput(paths: string[], position: { toLogical(scaleFactor: number): { x: number; y: number } }): void {
@@ -2105,7 +2116,7 @@ function renderWorkflowPanel(id: string): string {
       : "";
     form = `<div class="audio-preparation" aria-label="${t("workflowCopy.audioPreparation")}">
       <section class="audio-runtime-card ${runtime?.available ? "ready" : "warning"}"><div><span class="eyebrow">${t("workflowCopy.ffmpegRuntime")}</span><strong>${runtime === undefined ? t("workflowCopy.checking") : runtime.available ? `${t("workflowCopy.available")}${runtime.version ? ` · ${escapeHtml(runtime.version)}` : ""}` : automaticFfmpeg ? t("workflowCopy.ffmpegAutomatic") : t("workflowCopy.ffmpegNotFound")}</strong><small>${ffmpegTask ? escapeHtml(ffmpegTask.detail) : automaticFfmpeg && !runtime?.available ? t("workflowCopy.ffmpegAutomaticDescription") : escapeHtml(runtime?.detail ?? t("workflowCopy.openingThisToolChecksForLocalFfmpeg"))}${runtime !== undefined && !runtime.available && !automaticFfmpeg ? t("workflowCopy.installOrRepairFfmpegInComponentsThen") : ""}</small></div><span class="availability ${runtime?.available ? "ready" : "warning"}">${ffmpegTask ? `${ffmpegTask.progress}%` : escapeHtml(runtime?.source ?? (runtime === undefined ? t("workflowCopy.checking2") : runtime.available ? t("workflowCopy.ready") : automaticFfmpeg ? t("workflowCopy.ffmpegAutomatic") : t("workflowCopy.componentRequired")))}</span></section>
-      <section class="audio-input-card"><div class="section-heading"><div><h3>${t("workflowCopy.chooseOneAudioFile")}</h3><p>${t("workflowCopy.clickToSelectOrDropOneLocal")}</p></div><button type="button" class="secondary" data-pick-audio-file ${controlsLocked ? "disabled" : ""}>${t("workflowCopy.chooseFile")}</button></div><label class="visually-hidden" for="audio-prep-input">${t("workflowCopy.audioFilePath")}</label><input id="audio-prep-input" value="${escapeHtml(audioPrepareForm.inputPath)}" readonly placeholder="${t("workflowCopy.noFileSelected")}" aria-describedby="audio-drop-help" /><button type="button" class="audio-drop-zone" data-audio-drop-zone aria-label="${t("workflowCopy.dropAnAudioFileOrChooseA")}" aria-describedby="audio-drop-help" ${controlsLocked ? "disabled" : ""}><span>${icon("audio", 22)}</span><strong>${t("workflowCopy.dropAnAudioFileHere")}</strong><small id="audio-drop-help">${t("workflowCopy.onlyOneFileIsAcceptedAtA")}</small></button></section>
+      <section class="audio-input-card"><div class="section-heading"><div><h3>${t("workflowCopy.chooseOneAudioFile")}</h3><p>${t("workflowCopy.clickToSelectOrDropOneLocal")}</p></div><button type="button" class="secondary path-picker-button" data-pick-audio-file title="${t("workflowCopy.chooseFile")}" aria-label="${t("workflowCopy.chooseFile")}" ${controlsLocked ? "disabled" : ""}>${icon("file", 16)}</button></div><label class="visually-hidden" for="audio-prep-input">${t("workflowCopy.audioFilePath")}</label><input id="audio-prep-input" value="${escapeHtml(audioPrepareForm.inputPath)}" readonly placeholder="${t("workflowCopy.noFileSelected")}" aria-describedby="audio-drop-help" /><button type="button" class="audio-drop-zone" data-audio-drop-zone aria-label="${t("workflowCopy.dropAnAudioFileOrChooseA")}" aria-describedby="audio-drop-help" ${controlsLocked ? "disabled" : ""}><span>${icon("audio", 22)}</span><strong>${t("workflowCopy.dropAnAudioFileHere")}</strong><small id="audio-drop-help">${t("workflowCopy.onlyOneFileIsAcceptedAtA")}</small></button></section>
       ${probeCard}
       <div class="audio-action-grid"><section class="audio-action-card"><div><span class="eyebrow">SYNTHV PCM WAV</span><h3>${t("workflowCopy.preparePcmWavForSynthv")}</h3><p>${t("workflowCopy.preservesTheOriginalSampleRateAndChannels")}</p></div><form id="audio-prepare-form" class="workflow-form"><div class="workflow-pair three"><label>${t("workflowCopy.sampleRateHz")}<input id="audio-prep-rate" type="number" min="8000" max="192000" step="1" value="${audioPrepareForm.sampleRate ?? ""}" placeholder="${t("workflowCopy.keepOriginal")}" ${controlsLocked ? "disabled" : ""}/></label><label>${t("workflowCopy.channelCount")}<select id="audio-prep-channels" ${controlsLocked ? "disabled" : ""}><option value="">${t("workflowCopy.keepOriginal")}</option><option value="1" ${audioPrepareForm.channels === 1 ? "selected" : ""}>${t("workflowCopy.mono")}</option><option value="2" ${audioPrepareForm.channels === 2 ? "selected" : ""}>${t("workflowCopy.stereo")}</option></select></label><label>${t("workflowCopy.bitDepth")}<select id="audio-prep-format" ${controlsLocked ? "disabled" : ""}><option value="s16" ${audioPrepareForm.sampleFormat === "s16" ? "selected" : ""}>16-bit PCM</option><option value="s24" ${audioPrepareForm.sampleFormat === "s24" ? "selected" : ""}>24-bit PCM</option><option value="f32" ${audioPrepareForm.sampleFormat === "f32" ? "selected" : ""}>32-bit float</option></select></label></div><div class="workflow-pair"><label>${t("workflowCopy.startPositionSeconds")}<input id="audio-prep-start" type="number" min="0" step="0.01" value="${audioPrepareForm.startSeconds ?? ""}" placeholder="${t("workflowCopy.fromTheBeginning")}" ${controlsLocked ? "disabled" : ""}/></label><label>${t("workflowCopy.durationSeconds")}<input id="audio-prep-duration" type="number" min="0.01" step="0.01" value="${audioPrepareForm.durationSeconds ?? ""}" placeholder="${t("workflowCopy.untilTheEnd")}" ${controlsLocked ? "disabled" : ""}/></label></div><button class="primary" ${!audioPrepareForm.inputPath || !runtimeUsable || controlsLocked ? "disabled" : ""}>${icon("audio", 16)} ${t("workflowCopy.viewWritePlan")}</button></form></section>
       <section class="audio-action-card"><div><span class="eyebrow">EBU R128</span><h3>${t("workflowCopy.checkBalanceLoudness")}</h3><p>${t("workflowCopy.defaultTargets16Lufs15Dbtp")}</p></div><div class="button-row"><button class="secondary" data-analyze-audio-loudness ${!audioPrepareForm.inputPath || !runtimeUsable || controlsLocked ? "disabled" : ""}>${t("workflowCopy.checkLoudness")}</button></div>${loudness}<form id="audio-normalize-form" class="workflow-form"><div class="workflow-pair three"><label>LUFS<input id="audio-normalize-lufs" type="number" min="-70" max="-5" step="0.1" required value="${audioNormalizeForm.integratedLufs}" ${controlsLocked ? "disabled" : ""}/></label><label>dBTP<input id="audio-normalize-peak" type="number" min="-9" max="0" step="0.1" required value="${audioNormalizeForm.truePeakDbtp}" ${controlsLocked ? "disabled" : ""}/></label><label>LRA<input id="audio-normalize-lra" type="number" min="1" max="20" step="0.1" required value="${audioNormalizeForm.loudnessRange}" ${controlsLocked ? "disabled" : ""}/></label></div><button class="primary" ${!audioPrepareForm.inputPath || !runtimeUsable || controlsLocked ? "disabled" : ""}>${icon("shield", 16)} ${t("workflowCopy.viewNormalizationPlan")}</button></form></section></div>
@@ -2132,7 +2143,7 @@ function renderWorkflowPanel(id: string): string {
     form = `<div class="mode-limit"><strong>${t("workflowCopy.voiceAssignmentLimit")}</strong>${t("workflowCopy.toolboxRecordsTheRequestedVoiceAndConnects")}</div><form id="cover-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.bvOrYoutubeSource")}<input id="cover-source" required placeholder="${t("workflowCopy.bv1OrHttpsWwwYoutubeComWatch")}" /></label><div class="workflow-pair"><label>${t("workflowCopy.targetVoice")}<input id="cover-voice" required maxlength="200" placeholder="${t("workflowCopy.forExampleMai2")}" /></label><label>${t("workflowCopy.synthvProcess")}<select id="cover-process">${processOptions}</select></label></div><label>${t("workflowCopy.fullLyricsOptionalCjkCharactersAndLatin")}<textarea id="cover-lyrics" rows="7" placeholder="${t("workflowCopy.leaveBlankToUseDefaultMidiSynthv")}"></textarea></label><div class="workflow-pair"><label>${t("workflowCopy.targetTrackNumber")}<input id="cover-track" type="number" min="1" max="10000" value="1" required /></label><label>${t("workflowCopy.noteGroupName")}<input id="cover-group" value="Toolbox Cover" maxlength="200" required /></label></div><label class="checkbox workflow-check"><input id="cover-rights" type="checkbox" /> ${t("workflowCopy.iOwnTheSourceContentOrHave")}</label><button class="primary">${icon("sparkles", 16)} ${t("workflowCopy.startFullCover")}</button></form>${taskList}`;
   } else if (id === "tuning-learning") {
     const profiles = tuningProfiles.length ? `<div class="download-list">${tuningProfiles.map((profile) => `<article class="download-item completed"><span class="component-status ready">${icon("waveform", 17)}</span><div><div class="download-title"><strong>${escapeHtml(profile.voiceName)}</strong><span>${t("workflowCopy.profileSamples", { references: profile.sourceSamples, feedback: profile.outcomeSamples })}</span></div><small>${t("workflowCopy.loudness")} ${profile.parameters.loudness.toFixed(2)} ${t("workflowCopy.tension")} ${profile.parameters.tension.toFixed(3)} ${t("workflowCopy.breathiness")} ${profile.parameters.breathiness.toFixed(3)} ${t("workflowCopy.vibrato")} ${profile.parameters.vibratoStrength.toFixed(3)}</small></div></article>`).join("")}</div>` : `<div class="mode-limit">${t("workflowCopy.noTuningProfilesYetEachExactVoice")}</div>`;
-    form = `<div class="workflow-split"><form id="tuning-learn-form" class="workflow-form"><h3>${t("workflowCopy.learnFromReferenceVocals")}</h3><label>${t("workflowCopy.referenceVocalAudioPath")}<input id="tuning-audio" required /></label><label>${t("workflowCopy.exactVoiceName")}<input id="tuning-voice" required maxlength="200" /></label><button class="primary">${icon("waveform", 16)} ${t("workflowCopy.analyzeAndUpdateProfile")}</button></form><form id="tuning-apply-form" class="workflow-form"><h3>${t("workflowCopy.applyLearnedParameters")}</h3><label>${t("workflowCopy.voiceProfile")}<select id="tuning-profile" required>${tuningProfiles.map((profile) => `<option value="${escapeHtml(profile.voiceName)}">${escapeHtml(profile.voiceName)}</option>`).join("")}</select></label><div class="workflow-pair"><label>${t("workflowCopy.track")}<input id="tuning-track" type="number" min="1" value="1" required /></label><label>${t("workflowCopy.noteGroup")}<input id="tuning-group" type="number" min="1" value="1" required /></label></div><button class="primary" ${app.bridgeConnected && tuningProfiles.length ? "" : "disabled"}>${icon("sparkles", 16)} ${app.bridgeConnected ? t("workflowCopy.applyToSynthv") : t("workflowCopy.connectBridgeFirst")}</button></form></div>${profiles}`;
+    form = `<div class="workflow-split"><form id="tuning-learn-form" class="workflow-form"><h3>${t("workflowCopy.learnFromReferenceVocals")}</h3><label>${t("workflowCopy.referenceVocalAudioPath")}<div class="path-picker-control"><input id="tuning-audio" required />${pathPickerButton("tuning-audio", "audio")}</div></label><label>${t("workflowCopy.exactVoiceName")}<input id="tuning-voice" required maxlength="200" /></label><button class="primary">${icon("waveform", 16)} ${t("workflowCopy.analyzeAndUpdateProfile")}</button></form><form id="tuning-apply-form" class="workflow-form"><h3>${t("workflowCopy.applyLearnedParameters")}</h3><label>${t("workflowCopy.voiceProfile")}<select id="tuning-profile" required>${tuningProfiles.map((profile) => `<option value="${escapeHtml(profile.voiceName)}">${escapeHtml(profile.voiceName)}</option>`).join("")}</select></label><div class="workflow-pair"><label>${t("workflowCopy.track")}<input id="tuning-track" type="number" min="1" value="1" required /></label><label>${t("workflowCopy.noteGroup")}<input id="tuning-group" type="number" min="1" value="1" required /></label></div><button class="primary" ${app.bridgeConnected && tuningProfiles.length ? "" : "disabled"}>${icon("sparkles", 16)} ${app.bridgeConnected ? t("workflowCopy.applyToSynthv") : t("workflowCopy.connectBridgeFirst")}</button></form></div>${profiles}`;
   } else if (id === "media-import") {
     const sourcePreview = mediaSourcePreview
       ? `<section class="media-source-preview"><div><span class="availability ready">${escapeHtml(mediaSourcePreview.platform)}</span><h3>${escapeHtml(mediaSourcePreview.title)}</h3><p>${escapeHtml(mediaSourcePreview.uploader)} · ${mediaSourcePreview.durationSeconds ? `${Math.round(mediaSourcePreview.durationSeconds)} ${t("workflowCopy.s")}` : t("workflowCopy.unknownDuration")}</p><code>${escapeHtml(mediaSourcePreview.canonicalUrl)}</code></div></section>`
@@ -2164,17 +2175,17 @@ function renderWorkflowPanel(id: string): string {
       return `<article class="download-item ${task.status}"><span class="component-status ${task.status === "completed" ? "ready" : ""}">${icon(task.status === "failed" ? "plug" : "audio", 17)}</span><div><div class="download-title"><strong>${t("workflowCopy.vocalInstrumentalSeparation")}</strong><span>${escapeHtml(t(`workflowTaskStatus.${task.status}`))}</span></div><div class="progress-track"><span style="width:${Math.max(2, Math.min(100, task.progress))}%"></span></div><small>${escapeHtml(task.error || task.detail)}</small>${outputs}</div>${action}</article>`;
     }).join("");
     const taskList = taskCards ? `<section class="download-queue"><div class="section-heading"><div><h3>${t("workflowCopy.separationTasks")}</h3><p>${t("workflowCopy.taskStateIsSavedCancellingStopsPython")}</p></div></div><div class="download-list">${taskCards}</div></section>` : "";
-    form = `<div class="mode-limit">${t("workflowCopy.demucsFetchesTheHtdemucsModelOnFirst")}</div><form id="source-separation-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.mixedAudioPath")}<input id="separation-source" required placeholder="${t("workflowCopy.chooseAnImportedSourceWavOrAnother")}" /></label><button class="primary">${icon("audio", 16)} ${t("workflowCopy.separateVocalsInstrumental")}</button></form>${taskList}`;
+    form = `<div class="mode-limit">${t("workflowCopy.demucsFetchesTheHtdemucsModelOnFirst")}</div><form id="source-separation-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.mixedAudioPath")}<div class="path-picker-control"><input id="separation-source" required placeholder="${t("workflowCopy.chooseAnImportedSourceWavOrAnother")}" />${pathPickerButton("separation-source", "audio")}</div></label><button class="primary">${icon("audio", 16)} ${t("workflowCopy.separateVocalsInstrumental")}</button></form>${taskList}`;
   } else if (id === "audio-insight") {
     form = `<form id="audio-probe-form" class="workflow-form">
-      <label>${t("workflowCopy.audioFilePath")}<input id="audio-path" required placeholder="${t("workflowCopy.chooseAWavFlacMp3M4aAac")}" /></label>
+      <label>${t("workflowCopy.audioFilePath")}<div class="path-picker-control"><input id="audio-path" required placeholder="${t("workflowCopy.chooseAWavFlacMp3M4aAac")}" />${pathPickerButton("audio-path", "audio")}</div></label>
       ${ai ? `<label class="checkbox workflow-check"><input id="audio-advanced" type="checkbox" checked /> ${t("workflowCopy.enableNoteStatisticsPannsInstrumentStyleEstimates")}</label>` : `<div class="mode-limit">${t("workflowCopy.toolboxModeOnlyReportsBpmKeyEnergy")}</div>`}
       <button class="primary">${icon(ai ? "sparkles" : "play", 16)} ${t("workflowCopy.startAnalysis")}</button>
     </form>`;
   } else if (id === "score-to-synthv") {
     form = `<div class="mode-limit"><strong>${t("workflowCopy.conversionScope")}</strong>${t("workflowCopy.writeMonophonicMidiMusicxmlIntoTheOpen")}</div>
       <form id="score-to-synthv-form" class="workflow-form workflow-wide">
-        <label>${t("workflowCopy.scoreFilePath")}<input id="score-source-path" required placeholder="${t("workflowCopy.localMidMidiXmlMusicxmlOrMxl")}" /></label>
+        <label>${t("workflowCopy.scoreFilePath")}<div class="path-picker-control"><input id="score-source-path" required placeholder="${t("workflowCopy.localMidMidiXmlMusicxmlOrMxl")}" /></div></label>
         <div class="workflow-pair"><label>${t("workflowCopy.targetTrackNumber")}<input id="score-target-track" type="number" min="1" max="10000" value="1" required /></label><label>${t("workflowCopy.noteGroupName")}<input id="score-group-name" maxlength="200" value="Imported Score" required /></label></div>
         <label class="checkbox workflow-check"><input id="score-rights" type="checkbox" /> ${t("workflowCopy.iHavePermissionToImportThisLocal")}</label>
         <button class="primary" ${app.bridgeConnected ? "" : "disabled"}>${icon("file", 16)} ${app.bridgeConnected ? t("workflowCopy.convertAndImportIntoCurrentProject") : t("workflowCopy.connectBridgeFirst")}</button>
@@ -2182,16 +2193,16 @@ function renderWorkflowPanel(id: string): string {
   } else if (id === "project-tools") {
     form = `<div class="mode-limit">${t("workflowCopy.saveTheProjectInSynthvFirstThis")}</div>
       <div class="workflow-split">
-        <form id="project-probe-form" class="workflow-form"><h3>${t("workflowCopy.readOnlyProjectProbe")}</h3><label>${t("workflowCopy.svpProjectPath")}<input id="project-probe-path" required placeholder="${t("workflowCopy.targetSvpFile")}" /></label><button class="primary">${icon("file", 16)} ${t("workflowCopy.inspectVersionAndTracks")}</button></form>
-        <form id="project-no-params-form" class="workflow-form"><h3>${t("workflowCopy.exportProjectWithoutParameters")}</h3><label>${t("workflowCopy.savedSvpProjectPath")}<input id="project-no-params-path" required placeholder="${t("workflowCopy.theSourceProjectWillNotBeChanged")}" /></label><label>${t("workflowCopy.outputProjectFilename")}<input id="project-no-params-output" required value="project_no_params.svp" /></label><button class="secondary">${icon("file", 16)} ${t("workflowCopy.createCopyWithoutParameters")}</button></form>
-        <form id="project-lyrics-form" class="workflow-form"><h3>${t("workflowCopy.generateLrcWordLevelLrc")}</h3><label>${t("workflowCopy.savedSvpProjectPath")}<input id="project-lyrics-path" required /></label><div class="workflow-pair"><label>${t("workflowCopy.lyricTrackNumber")}<input id="project-lyrics-track" type="number" min="1" max="10000" step="1" value="1" required /></label><label>${t("workflowCopy.phraseGapSeconds")}<input id="project-lyrics-gap" type="number" min="0" max="10" step="0.1" value="0.8" required /></label></div><label>${t("workflowCopy.standardLrcFilename")}<input id="project-lyrics-output" required value="project.lrc" /></label><label>${t("workflowCopy.wordLevelLrcFilename")}<input id="project-word-lyrics-output" required value="project.word.lrc" /></label><button class="secondary">${icon("file", 16)} ${t("workflowCopy.generateBothLrcFormats")}</button></form>
-        <form id="project-reference-form" class="workflow-form"><h3>${t("workflowCopy.createReferenceTrackCopy")}</h3><label>${t("workflowCopy.targetSvpProjectPath")}<input id="project-ref-path" required /></label><label>${t("workflowCopy.referenceAudioPath")}<input id="project-ref-audio" required /></label><div class="workflow-pair"><label>${t("workflowCopy.referenceTrackName")}<input id="project-ref-name" required value="CVRS Reference" /></label><label>${t("workflowCopy.startTimeSeconds")}<input id="project-ref-begin" type="number" min="0" max="86400" step="0.01" value="0" /></label></div><label>${t("workflowCopy.outputProjectFilename")}<input id="project-ref-output" required value="project_cvrs.svp" /></label><button class="secondary">${icon("plus", 16)} ${t("workflowCopy.createSafeCopy")}</button></form>
+        <form id="project-probe-form" class="workflow-form"><h3>${t("workflowCopy.readOnlyProjectProbe")}</h3><label>${t("workflowCopy.svpProjectPath")}<div class="path-picker-control"><input id="project-probe-path" required placeholder="${t("workflowCopy.targetSvpFile")}" />${pathPickerButton("project-probe-path", "project")}</div></label><button class="primary">${icon("file", 16)} ${t("workflowCopy.inspectVersionAndTracks")}</button></form>
+        <form id="project-no-params-form" class="workflow-form"><h3>${t("workflowCopy.exportProjectWithoutParameters")}</h3><label>${t("workflowCopy.savedSvpProjectPath")}<div class="path-picker-control"><input id="project-no-params-path" required placeholder="${t("workflowCopy.theSourceProjectWillNotBeChanged")}" />${pathPickerButton("project-no-params-path", "project")}</div></label><label>${t("workflowCopy.outputProjectFilename")}<input id="project-no-params-output" required value="project_no_params.svp" /></label><button class="secondary">${icon("file", 16)} ${t("workflowCopy.createCopyWithoutParameters")}</button></form>
+        <form id="project-lyrics-form" class="workflow-form"><h3>${t("workflowCopy.generateLrcWordLevelLrc")}</h3><label>${t("workflowCopy.savedSvpProjectPath")}<div class="path-picker-control"><input id="project-lyrics-path" required />${pathPickerButton("project-lyrics-path", "project")}</div></label><div class="workflow-pair"><label>${t("workflowCopy.lyricTrackNumber")}<input id="project-lyrics-track" type="number" min="1" max="10000" step="1" value="1" required /></label><label>${t("workflowCopy.phraseGapSeconds")}<input id="project-lyrics-gap" type="number" min="0" max="10" step="0.1" value="0.8" required /></label></div><label>${t("workflowCopy.standardLrcFilename")}<input id="project-lyrics-output" required value="project.lrc" /></label><label>${t("workflowCopy.wordLevelLrcFilename")}<input id="project-word-lyrics-output" required value="project.word.lrc" /></label><button class="secondary">${icon("file", 16)} ${t("workflowCopy.generateBothLrcFormats")}</button></form>
+        <form id="project-reference-form" class="workflow-form"><h3>${t("workflowCopy.createReferenceTrackCopy")}</h3><label>${t("workflowCopy.targetSvpProjectPath")}<div class="path-picker-control"><input id="project-ref-path" required />${pathPickerButton("project-ref-path", "project")}</div></label><label>${t("workflowCopy.referenceAudioPath")}<div class="path-picker-control"><input id="project-ref-audio" required />${pathPickerButton("project-ref-audio", "audio")}</div></label><div class="workflow-pair"><label>${t("workflowCopy.referenceTrackName")}<input id="project-ref-name" required value="CVRS Reference" /></label><label>${t("workflowCopy.startTimeSeconds")}<input id="project-ref-begin" type="number" min="0" max="86400" step="0.01" value="0" /></label></div><label>${t("workflowCopy.outputProjectFilename")}<input id="project-ref-output" required value="project_cvrs.svp" /></label><button class="secondary">${icon("plus", 16)} ${t("workflowCopy.createSafeCopy")}</button></form>
       </div>`;
   } else if (id === "audio-to-project") {
     form = `<div class="mode-limit">${t("workflowCopy.thisToolCombinesMidiExportAndSynthv")}</div><div class="mode-limit">${busy ? t("workflowCopy.audioToProjectInProgress") : t("workflowCopy.audioToProjectRecognitionNote")}</div>
       <form id="audio-to-project-form" class="workflow-form workflow-wide">
-        <div class="workflow-pair"><label>${t("workflowCopy.vocalVersionAudioPath")}<div class="input-action"><input id="pipeline-vocal" required value="${escapeHtml(audioToProjectVocalPath)}" placeholder="${t("workflowCopy.audioContainingTheTargetVocals")}" data-pipeline-drop-target="vocal" /><button class="secondary compact" type="button" data-pick-pipeline-vocal>${t("workflowCopy.chooseFile")}</button></div><small>${t("workflowCopy.clickOrDropVocalAudio")}</small></label><label>${t("workflowCopy.instrumentalVersionAudioPath")} <span class="optional-field">${t("workflowCopy.optional")}</span><div class="input-action"><input id="pipeline-inst" value="${escapeHtml(audioToProjectInstrumentalPath)}" placeholder="${t("workflowCopy.instrumentalFromTheSameVersionAndTimeline")}" data-pipeline-drop-target="instrumental" /><button class="secondary compact" type="button" data-pick-pipeline-instrumental>${t("workflowCopy.chooseFile")}</button><button class="secondary compact" type="button" data-clear-pipeline-instrumental ${audioToProjectInstrumentalPath ? "" : "disabled"}>${t("workflowCopy.clear")}</button></div><small>${t("workflowCopy.optionalInstrumentalHelp")}</small></label></div>
-        <div class="workflow-pair"><label>${t("workflowCopy.outputDirectory")}<div class="input-action"><input id="pipeline-output-directory" value="${escapeHtml(audioToProjectOutputDirectory)}" placeholder="${t("workflowCopy.outputDirectoryDefaultsToSource")}" /><button class="secondary compact" type="button" data-pick-pipeline-output-directory>${t("workflowCopy.chooseDirectory")}</button></div><small>${t("workflowCopy.outputDirectoryDefaultsToSource")}</small></label><label>${t("workflowCopy.outputMidiFilename")}<input id="pipeline-output" required value="${escapeHtml(audioToProjectOutputName)}" /></label></div>
+        <div class="workflow-pair"><label>${t("workflowCopy.vocalVersionAudioPath")}<div class="path-picker-control"><input id="pipeline-vocal" required value="${escapeHtml(audioToProjectVocalPath)}" placeholder="${t("workflowCopy.audioContainingTheTargetVocals")}" data-pipeline-drop-target="vocal" /><button class="secondary path-picker-button" type="button" data-pick-pipeline-vocal title="${t("workflowCopy.chooseFile")}" aria-label="${t("workflowCopy.chooseFile")}">${icon("file", 16)}</button></div><small>${t("workflowCopy.clickOrDropVocalAudio")}</small></label><label>${t("workflowCopy.instrumentalVersionAudioPath")} <span class="optional-field">${t("workflowCopy.optional")}</span><div class="path-picker-control"><input id="pipeline-inst" value="${escapeHtml(audioToProjectInstrumentalPath)}" placeholder="${t("workflowCopy.instrumentalFromTheSameVersionAndTimeline")}" data-pipeline-drop-target="instrumental" /><button class="secondary path-picker-button" type="button" data-pick-pipeline-instrumental title="${t("workflowCopy.chooseFile")}" aria-label="${t("workflowCopy.chooseFile")}">${icon("file", 16)}</button><button class="secondary compact" type="button" data-clear-pipeline-instrumental ${audioToProjectInstrumentalPath ? "" : "disabled"}>${t("workflowCopy.clear")}</button></div><small>${t("workflowCopy.optionalInstrumentalHelp")}</small></label></div>
+        <div class="workflow-pair"><label>${t("workflowCopy.outputDirectory")}<div class="path-picker-control"><input id="pipeline-output-directory" value="${escapeHtml(audioToProjectOutputDirectory)}" placeholder="${t("workflowCopy.outputDirectoryDefaultsToSource")}" /><button class="secondary path-picker-button" type="button" data-pick-pipeline-output-directory title="${t("workflowCopy.chooseDirectory")}" aria-label="${t("workflowCopy.chooseDirectory")}">${icon("folder", 16)}</button></div><small>${t("workflowCopy.outputDirectoryDefaultsToSource")}</small></label><label>${t("workflowCopy.outputMidiFilename")}<input id="pipeline-output" required value="${escapeHtml(audioToProjectOutputName)}" /></label></div>
         ${ai ? `<label>${t("workflowCopy.matchingToleranceSeconds")}<input id="pipeline-tolerance" type="number" min="0.02" max="0.25" step="0.01" value="${audioToProjectTolerance}" /></label>` : `<input id="pipeline-tolerance" type="hidden" value="${audioToProjectTolerance}" />`}
         ${ai ? `<label class="checkbox workflow-check"><input id="pipeline-advanced" type="checkbox" ${audioToProjectAdvanced ? "checked" : ""} /> ${t("workflowCopy.enableParameterOptimizationAndLowConfidenceNote")}</label>` : ""}
         <label class="checkbox workflow-check"><input id="pipeline-import" type="checkbox" ${audioToProjectImportToSynthv ? "checked" : ""} ${app.bridgeConnected ? "" : "disabled"} /> ${t("workflowCopy.importIntoTheCurrentSynthvProjectThrough")}${app.bridgeConnected ? "" : t("workflowCopy.bridgeDisconnected")}</label>
@@ -2199,7 +2210,7 @@ function renderWorkflowPanel(id: string): string {
         <button class="primary" id="pipeline-submit">${icon("pipeline", 16)} ${t("workflowCopy.extractAndExportMidi")}</button>
       </form>`;
   } else if (id === "project-doctor") {
-    form = `<div class="mode-limit">${t("workflowCopy.completelyOfflineReadOnlyInspectionOfA")}</div><form id="project-doctor-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.svpProjectPath")}<input id="doctor-project" required placeholder="${t("workflowCopy.chooseAProjectToInspect")}" /></label><button class="primary">${icon("doctor", 16)} ${t("workflowCopy.startReadOnlyInspection")}</button></form>`;
+    form = `<div class="mode-limit">${t("workflowCopy.completelyOfflineReadOnlyInspectionOfA")}</div><form id="project-doctor-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.svpProjectPath")}<div class="path-picker-control"><input id="doctor-project" required placeholder="${t("workflowCopy.chooseAProjectToInspect")}" />${pathPickerButton("doctor-project", "project")}</div></label><button class="primary">${icon("doctor", 16)} ${t("workflowCopy.startReadOnlyInspection")}</button></form>`;
   } else if (id === "batch-recipes") {
     const recipes = workflowRecipes.filter((recipe) => recipe.supportsBatch);
     form = `<div class="mode-limit">${t("workflowCopy.enterOneInputPathPerLineUp")}</div><form id="batch-workflow-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.batchRecipe")}<select id="batch-recipe">${recipes.map((recipe) => `<option value="${escapeHtml(recipe.id)}">${escapeHtml(t(`workflowRecipes.${recipe.id}.title`))} · ${escapeHtml(t(`workflowRecipes.${recipe.id}.description`))}</option>`).join("")}</select></label><label>${t("workflowCopy.inputFilePathsOnePerLine")}<textarea id="batch-inputs" rows="8" required placeholder="C:\Projects\song-a.svp&#10;C:\Projects\song-b.svp"></textarea></label><label>${t("workflowCopy.optionalJsonParameters")}<textarea id="batch-options" rows="3" placeholder='${t("workflowCopy.forExample")} {"suffix":"_delivery"}'>{}</textarea></label><button class="primary">${icon("batch", 16)} ${t("workflowCopy.queueAndRunBatch")}</button></form>`;
@@ -2229,11 +2240,11 @@ function renderWorkflowPanel(id: string): string {
         <div class="button-row"><button type="button" class="secondary" data-refresh-capture-targets ${captureSupported ? "" : "disabled"}>${icon("sync", 15)} ${t("workflowCopy.refreshInstances")}</button><button class="secondary" value="baseline" ${captureSupported && audioCaptureTargets.length ? "" : "disabled"}>${icon("audio", 15)} ${t("workflowCopy.captureBaselineA")}</button><button class="primary" value="candidate" ${captureSupported && audioCaptureTargets.length ? "" : "disabled"}>${icon("play", 15)} ${t("workflowCopy.captureCandidateB")}</button></div>
       </form>
       <div class="ab-capture-paths"><div><span>${t("workflowCopy.baselineA")}</span><code>${escapeHtml(abBaselinePath || t("workflowCopy.notCaptured"))}</code></div><div><span>${t("workflowCopy.candidateB")}</span><code>${escapeHtml(abCandidatePath || t("workflowCopy.notCaptured"))}</code></div></div>
-      <form id="ab-compare-form" class="workflow-form workflow-wide"><div class="workflow-pair"><label>${t("workflowCopy.aWavPath")}<input id="ab-baseline-path" required value="${escapeHtml(abBaselinePath)}" /></label><label>${t("workflowCopy.bWavPath")}<input id="ab-candidate-path" required value="${escapeHtml(abCandidatePath)}" /></label></div><label>${t("workflowCopy.maximumAutomaticAlignmentOffsetMs")}<input id="ab-max-lag" type="number" min="0" max="1000" step="1" value="250" /></label><button class="primary">${icon("compare", 16)} ${t("workflowCopy.alignAndCompareAB")}</button></form>`;
+      <form id="ab-compare-form" class="workflow-form workflow-wide"><div class="workflow-pair"><label>${t("workflowCopy.aWavPath")}<div class="path-picker-control"><input id="ab-baseline-path" required value="${escapeHtml(abBaselinePath)}" />${pathPickerButton("ab-baseline-path", "audio")}</div></label><label>${t("workflowCopy.bWavPath")}<div class="path-picker-control"><input id="ab-candidate-path" required value="${escapeHtml(abCandidatePath)}" />${pathPickerButton("ab-candidate-path", "audio")}</div></label></div><label>${t("workflowCopy.maximumAutomaticAlignmentOffsetMs")}<input id="ab-max-lag" type="number" min="0" max="1000" step="1" value="250" /></label><button class="primary">${icon("compare", 16)} ${t("workflowCopy.alignAndCompareAB")}</button></form>`;
   } else if (id === "pronunciation-doctor") {
-    form = `<div class="mode-limit">${t("workflowCopy.inspectASavedProjectOrPasteLyrics")}</div><form id="pronunciation-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.svpProjectPathOptional")}<input id="pronunciation-project" placeholder="${t("workflowCopy.doNotAlsoPasteLyricsWhenProviding")}" /></label><label>${t("workflowCopy.lyricTextOptional")}<textarea id="pronunciation-lyrics" rows="8" placeholder="${t("workflowCopy.pasteLyricsLineByLineLeaveThe")}"></textarea></label><button class="primary">${icon("pronunciation", 16)} ${t("workflowCopy.runPronunciationDiagnostics")}</button></form>`;
+    form = `<div class="mode-limit">${t("workflowCopy.inspectASavedProjectOrPasteLyrics")}</div><form id="pronunciation-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.svpProjectPathOptional")}<div class="path-picker-control"><input id="pronunciation-project" placeholder="${t("workflowCopy.doNotAlsoPasteLyricsWhenProviding")}" />${pathPickerButton("pronunciation-project", "project")}</div></label><label>${t("workflowCopy.lyricTextOptional")}<textarea id="pronunciation-lyrics" rows="8" placeholder="${t("workflowCopy.pasteLyricsLineByLineLeaveThe")}"></textarea></label><button class="primary">${icon("pronunciation", 16)} ${t("workflowCopy.runPronunciationDiagnostics")}</button></form>`;
   } else if (id === "render-review") {
-    form = `<div class="mode-limit">${t("workflowCopy.usesLocalPiAudioResultsToCheck")}</div><form id="render-review-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.renderedAudioPath")}<input id="render-audio" required /></label><div class="workflow-pair"><label>${t("workflowCopy.expectedDurationSecondsOptional")}<input id="render-duration" type="number" min="0.01" step="0.01" /></label><label>${t("workflowCopy.expectedBpmOptional")}<input id="render-bpm" type="number" min="1" max="1000" step="0.01" /></label></div><label class="checkbox workflow-check"><input id="render-notes" type="checkbox" /> ${t("workflowCopy.requireDetectedPitchEvents")}</label>${ai ? `<label class="checkbox workflow-check"><input id="render-advanced" type="checkbox" /> ${t("workflowCopy.enableAdvancedAudioAnalysis")}</label>` : ""}<button class="primary">${icon("shield", 16)} ${t("workflowCopy.startDeliveryReview")}</button></form>`;
+    form = `<div class="mode-limit">${t("workflowCopy.usesLocalPiAudioResultsToCheck")}</div><form id="render-review-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.renderedAudioPath")}<div class="path-picker-control"><input id="render-audio" required />${pathPickerButton("render-audio", "audio")}</div></label><div class="workflow-pair"><label>${t("workflowCopy.expectedDurationSecondsOptional")}<input id="render-duration" type="number" min="0.01" step="0.01" /></label><label>${t("workflowCopy.expectedBpmOptional")}<input id="render-bpm" type="number" min="1" max="1000" step="0.01" /></label></div><label class="checkbox workflow-check"><input id="render-notes" type="checkbox" /> ${t("workflowCopy.requireDetectedPitchEvents")}</label>${ai ? `<label class="checkbox workflow-check"><input id="render-advanced" type="checkbox" /> ${t("workflowCopy.enableAdvancedAudioAnalysis")}</label>` : ""}<button class="primary">${icon("shield", 16)} ${t("workflowCopy.startDeliveryReview")}</button></form>`;
   } else {
     const catalogFeature = features.find((item) => item.id === id);
     form = catalogFeature ? `<div class="mode-limit"><strong>${t("workflowCopy.toolEntryReady")}</strong><br />${escapeHtml(catalogFeature.base.join(" · "))}${t("workflowCopy.parametersAndResultsWillAppearHereWhen")}</div>` : "";
@@ -2300,22 +2311,6 @@ async function saveFfmpegDirectory(directory: string | null): Promise<void> {
   refreshAudioRuntimeStatus();
 }
 
-async function selectFfmpegDirectory(): Promise<void> {
-  const generation = ffmpegConfigurationGeneration;
-  try {
-    const directory = await api.pickDirectory();
-    if (!directory || page !== "components" || generation !== ffmpegConfigurationGeneration) return;
-    ffmpegDirectoryDraft = directory;
-    const input = document.querySelector<HTMLInputElement>("#ffmpeg-directory");
-    if (input) input.value = directory;
-  } catch (reason) {
-    if (page !== "components" || generation !== ffmpegConfigurationGeneration) return;
-    error = formatError(reason);
-    notice = "";
-    render();
-  }
-}
-
 function renderComponents(): string {
   if (!app) return "";
   const statusLabel = { queued: t("components.status.queued"), downloading: t("components.status.downloading"), installing: t("components.status.installing"), completed: t("components.status.completed"), failed: t("components.status.failed"), cancelled: t("components.status.cancelled") } as const;
@@ -2330,7 +2325,7 @@ function renderComponents(): string {
   </section>` : "";
   const ffmpegControlsDisabled = busy || ffmpegConfigurationLoading;
   const ffmpegDirectoryValue = ffmpegDirectoryDraft ?? ffmpegDirectory ?? "";
-  const ffmpegControls = `<form id="ffmpeg-config-form" class="ffmpeg-config-form"><label>${t("system.ffmpegLocalDirectory")}<input id="ffmpeg-directory" name="directory" value="${escapeHtml(ffmpegDirectoryValue)}" placeholder="${t("system.ffmpegChooseDirectory")}" ${ffmpegControlsDisabled ? "disabled" : ""} /></label><div class="button-row"><button class="secondary" type="button" data-pick-ffmpeg-directory ${ffmpegControlsDisabled ? "disabled" : ""}>${t("system.chooseDirectory")}</button><button class="primary" type="submit" ${ffmpegControlsDisabled ? "disabled" : ""}>${t("system.savePath")}</button><button class="secondary" type="button" data-clear-ffmpeg-directory ${ffmpegControlsDisabled || !ffmpegDirectory ? "disabled" : ""}>${t("system.clearSelection")}</button><button class="secondary" type="button" data-open-ffmpeg-download ${ffmpegControlsDisabled ? "disabled" : ""}>${t("system.manualDownload")}</button></div></form>`;
+  const ffmpegControls = `<form id="ffmpeg-config-form" class="ffmpeg-config-form"><label>${t("system.ffmpegLocalDirectory")}<div class="path-picker-control"><input id="ffmpeg-directory" name="directory" value="${escapeHtml(ffmpegDirectoryValue)}" placeholder="${t("system.ffmpegChooseDirectory")}" ${ffmpegControlsDisabled ? "disabled" : ""} />${pathPickerButton("ffmpeg-directory", "directory", ffmpegControlsDisabled)}</div></label><div class="button-row"><button class="primary" type="submit" ${ffmpegControlsDisabled ? "disabled" : ""}>${t("system.savePath")}</button><button class="secondary" type="button" data-clear-ffmpeg-directory ${ffmpegControlsDisabled || !ffmpegDirectory ? "disabled" : ""}>${t("system.clearSelection")}</button><button class="secondary" type="button" data-open-ffmpeg-download ${ffmpegControlsDisabled ? "disabled" : ""}>${t("system.manualDownload")}</button></div></form>`;
   return `${queue}<div class="section-heading"><div><h2>${t("components.local")}</h2><p>${t("components.localDescription")}</p></div></div>
     <div class="component-list">${app.components.map((component) => {
       const task = app?.downloads.find((item) => item.componentId === component.id && ["queued", "downloading", "installing"].includes(item.status));
@@ -2438,7 +2433,7 @@ function renderBridge(): string {
     </div></section>
     <section class="panel"><div class="panel-heading"><span class="feature-icon blue">${icon("plug", 25)}</span><div><h2>${t("bridge.management")}</h2><p>${t("bridge.managementDescription")}</p></div></div>
       ${targets.length ? `<div class="button-row"><button class="primary" type="button" data-bridge-batch="install">${t("bridge.installAll", { count: targets.length })}</button><button class="secondary" type="button" data-bridge-batch="diagnose">${t("bridge.diagnoseAll")}</button></div><div class="installation-list">${targets.map((target) => `<article class="installation-item"><span class="status-dot online"></span><span><strong>${escapeHtml(target.installations.map((item) => item.displayName).join(" / "))}</strong><small>${escapeHtml(target.scriptsPath)}</small>${renderBridgeResult(target)}</span><div class="button-row"><button class="secondary compact" type="button" data-bridge-target="install" data-scripts-path="${escapeHtml(target.scriptsPath)}" data-bridge-profile="${target.bridgeProfile}">${t("bridge.install")}</button><button class="secondary compact" type="button" data-bridge-target="diagnose" data-scripts-path="${escapeHtml(target.scriptsPath)}" data-bridge-profile="${target.bridgeProfile}">${t("bridge.diagnose")}</button></div></article>`).join("")}</div>` : ""}
-      <form id="bridge-form" class="form-stack"><label>${t("bridge.manualDirectory")}<input id="scripts-path" value="${escapeHtml(bridgeManualScriptsPath || (app.scriptsPath ?? ""))}" placeholder="${t("bridge.directoryPlaceholder")}" /></label><label>${t("bridge.targetType")}<select id="bridge-profile"><option value="sv2" ${bridgeManualProfile === "sv2" ? "selected" : ""}>${t("bridge.sv2")}</option><option value="sv1" ${bridgeManualProfile === "sv1" ? "selected" : ""}>${t("bridge.sv1")}</option><option value="flat" ${bridgeManualProfile === "flat" ? "selected" : ""}>${t("bridge.flat")}</option></select></label><div class="button-row"><button class="primary" value="install">${t("bridge.installManual")}</button><button class="secondary" value="diagnose">${t("bridge.diagnoseManual")}</button><button class="secondary" value="connect">${t("bridge.testConnection")}</button></div></form>
+      <form id="bridge-form" class="form-stack"><label>${t("bridge.manualDirectory")}<div class="path-picker-control"><input id="scripts-path" value="${escapeHtml(bridgeManualScriptsPath || (app.scriptsPath ?? ""))}" placeholder="${t("bridge.directoryPlaceholder")}" />${pathPickerButton("scripts-path", "directory")}</div></label><label>${t("bridge.targetType")}<select id="bridge-profile"><option value="sv2" ${bridgeManualProfile === "sv2" ? "selected" : ""}>${t("bridge.sv2")}</option><option value="sv1" ${bridgeManualProfile === "sv1" ? "selected" : ""}>${t("bridge.sv1")}</option><option value="flat" ${bridgeManualProfile === "flat" ? "selected" : ""}>${t("bridge.flat")}</option></select></label><div class="button-row"><button class="primary" value="install">${t("bridge.installManual")}</button><button class="secondary" value="diagnose">${t("bridge.diagnoseManual")}</button><button class="secondary" value="connect">${t("bridge.testConnection")}</button></div></form>
       <div class="inline-status"><span class="status-dot ${app.bridgeBundled ? "online" : ""}"></span><span>${app.bridgeBundled ? t("bridge.bundled") : t("bridge.missingBundle")}</span></div>
     </section>${processControls}</div>`;
 }
@@ -2846,7 +2841,7 @@ function wireForms(): void {
     if (path) setAudioToProjectVocalPath(path);
   });
   document.querySelector<HTMLInputElement>("#pipeline-inst")?.addEventListener("change", (event) => {
-    audioToProjectInstrumentalPath = (event.currentTarget as HTMLInputElement).value.trim();
+    setAudioToProjectInstrumentalPath((event.currentTarget as HTMLInputElement).value.trim());
   });
   document.querySelector<HTMLInputElement>("#pipeline-output-directory")?.addEventListener("change", (event) => {
     audioToProjectOutputDirectory = (event.currentTarget as HTMLInputElement).value.trim();
@@ -3282,6 +3277,10 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (page === "lyrics" && document.querySelector(".lyric-workbench-grid")) syncLyricDraftFromDom();
+  if (target.dataset.pickPath && target.dataset.pickPathKind) {
+    void pickPathIntoInput(target.dataset.pickPath, target.dataset.pickPathKind as "project" | "audio" | "directory").catch((reason) => { error = formatError(reason); render(); });
+    return;
+  }
   if (target.hasAttribute("data-pick-pipeline-vocal")) {
     void pickAudioToProjectInput("vocal").catch((reason) => { error = formatError(reason); render(); });
     return;
@@ -3839,7 +3838,7 @@ document.addEventListener("click", (event) => {
     const enteringAccounts = targetPage === "accounts" && page !== "accounts";
     const leavingAccounts = page === "accounts" && targetPage !== "accounts";
     const enteringComponents = targetPage === "components" && page !== "components";
-    const enteringToolCategory = targetPage === "import" || targetPage === "quality";
+    const enteringToolCategory = toolGroups.some((group) => group.id === targetPage);
     const activeFeatureId = activeWorkflow;
     const activeGroup = activeFeatureId ? toolGroups.find((group) => group.featureIds.includes(activeFeatureId)) : undefined;
     instanceRefreshGeneration += 1;
@@ -4117,10 +4116,6 @@ document.addEventListener("click", (event) => {
   }
   if (target.dataset.openComponentDownload) {
     void run(async () => { setFeedback(await api.openDownloadedComponent(target.dataset.openComponentDownload ?? "")); });
-    return;
-  }
-  if (target.hasAttribute("data-pick-ffmpeg-directory")) {
-    void selectFfmpegDirectory();
     return;
   }
   if (target.hasAttribute("data-clear-ffmpeg-directory")) {

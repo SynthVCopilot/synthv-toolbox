@@ -18,7 +18,7 @@ export interface FeatureCatalogItem {
 }
 
 export interface ToolGroup {
-  id: "import" | "quality";
+  id: "import" | "convert" | "analysis" | "quality";
   title: string;
   description: string;
   icon: IconName;
@@ -27,13 +27,13 @@ export interface ToolGroup {
 }
 
 const featureDefinitions: FeatureCatalogItem[] = [
-  { id: "cover", title: "一键 Cover", description: "从 BV 或 YouTube 来源自动下载、分离、提取旋律、映射歌词并导入当前 SynthV 工程。", icon: "sparkles", accent: "violet", homePriority: 1, base: ["来源到双轨", "旋律 MIDI 与歌词", "自动 F13 Bridge 连接"], ai: ["快捷指令编排", "指定声库授权提示", "失败阶段解释与重试"], requirements: ["媒体导入器", "人声伴奏分离", "pi-audio", "SynthV Bridge"], componentIds: ["media-fetcher", "vocal-separation", "pi-audio", "ffmpeg"], requiresConnectedBridge: false },
+  { id: "cover", title: "一键 Cover", description: "从 BV 或 YouTube 来源完成 Cover，并导入当前 SynthV 工程。", icon: "sparkles", accent: "violet", homePriority: 1, base: ["来源音频处理", "旋律 MIDI 与歌词", "导入当前工程"], ai: ["快捷指令编排", "指定声库授权提示", "失败阶段解释与重试"], requirements: ["媒体导入器", "人声伴奏分离", "pi-audio", "SynthV Bridge"], componentIds: ["media-fetcher", "vocal-separation", "pi-audio", "ffmpeg"], requiresConnectedBridge: false },
   { id: "tuning-learning", title: "分声库调声学习", description: "从参考人声提取演唱特征，为每个声库独立学习并应用有边界的调声参数。", icon: "waveform", accent: "emerald", homePriority: 2, base: ["离线演唱特征", "分声库档案", "A/B 反馈更新"], ai: ["自动参数建议", "Bridge 安全应用", "Solo 迭代基础"], requirements: ["pi-audio", "SynthV Bridge（应用时）"], componentIds: ["pi-audio"] },
   { id: "media-import", title: "BV / YouTube 音频导入", description: "预览明确提供的 Bilibili 或 YouTube 来源，并在权利确认后下载为受管理 WAV。", icon: "download", accent: "blue", homePriority: 2, base: ["BV / URL 元数据预览", "受管 WAV 与 SHA-256", "来源与权利确认记录"], ai: ["后续自动分离与 Cover 编排", "来源结构说明", "失败原因归类"], requirements: ["media-fetcher", "FFmpeg", "Node.js 22+"], componentIds: ["media-fetcher", "ffmpeg"] },
-  { id: "source-separation", title: "人声 / 伴奏分离", description: "使用受管 Demucs htdemucs 将单个混音源分离为 vocals 与 instrumental WAV。", icon: "audio", accent: "violet", homePriority: 3, base: ["两轨 Demucs 分离", "稳定 vocals / inst 输出", "受管本地目录"], ai: ["自动接入 Cover 工作流", "分离结果复检", "模型运行失败解释"], requirements: ["人声伴奏分离组件", "FFmpeg"], componentIds: ["vocal-separation", "ffmpeg"] },
+  { id: "source-separation", title: "人声 / 伴奏分离", description: "将混合音频分离为人声和伴奏，便于后续编辑。", icon: "audio", accent: "violet", homePriority: 3, base: ["人声与伴奏双轨", "稳定的输出文件", "可用于后续处理"], ai: ["自动接入 Cover 工作流", "分离结果复检", "模型运行失败解释"], requirements: ["人声伴奏分离组件", "FFmpeg"], componentIds: ["vocal-separation", "ffmpeg"] },
   { id: "score-to-synthv", title: "曲谱导入 SynthV", description: "把本地 MIDI 或 MusicXML 曲谱安全转换为当前 SynthV 工程中的单声部音符组。", icon: "file", accent: "emerald", homePriority: 1, base: ["MIDI / MusicXML 读取", "单声部音符转换", "导入前文件指纹校验"], ai: ["声部选择建议", "导入结果复核", "后续调声规划"], requirements: ["SynthV Bridge"], requiresConnectedBridge: true },
   { id: "audio-to-project", title: "演唱音频 → MIDI / SynthV", description: "从演唱音频提取单音旋律、歌词与音素；伴奏可选，可只导出 MIDI，也可继续导入当前 SynthV 工程。", icon: "pipeline", accent: "violet", homePriority: 4, base: ["可选伴奏辅助分离", "旋律、歌词与音素 MIDI 标记", "可选 Bridge 导入"], ai: ["候选参数寻优", "低置信音符纠正", "导入结果复核"], requirements: ["FFmpeg", "pi-audio", "Bridge（可选）"], componentIds: ["ffmpeg", "pi-audio"] },
-  { id: "audio-preparation", title: "音频准备", description: "把本地音频安全准备为 SynthV 可编辑的 PCM WAV，并在需要时按 EBU R128 检查或平衡响度。", icon: "audio", accent: "violet", base: ["媒体信息探测", "PCM WAV 转换", "响度检查与标准化"], ai: ["参数建议", "结果复核", "交付风险提示"], requirements: ["FFmpeg"], componentIds: ["ffmpeg"] },
+  { id: "audio-preparation", title: "音频准备", description: "将本地音频转换为适合 SynthV 使用的格式，并在需要时检查或调整响度。", icon: "audio", accent: "violet", base: ["音频信息检查", "格式转换", "响度调整"], ai: ["参数建议", "结果复核", "交付风险提示"], requirements: ["FFmpeg"], componentIds: ["ffmpeg"] },
   { id: "audio-insight", title: "音频结构分析", description: "提取速度、拍点、调性、能量和频谱趋势，为编曲、调声与复检建立可追溯依据。", icon: "waveform", accent: "blue", homePriority: 3, base: ["BPM / 拍点 / 调性", "能量与频谱曲线", "结构化分析报告"], ai: ["段落与风格归纳", "异常片段解释", "制作方向建议"], requirements: ["FFmpeg", "pi-audio"], componentIds: ["ffmpeg", "pi-audio"] },
   { id: "project-tools", title: "SV 工程文件", description: "只读探测已保存的 .svp，生成参考轨或无参安全副本，并导出普通 LRC 与逐字 LRC。", icon: "file", accent: "blue", base: ["工程结构探测", "安全副本生成", "LRC / 逐字 LRC"], ai: ["工程风险说明", "变更方案草拟", "批量结果复核"], requirements: ["CVRS"], componentIds: ["cvrs"] },
   { id: "ab-audition", title: "片段 A/B 检查", description: "定位并捕获 SynthV 的短试听片段，自动消除回环延迟后比较修改前后差异，避免重复完整渲染。", icon: "compare", accent: "violet", base: ["进程级音频捕获", "播放头恢复与中断校验", "快速 A/B 对齐比较"], ai: ["局部修改复检", "差异指标解释", "连续候选筛选"], requirements: ["Windows 10 20348+", "SynthV Bridge"], requiresConnectedBridge: true, windowsOnly: true },
@@ -48,19 +48,35 @@ const featureDefinitions: FeatureCatalogItem[] = [
 const groupDefinitions: ToolGroup[] = [
   {
     id: "import",
-    title: "导入与转换",
-    description: "把曲谱或演唱音频变成可继续编辑的 MIDI 与 SynthV 音符。",
+    title: "导入",
+    description: "从一个来源开始完成 Cover 工作流。",
+    icon: "import",
+    accent: "violet",
+    featureIds: ["cover"],
+  },
+  {
+    id: "convert",
+    title: "转换",
+    description: "处理音频、提取旋律，或准备可继续编辑的素材。",
     icon: "pipeline",
     accent: "violet",
-    featureIds: ["cover", "media-import", "source-separation", "audio-to-project", "score-to-synthv", "audio-preparation"],
+    featureIds: ["source-separation", "audio-to-project", "audio-preparation"],
+  },
+  {
+    id: "analysis",
+    title: "分析",
+    description: "了解人声表现与音频结构，为下一步创作提供依据。",
+    icon: "waveform",
+    accent: "blue",
+    featureIds: ["tuning-learning", "audio-insight"],
   },
   {
     id: "quality",
-    title: "分析与质检",
-    description: "集中完成音频分析、工程诊断、发音检查与交付复检。",
+    title: "质检",
+    description: "检查工程、发音和渲染结果，定位需要处理的问题。",
     icon: "doctor",
     accent: "emerald",
-    featureIds: ["tuning-learning", "audio-insight", "project-doctor", "pronunciation-doctor", "render-review"],
+    featureIds: ["project-doctor", "pronunciation-doctor", "render-review"],
   },
 ];
 
@@ -78,6 +94,9 @@ export const featureCatalog: FeatureCatalogItem[] = featureDefinitions.map((feat
   get ai() { return feature.ai.map((_, index) => t(`features.${feature.id}.ai.${index}`)); },
   get requirements() { return feature.requirements.map((_, index) => t(`features.${feature.id}.requirements.${index}`)); },
 }));
+
+export const guiFeatureIds = new Set(groupDefinitions.flatMap((group) => group.featureIds));
+export const guiFeatureCatalog = featureCatalog.filter((feature) => guiFeatureIds.has(feature.id));
 
 export const toolGroups: ToolGroup[] = groupDefinitions.map((group) => ({
   ...group,
