@@ -20,14 +20,14 @@ assert.match(source, /position\.toLogical\(window\.devicePixelRatio\)/, 'Native 
 assert.match(source, /data-clear-pipeline-instrumental/, 'Optional instrumental input can be cleared');
 assert.match(apiSource, /instrumentalPath: string \| null/);
 assert.match(apiSource, /outputDirectory: string \| null/);
-const functions = new Set(['escapeHtml', 'formatAudioNumber', 'isTerminalAudioJob', 'asObject', 'resultMetric', 'renderDiagnosticResult', 'renderBatchResult', 'renderScalarResult', 'renderAbAudioResult', 'sourceDirectory', 'setAudioToProjectVocalPath', 'setAudioToProjectInstrumentalPath', 'pathPickerButton', 'pickAudioToProjectInput', 'pickAudioToProjectOutputDirectory', 'dropAudioToProjectInput', 'syncAudioToProjectForm', 'renderWorkflowPanel', 'renderAudioPlanDialog', 'renderCopilot', 'renderMessage', 'wireForms']);
+const functions = new Set(['escapeHtml', 'formatAudioNumber', 'isTerminalAudioJob', 'asObject', 'resultMetric', 'renderDiagnosticResult', 'renderBatchResult', 'renderScalarResult', 'renderAbAudioResult', 'sourceDirectory', 'setAudioToProjectVocalPath', 'setAudioToProjectInstrumentalPath', 'pathPickerButton', 'pickPathIntoInput', 'pickAudioToProjectInput', 'pickAudioToProjectOutputDirectory', 'dropAudioToProjectInput', 'syncAudioToProjectForm', 'renderWorkflowPanel', 'renderAudioPlanDialog', 'renderCopilot', 'renderMessage', 'wireForms']);
 const ast = parse(source, { sourceType: 'module', plugins: ['typescript'] });
 const implementations = ast.program.body.filter((node) => node.type === 'FunctionDeclaration' && functions.has(node.id.name)).map((node) => source.slice(node.start, node.end)).join('\n');
 assert.doesNotMatch(implementations, /\p{Script=Han}/u, 'Static workflow wording must come from the dictionaries');
 assert.doesNotMatch(implementations, /t\(['"]['"]\)/, 'No empty lookups');
 const ids = ['audio-preparation', 'cover', 'tuning-learning', 'media-import', 'source-separation', 'audio-insight', 'score-to-synthv', 'project-tools', 'audio-to-project', 'project-doctor', 'batch-recipes', 'selective-sync', 'retake-compare', 'ab-audition', 'pronunciation-doctor', 'render-review', 'future-tool'];
 const state = {
-  t, locale: () => i18n.global.locale.value, icon: () => '', busy: false,
+  t, locale: () => i18n.global.locale.value, icon: () => '', busy: false, page: 'convert',
   conversation: undefined, conversations: [], fileApprovals: [], activeAiProvider: () => undefined, aiProviderDisplayName: (provider) => provider.displayName,
   app: { mode: 'ai', bridgeConnected: true, components: [], downloads: [] }, features: [], toolGroups: [], workflowResult: undefined,
   audioRuntime: { available: true, version: '8', detail: 'Runtime detail', source: 'system' },
@@ -48,6 +48,25 @@ function rendered(id) {
   const document = new JSDOM(html).window.document;
   assert.ok(document.querySelector('.workflow-panel'), id);
   if (i18n.global.locale.value === 'en') assert.doesNotMatch(document.body.textContent, /\p{Script=Han}/u, id);
+  for (const button of document.querySelectorAll('.path-picker-button')) {
+    assert.equal(button.textContent.trim(), '', `${id} picker is icon-only`);
+    assert.ok(button.getAttribute('aria-label'), `${id} picker has an accessible label`);
+    assert.ok(button.getAttribute('title'), `${id} picker has a tooltip`);
+  }
+  const pickerInputIds = {
+    'source-separation': 'separation-source',
+    'audio-insight': 'audio-path',
+    'tuning-learning': 'tuning-audio',
+    'project-doctor': 'doctor-project',
+    'pronunciation-doctor': 'pronunciation-project',
+    'render-review': 'render-audio',
+  };
+  const pickerInputId = pickerInputIds[id];
+  if (pickerInputId) {
+    const input = document.querySelector(`#${pickerInputId}`);
+    assert.ok(input, `${id} renders its path input`);
+    assert.ok(input.parentElement.querySelector(`[data-pick-path="${pickerInputId}"]`), `${id} picker is next to its input`);
+  }
   return document;
 }
 let renders = 0;
@@ -98,6 +117,7 @@ const interactionDom = new JSDOM('<main></main>');
 const pickerCalls = [];
 state.document = interactionDom.window.document;
 state.window = interactionDom.window;
+state.Event = interactionDom.window.Event;
 state.api = {
   pickAudioFile: async () => pickerCalls.shift(),
   pickDirectory: async () => pickerCalls.shift(),
@@ -130,6 +150,14 @@ await state.pickAudioToProjectOutputDirectory();
 pickerCalls.push('C:\\replacement\\vocal.wav');
 await state.pickAudioToProjectInput('vocal');
 assert.equal(state.document.querySelector('#pipeline-output-directory').value, 'D:\\chosen-output', 'A chosen output directory survives source replacement');
+pickerCalls.push('C:\\audio\\inst.wav');
+await state.pickAudioToProjectInput('instrumental');
+assert.equal(state.document.querySelector('#pipeline-inst').value, 'C:\\audio\\inst.wav', 'Picking instrumental audio updates the form through the shared picker');
+assert.equal(state.document.querySelector('[data-clear-pipeline-instrumental]').disabled, false, 'Picked instrumental audio enables its clear button');
+assert.equal(state.document.querySelector('#pipeline-output').value, 'handwritten.mid', 'Picking instrumental audio preserves a typed output name');
+pickerCalls.push(undefined);
+await state.pickAudioToProjectInput('instrumental');
+assert.equal(state.document.querySelector('#pipeline-inst').value, 'C:\\audio\\inst.wav', 'Cancelling instrumental selection preserves the existing input');
 state.setAudioToProjectInstrumentalPath('C:\\audio\\inst.wav');
 input('#pipeline-inst', '');
 dispatch(state.document.querySelector('#audio-to-project-form'), 'submit');
