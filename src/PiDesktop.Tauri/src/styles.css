@@ -808,7 +808,7 @@ button.full { width: 100%; }
 .update-notes-heading strong { font-size: 12px; }
 .update-notes-heading span { color: var(--muted); font-size: 9px; }
 .update-release-notes { max-height: 260px; overflow: auto; margin: 9px 0 0; padding: 13px; border: 1px solid var(--line); border-radius: 7px; color: inherit; background: var(--surface-subtle); font: 10px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-.about-layout { display: grid; grid-template-columns: minmax(0,1fr); gap: 24px; max-width: 900px; }
+.about-layout { display: grid; grid-template-columns: minmax(240px,.72fr) minmax(420px,1.28fr); gap: 28px; max-width: 1040px; }
 .about-product { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: start; gap: 17px; }
 .about-product-mark { display: grid; width: 68px; height: 68px; place-items: center; border: 1px solid color-mix(in srgb,var(--primary) 24%,var(--line)); border-radius: 16px; background: radial-gradient(circle at 28% 18%, rgba(0,103,192,.18), transparent 65%), var(--surface-subtle); box-shadow: var(--shadow-card); }
 .about-product-mark .brand-logo { width: 47px; height: 47px; }
@@ -822,7 +822,7 @@ button.full { width: 100%; }
 .about-product-details dd { margin-top: 5px; font-size: 11px; font-weight: 650; }
 .about-links { display: flex; grid-column: 1 / -1; flex-wrap: wrap; gap: 7px; }
 .about-links button { min-height: 32px; padding: 6px 9px; font-size: 10px; }
-.about-updates { min-width: 0; padding-top: 24px; border-top: 1px solid var(--line); }
+.about-updates { min-width: 0; padding-left: 28px; border-left: 1px solid var(--line); }
 .about-update-controls { display: grid; grid-template-columns: minmax(170px,1fr) auto; align-items: end; gap: 13px; }
 .about-update-controls .field { margin: 0; }
 .fluent-select { display: block; width: 100%; height: 34px; margin-top: 6px; padding: 0 30px 0 10px; border: 1px solid var(--line-strong); border-bottom-color: rgba(0,0,0,.32); border-radius: 4px; color: inherit; background-color: var(--control); font: inherit; box-shadow: inset 0 1px 0 rgba(255,255,255,.35); transition: border-color 100ms ease, background-color 100ms ease; }
@@ -836,6 +836,7 @@ button.full { width: 100%; }
 .about-check-action strong { margin-top: 3px; font-size: 15px; }
 .about-check-action button { min-height: 32px; margin-left: auto; padding: 5px 9px; font-size: 10px; white-space: nowrap; }
 .about-release-result { margin-top: 17px; padding-top: 16px; border-top: 1px solid var(--line); }
+.about-release-result.ahead { opacity: .82; }
 .about-update-status { display: flex; align-items: center; gap: 12px; }
 .about-update-status h3 { margin: 6px 0 4px; font-size: 14px; }
 .about-update-status small { color: var(--muted); font-size: 10px; }
@@ -1358,6 +1359,8 @@ button.path-picker-button { display: inline-flex; flex: 0 0 34px; align-items: c
 .fatal pre { max-width: 700px; padding: 14px; border: 1px solid rgba(196,43,28,.2); border-radius: 7px; color: var(--danger); background: var(--surface); white-space: pre-wrap; }
 
 @media (max-width: 1050px) {
+  .about-layout { grid-template-columns: minmax(0,1fr); max-width: 900px; }
+  .about-updates { padding-top: 24px; padding-left: 0; border-top: 1px solid var(--line); border-left: 0; }
   .stats-grid { grid-template-columns: repeat(2,1fr); }
   .bridge-grid, .mcp-layout, .profile-setup-grid, .workflow-split { grid-template-columns: 1fr; }
   .hero-panel { grid-template-columns: 1fr; }

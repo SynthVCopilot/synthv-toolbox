@@ -55,6 +55,16 @@ try {
     /same base version/,
   );
   assert.equal(JSON.parse(readFileSync(join(desktop, "package.json"), "utf8")).version, version);
+
+  write("src/PiDesktop.Tauri/package.json", JSON.stringify({ version: "1.2.3" }));
+  write("src/PiDesktop.Tauri/package-lock.json", JSON.stringify({
+    version: "1.2.3",
+    packages: { "": { version: "1.2.3" } },
+  }));
+  write("src/PiDesktop.Tauri/src-tauri/tauri.conf.json", JSON.stringify({ version: "1.2.3" }));
+  write("src/PiDesktop.Tauri/src-tauri/Cargo.toml", "[package]\nname = \"fixture\"\nversion = \"1.2.3\"\n");
+  execFileSync(process.execPath, [join(root, ".github", "scripts", "set-dev-version.mjs"), "AbC1234f", fixture, "--next-minor"]);
+  assert.equal(JSON.parse(readFileSync(join(desktop, "package.json"), "utf8")).version, "1.3.0-dev.abc1234");
 } finally {
   rmSync(fixture, { recursive: true, force: true });
 }
