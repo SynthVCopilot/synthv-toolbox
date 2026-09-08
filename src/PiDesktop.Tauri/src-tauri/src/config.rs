@@ -797,7 +797,10 @@ pub fn model_summary(
             .collect::<Vec<_>>();
         let healthy_accounts = accounts.iter().filter(|account| account.healthy).count();
         let oauth_models = oauth_models_for(provider, catalog, discovered_codex_models.as_ref());
-        let api_key_models = settings.api_key_models_for(provider);
+        let api_key_models = match provider {
+            AiProviderId::Anthropic | AiProviderId::OpenaiCodex => catalog.models_for(provider).to_vec(),
+            AiProviderId::Workbuddy | AiProviderId::Traecode => Vec::new(),
+        };
         let mut models = if accounts.iter().any(|account| account.authorized) || trae_connected {
             oauth_models.clone()
         } else {
@@ -1054,7 +1057,7 @@ mod tests {
     #[test]
     fn codex_model_must_come_from_the_subscription_catalog() {
         let mut settings = ToolboxSettings::default();
-        let catalog = RuntimeModelCatalog::fallback(None);
+        let catalog = RuntimeModelCatalog::unavailable(None);
         assert!(validate_ai_model(
             &settings,
             AiProviderId::OpenaiCodex,
@@ -1103,7 +1106,7 @@ mod tests {
         assert_eq!(AiProviderId::Anthropic.display_name(), "Claude / Anthropic");
         assert_eq!(AiProviderId::OpenaiCodex.display_name(), "OpenAI / Codex");
         let balancer = CredentialBalancer::new([]);
-        let catalog = RuntimeModelCatalog::fallback(None);
+        let catalog = RuntimeModelCatalog::unavailable(None);
         let encoded = serde_json::to_value(model_summary(
             &ToolboxSettings::default(),
             &balancer,
@@ -1111,7 +1114,7 @@ mod tests {
         ))
         .unwrap();
         let providers = encoded["providers"].as_array().unwrap();
-        assert_eq!(encoded["catalogSource"], "built-in-fallback");
+        assert_eq!(encoded["catalogSource"], "unavailable");
         assert!(providers[0]["description"]
             .as_str()
             .unwrap()
@@ -1125,7 +1128,7 @@ mod tests {
     #[test]
     fn provider_auth_method_contract_is_explicit_and_restricted() {
         let balancer = CredentialBalancer::new([]);
-        let catalog = RuntimeModelCatalog::fallback(None);
+        let catalog = RuntimeModelCatalog::unavailable(None);
         let value = serde_json::to_value(model_summary(
             &ToolboxSettings::default(),
             &balancer,
@@ -1191,7 +1194,7 @@ mod tests {
     }
 
     #[test]
-    fn oauth_and_api_key_model_directories_never_mix() {
+    fn saved_api_key_metadata_never_becomes_an_unavailable_catalog() {
         let settings = ToolboxSettings {
             anthropic_api_keys: vec![ApiKeyMetadata {
                 id: "key-1".to_string(),
@@ -1214,16 +1217,44 @@ mod tests {
             ..ToolboxSettings::default()
         };
 
-        let catalog = RuntimeModelCatalog::fallback(None);
+        let catalog = RuntimeModelCatalog::unavailable(None);
         let oauth = oauth_models_for(AiProviderId::Anthropic, &catalog, None);
         let api_key = settings.api_key_models_for(AiProviderId::Anthropic);
-        assert!(oauth.contains(&"claude-sonnet-4-6".to_string()));
+        assert!(oauth.is_empty());
         assert!(!oauth.contains(&"claude-api-only".to_string()));
         assert_eq!(api_key, vec!["claude-api-only"]);
         assert_eq!(
             settings.api_key_models_for(AiProviderId::OpenaiCodex),
             vec!["gpt-api-only"]
         );
+    }
+
+    #[test]
+    fn api_key_provider_models_follow_the_current_models_dev_catalog() {
+        let catalog = crate::opencode_catalog::runtime_catalog_from_bytes(
+            br#"{
+              "anthropic": {"npm":"@ai-sdk/anthropic","models":{"claude-a":{"tool_call":true,"modalities":{"output":["text"]}}}},
+              "openai": {"npm":"@ai-sdk/openai","models":{"gpt-a":{"tool_call":true,"modalities":{"output":["text"]}},"gpt-b":{"tool_call":true,"modalities":{"output":["text"]}}}}
+            }"#,
+        )
+        .unwrap();
+        let summary = model_summary(
+            &ToolboxSettings::default(),
+            &CredentialBalancer::new([]),
+            &catalog,
+        );
+        let anthropic = summary
+            .providers
+            .iter()
+            .find(|provider| provider.id == AiProviderId::Anthropic)
+            .unwrap();
+        let openai = summary
+            .providers
+            .iter()
+            .find(|provider| provider.id == AiProviderId::OpenaiCodex)
+            .unwrap();
+        assert_eq!(anthropic.api_key_models, ["claude-a"]);
+        assert_eq!(openai.api_key_models, ["gpt-a", "gpt-b"]);
     }
 
     #[test]

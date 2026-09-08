@@ -73,10 +73,20 @@ fn binds_models_dev_catalog_to_implemented_runtime_providers() {
     );
     assert_eq!(
         runtime.models_for(AiProviderId::OpenaiCodex),
-        ["gpt-5.6-terra"]
+        ["gpt-5.6-terra", "gpt-4.1"]
     );
     assert_eq!(
         runtime.models_for(AiProviderId::Traecode),
         ["trae-account-default"]
     );
+}
+
+#[test]
+fn unavailable_catalog_has_no_hard_coded_api_key_models() {
+    let runtime = synthv_toolbox_lib::opencode_catalog::RuntimeModelCatalog::unavailable(Some(
+        "models.dev unavailable".to_string(),
+    ));
+    assert_eq!(runtime.source, RuntimeCatalogSource::Unavailable);
+    assert!(runtime.models_for(AiProviderId::Anthropic).is_empty());
+    assert!(runtime.models_for(AiProviderId::OpenaiCodex).is_empty());
 }

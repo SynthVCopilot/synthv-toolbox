@@ -5,7 +5,7 @@ fn unauthorised_oauth_providers_remain_runtime_available() {
     let summary = model_summary(
         &ToolboxSettings::default(),
         &CredentialBalancer::new([]),
-        &RuntimeModelCatalog::fallback(None),
+        &RuntimeModelCatalog::unavailable(None),
     );
     for provider_id in [
         AiProviderId::Anthropic,

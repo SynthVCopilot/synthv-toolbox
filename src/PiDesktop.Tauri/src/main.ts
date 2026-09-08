@@ -2452,88 +2452,8 @@ function renderMcp(): string {
   return `<div class="connections-layout"><section class="panel http-api-settings"><div class="section-heading"><div><h2>${t("connections.localService")}</h2><p>${t("connections.localServiceDescription")}</p></div><span class="availability ${httpApiStatus.running ? "ready" : httpApiStatus.enabled || httpApiStatus.agentEnabled ? "warning" : ""}">${httpApiStatus.running ? t("connections.running") : httpApiStatus.enabled || httpApiStatus.agentEnabled ? t("connections.failed") : t("connections.off")}</span></div><form id="http-api-form" class="http-api-form"><label class="fluent-switch large"><input id="http-api-enabled" name="enabled" type="checkbox" ${httpApiStatus.enabled ? "checked" : ""} aria-label="${t("connections.mcpTools")}" aria-describedby="http-api-help" /><span></span>${t("connections.mcpTools")}</label><label class="fluent-switch large"><input id="http-agent-enabled" name="agentEnabled" type="checkbox" ${httpApiStatus.agentEnabled ? "checked" : ""} aria-label="${t("connections.agentChat")}" aria-describedby="http-api-help" /><span></span>${t("connections.agentChat")}</label><label class="http-api-port">${t("connections.port")}<input id="http-api-port" name="port" type="number" min="1" max="65535" step="1" value="${httpApiStatus.port || 17831}" inputmode="numeric" required aria-describedby="http-api-help" /></label><button class="primary" type="submit" ${busy ? "disabled" : ""}>${t("connections.apply")}</button></form><div id="http-api-help" class="http-api-status"><span><strong>${t("connections.listening")}</strong>${httpApiStatus.running ? t("connections.active") : httpApiStatus.enabled || httpApiStatus.agentEnabled ? t("connections.inactive") : t("connections.disabled")}</span>${httpApiStatus.endpoint ? `<span><strong>MCP</strong><code>${escapeHtml(httpApiStatus.endpoint)}</code></span>` : ""}${httpApiStatus.agentEndpoint ? `<span><strong>Agent</strong><code>${escapeHtml(httpApiStatus.agentEndpoint)}</code></span>` : ""}${httpApiStatus.lastError ? `<span class="error-text"><strong>${t("connections.error")}</strong>${escapeHtml(httpApiStatus.lastError)}</span>` : ""}</div></section>${externalMcp}</div>`;
 }
 
-function fallbackAiProviders(): AiProviderSummary[] {
-  return [{
-    id: "anthropic",
-    displayName: "Claude / Anthropic",
-    description: t("accountUi.anthropicConnection"),
-    active: true,
-    connected: false,
-    healthyAccounts: 0,
-    totalAccounts: 0,
-    model: "",
-    oauthModels: [],
-    apiKeyModels: [],
-    accounts: [],
-    apiKeys: [],
-    models: [],
-    authMethods: ["oauth", "api-key"],
-    available: true,
-    oauthEnabled: true,
-    loadStrategy: "round-robin",
-    unavailableReason: null,
-  }, {
-    id: "openai-codex",
-    displayName: "OpenAI / Codex",
-    description: t("accountUi.openaiConnection"),
-    active: false,
-    connected: false,
-    healthyAccounts: 0,
-    totalAccounts: 0,
-    model: "",
-    oauthModels: [],
-    apiKeyModels: [],
-    accounts: [],
-    apiKeys: [],
-    models: [],
-    authMethods: ["oauth", "api-key"],
-    available: true,
-    oauthEnabled: true,
-    loadStrategy: "round-robin",
-    unavailableReason: null,
-  }, {
-    id: "workbuddy",
-    displayName: "WorkBuddy",
-    description: t("accountUi.workbuddyConnection"),
-    active: false,
-    connected: false,
-    healthyAccounts: 0,
-    totalAccounts: 0,
-    model: "glm-5.2",
-    models: [],
-    oauthModels: ["glm-5.2"],
-    apiKeyModels: [],
-    accounts: [],
-    apiKeys: [],
-    authMethods: ["oauth"],
-    available: true,
-    oauthEnabled: true,
-    loadStrategy: "round-robin",
-    unavailableReason: null,
-  }, {
-    id: "traecode",
-    displayName: "TraeCode",
-    description: t("accountUi.traecodeConnection"),
-    active: false,
-    connected: false,
-    healthyAccounts: 0,
-    totalAccounts: 0,
-    model: "trae-account-default",
-    models: ["trae-account-default"],
-    oauthModels: ["trae-account-default"],
-    apiKeyModels: [],
-    accounts: [],
-    apiKeys: [],
-    authMethods: ["oauth"],
-    available: false,
-    oauthEnabled: true,
-    loadStrategy: "round-robin",
-    unavailableReason: t("accountUi.traecodeUnavailable"),
-  }];
-}
-
 function aiProviders(): AiProviderSummary[] {
-  return app?.model?.providers?.length ? app.model.providers : fallbackAiProviders();
+  return app?.model?.providers ?? [];
 }
 
 function isActiveAiProvider(provider: AiProviderSummary): boolean {
@@ -2582,7 +2502,9 @@ function syncModelAuthDialog(): void {
     providers,
     theme: "system",
     model: catalog ? { providerId: catalog.activeProvider, model: aiProviders().find((item) => item.id === catalog.activeProvider)?.model ?? "" } : null,
-    catalogStatus: { state: catalog?.catalogError ? "error" : "ready", source: catalog?.catalogSource === "models-dev" ? "models.dev" : "fallback", checkedAt: catalog?.catalogGeneratedAt ? new Date(catalog.catalogGeneratedAt).toISOString() : undefined, error: catalog?.catalogError },
+    catalogStatus: catalog
+      ? { state: catalog.catalogError ? "error" : "ready", source: "models.dev", checkedAt: catalog.catalogGeneratedAt ? new Date(catalog.catalogGeneratedAt).toISOString() : undefined, error: catalog.catalogError }
+      : { state: "error", source: "models.dev", error: "models.dev 目录尚未加载。" },
     open: aiProviderPickerOpen,
   });
 }
