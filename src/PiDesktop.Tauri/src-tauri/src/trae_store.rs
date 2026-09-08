@@ -3,15 +3,13 @@ use zeroize::Zeroizing;
 static WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 const SERVICE: &str = "com.synthvcopilot.toolbox.trae.credential";
 pub type Backup = Option<Zeroizing<Vec<u8>>>;
-fn entry(id: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(SERVICE, id).map_err(|_| "系统凭据库不可用。".into())
+fn store() -> crate::local_credential_store::Store {
+    crate::local_credential_store::Store::new(crate::agent::data_root().join("credentials"))
 }
 fn read(id: &str) -> Result<Backup, String> {
-    match entry(id)?.get_secret() {
-        Ok(bytes) => Ok(Some(Zeroizing::new(bytes))),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(_) => Err("无法读取 Trae 凭据。".into()),
-    }
+    store()
+        .read(SERVICE, id)
+        .map_err(|_| "无法读取 Trae 凭据。".into())
 }
 pub fn load(id: &str) -> Result<TraeCredential, String> {
     let bytes = read(id)?.ok_or_else(|| "没有找到 Trae 凭据，请重新授权。".to_string())?;
@@ -26,8 +24,8 @@ fn replace_unlocked(id: &str, credential: &TraeCredential) -> Result<Backup, Str
     let bytes = Zeroizing::new(
         serde_json::to_vec(credential).map_err(|_| "无法编码 Trae 凭据。".to_string())?,
     );
-    entry(id)?
-        .set_secret(&bytes)
+    store()
+        .write(SERVICE, id, &bytes)
         .map_err(|_| "无法保存 Trae 凭据。".to_string())?;
     Ok(backup)
 }
@@ -37,13 +35,12 @@ pub fn restore(id: &str, backup: Backup) -> Result<(), String> {
 }
 fn restore_unlocked(id: &str, backup: Backup) -> Result<(), String> {
     match backup {
-        Some(bytes) => entry(id)?
-            .set_secret(&bytes)
+        Some(bytes) => store()
+            .write(SERVICE, id, &bytes)
             .map_err(|_| "无法恢复 Trae 凭据。".into()),
-        None => match entry(id)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(_) => Err("无法删除 Trae 凭据。".into()),
-        },
+        None => store()
+            .delete(SERVICE, id)
+            .map_err(|_| "无法删除 Trae 凭据。".into()),
     }
 }
 pub fn take(id: &str) -> Result<Backup, String> {

@@ -21,38 +21,35 @@ const ANTHROPIC_KEY_HEADER: &str = "x-api-key";
 const ANTHROPIC_VERSION_HEADER: &str = "anthropic-version";
 const OPENAI_AUTHORIZATION_HEADER: &str = "authorization";
 
-/// A restorable keyring snapshot used to keep delete/configure transactions honest.
+/// A restorable local-storage snapshot used to keep delete/configure transactions honest.
 pub struct ApiKeyBackup(Option<Zeroizing<Vec<u8>>>);
 
-fn entry(credential_id: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(API_KEY_SERVICE, credential_id)
-        .map_err(|error| format!("系统凭据库不可用：{error}"))
+fn store() -> crate::local_credential_store::Store {
+    crate::local_credential_store::Store::new(crate::agent::data_root().join("credentials"))
 }
 
 fn read_raw(
     _provider: AiProviderId,
     credential_id: &str,
 ) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
-    match entry(credential_id)?.get_secret() {
-        Ok(value) => Ok(Some(Zeroizing::new(value))),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(error) => Err(format!("无法读取系统 API Key：{error}")),
-    }
+    store()
+        .read(API_KEY_SERVICE, credential_id)
+        .map_err(|error| format!("无法读取本地 API Key：{error}"))
 }
 
 pub fn load(_provider: AiProviderId, credential_id: &str) -> Result<Zeroizing<String>, String> {
     let bytes =
         read_raw(_provider, credential_id)?.ok_or_else(|| "尚未配置 API Key。".to_string())?;
     if bytes.is_empty() {
-        return Err("系统凭据库中的 API Key 为空。请重新配置。".to_string());
+        return Err("本地存储的 API Key 为空。请重新配置。".to_string());
     }
     match String::from_utf8(bytes.to_vec()) {
         Ok(value) if !value.trim().is_empty() => Ok(Zeroizing::new(value)),
-        Ok(_) => Err("系统凭据库中的 API Key 为空。请重新配置。".to_string()),
+        Ok(_) => Err("本地存储的 API Key 为空。请重新配置。".to_string()),
         Err(error) => {
             let mut invalid = error.into_bytes();
             invalid.zeroize();
-            Err("系统凭据库中的 API Key 不是有效 UTF-8。请重新配置。".to_string())
+            Err("本地存储的 API Key 不是有效 UTF-8。请重新配置。".to_string())
         }
     }
 }
@@ -66,18 +63,18 @@ pub fn replace(
         return Err("API Key 不能为空。".to_string());
     }
     let backup = ApiKeyBackup(read_raw(_provider, credential_id)?);
-    entry(credential_id)?
-        .set_secret(api_key.as_bytes())
-        .map_err(|error| format!("无法写入系统 API Key：{error}"))?;
+    store()
+        .write(API_KEY_SERVICE, credential_id, api_key.as_bytes())
+        .map_err(|error| format!("无法写入本地 API Key：{error}"))?;
     Ok(backup)
 }
 
 pub fn take(_provider: AiProviderId, credential_id: &str) -> Result<ApiKeyBackup, String> {
     let backup = ApiKeyBackup(read_raw(_provider, credential_id)?);
-    match entry(credential_id)?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(backup),
-        Err(error) => Err(format!("无法从系统凭据库删除 API Key：{error}")),
-    }
+    store()
+        .delete(API_KEY_SERVICE, credential_id)
+        .map_err(|error| format!("无法删除本地 API Key：{error}"))?;
+    Ok(backup)
 }
 
 pub fn restore(
@@ -86,13 +83,12 @@ pub fn restore(
     backup: ApiKeyBackup,
 ) -> Result<(), String> {
     match backup.0 {
-        Some(secret) => entry(credential_id)?
-            .set_secret(&secret)
-            .map_err(|error| format!("无法恢复系统 API Key：{error}")),
-        None => match entry(credential_id)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(error) => Err(format!("无法清理系统 API Key：{error}")),
-        },
+        Some(secret) => store()
+            .write(API_KEY_SERVICE, credential_id, &secret)
+            .map_err(|error| format!("无法恢复本地 API Key：{error}")),
+        None => store()
+            .delete(API_KEY_SERVICE, credential_id)
+            .map_err(|error| format!("无法清理本地 API Key：{error}")),
     }
 }
 
@@ -175,7 +171,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn official_model_endpoints_and_keyring_service_are_separate() {
+    fn official_model_endpoints_and_storage_service_are_separate() {
         assert_eq!(ANTHROPIC_MODELS_URL, "https://api.anthropic.com/v1/models");
         assert_eq!(OPENAI_MODELS_URL, "https://api.openai.com/v1/models");
         assert_eq!(ANTHROPIC_KEY_HEADER, "x-api-key");

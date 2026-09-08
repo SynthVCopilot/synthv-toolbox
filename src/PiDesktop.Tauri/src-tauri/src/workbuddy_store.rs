@@ -10,16 +10,14 @@ pub struct Backup {
     routing: Option<Zeroizing<Vec<u8>>>,
 }
 
-fn entry(service: &str, id: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(service, id).map_err(|error| format!("系统凭据库不可用：{error}"))
+fn store() -> crate::local_credential_store::Store {
+    crate::local_credential_store::Store::new(crate::agent::data_root().join("credentials"))
 }
 
 fn optional_secret(service: &str, id: &str) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
-    match entry(service, id)?.get_secret() {
-        Ok(value) => Ok(Some(Zeroizing::new(value))),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(error) => Err(format!("无法读取现有 WorkBuddy 凭据：{error}")),
-    }
+    store()
+        .read(service, id)
+        .map_err(|error| format!("无法读取现有 WorkBuddy 凭据：{error}"))
 }
 
 fn read_backup(id: &str) -> Result<Backup, String> {
@@ -35,13 +33,12 @@ fn set_or_delete(
     value: Option<&Zeroizing<Vec<u8>>>,
 ) -> Result<(), String> {
     match value {
-        Some(bytes) => entry(service, id)?
-            .set_secret(bytes)
+        Some(bytes) => store()
+            .write(service, id, bytes)
             .map_err(|error| format!("无法恢复 WorkBuddy 凭据：{error}")),
-        None => match entry(service, id)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(error) => Err(format!("无法清理 WorkBuddy 凭据：{error}")),
-        },
+        None => store()
+            .delete(service, id)
+            .map_err(|error| format!("无法清理 WorkBuddy 凭据：{error}")),
     }
 }
 
@@ -58,10 +55,10 @@ fn restore_from(id: &str, backup: &Backup) -> Result<(), String> {
 pub fn load(id: &str) -> Result<WorkBuddyCredential, String> {
     let access_bytes = optional_secret(ACCESS_SERVICE, id)?
         .filter(|bytes| !bytes.is_empty())
-        .ok_or_else(|| "系统凭据库中没有此 WorkBuddy access token。".to_string())?;
+        .ok_or_else(|| "本地加密存储中没有此 WorkBuddy access token。".to_string())?;
     let routing_bytes = optional_secret(ROUTING_SERVICE, id)?
         .filter(|bytes| !bytes.is_empty())
-        .ok_or_else(|| "系统凭据库中没有此 WorkBuddy refresh token。".to_string())?;
+        .ok_or_else(|| "本地加密存储中没有此 WorkBuddy refresh token。".to_string())?;
     let access = String::from_utf8_lossy(&access_bytes).into_owned();
     let mut stored: StoredCredential = serde_json::from_slice(&routing_bytes)
         .map_err(|_| "WorkBuddy 凭据格式无效。".to_string())?;
@@ -85,10 +82,10 @@ pub fn replace(id: &str, credential: &WorkBuddyCredential) -> Result<Backup, Str
         serde_json::to_vec(&StoredCredential::from(credential))
             .map_err(|error| format!("无法编码 WorkBuddy 凭据：{error}"))?,
     );
-    if let Err(error) = entry(ACCESS_SERVICE, id)?.set_secret(&access) {
+    if let Err(error) = store().write(ACCESS_SERVICE, id, &access) {
         return Err(format!("无法写入 WorkBuddy access token：{error}"));
     }
-    if let Err(error) = entry(ROUTING_SERVICE, id)?.set_secret(&routing) {
+    if let Err(error) = store().write(ROUTING_SERVICE, id, &routing) {
         let rollback = restore_from(id, &backup);
         return Err(match rollback {
             Ok(()) => format!("无法写入 WorkBuddy refresh token：{error}"),

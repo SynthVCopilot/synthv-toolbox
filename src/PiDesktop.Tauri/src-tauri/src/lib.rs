@@ -18,6 +18,7 @@ mod downloads;
 #[path = "../../../../test/ffmpeg_local_source.rs"]
 mod ffmpeg_local_source_tests;
 mod http_api;
+mod local_credential_store;
 mod lyric_bridge;
 mod lyric_projects;
 mod lyric_tools;

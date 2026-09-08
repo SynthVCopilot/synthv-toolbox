@@ -1,7 +1,7 @@
 //! Browser OAuth for the supported official subscription runtimes.
 //!
 //! The renderer only receives non-secret account metadata. Renewable credentials
-//! are stored in the operating-system credential store and are loaded/refreshed
+//! are stored in local encrypted files and are loaded/refreshed
 //! only by the Rust backend immediately before a model request.
 
 use std::collections::{HashMap, HashSet};
@@ -36,9 +36,6 @@ const CODEX_MODELS_FAILURE_CACHE_TTL: Duration = Duration::from_secs(30);
 const CODEX_MODELS_MAX_CONCURRENCY: usize = 4;
 const MAX_TOKEN_LIFETIME_SECONDS: i64 = 365 * 24 * 60 * 60;
 const REFRESH_EARLY_MS: i64 = 30_000;
-const SECRET_CHUNK_BYTES: usize = 2_048;
-const MAX_SECRET_CHUNKS: usize = 32;
-const SECRET_MANIFEST_VERSION: u8 = 1;
 
 const ANTHROPIC_AUTHORIZE_URL: &str = "https://claude.ai/oauth/authorize";
 const ANTHROPIC_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
@@ -183,50 +180,18 @@ pub struct AuthorizedAccount {
 }
 
 pub struct CredentialBackup {
-    persisted: RawCredentialBackup,
+    persisted: Option<Zeroizing<Vec<u8>>>,
     cached: Option<OAuthCredential>,
     pending: bool,
 }
 
-struct RawCredentialBackup {
-    root: Option<Vec<u8>>,
-    slot_a: Vec<Option<Vec<u8>>>,
-    slot_b: Vec<Option<Vec<u8>>>,
-}
-
-impl Drop for RawCredentialBackup {
-    fn drop(&mut self) {
-        if let Some(root) = &mut self.root {
-            root.zeroize();
-        }
-        for value in self
-            .slot_a
-            .iter_mut()
-            .chain(self.slot_b.iter_mut())
-            .flatten()
-        {
-            value.zeroize();
-        }
-    }
-}
-
-/// Only the renewable, compact secret is persisted in the OS credential store.
-///
-/// Windows Generic Credentials cap a binary secret at 2560 bytes. Refresh
-/// tokens are split into versioned entries when needed; access tokens stay in
-/// process memory and are recreated lazily after a restart.
+/// Only the renewable, compact secret is persisted in local encrypted storage.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PersistedOAuthSecret {
     refresh: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     account_id: Option<String>,
-    // Backward-compatible reader for credentials written by early builds. New
-    // writes deliberately omit these potentially large fields.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    access: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    expires_at: Option<i64>,
 }
 
 impl Drop for PersistedOAuthSecret {
@@ -235,20 +200,7 @@ impl Drop for PersistedOAuthSecret {
         if let Some(account_id) = &mut self.account_id {
             account_id.zeroize();
         }
-        if let Some(access) = &mut self.access {
-            access.zeroize();
-        }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SecretManifest {
-    version: u8,
-    generation: String,
-    chunks: usize,
-    total_len: usize,
-    sha256: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -411,12 +363,7 @@ pub fn install_authorized(account: &AuthorizedAccount) -> Result<CredentialBacku
         .lock()
         .map_err(|_| "OAuth 账号锁已损坏。".to_string())?;
     let backup = backup_credential(&account.metadata)?;
-    let mutation = (|| {
-        // A raw backup allows an explicitly re-authorized account to replace a
-        // corrupt legacy manifest or a partially missing chunk set.
-        delete_persisted_secret(&account.metadata)?;
-        save_new_credential(&account.metadata, &account.credential)
-    })();
+    let mutation = save_new_credential(&account.metadata, &account.credential);
     if let Err(mutation_error) = mutation {
         let rollback = restore_credential_locked(&account.metadata, &backup);
         return Err(with_rollback_error(mutation_error, rollback));
@@ -525,18 +472,11 @@ pub fn load_ready_credential(metadata: &OAuthAccountMetadata) -> Result<OAuthCre
 
     let mut stored = load_secret(metadata)?;
     let current = OAuthCredential {
-        access: stored.access.take().unwrap_or_default(),
+        access: String::new(),
         refresh: std::mem::take(&mut stored.refresh),
-        expires_at: stored.expires_at.take().unwrap_or_default(),
+        expires_at: 0,
         account_id: stored.account_id.take(),
     };
-    if !current.access.is_empty() && current.expires_at > now_ms() + REFRESH_EARLY_MS {
-        // Migrate an early full-token entry to the compact refresh-only format.
-        verify_account_binding(metadata, &current)?;
-        save_new_credential(metadata, &current)?;
-        return Ok(current);
-    }
-
     let credential = refresh(metadata.provider, &current)?;
     verify_account_binding(metadata, &credential)?;
     save_refreshed_credential(metadata, &credential)?;
@@ -770,117 +710,24 @@ fn invalidate_codex_models_cache(metadata: &OAuthAccountMetadata) {
 }
 
 fn backup_credential(metadata: &OAuthAccountMetadata) -> Result<CredentialBackup, String> {
-    let mut persisted = RawCredentialBackup {
-        root: read_optional_secret(&credential_entry(metadata)?, "根凭据")?,
-        slot_a: Vec::with_capacity(MAX_SECRET_CHUNKS),
-        slot_b: Vec::with_capacity(MAX_SECRET_CHUNKS),
-    };
-    for index in 0..MAX_SECRET_CHUNKS {
-        persisted.slot_a.push(read_optional_secret(
-            &credential_chunk_entry(metadata, "a", index)?,
-            &format!("分片 a/{index}"),
-        )?);
-        persisted.slot_b.push(read_optional_secret(
-            &credential_chunk_entry(metadata, "b", index)?,
-            &format!("分片 b/{index}"),
-        )?);
-    }
     Ok(CredentialBackup {
-        persisted,
+        persisted: credential_store().read(CREDENTIAL_SERVICE, &metadata.id)?,
         cached: cached_credential(metadata)?,
         pending: persistence_pending(metadata)?,
     })
 }
 
-fn read_optional_secret(entry: &keyring::Entry, label: &str) -> Result<Option<Vec<u8>>, String> {
-    match entry.get_secret() {
-        Ok(value) => Ok(Some(value)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(error) => Err(format!("无法备份现有 OAuth {label}：{error}")),
-    }
+fn credential_store() -> crate::local_credential_store::Store {
+    crate::local_credential_store::Store::new(crate::agent::data_root().join("credentials"))
 }
 
 fn restore_raw_credential(
     metadata: &OAuthAccountMetadata,
-    backup: &RawCredentialBackup,
+    backup: &Option<Zeroizing<Vec<u8>>>,
 ) -> Result<(), String> {
-    let mut errors = Vec::new();
-    let mut failed_slots = HashSet::new();
-    for (generation, values) in [("a", &backup.slot_a), ("b", &backup.slot_b)] {
-        for index in 0..MAX_SECRET_CHUNKS {
-            match credential_chunk_entry(metadata, generation, index) {
-                Ok(entry) => {
-                    if let Err(error) =
-                        restore_raw_entry(&entry, values.get(index).and_then(Option::as_deref))
-                    {
-                        failed_slots.insert((generation.to_string(), index));
-                        errors.push(format!("分片 {generation}/{index}：{error}"));
-                    }
-                }
-                Err(error) => {
-                    failed_slots.insert((generation.to_string(), index));
-                    errors.push(format!("分片 {generation}/{index}：{error}"));
-                }
-            }
-        }
-    }
-
-    let referenced_chunk_failed =
-        manifest_references_failed_chunk(backup.root.as_deref(), &failed_slots);
-    if referenced_chunk_failed {
-        errors.push(
-            "原凭据清单引用的分片未能全部恢复；为避免提交已知损坏的清单，根凭据保持未安装状态。"
-                .to_string(),
-        );
-    }
-
-    // Commit a valid root manifest last and only after every referenced chunk
-    // is restored. Legacy/opaque roots are independent of the chunk slots and
-    // are restored byte-for-byte even when an unrelated orphan slot failed.
-    match credential_entry(metadata) {
-        Ok(entry) => {
-            let root = (!referenced_chunk_failed)
-                .then_some(backup.root.as_deref())
-                .flatten();
-            if let Err(error) = restore_raw_entry(&entry, root) {
-                errors.push(format!("根凭据：{error}"));
-            }
-        }
-        Err(error) => errors.push(format!("根凭据：{error}")),
-    }
-
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(format!("无法完整恢复系统凭据库：{}", errors.join("；")))
-    }
-}
-
-fn manifest_references_failed_chunk(
-    root: Option<&[u8]>,
-    failed_slots: &HashSet<(String, usize)>,
-) -> bool {
-    root.and_then(|root| serde_json::from_slice::<SecretManifest>(root).ok())
-        .filter(|manifest| {
-            manifest.version == SECRET_MANIFEST_VERSION
-                && matches!(manifest.generation.as_str(), "a" | "b")
-                && manifest.chunks > 0
-                && manifest.chunks <= MAX_SECRET_CHUNKS
-        })
-        .is_some_and(|manifest| {
-            (0..manifest.chunks)
-                .any(|index| failed_slots.contains(&(manifest.generation.clone(), index)))
-        })
-}
-
-fn restore_raw_entry(entry: &keyring::Entry, value: Option<&[u8]>) -> Result<(), String> {
-    if let Some(value) = value {
-        set_secret_with_retry(entry, value)
-    } else {
-        match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(error) => Err(error.to_string()),
-        }
+    match backup {
+        Some(value) => credential_store().write(CREDENTIAL_SERVICE, &metadata.id, value),
+        None => credential_store().delete(CREDENTIAL_SERVICE, &metadata.id),
     }
 }
 
@@ -909,210 +756,40 @@ fn save_refreshed_credential(
     if let Err(error) = persist_refresh_secret(metadata, &credential.refresh) {
         set_persistence_pending(metadata, true)?;
         return Err(format!(
-            "OAuth 已刷新，但旋转后的凭据无法写入系统凭据库；当前进程暂时保留新凭据：{error}"
+            "OAuth 已刷新，但旋转后的凭据无法写入本地加密存储；当前进程暂时保留新凭据：{error}"
         ));
     }
     set_persistence_pending(metadata, false)
 }
 
 fn load_secret(metadata: &OAuthAccountMetadata) -> Result<PersistedOAuthSecret, String> {
-    let root = Zeroizing::new(credential_entry(metadata)?.get_secret().map_err(
-        |error| match error {
-            keyring::Error::NoEntry => "系统凭据库中没有此 OAuth 账号。".to_string(),
-            other => format!("无法读取系统凭据库：{other}"),
-        },
-    )?);
-    let secret = if let Ok(manifest) = serde_json::from_slice::<SecretManifest>(&root) {
-        if manifest.version != SECRET_MANIFEST_VERSION
-            || !matches!(manifest.generation.as_str(), "a" | "b")
-            || manifest.chunks == 0
-            || manifest.chunks > MAX_SECRET_CHUNKS
-        {
-            return Err("OAuth 凭据清单版本或分片数量无效。".to_string());
-        }
-        let mut refresh = Vec::with_capacity(manifest.chunks * SECRET_CHUNK_BYTES);
-        for index in 0..manifest.chunks {
-            let mut chunk = credential_chunk_entry(metadata, &manifest.generation, index)?
-                .get_secret()
-                .map_err(|error| format!("OAuth 凭据分片 {index} 无法读取：{error}"))?;
-            refresh.append(&mut chunk);
-        }
-        if refresh.len() != manifest.total_len || sha256_hex(&refresh) != manifest.sha256 {
-            refresh.zeroize();
-            return Err("OAuth 凭据分片完整性校验失败。".to_string());
-        }
-        let refresh = match String::from_utf8(refresh) {
-            Ok(refresh) => refresh,
-            Err(error) => {
-                let mut bytes = error.into_bytes();
-                bytes.zeroize();
-                return Err("OAuth 刷新凭据不是有效 UTF-8。".to_string());
-            }
-        };
-        PersistedOAuthSecret {
-            refresh,
-            account_id: account_id_from_metadata(metadata),
-            access: None,
-            expires_at: None,
-        }
-    } else {
-        // One-time compatibility with an early development build that stored a
-        // complete credential JSON in the root entry.
-        parse_legacy_secret(&root)?
-    };
+    let bytes = credential_store()
+        .read(CREDENTIAL_SERVICE, &metadata.id)?
+        .ok_or_else(|| "本地加密存储中没有此 OAuth 账号。".to_string())?;
+    let secret = serde_json::from_slice::<PersistedOAuthSecret>(&bytes)
+        .map_err(|_| "本地 OAuth 凭据格式无效。".to_string())?;
     if secret.refresh.trim().is_empty() {
         return Err("OAuth 刷新凭据为空。".to_string());
     }
     Ok(secret)
 }
 
-#[allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
-fn parse_legacy_secret(bytes: &[u8]) -> Result<PersistedOAuthSecret, String> {
-    if let Ok(secret) = serde_json::from_slice(bytes) {
-        return Ok(secret);
-    }
-    if !bytes.len().is_multiple_of(2) {
-        return Err("OAuth 凭据已损坏。".to_string());
-    }
-    let mut utf16 = bytes
-        .chunks_exact(2)
-        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-        .collect::<Vec<_>>();
-    let mut decoded = String::from_utf16(&utf16).map_err(|_| "OAuth 凭据已损坏。".to_string())?;
-    utf16.zeroize();
-    let parsed = serde_json::from_str(&decoded).map_err(|_| "OAuth 凭据已损坏。".to_string());
-    decoded.zeroize();
-    parsed
-}
-
 fn persist_refresh_secret(metadata: &OAuthAccountMetadata, refresh: &str) -> Result<(), String> {
     if refresh.is_empty() {
         return Err("OAuth 刷新凭据为空。".to_string());
     }
-    let chunks = refresh
-        .as_bytes()
-        .chunks(SECRET_CHUNK_BYTES)
-        .collect::<Vec<_>>();
-    if chunks.len() > MAX_SECRET_CHUNKS {
-        return Err(format!(
-            "OAuth 刷新凭据超过安全存储上限（最多 {} bytes）。",
-            SECRET_CHUNK_BYTES * MAX_SECRET_CHUNKS
-        ));
-    }
-
-    let previous_manifest = existing_manifest(metadata)?;
-    let generation = if previous_manifest
-        .as_ref()
-        .is_some_and(|value| value.generation == "a")
-    {
-        "b"
-    } else {
-        "a"
-    };
-    cleanup_slot(metadata, generation)?;
-    let mut written = 0usize;
-    for (index, chunk) in chunks.iter().enumerate() {
-        let entry = credential_chunk_entry(metadata, generation, index)?;
-        if let Err(error) = set_secret_with_retry(&entry, chunk) {
-            cleanup_written_chunks(metadata, generation, written);
-            return Err(format!("无法写入系统凭据库分片 {index}：{error}"));
-        }
-        written += 1;
-    }
-
-    let manifest = serde_json::to_vec(&SecretManifest {
-        version: SECRET_MANIFEST_VERSION,
-        generation: generation.to_string(),
-        chunks: chunks.len(),
-        total_len: refresh.len(),
-        sha256: sha256_hex(refresh.as_bytes()),
-    })
-    .map_err(|error| format!("无法序列化 OAuth 凭据清单：{error}"))?;
-    if manifest.len() > SECRET_CHUNK_BYTES {
-        cleanup_written_chunks(metadata, generation, written);
-        return Err("OAuth 凭据清单超过安全存储上限。".to_string());
-    }
-    if let Err(error) = set_secret_with_retry(&credential_entry(metadata)?, &manifest) {
-        cleanup_written_chunks(metadata, generation, written);
-        return Err(format!("无法提交 OAuth 凭据清单：{error}"));
-    }
-    if let Some(previous) = previous_manifest {
-        let _ = cleanup_slot(metadata, &previous.generation);
-    }
-    Ok(())
-}
-
-fn existing_manifest(metadata: &OAuthAccountMetadata) -> Result<Option<SecretManifest>, String> {
-    let root = match credential_entry(metadata)?.get_secret() {
-        Ok(value) => Zeroizing::new(value),
-        Err(keyring::Error::NoEntry) => return Ok(None),
-        Err(error) => return Err(format!("无法读取现有 OAuth 凭据清单：{error}")),
-    };
-    if let Ok(manifest) = serde_json::from_slice::<SecretManifest>(&root) {
-        if manifest.version != SECRET_MANIFEST_VERSION
-            || !matches!(manifest.generation.as_str(), "a" | "b")
-            || manifest.chunks == 0
-            || manifest.chunks > MAX_SECRET_CHUNKS
-        {
-            return Err("现有 OAuth 凭据清单无效，已拒绝覆盖。".to_string());
-        }
-        return Ok(Some(manifest));
-    }
-    parse_legacy_secret(&root)
-        .map(|_| None)
-        .map_err(|_| "现有 OAuth 凭据损坏，已拒绝覆盖。".to_string())
+    let bytes = Zeroizing::new(
+        serde_json::to_vec(&PersistedOAuthSecret {
+            refresh: refresh.to_string(),
+            account_id: account_id_from_metadata(metadata),
+        })
+        .map_err(|error| format!("无法编码 OAuth 凭据：{error}"))?,
+    );
+    credential_store().write(CREDENTIAL_SERVICE, &metadata.id, &bytes)
 }
 
 fn delete_persisted_secret(metadata: &OAuthAccountMetadata) -> Result<(), String> {
-    let entry = credential_entry(metadata)?;
-    // Delete both deterministic slots first. Keeping the manifest until every
-    // chunk is gone ensures a failed removal remains discoverable/retryable.
-    cleanup_slot(metadata, "a")?;
-    cleanup_slot(metadata, "b")?;
-    match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => {}
-        Err(error) => return Err(format!("无法从系统凭据库删除 OAuth 账号：{error}")),
-    }
-    Ok(())
-}
-
-fn set_secret_with_retry(entry: &keyring::Entry, secret: &[u8]) -> Result<(), String> {
-    match entry.set_secret(secret) {
-        Ok(()) => Ok(()),
-        Err(first) => entry
-            .set_secret(secret)
-            .map_err(|second| format!("{first}; 重试失败：{second}")),
-    }
-}
-
-fn cleanup_written_chunks(metadata: &OAuthAccountMetadata, generation: &str, chunks: usize) {
-    for index in 0..chunks.min(MAX_SECRET_CHUNKS) {
-        if let Ok(entry) = credential_chunk_entry(metadata, generation, index) {
-            let _ = entry.delete_credential();
-        }
-    }
-}
-
-fn cleanup_slot(metadata: &OAuthAccountMetadata, generation: &str) -> Result<(), String> {
-    for index in 0..MAX_SECRET_CHUNKS {
-        let entry = credential_chunk_entry(metadata, generation, index)?;
-        match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => {}
-            Err(error) => {
-                return Err(format!(
-                    "无法清理系统凭据库分片 {generation}/{index}：{error}"
-                ))
-            }
-        }
-    }
-    Ok(())
-}
-
-fn sha256_hex(value: &[u8]) -> String {
-    Sha256::digest(value)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    credential_store().delete(CREDENTIAL_SERVICE, &metadata.id)
 }
 
 fn cached_credential(metadata: &OAuthAccountMetadata) -> Result<Option<OAuthCredential>, String> {
@@ -1182,23 +859,6 @@ fn verify_account_binding(
         return Err("Codex OAuth 刷新返回了不同的 ChatGPT account id，已拒绝绑定。".to_string());
     }
     Ok(())
-}
-
-fn credential_entry(metadata: &OAuthAccountMetadata) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(CREDENTIAL_SERVICE, &metadata.id)
-        .map_err(|error| format!("系统凭据库不可用：{error}"))
-}
-
-fn credential_chunk_entry(
-    metadata: &OAuthAccountMetadata,
-    generation: &str,
-    index: usize,
-) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(
-        CREDENTIAL_SERVICE,
-        &format!("{}:refresh:{generation}:{index}", metadata.id),
-    )
-    .map_err(|error| format!("系统凭据库不可用：{error}"))
 }
 
 fn refresh(provider: AiProviderId, current: &OAuthCredential) -> Result<OAuthCredential, String> {
@@ -1302,7 +962,6 @@ fn parse_token_response(
         .unwrap_or_default();
     if access.is_empty()
         || refresh.is_empty()
-        || refresh.len() > SECRET_CHUNK_BYTES * MAX_SECRET_CHUNKS
         || expires_in <= 0
         || expires_in > MAX_TOKEN_LIFETIME_SECONDS
     {
@@ -1654,27 +1313,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_utf16_secret_is_migratable() {
-        let json = serde_json::json!({
-            "refresh": "legacy-refresh",
-            "accountId": "account-123",
-            "access": "legacy-access",
-            "expiresAt": 42
-        })
-        .to_string();
-        let utf16le = json
-            .encode_utf16()
-            .flat_map(u16::to_le_bytes)
-            .collect::<Vec<_>>();
-
-        let secret = parse_legacy_secret(&utf16le).unwrap();
-        assert_eq!(secret.refresh, "legacy-refresh");
-        assert_eq!(secret.account_id.as_deref(), Some("account-123"));
-        assert_eq!(secret.access.as_deref(), Some("legacy-access"));
-        assert_eq!(secret.expires_at, Some(42));
-    }
-
-    #[test]
     fn credential_debug_output_redacts_tokens() {
         let credential = OAuthCredential {
             access: "access-secret-value".to_string(),
@@ -1705,23 +1343,5 @@ mod tests {
         assert!(models.contains("gpt-5.6-terra"));
         assert!(!models.contains("unavailable"));
         assert!(!models.contains("../../invalid"));
-    }
-
-    #[test]
-    fn credential_rollback_never_commits_a_manifest_with_missing_chunks() {
-        let root = serde_json::to_vec(&SecretManifest {
-            version: SECRET_MANIFEST_VERSION,
-            generation: "b".to_string(),
-            chunks: 2,
-            total_len: 10,
-            sha256: "digest".to_string(),
-        })
-        .unwrap();
-        let mut failed = HashSet::new();
-        failed.insert(("a".to_string(), 0));
-        assert!(!manifest_references_failed_chunk(Some(&root), &failed));
-
-        failed.insert(("b".to_string(), 1));
-        assert!(manifest_references_failed_chunk(Some(&root), &failed));
     }
 }
