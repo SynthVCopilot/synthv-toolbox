@@ -434,7 +434,9 @@ addMessages("zh-CN", { accountNotice: {
   "checked": "此账号的会话与授权状态已检查。",
   "activated": "默认账号槽位已切换。",
   "isolationPrepared": "隔离环境已准备，可以并发启动。",
-  "invalidRouteRequest": "收到的 .svp 智能路由请求格式无效。"
+  "invalidRouteRequest": "收到的 .svp 智能路由请求格式无效。",
+  "routingAlwaysAskEnabled": "智能 .svp 启动将始终询问打开方式。",
+  "routingAlwaysAskDisabled": "格式明确时，智能 .svp 启动将自动选择打开方式。"
 } });
 
 addMessages("en", { accountNotice: {
@@ -460,5 +462,7 @@ addMessages("en", { accountNotice: {
   "checked": "This account’s session and authorization status have been checked.",
   "activated": "Default account slot switched.",
   "isolationPrepared": "Isolation is prepared and ready for concurrent launch.",
-  "invalidRouteRequest": "The received smart .svp routing request has an invalid format."
+  "invalidRouteRequest": "The received smart .svp routing request has an invalid format.",
+  "routingAlwaysAskEnabled": "Smart .svp launch will always ask which host to use.",
+  "routingAlwaysAskDisabled": "Smart .svp launch will choose automatically when the format is unambiguous."
 } });
