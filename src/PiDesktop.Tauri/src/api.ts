@@ -186,22 +186,22 @@ let previewAiProviders: AiProviderSummary[] = [{
 }, {
   id: "traecode",
   displayName: "TraeCode",
-  description: "通过本机 TraeCode CLI 登录并调用只读 Agent。",
+  description: "通过浏览器登录 Trae 并使用文本模型。",
   active: false,
   connected: false,
   healthyAccounts: 0,
   totalAccounts: 0,
-  model: "trae-account-default",
-  models: ["trae-account-default"],
-  oauthModels: ["trae-account-default"],
+  model: "",
+  models: [],
+  oauthModels: [],
   apiKeyModels: [],
   accounts: [],
   apiKeys: [],
   authMethods: ["oauth"],
-  available: false,
+  available: true,
   oauthEnabled: true,
   loadStrategy: "round-robin",
-  unavailableReason: "未检测到 TraeCode CLI；请先安装并登录 traecli。",
+  unavailableReason: null,
 }];
 
 function previewAiModel() {

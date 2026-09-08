@@ -2493,7 +2493,7 @@ function syncModelAuthDialog(): void {
     id: provider.id, name: provider.displayName, description: provider.description, authMethods: provider.authMethods,
     available: provider.available, unavailableReason: provider.unavailableReason, oauthEnabled: provider.oauthEnabled,
     loadStrategy: provider.loadStrategy, mark: aiProviderMark(provider),
-    authorizeLabel: provider.id === "traecode" ? t("accountUi.signInThroughTraecodeCli") : t("accountUi.authorizeInBrowser"),
+    authorizeLabel: t("accountUi.authorizeInBrowser"),
     models: provider.models, oauthModels: provider.oauthModels, apiKeyModels: provider.apiKeyModels,
     oauthCredentials: provider.accounts.map((account) => ({ id: account.id, label: account.label, account: account.label, healthy: account.healthy, enabled: account.enabled, weight: account.weight, models: provider.oauthModels })),
     apiKeyCredentials: provider.apiKeys.map((key) => ({ id: key.id, label: key.label, healthy: key.healthy, enabled: key.enabled, weight: key.weight, models: key.models, cooldownUntilUtc: key.cooldownUntilUtc })),

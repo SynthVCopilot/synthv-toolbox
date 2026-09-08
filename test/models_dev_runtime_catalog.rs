@@ -75,10 +75,7 @@ fn binds_models_dev_catalog_to_implemented_runtime_providers() {
         runtime.models_for(AiProviderId::OpenaiCodex),
         ["gpt-5.6-terra", "gpt-4.1"]
     );
-    assert_eq!(
-        runtime.models_for(AiProviderId::Traecode),
-        ["trae-account-default"]
-    );
+    assert!(runtime.models_for(AiProviderId::Traecode).is_empty());
 }
 
 #[test]

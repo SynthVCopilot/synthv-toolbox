@@ -58,7 +58,7 @@ impl RuntimeModelCatalog {
             anthropic: Vec::new(),
             openai_codex: Vec::new(),
             workbuddy: Vec::new(),
-            traecode: vec!["trae-account-default".to_string()],
+            traecode: Vec::new(),
         }
     }
 
@@ -81,7 +81,7 @@ impl RuntimeModelCatalog {
             anthropic,
             openai_codex,
             workbuddy: workbuddy_models(catalog),
-            traecode: vec!["trae-account-default".to_string()],
+            traecode: Vec::new(),
         }
     }
 }

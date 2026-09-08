@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::agent::{TraeCodeConfig, TraeCodeProvider};
 use crate::credential_balancer::{cooldown_until_utc, CredentialBalancer, CredentialRoute};
 use crate::oauth::{self, AiProviderId, OAuthAccountMetadata};
 use crate::opencode_catalog::{RuntimeCatalogSource, RuntimeModelCatalog};
@@ -71,7 +70,6 @@ pub enum AiLoadStrategy {
 #[serde(rename_all = "kebab-case")]
 pub enum AiModelMode {
     Catalog,
-    AccountDefaultReadonly,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -399,7 +397,11 @@ impl ToolboxSettings {
                 id: account.id.clone(),
                 provider: account.provider,
                 auth_method: AiAuthMethod::OAuth,
-                models: catalog.models_for(account.provider).to_vec(),
+                models: if account.provider == AiProviderId::Traecode {
+                    crate::trae_store::models(&account.id)
+                } else {
+                    catalog.models_for(account.provider).to_vec()
+                },
                 weight: account.weight,
                 strategy: self.load_strategy(account.provider),
             })
@@ -736,7 +738,7 @@ pub fn model_summary(
                 }
             })
             .collect::<Vec<_>>();
-        let mut account_metadata = settings
+        let account_metadata = settings
             .oauth_accounts
             .iter()
             .filter(|account| account.provider == provider)
@@ -746,33 +748,13 @@ pub fn model_summary(
             && !account_metadata.is_empty())
         .then(|| oauth::discover_codex_models(&account_metadata).ok())
         .flatten();
-        let trae_status = (provider == AiProviderId::Traecode).then(|| {
-            TraeCodeProvider::new(TraeCodeConfig::new(provider.default_model())).cached_login_status()
-        });
-        let trae_available = trae_status.as_ref().and_then(|status| status.as_ref().ok()).is_some_and(|status| status.available);
-        let trae_connected = trae_status.as_ref().and_then(|status| status.as_ref().ok()).is_some_and(|status| status.logged_in);
-        if provider == AiProviderId::Traecode
-            && trae_connected
-            && !account_metadata
-                .iter()
-                .any(|account| account.id == "oauth:traecode:enterprise")
-        {
-            account_metadata.push(OAuthAccountMetadata {
-                id: "oauth:traecode:enterprise".to_string(),
-                provider,
-                label: "TraeCode account".to_string(),
-                expires_at: 0,
-                enabled: true,
-                weight: 1,
-            });
-        }
         let accounts = account_metadata
             .iter()
             .map(|account| {
                 let authorized = if provider == AiProviderId::Workbuddy {
                     workbuddy_store::configured(&account.id)
                 } else if provider == AiProviderId::Traecode {
-                    trae_connected
+                    crate::trae_store::configured(&account.id)
                 } else {
                     oauth::credential_available(account)
                 };
@@ -781,7 +763,9 @@ pub fn model_summary(
                     label: account.label.clone(),
                     expires_at: match provider {
                         AiProviderId::Workbuddy => account.expires_at,
-                        AiProviderId::Traecode => 0,
+                        AiProviderId::Traecode => crate::trae_store::load(&account.id)
+                            .map(|credential| credential.expires)
+                            .unwrap_or_default(),
                         AiProviderId::Anthropic | AiProviderId::OpenaiCodex => {
                             oauth::credential_expires_at(account).unwrap_or_default()
                         }
@@ -796,12 +780,24 @@ pub fn model_summary(
             })
             .collect::<Vec<_>>();
         let healthy_accounts = accounts.iter().filter(|account| account.healthy).count();
-        let oauth_models = oauth_models_for(provider, catalog, discovered_codex_models.as_ref());
+        let oauth_models = if provider == AiProviderId::Traecode {
+            let mut models = account_metadata
+                .iter()
+                .flat_map(|account| crate::trae_store::models(&account.id))
+                .collect::<Vec<_>>();
+            models.sort();
+            models.dedup();
+            models
+        } else {
+            oauth_models_for(provider, catalog, discovered_codex_models.as_ref())
+        };
         let api_key_models = match provider {
-            AiProviderId::Anthropic | AiProviderId::OpenaiCodex => catalog.models_for(provider).to_vec(),
+            AiProviderId::Anthropic | AiProviderId::OpenaiCodex => {
+                catalog.models_for(provider).to_vec()
+            }
             AiProviderId::Workbuddy | AiProviderId::Traecode => Vec::new(),
         };
-        let mut models = if accounts.iter().any(|account| account.authorized) || trae_connected {
+        let mut models = if accounts.iter().any(|account| account.authorized) {
             oauth_models.clone()
         } else {
             Vec::new()
@@ -816,12 +812,8 @@ pub fn model_summary(
             }
             AiProviderId::Workbuddy | AiProviderId::Traecode => vec![AiAuthMethod::OAuth],
         };
-        let available = provider != AiProviderId::Traecode || trae_available;
-        let unavailable_reason = trae_status.and_then(|status| match status {
-            Ok(status) if status.available => None,
-            Ok(status) => Some(status.detail),
-            Err(error) => Some(error.to_string()),
-        });
+        let available = true;
+        let unavailable_reason = None;
         AiProviderSummary {
             id: provider,
             display_name: provider.display_name().to_string(),
@@ -833,18 +825,16 @@ pub fn model_summary(
                     "支持 OAuth（ChatGPT Plus / Pro）或 OpenAI API Key。".to_string()
                 }
                 AiProviderId::Workbuddy => "支持 WorkBuddy OAuth。".to_string(),
-                AiProviderId::Traecode => "通过官方 TraeCode CLI 登录；仅使用账号默认模型，不能作为 models.dev 模型元数据。".to_string(),
+                AiProviderId::Traecode => {
+                    "通过浏览器登录 Trae，使用账号提供的文本模型；暂不支持工具调用。".to_string()
+                }
             },
             active,
             connected: accounts.iter().any(|account| account.authorized) || !api_keys.is_empty(),
             healthy_accounts,
             total_accounts: accounts.len(),
             model: settings.model_for(provider).to_string(),
-            model_mode: if provider == AiProviderId::Traecode {
-                AiModelMode::AccountDefaultReadonly
-            } else {
-                AiModelMode::Catalog
-            },
+            model_mode: AiModelMode::Catalog,
             models,
             oauth_models,
             api_key_models,
@@ -898,15 +888,20 @@ pub fn validate_ai_model(
         return Err("模型 ID 包含不受支持的字符。".to_string());
     }
     if provider == AiProviderId::Traecode {
-        if model != AiProviderId::Traecode.default_model() {
-            return Err("TraeCode 仅支持只读的账号默认模型。".to_string());
-        }
-        let authenticated = TraeCodeProvider::new(TraeCodeConfig::new(model))
-            .cached_login_status()
-            .is_ok_and(|status| status.logged_in);
-        return authenticated
+        return settings
+            .oauth_accounts
+            .iter()
+            .filter(|account| {
+                account.provider == provider && account.enabled && settings.oauth_enabled(provider)
+            })
+            .any(|account| {
+                crate::trae_store::configured(&account.id)
+                    && crate::trae_store::models(&account.id)
+                        .iter()
+                        .any(|available| available == model)
+            })
             .then(|| model.to_string())
-            .ok_or_else(|| "TraeCode CLI 尚未登录。".to_string());
+            .ok_or_else(|| "Trae 账号没有提供所选模型。".to_string());
     }
     let oauth_connected = match provider {
         AiProviderId::Workbuddy => settings
@@ -914,11 +909,7 @@ pub fn validate_ai_model(
             .iter()
             .filter(|account| account.provider == provider)
             .any(|account| workbuddy_store::configured(&account.id)),
-        AiProviderId::Traecode => {
-            TraeCodeProvider::new(TraeCodeConfig::new(provider.default_model()))
-                .cached_login_status()
-                .is_ok_and(|status| status.logged_in)
-        }
+        AiProviderId::Traecode => false,
         AiProviderId::Anthropic | AiProviderId::OpenaiCodex => settings
             .oauth_accounts
             .iter()

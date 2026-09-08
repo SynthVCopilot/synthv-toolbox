@@ -1,461 +1,744 @@
-//! TraeCode CLI provider with a deliberately narrow official CLI boundary.
-
-use std::fs;
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Mutex, OnceLock,
+use super::{AgentError, AgentProvider, AgentStep, ChatMessage, Result, Role, ToolDefinition};
+use aes_gcm::{
+    aead::{Aead, Payload},
+    Aes256Gcm, KeyInit,
 };
-use std::thread;
-use std::time::{Duration, Instant};
-
+use axum::{
+    extract::{Request, State},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::any,
+    Router,
+};
+use base64::{
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+    Engine,
+};
+use eventsource_stream::Eventsource;
+use futures_util::StreamExt;
+use p256::{
+    ecdsa::{signature::Signer, Signature, SigningKey},
+    elliptic_curve::rand_core::{OsRng, RngCore},
+    pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey, LineEnding},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use uuid::Uuid;
-
-use super::{
-    AgentError, AgentProvider, AgentStep, ChatMessage, Result, Role, ToolCall, ToolDefinition,
+use sha2::{Digest, Sha256};
+use std::{
+    future::Future,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
 };
+use url::Url;
+use uuid::Uuid;
+use zeroize::Zeroize;
 
-const DEFAULT_TIMEOUT_SECS: u64 = 120;
-const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
-const STATUS_CACHE_TTL: Duration = Duration::from_secs(10);
-static STATUS_CACHE: OnceLock<Mutex<Option<(Instant, TraeLoginStatus)>>> = OnceLock::new();
+const CLIENT_ID: &str = "ono9krqynydwx5";
+const VERSION: &str = "3.5.81";
+const EXCHANGE: &str = "/trae/api/v3/oauth/ExchangeToken";
+const HOSTS: [&str; 3] = [
+    "https://growsg-normal.trae.ai",
+    "https://grow-normal.traeapi.us",
+    "https://grow-normal.trae.ai",
+];
+const MAX_RESPONSE: usize = 8 * 1024 * 1024;
 
-fn default_timeout_secs() -> u64 {
-    DEFAULT_TIMEOUT_SECS
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TraeDevice {
+    pub device_id: String,
+    pub machine_id: String,
+    pub private_key_pem: String,
+    pub public_key_pem: String,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl Drop for TraeDevice {
+    fn drop(&mut self) {
+        self.private_key_pem.zeroize();
+    }
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TraeCredential {
+    pub access: String,
+    pub refresh: String,
+    pub expires: i64,
+    pub refresh_expires: i64,
+    pub host: String,
+    pub client_id: String,
+    pub device: TraeDevice,
+    pub account_id: String,
+    pub label: String,
+    pub store_country: String,
+    pub models: Vec<String>,
+}
+impl Drop for TraeCredential {
+    fn drop(&mut self) {
+        self.access.zeroize();
+        self.refresh.zeroize();
+    }
+}
+#[derive(Clone)]
 pub struct TraeCodeConfig {
     pub model: String,
-    #[serde(default = "default_timeout_secs")]
+    pub account_id: String,
     pub timeout_secs: u64,
-    #[serde(default)]
-    pub executable: Option<PathBuf>,
-    #[serde(default = "default_home_dir")]
-    pub home_dir: PathBuf,
 }
-
 impl TraeCodeConfig {
-    pub fn new(model: impl Into<String>) -> Self {
+    pub fn new(model: impl Into<String>, account_id: impl Into<String>) -> Self {
         Self {
             model: model.into(),
-            timeout_secs: DEFAULT_TIMEOUT_SECS,
-            executable: None,
-            home_dir: default_home_dir(),
+            account_id: account_id.into(),
+            timeout_secs: 120,
         }
     }
 }
-
-fn default_home_dir() -> PathBuf {
-    super::data_root().join("traecode").join("default")
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TraeLoginStatus {
-    pub available: bool,
-    pub logged_in: bool,
-    pub detail: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TraeToolCall {
-    pub id: String,
-    pub tool_name: String,
-    pub arguments_json: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TraeCodeOutput {
-    #[serde(rename = "assistantText", default)]
-    pub assistant_text: Option<String>,
-    #[serde(rename = "toolCalls", default)]
-    pub tool_calls: Vec<TraeToolCall>,
-}
-
 pub struct TraeCodeProvider {
     config: TraeCodeConfig,
 }
-
 impl TraeCodeProvider {
     pub fn new(config: TraeCodeConfig) -> Self {
         Self { config }
     }
-    pub fn config(&self) -> &TraeCodeConfig {
-        &self.config
-    }
-
-    pub fn resolve_executable(&self) -> Result<PathBuf> {
-        if let Some(path) = &self.config.executable {
-            if is_executable(path) {
-                return Ok(path.clone());
-            }
-            return Err(AgentError::new(format!(
-                "未在 {} 找到可执行的 TraeCode CLI。",
-                path.display()
-            )));
-        }
-        if let Some(path) = std::env::var_os("PATH").and_then(|path| {
-            std::env::split_paths(&path)
-                .map(|dir| dir.join("traecli"))
-                .find(|path| is_executable(path))
-        }) {
-            return Ok(path);
-        }
-        if let Some(home) = std::env::var_os("HOME") {
-            let path = PathBuf::from(home).join(".local/bin/traecli");
-            if is_executable(&path) {
-                return Ok(path);
-            }
-        }
-        Err(AgentError::new(
-            "未找到 TraeCode CLI；请安装 traecli 或配置可执行文件路径。",
-        ))
-    }
-
-    pub fn login_status(&self) -> Result<TraeLoginStatus> {
-        let executable = match self.resolve_executable() {
-            Ok(path) => path,
-            Err(error) => {
-                return Ok(TraeLoginStatus {
-                    available: false,
-                    logged_in: false,
-                    detail: error.to_string(),
-                })
-            }
-        };
-        let output = self.run_owned(
-            &executable,
-            &["login".to_string(), "status".to_string()],
-            None,
-            None,
-        )?;
-        let status_text = format!("{}\n{}", output.stdout, output.stderr);
-        let value = serde_json::from_str::<Value>(&output.stdout).ok();
-        let logged_in = value
-            .as_ref()
-            .and_then(|value| value.get("loggedIn").or_else(|| value.get("logged_in")))
-            .and_then(Value::as_bool)
-            .unwrap_or_else(|| status_reports_authenticated(&status_text));
-        Ok(TraeLoginStatus {
-            available: true,
-            logged_in,
-            detail: if logged_in {
-                "TraeCode 已登录".to_string()
-            } else {
-                "TraeCode 尚未登录".to_string()
-            },
-        })
-    }
-
-    pub fn cached_login_status(&self) -> Result<TraeLoginStatus> {
-        let cache = STATUS_CACHE.get_or_init(|| Mutex::new(None));
-        if let Ok(guard) = cache.lock() {
-            if let Some((created, status)) = guard.as_ref() {
-                if created.elapsed() < STATUS_CACHE_TTL {
-                    return Ok(status.clone());
-                }
-            }
-        }
-        let mut status_config = self.config.clone();
-        status_config.timeout_secs = status_config.timeout_secs.min(5);
-        let status = Self::new(status_config).login_status()?;
-        Self::remember_login_status(&status);
-        Ok(status)
-    }
-
-    fn remember_login_status(status: &TraeLoginStatus) {
-        let cache = STATUS_CACHE.get_or_init(|| Mutex::new(None));
-        if let Ok(mut guard) = cache.lock() {
-            *guard = Some((Instant::now(), status.clone()));
-        }
-    }
-
-    pub fn login(&self) -> Result<TraeLoginStatus> {
-        self.login_cancellable(None)
-    }
-
-    pub fn login_cancellable(&self, cancelled: Option<&AtomicBool>) -> Result<TraeLoginStatus> {
-        if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
-            return Err(AgentError::new("TraeCode CLI 已取消"));
-        }
-        let mut login_config = self.config.clone();
-        login_config.timeout_secs = 10 * 60;
-        let login_provider = Self::new(login_config);
-        let executable = login_provider.resolve_executable()?;
-        login_provider.run_cancellable(&executable, &["login"], cancelled)?;
-        let status = self.login_status()?;
-        Self::remember_login_status(&status);
-        Ok(status)
-    }
-
-    pub fn logout(&self) -> Result<TraeLoginStatus> {
-        let executable = self.resolve_executable()?;
-        self.run(&executable, &["logout"])?;
-        let status = self.login_status()?;
-        Self::remember_login_status(&status);
-        Ok(status)
-    }
-
-    pub fn build_exec_args(
-        &self,
-        conversation: &[ChatMessage],
-        tools: &[ToolDefinition],
-        schema_path: &Path,
-        output_path: &Path,
-    ) -> Result<Vec<String>> {
-        if self.config.model.trim().is_empty() {
-            return Err(AgentError::new("TraeCode model id is empty"));
-        }
-        let schema = json!({ "type": "object", "required": ["assistantText", "toolCalls"], "additionalProperties": false, "properties": { "assistantText": { "type": ["string", "null"] }, "toolCalls": { "type": "array", "items": { "type": "object", "required": ["id", "tool_name", "arguments_json"], "additionalProperties": false, "properties": { "id": { "type": "string" }, "tool_name": { "type": "string" }, "arguments_json": { "type": "string" } } } } } });
-        fs::write(schema_path, schema.to_string()).map_err(|error| {
-            AgentError::new(format!("write TraeCode output schema failed: {error}"))
-        })?;
-        let input = json!({ "model": self.config.model, "messages": conversation.iter().map(trae_message).collect::<Result<Vec<_>>>()?, "tools": tools.iter().map(|tool| json!({ "name": tool.name, "description": tool.description, "inputSchema": serde_json::from_str::<Value>(&tool.input_schema_json).unwrap_or_else(|_| json!({ "type": "object" })) })).collect::<Vec<_>>() });
-        Ok(vec![
-            "exec".into(),
-            "--json".into(),
-            "--output-schema".into(),
-            schema_path.to_string_lossy().into_owned(),
-            "--output-last-message".into(),
-            output_path.to_string_lossy().into_owned(),
-            "--ephemeral".into(),
-            "--sandbox".into(),
-            "read-only".into(),
-            "--skip-git-repo-check".into(),
-            input.to_string(),
-        ])
-    }
-
-    pub fn parse_output(text: &str) -> Result<AgentStep> {
-        let output: TraeCodeOutput = serde_json::from_str(text)
-            .map_err(|error| AgentError::new(format!("Invalid TraeCode JSON output: {error}")))?;
-        Ok(AgentStep {
-            assistant_text: output.assistant_text,
-            tool_calls: output
-                .tool_calls
-                .into_iter()
-                .map(|call| ToolCall {
-                    id: call.id,
-                    tool_name: call.tool_name,
-                    arguments_json: normalize_arguments(&call.arguments_json),
-                })
-                .collect(),
-        })
-    }
-
-    fn run(&self, executable: &Path, args: &[&str]) -> Result<BoundedOutput> {
-        self.run_cancellable(executable, args, None)
-    }
-
-    fn run_cancellable(
-        &self,
-        executable: &Path,
-        args: &[&str],
-        cancelled: Option<&AtomicBool>,
-    ) -> Result<BoundedOutput> {
-        let owned = args
-            .iter()
-            .map(|value| (*value).to_string())
-            .collect::<Vec<_>>();
-        let output = self.run_owned(executable, &owned, None, cancelled)?;
-        if output.success {
-            Ok(output)
-        } else {
-            Err(AgentError::new("TraeCode CLI command failed"))
-        }
-    }
-
-    fn run_owned(
-        &self,
-        executable: &Path,
-        args: &[String],
-        current_dir: Option<&Path>,
-        cancelled: Option<&AtomicBool>,
-    ) -> Result<BoundedOutput> {
-        let mut command = Command::new(executable);
-        command.args(args);
-        fs::create_dir_all(&self.config.home_dir)
-            .map_err(|error| AgentError::new(format!("无法创建 TraeCode 运行目录：{error}")))?;
-        command.env("TRAE_HOME", &self.config.home_dir);
-        command.env_remove("TRAECLI_PERSONAL_ACCESS_TOKEN");
-        command.env_remove("TRAECLI_HOST");
-        if let Some(directory) = current_dir {
-            command.current_dir(directory);
-        }
-        let mut child = command
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| AgentError::new(format!("failed to start TraeCode CLI: {error}")))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| AgentError::new("TraeCode CLI stdout unavailable"))?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| AgentError::new("TraeCode CLI stderr unavailable"))?;
-        let out_thread = thread::spawn(|| read_bounded(stdout));
-        let err_thread = thread::spawn(|| read_bounded(stderr));
-        let deadline = Instant::now() + Duration::from_secs(self.config.timeout_secs.max(1));
-        let status = loop {
-            if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(AgentError::new("TraeCode CLI 已取消"));
-            }
-            if let Some(status) = child
-                .try_wait()
-                .map_err(|error| AgentError::new(format!("TraeCode CLI wait failed: {error}")))?
-            {
-                break status;
-            }
-            if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(AgentError::new("TraeCode CLI timed out"));
-            }
-            thread::sleep(Duration::from_millis(20));
-        };
-        let stdout = out_thread
-            .join()
-            .map_err(|_| AgentError::new("TraeCode stdout reader failed"))??;
-        let stderr = err_thread
-            .join()
-            .map_err(|_| AgentError::new("TraeCode stderr reader failed"))??;
-        Ok(BoundedOutput {
-            stdout: String::from_utf8_lossy(&stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&stderr).into_owned(),
-            success: status.success(),
-        })
+}
+fn error(message: &str) -> AgentError {
+    AgentError::new(message)
+}
+fn now() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+fn random<const N: usize>() -> [u8; N] {
+    let mut bytes = [0; N];
+    OsRng.fill_bytes(&mut bytes);
+    bytes
+}
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+fn client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|_| error("Trae HTTP client unavailable."))
+}
+fn trusted_host(host: &str) -> Result<&str> {
+    if HOSTS.contains(&host) {
+        Ok(host)
+    } else {
+        Err(error("Trae credential host is not trusted."))
     }
 }
+fn text(value: &Value, key: &str) -> Result<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| error("Trae returned an incomplete response."))
+}
+fn validate(credential: &TraeCredential) -> Result<SigningKey> {
+    trusted_host(&credential.host)?;
+    if credential.client_id.is_empty()
+        || credential.access.is_empty()
+        || credential.refresh.is_empty()
+        || credential.device.device_id.is_empty()
+        || credential.device.machine_id.is_empty()
+    {
+        return Err(error("Trae credential binding is incomplete."));
+    }
+    let key = SigningKey::from_pkcs8_pem(&credential.device.private_key_pem)
+        .map_err(|_| error("Trae device key is invalid."))?;
+    let pem = key
+        .verifying_key()
+        .to_public_key_pem(LineEnding::LF)
+        .map_err(|_| error("Trae device key is invalid."))?;
+    if pem != credential.device.public_key_pem {
+        return Err(error("Trae device public key does not match."));
+    }
+    Ok(key)
+}
+fn device() -> Result<TraeDevice> {
+    let key = SigningKey::random(&mut OsRng);
+    Ok(TraeDevice {
+        device_id: Uuid::new_v4().to_string(),
+        machine_id: Uuid::new_v4().to_string(),
+        private_key_pem: key
+            .to_pkcs8_pem(LineEnding::LF)
+            .map_err(|_| error("Trae device key unavailable."))?
+            .to_string(),
+        public_key_pem: key
+            .verifying_key()
+            .to_public_key_pem(LineEnding::LF)
+            .map_err(|_| error("Trae device key unavailable."))?,
+    })
+}
+fn device_info(device: &TraeDevice) -> Value {
+    json!({"DeviceID":device.device_id,"MachineID":device.machine_id,"PlatformCode":"IDE_PC","DeviceType":"PC","DeviceName":"","DeviceModel":"","ClientVersion":VERSION,"DevicePublicKey":device.public_key_pem,"DeviceBrand":"","DeviceCPU":"","OSInfo":"","OSVersion":""})
+}
+async fn checked(response: reqwest::Response) -> Result<reqwest::Response> {
+    if response.status().is_success() {
+        Ok(response)
+    } else {
+        Err(AgentError::http(
+            response.status().as_u16(),
+            "Trae service rejected the request.",
+        ))
+    }
+}
+async fn bounded_json(response: reqwest::Response) -> Result<Value> {
+    let mut bytes = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(part) = stream.next().await {
+        let part = part.map_err(|_| error("Trae response was interrupted."))?;
+        if bytes.len() + part.len() > MAX_RESPONSE {
+            return Err(error("Trae response exceeds size limit."));
+        }
+        bytes.extend_from_slice(&part);
+    }
+    serde_json::from_slice(&bytes).map_err(|_| error("Trae returned invalid JSON."))
+}
+async fn post(
+    client: &reqwest::Client,
+    host: &str,
+    path: &str,
+    access: &str,
+    body: Value,
+) -> Result<Value> {
+    let response = client
+        .post(format!("{}{path}", trusted_host(host)?))
+        .header("x-cloudide-token", access)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|_| AgentError::transport("Trae service request failed."))?;
+    let envelope = bounded_json(checked(response).await?).await?;
+    if envelope
+        .pointer("/ResponseMetadata/Error")
+        .is_some_and(|v| !v.is_null())
+    {
+        return Err(error("Trae rejected the authorization."));
+    }
+    envelope
+        .get("Result")
+        .filter(|v| v.is_object())
+        .cloned()
+        .ok_or_else(|| error("Trae returned an incomplete response."))
+}
+fn expiry(value: &Value, duration: Option<&Value>) -> Result<i64> {
+    let time = value.as_i64().or_else(|| {
+        value.as_str().and_then(|s| {
+            s.parse().ok().or_else(|| {
+                chrono::DateTime::parse_from_rfc3339(s)
+                    .ok()
+                    .map(|d| d.timestamp_millis())
+            })
+        })
+    });
+    time.filter(|time| *time > now())
+        .or_else(|| {
+            duration
+                .and_then(Value::as_i64)
+                .filter(|d| *d > 0)
+                .and_then(|d| now().checked_add(d))
+        })
+        .ok_or_else(|| error("Trae returned an expired credential."))
+}
+fn update_tokens(credential: &mut TraeCredential, value: &Value) -> Result<()> {
+    let access = text(value, "Token")?;
+    let refresh = text(value, "RefreshToken")?;
+    let expires = expiry(&value["TokenExpireAt"], value.get("TokenExpireDuration"))?;
+    let refresh_expires = expiry(&value["RefreshExpireAt"], None)?;
+    credential.access = access;
+    credential.refresh = refresh;
+    credential.expires = expires;
+    credential.refresh_expires = refresh_expires;
+    Ok(())
+}
+fn refresh_body(credential: &TraeCredential, timestamp: i64, nonce: &str) -> Result<Value> {
+    let key = validate(credential)?;
+    let proof = format!(
+        "POST\n{EXCHANGE}\n{}\n{}\n{timestamp}\n{nonce}",
+        credential.client_id, credential.refresh
+    );
+    let signature: Signature = key.sign(proof.as_bytes());
+    Ok(
+        json!({"ClientID":credential.client_id,"ClientSecret":"","RefreshToken":credential.refresh,"DeviceInfo":device_info(&credential.device),"DeviceProof":{"Signature":STANDARD.encode(signature.to_der().as_bytes()),"Timestamp":timestamp,"Nonce":nonce},"IDEVersion":VERSION}),
+    )
+}
+async fn refresh(client: &reqwest::Client, credential: &mut TraeCredential) -> Result<()> {
+    if credential.refresh_expires <= now() {
+        return Err(error(
+            "Trae refresh credential has expired; reconnect the account.",
+        ));
+    }
+    let result = post(
+        client,
+        &credential.host,
+        EXCHANGE,
+        &credential.access,
+        refresh_body(credential, now() / 1000, &hex(&random::<16>()))?,
+    )
+    .await?;
+    update_tokens(credential, &result)
+}
+fn inference_host(credential: &TraeCredential) -> Result<&'static str> {
+    let country = &credential.store_country;
+    if country.len() != 2 || !country.bytes().all(|b| b.is_ascii_uppercase()) {
+        return Err(error("Trae account deployment country is missing."));
+    }
+    Ok(
+        if ["AS", "GU", "MP", "PR", "UM", "US", "VI"].contains(&country.as_str()) {
+            "https://core-normal.traeapi.us"
+        } else {
+            "https://coresg-normal.trae.ai"
+        },
+    )
+}
+fn api_request(
+    client: &reqwest::Client,
+    credential: &TraeCredential,
+    path: &str,
+    method: reqwest::Method,
+) -> Result<reqwest::RequestBuilder> {
+    validate(credential)?;
+    if credential.expires <= now() {
+        return Err(error("Trae access credential has expired."));
+    }
+    Ok(client
+        .request(method, format!("{}{path}", inference_host(credential)?))
+        .header("Content-Type", "application/json")
+        .header("X-App-Id", "6eefa01c-1036-4c7e-9ca5-d891f63bfcd8")
+        .header(
+            "Authorization",
+            format!("Cloud-IDE-JWT {}", credential.access),
+        )
+        .header("get-svc", "1")
+        .header("x-ide-version-code", "20260212")
+        .header("X-Device-Id", &credential.device.device_id)
+        .header("X-Machine-Id", &credential.device.machine_id))
+}
+async fn models(client: &reqwest::Client, credential: &TraeCredential) -> Result<Vec<String>> {
+    let response = api_request(
+        client,
+        credential,
+        "/api/ide/v1/model_list?type=llm_raw_chat",
+        reqwest::Method::GET,
+    )?
+    .send()
+    .await
+    .map_err(|_| AgentError::transport("Trae model discovery failed."))?;
+    let value = bounded_json(checked(response).await?).await?;
+    if value.get("code").is_some_and(|v| v != &json!(0)) {
+        return Err(error("Trae model discovery was rejected."));
+    }
+    let values = value
+        .get("model_configs")
+        .and_then(Value::as_array)
+        .ok_or_else(|| error("Trae returned an invalid model list."))?;
+    let mut names = values
+        .iter()
+        .map(|v| text(v, "name"))
+        .collect::<Result<Vec<_>>>()?;
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
 
+struct CallbackState {
+    authority: String,
+    trace: String,
+    sender: Mutex<Option<tokio::sync::oneshot::Sender<Result<(String, String)>>>>,
+}
+fn callback_value(
+    method: &str,
+    authority: &str,
+    target: &str,
+    state: &CallbackState,
+) -> Result<Option<(String, String)>> {
+    if method != "GET"
+        || authority != state.authority
+        || target.len() > 32_768
+        || !target.starts_with("/authorize?")
+    {
+        return Err(error("Invalid callback route."));
+    }
+    let url = Url::parse(&format!("http://{}{target}", state.authority))
+        .map_err(|_| error("Invalid callback URL."))?;
+    if url.path() != "/authorize" || url.host_str() != Some("127.0.0.1") {
+        return Err(error("Invalid callback route."));
+    }
+    let pairs: Vec<_> = url.query_pairs().collect();
+    let one = |key: &str| -> Option<String> {
+        let found: Vec<_> = pairs.iter().filter(|(k, _)| k == key).collect();
+        if found.len() == 1 {
+            Some(found[0].1.to_string())
+        } else {
+            None
+        }
+    };
+    if one("loginTraceID").as_deref() != Some(&state.trace) {
+        return Err(error("Invalid callback correlation."));
+    }
+    if pairs.iter().any(|(k, _)| k == "error_code") {
+        return Ok(None);
+    }
+    let info: Value = serde_json::from_str(
+        &one("authCodeInfo").ok_or_else(|| error("Invalid authorization response."))?,
+    )
+    .map_err(|_| error("Invalid authorization response."))?;
+    let tag = one("userTag")
+        .filter(|t| t == "row" || t == "usttp")
+        .ok_or_else(|| error("Invalid authorization response."))?;
+    if one("scope").as_deref() != Some("trae") {
+        return Err(error("Invalid authorization scope."));
+    }
+    Ok(Some((text(&info, "AuthCode")?, tag)))
+}
+async fn callback(State(state): State<Arc<CallbackState>>, request: Request) -> impl IntoResponse {
+    let host = request
+        .headers()
+        .get("host")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    let target = request.uri().to_string();
+    let result = callback_value(request.method().as_str(), host, &target, &state);
+    let status = match result {
+        Ok(value) => {
+            let mut sender = state.sender.lock().unwrap();
+            if let Some(sender) = sender.take() {
+                let ok = value.is_some();
+                let _ = sender
+                    .send(value.ok_or_else(|| error("Trae browser authorization was rejected.")));
+                if ok {
+                    StatusCode::OK
+                } else {
+                    StatusCode::BAD_REQUEST
+                }
+            } else {
+                StatusCode::GONE
+            }
+        }
+        Err(_) => StatusCode::BAD_REQUEST,
+    };
+    (
+        status,
+        [
+            ("cache-control", "no-store"),
+            ("referrer-policy", "no-referrer"),
+            ("content-security-policy", "default-src 'none'"),
+        ],
+        "Authorization response received. Return to the application.",
+    )
+}
+fn run<T>(
+    future: impl Future<Output = Result<T>>,
+    cancelled: Option<&AtomicBool>,
+    timeout: Duration,
+) -> Result<T> {
+    tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|_| error("Trae runtime unavailable."))?.block_on(async {
+        tokio::select! {
+            result=future => result,
+            _=tokio::time::sleep(timeout) => Err(error("Trae operation timed out.")),
+            _=async { loop { if cancelled.is_some_and(|c| c.load(Ordering::Relaxed)) { break; } tokio::time::sleep(Duration::from_millis(50)).await; } } => Err(error("Trae operation was cancelled.")),
+        }
+    })
+}
+pub fn authorize(
+    cancelled: Option<&AtomicBool>,
+    open: impl FnOnce(&str) -> std::result::Result<(), String>,
+) -> Result<TraeCredential> {
+    if cancelled.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return Err(error("Trae operation was cancelled."));
+    }
+    run(
+        async {
+            let binding = device()?;
+            let trace = Uuid::new_v4().to_string();
+            let verifier = URL_SAFE_NO_PAD.encode(random::<48>());
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .map_err(|_| error("Trae callback listener unavailable."))?;
+            let authority = listener
+                .local_addr()
+                .map_err(|_| error("Trae callback listener unavailable."))?
+                .to_string();
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            let state = Arc::new(CallbackState {
+                authority: authority.clone(),
+                trace: trace.clone(),
+                sender: Mutex::new(Some(sender)),
+            });
+            let app = Router::new().fallback(any(callback)).with_state(state);
+            let server = tokio::spawn(async move { axum::serve(listener, app).await });
+            let mut url = Url::parse("https://www.trae.ai/authorization").unwrap();
+            url.query_pairs_mut().extend_pairs(&[
+                ("login_version", "1"),
+                ("auth_from", "trae"),
+                ("login_channel", "native_ide"),
+                ("plugin_version", "2.3.61406"),
+                ("auth_type", "local"),
+                ("client_id", CLIENT_ID),
+                ("redirect", "0"),
+                ("login_trace_id", &trace),
+                (
+                    "auth_callback_url",
+                    &format!("http://{authority}/authorize"),
+                ),
+                ("machine_id", &binding.machine_id),
+                ("device_id", &binding.device_id),
+                ("x_device_id", &binding.device_id),
+                ("x_machine_id", &binding.machine_id),
+                ("x_app_version", VERSION),
+                ("x_app_type", "stable"),
+                (
+                    "code_challenge",
+                    &URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes())),
+                ),
+                ("code_challenge_method", "S256"),
+            ]);
+            if open(url.as_str()).is_err() {
+                server.abort();
+                return Err(error("Trae authorization browser could not be opened."));
+            }
+            let result = receiver
+                .await
+                .map_err(|_| error("Trae callback listener stopped."));
+            server.abort();
+            let (code, tag) = result??;
+            let host = if tag == "usttp" { HOSTS[1] } else { HOSTS[0] };
+            let client = client()?;
+            let result=post(&client,host,EXCHANGE,"",json!({"ClientID":CLIENT_ID,"AuthCode":code,"CodeVerifier":verifier,"DeviceInfo":device_info(&binding),"IDEVersion":VERSION})).await?;
+            let mut credential = TraeCredential {
+                access: String::new(),
+                refresh: String::new(),
+                expires: 0,
+                refresh_expires: 0,
+                host: host.into(),
+                client_id: CLIENT_ID.into(),
+                device: binding,
+                account_id: String::new(),
+                label: String::new(),
+                store_country: String::new(),
+                models: Vec::new(),
+            };
+            update_tokens(&mut credential, &result)?;
+            let user = post(
+                &client,
+                host,
+                "/cloudide/api/v3/trae/GetUserInfo",
+                &credential.access,
+                json!({"IDEVersion":VERSION,"ReqSource":"IDE"}),
+            )
+            .await?;
+            credential.account_id = text(&user, "UserID")?;
+            credential.label = text(&user, "ScreenName")
+                .or_else(|_| text(&user, "NonPlainTextEmail"))
+                .unwrap_or_else(|_| credential.account_id.clone());
+            credential.store_country = text(&user, "StoreCountry")?;
+            credential.models = models(&client, &credential).await?;
+            Ok(credential)
+        },
+        cancelled,
+        Duration::from_secs(300),
+    )
+}
+pub fn ready(account_id: &str) -> Result<TraeCredential> {
+    let mut credential = crate::trae_store::load(account_id).map_err(AgentError::new)?;
+    validate(&credential)?;
+    if credential.expires <= now() + 60_000 {
+        let expected_refresh = zeroize::Zeroizing::new(credential.refresh.clone());
+        run(
+            refresh(&client()?, &mut credential),
+            None,
+            Duration::from_secs(60),
+        )?;
+        crate::trae_store::replace_current(account_id, &expected_refresh, &credential)
+            .map_err(AgentError::new)?;
+    }
+    Ok(credential)
+}
+fn encrypted_messages(
+    conversation: &[ChatMessage],
+    tools: &[ToolDefinition],
+    pin: &[u8; 8],
+    iv: &[u8; 12],
+    timestamp: &str,
+) -> Result<String> {
+    if !tools.is_empty()
+        || conversation.iter().any(|m| {
+            matches!(m.role, Role::Tool) || !m.tool_calls.is_empty() || m.tool_call_id.is_some()
+        })
+    {
+        return Err(error(
+            "Trae text endpoint does not support tool definitions or tool history.",
+        ));
+    }
+    if conversation.is_empty() {
+        return Err(error("Trae requires at least one message."));
+    }
+    let messages = conversation
+        .iter()
+        .map(|m| json!({"role":m.role,"content":[{"type":"text","text":m.content}]}))
+        .collect::<Vec<_>>();
+    let mut key = [
+        0x61, 0x95, 0xf2, 0x4c, 0xa4, 0xd4, 0x30, 0xf8, 0xa4, 0x83, 0x3d, 0xe7, 0xdb, 0x8d, 0xac,
+        0x37, 0xd1, 0x48, 0xa0, 0x84, 0xe7, 0x46, 0x4a, 0x35, 0x1f, 0xfa, 0x68, 0x58, 0x5c, 0x16,
+        0xb9, 0x55,
+    ];
+    for i in 0..8 {
+        key[i] ^= pin[i];
+    }
+    let encrypted = Aes256Gcm::new_from_slice(&key)
+        .map_err(|_| error("Trae encryption unavailable."))?
+        .encrypt(
+            iv.into(),
+            Payload {
+                msg: json!(messages).to_string().as_bytes(),
+                aad: timestamp.as_bytes(),
+            },
+        )
+        .map_err(|_| error("Trae encryption failed."))?;
+    let mut result = iv.to_vec();
+    result.extend(encrypted);
+    Ok(STANDARD.encode(result))
+}
+#[derive(Default)]
+struct Completion {
+    text: String,
+    reasoning: String,
+    usage: Option<Value>,
+    done: bool,
+}
+impl Completion {
+    fn event(&mut self, name: &str, data: &str) -> Result<()> {
+        let value: Value =
+            serde_json::from_str(data).map_err(|_| error("Trae stream returned invalid JSON."))?;
+        if !value.is_object()
+            || name == "error"
+            || value.get("tool_calls").is_some()
+            || value.get("function_call").is_some()
+            || value["finish_reason"] == "tool_calls"
+        {
+            return Err(error(
+                "Trae returned an error or unsupported tool response.",
+            ));
+        }
+        if name == "metadata" || name == "progress_notice" {
+            return Ok(());
+        }
+        if name == "token_usage" {
+            for field in ["prompt_tokens", "completion_tokens", "total_tokens"] {
+                if !value[field]
+                    .as_f64()
+                    .is_some_and(|n| n.is_finite() && n >= 0.0)
+                {
+                    return Err(error("Trae returned invalid token usage."));
+                }
+            }
+            self.usage = Some(value.clone());
+        }
+        for (field, target) in [
+            ("response", &mut self.text),
+            ("reasoning_content", &mut self.reasoning),
+        ] {
+            if let Some(delta) = value.get(field) {
+                target.push_str(
+                    delta
+                        .as_str()
+                        .ok_or_else(|| error("Trae returned an invalid text delta."))?,
+                );
+            }
+        }
+        if name == "done" {
+            text(&value, "finish_reason")?;
+            self.done = true;
+        }
+        Ok(())
+    }
+}
+async fn parse_events(bytes: Vec<u8>) -> Result<Completion> {
+    if ![
+        b"\n\n".as_slice(),
+        b"\r\r".as_slice(),
+        b"\r\n\r\n".as_slice(),
+        b"\n\r\n".as_slice(),
+    ]
+    .iter()
+    .any(|ending| bytes.ends_with(ending))
+    {
+        return Err(error("Trae stream ended inside an event."));
+    }
+    let stream = futures_util::stream::iter(vec![Ok::<_, AgentError>(bytes)]);
+    let mut events = stream.eventsource();
+    let mut completion = Completion::default();
+    while let Some(event) = events.next().await {
+        let event = event.map_err(|_| error("Trae stream interrupted."))?;
+        completion.event(&event.event, &event.data)?;
+    }
+    Ok(completion)
+}
 impl AgentProvider for TraeCodeProvider {
     fn id(&self) -> &str {
         "traecode"
     }
     fn step(&self, conversation: &[ChatMessage], tools: &[ToolDefinition]) -> Result<AgentStep> {
-        let executable = self.resolve_executable()?;
-        let temporary_directory =
-            std::env::temp_dir().join(format!("synthv-traecode-{}", Uuid::new_v4().simple()));
-        fs::create_dir(&temporary_directory).map_err(|error| {
-            AgentError::new(format!(
-                "create TraeCode temporary directory failed: {error}"
-            ))
-        })?;
-        let schema_path = temporary_directory.join("output-schema.json");
-        let output_path = temporary_directory.join("last-message.json");
-        let result = (|| {
-            let args = self.build_exec_args(conversation, tools, &schema_path, &output_path)?;
-            let output = self.run_owned(&executable, &args, Some(&temporary_directory), None)?;
-            if !output.success {
-                return Err(AgentError::new("TraeCode CLI execution failed"));
-            }
-            let message = fs::read_to_string(&output_path).map_err(|error| {
-                AgentError::new(format!("TraeCode final message file unavailable: {error}"))
-            })?;
-            Self::parse_output(&message)
-        })();
-        let _ = fs::remove_dir_all(temporary_directory);
-        result
+        let pin = random::<8>();
+        let timestamp = (now() / 1000).to_string();
+        let encrypted = encrypted_messages(conversation, tools, &pin, &random::<12>(), &timestamp)?;
+        let credential = ready(&self.config.account_id)?;
+        if !credential.models.contains(&self.config.model) {
+            return Err(error("Trae account does not advertise the selected model."));
+        }
+        run(
+            async {
+                let response = api_request(
+                    &client()?,
+                    &credential,
+                    "/api/ide/v1/llm_raw_chat",
+                    reqwest::Method::POST,
+                )?
+                .header("X-Request-Pin", hex(&pin))
+                .header("X-Requested-At", timestamp)
+                .json(&json!({"model_name":self.config.model,"message":encrypted}))
+                .send()
+                .await
+                .map_err(|_| AgentError::transport("Trae request failed."))?;
+                let response = checked(response).await?;
+                if !response
+                    .headers()
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok())
+                    .is_some_and(|v| v.to_ascii_lowercase().starts_with("text/event-stream"))
+                {
+                    return Err(error("Trae returned a non-streaming response."));
+                }
+                let mut bytes = Vec::new();
+                let mut stream = response.bytes_stream();
+                while let Some(part) = stream.next().await {
+                    let part = part.map_err(|_| error("Trae stream interrupted."))?;
+                    if bytes.len() + part.len() > MAX_RESPONSE {
+                        return Err(error("Trae stream exceeds size limit."));
+                    }
+                    bytes.extend_from_slice(&part);
+                }
+                let completion = parse_events(bytes).await?;
+                if !completion.done {
+                    return Err(error("Trae stream ended before its completion marker."));
+                }
+                Ok(AgentStep {
+                    assistant_text: Some(completion.text),
+                    tool_calls: Vec::new(),
+                })
+            },
+            None,
+            Duration::from_secs(self.config.timeout_secs),
+        )
     }
 }
-
-struct BoundedOutput {
-    stdout: String,
-    stderr: String,
-    success: bool,
-}
-
-fn read_bounded<R: Read>(reader: R) -> Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    reader
-        .take((MAX_OUTPUT_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > MAX_OUTPUT_BYTES {
-        return Err(AgentError::new("TraeCode CLI output exceeded 8 MiB"));
-    }
-    Ok(bytes)
-}
-
-fn is_executable(path: &Path) -> bool {
-    if !path.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        path.metadata()
-            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
-}
-
-fn status_reports_authenticated(status: &str) -> bool {
-    let normalized = status.to_ascii_lowercase();
-    (normalized.contains("logged in") || normalized.contains("authenticated"))
-        && !normalized.contains("not logged in")
-        && !normalized.contains("logged out")
-        && !normalized.contains("unauthenticated")
-}
-
-fn trae_message(message: &ChatMessage) -> Result<Value> {
-    let role = match message.role {
-        Role::System => "system",
-        Role::User => "user",
-        Role::Assistant => "assistant",
-        Role::Tool => "tool",
-    };
-    let mut value = json!({ "role": role, "content": message.content });
-    if let Some(id) = &message.tool_call_id {
-        value["toolCallId"] = json!(id);
-    }
-    if !message.tool_calls.is_empty() {
-        value["toolCalls"] = serde_json::to_value(&message.tool_calls).map_err(|error| {
-            AgentError::new(format!("serialize TraeCode tool calls failed: {error}"))
-        })?;
-    }
-    Ok(value)
-}
-
-fn normalize_arguments(arguments: &str) -> String {
-    serde_json::from_str::<Value>(arguments)
-        .map(|value| value.to_string())
-        .unwrap_or_else(|_| "{}".to_string())
-}
-
 #[cfg(test)]
-mod tests {
-    use std::sync::atomic::AtomicBool;
-
-    use super::*;
-
-    #[test]
-    fn status_markers_never_treat_unauthenticated_as_logged_in() {
-        assert!(status_reports_authenticated("Status: authenticated"));
-        assert!(!status_reports_authenticated("Status: unauthenticated"));
-        assert!(!status_reports_authenticated("Not logged in"));
-    }
-
-    #[test]
-    fn cancelled_login_stops_before_cli_discovery() {
-        let cancelled = AtomicBool::new(true);
-        let result = TraeCodeProvider::new(TraeCodeConfig::new("trae-account-default"))
-            .login_cancellable(Some(&cancelled));
-        assert!(result.is_err());
-    }
-}
-
-#[cfg(test)]
-#[path = "../../../../../test/provider_auth_capability_traecode.rs"]
-mod provider_auth_capability_traecode;
+#[path = "../../../../../test/trae_browser.rs"]
+mod tests;

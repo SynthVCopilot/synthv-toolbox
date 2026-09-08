@@ -187,7 +187,6 @@ addMessages("zh-CN", { accountUi: {
   "youCanAlsoBrowseAllPreviousReleases": "也可以查看全部历史版本",
   "chooseAModelProvider": "请选择模型提供商",
   "waitingForAConnection": "等待添加连接",
-  "signInThroughTraecodeCli": "通过 TraeCode CLI 登录",
   "authorizeInBrowser": "浏览器授权",
   "officialAccountAuthorizationUpdated": "官方账号授权已更新。",
   "apiKeySavedAndVerified": "API Key 已保存并验证。",
@@ -374,7 +373,6 @@ addMessages("en", { accountUi: {
   "youCanAlsoBrowseAllPreviousReleases": "You can also browse all previous releases",
   "chooseAModelProvider": "Choose a model provider",
   "waitingForAConnection": "Waiting for a connection",
-  "signInThroughTraecodeCli": "Sign in through TraeCode CLI",
   "authorizeInBrowser": "Authorize in browser",
   "officialAccountAuthorizationUpdated": "Official account authorization updated.",
   "apiKeySavedAndVerified": "API key saved and verified.",
@@ -393,8 +391,8 @@ addMessages("zh-CN", { accountUi: {
   "anthropicConnection": "通过 Claude OAuth 或 Anthropic API Key 连接。",
   "openaiConnection": "通过 ChatGPT OAuth 或 OpenAI API Key 连接。",
   "workbuddyConnection": "通过 WorkBuddy OAuth 连接 WorkBuddy 助理模型。",
-  "traecodeConnection": "通过本机 TraeCode CLI 登录并调用只读 Agent。",
-  "traecodeUnavailable": "未检测到 TraeCode CLI；请先安装并登录 traecli。"
+  "traecodeConnection": "通过浏览器登录 Trae 并使用文本模型。",
+  "traecodeUnavailable": "Trae 服务暂时不可用。"
 } });
 
 addMessages("en", { accountUi: {
@@ -407,8 +405,8 @@ addMessages("en", { accountUi: {
   "anthropicConnection": "Connect through Claude OAuth or an Anthropic API key.",
   "openaiConnection": "Connect through ChatGPT OAuth or an OpenAI API key.",
   "workbuddyConnection": "Connect to WorkBuddy assistant models through WorkBuddy OAuth.",
-  "traecodeConnection": "Sign in through the local TraeCode CLI and use its read-only agent.",
-  "traecodeUnavailable": "TraeCode CLI was not detected. Install traecli and sign in first."
+  "traecodeConnection": "Sign in through your browser to use Trae text models.",
+  "traecodeUnavailable": "Trae service is currently unavailable."
 } });
 
 addMessages("zh-CN", { accountNotice: {

@@ -276,6 +276,7 @@ impl ProviderPool {
             }
             AiProviderId::Traecode => Ok(Box::new(TraeCodeProvider::new(TraeCodeConfig::new(
                 self.model.clone(),
+                account.id.clone(),
             )))),
         }
     }
@@ -496,27 +497,6 @@ fn build_ai_provider(
         .cloned()
         .collect::<Vec<_>>();
     accounts.retain(|account| account.enabled && settings.oauth_enabled(provider_id));
-    let trae_connected = provider_id == AiProviderId::Traecode
-        && TraeCodeProvider::new(TraeCodeConfig::new(provider_id.default_model()))
-            .cached_login_status()
-            .is_ok_and(|status| status.logged_in);
-    if provider_id == AiProviderId::Traecode {
-        if !trae_connected {
-            accounts.clear();
-        } else if !accounts
-            .iter()
-            .any(|account| account.id == "oauth:traecode:enterprise")
-        {
-            accounts.push(OAuthAccountMetadata {
-                id: "oauth:traecode:enterprise".to_string(),
-                provider: provider_id,
-                label: "TraeCode account".to_string(),
-                expires_at: 0,
-                enabled: true,
-                weight: 1,
-            });
-        }
-    }
     let api_keys = settings
         .api_keys_for(provider_id)
         .iter()
@@ -538,18 +518,6 @@ fn build_ai_provider(
             Err(error) => return Err(error),
         }
     };
-    if provider_id == AiProviderId::Traecode && !accounts.is_empty() {
-        if let Ok(mut balancer) = balancer.lock() {
-            balancer.upsert(crate::credential_balancer::CredentialRoute {
-                id: "oauth:traecode:enterprise".to_string(),
-                provider: provider_id,
-                auth_method: AiAuthMethod::OAuth,
-                models: vec![provider_id.default_model().to_string()],
-                weight: 1,
-                strategy: AiLoadStrategy::RoundRobin,
-            });
-        }
-    }
     Ok(ProviderPool {
         id: provider_id.as_str().to_string(),
         provider_id,
@@ -565,6 +533,22 @@ fn eligible_accounts_for_model(
     model: &str,
     accounts: Vec<OAuthAccountMetadata>,
 ) -> Result<Vec<OAuthAccountMetadata>, String> {
+    if provider == AiProviderId::Traecode {
+        let eligible = accounts
+            .into_iter()
+            .filter(|account| {
+                crate::trae_store::configured(&account.id)
+                    && crate::trae_store::models(&account.id)
+                        .iter()
+                        .any(|available| available == model)
+            })
+            .collect::<Vec<_>>();
+        return if eligible.is_empty() {
+            Err("当前 Trae 账号未提供所选模型。".into())
+        } else {
+            Ok(eligible)
+        };
+    }
     if provider != AiProviderId::OpenaiCodex {
         return Ok(accounts);
     }
@@ -973,48 +957,58 @@ pub async fn authorize_ai_provider(
     }
     if provider == AiProviderId::Traecode {
         let cancellation_for_worker = cancellation.clone();
-        let status = tauri::async_runtime::spawn_blocking(move || {
-            TraeCodeProvider::new(TraeCodeConfig::new(AiProviderId::Traecode.default_model()))
-                .login_cancellable(cancellation_for_worker.as_deref())
+        let credential = tauri::async_runtime::spawn_blocking(move || {
+            crate::agent::traecode::authorize(
+                cancellation_for_worker.as_deref(),
+                oauth::open_external,
+            )
         })
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(|_| "Trae authorization worker failed.".to_string())?
         .map_err(|error| error.to_string())?;
         authorization_cancelled(cancellation.as_deref())?;
-        if !status.available || !status.logged_in {
-            return Err(status.detail);
-        }
         let mut metadata = OAuthAccountMetadata {
-            id: "oauth:traecode:enterprise".to_string(),
+            id: format!("oauth:traecode:{}", credential.account_id),
             provider,
-            label: "TraeCode enterprise CLI".to_string(),
-            expires_at: 0,
+            label: credential.label.clone(),
+            expires_at: credential.expires,
             enabled: true,
             weight: 1,
         };
-        if let Some(credential_id) = credential_id {
-            let existing = state
-                .settings
-                .read()
-                .await
+        let mut settings = state.settings.write().await;
+        if let Some(id) = credential_id {
+            let existing = settings
                 .oauth_accounts
                 .iter()
-                .find(|account| account.provider == provider && account.id == credential_id)
-                .cloned();
-            let Some(existing) = existing else {
-                return Err("没有找到要重新授权的 TraeCode 账号。".to_string());
-            };
-            metadata.id = credential_id;
-            metadata.label = existing.label;
+                .find(|account| account.provider == provider && account.id == id)
+                .ok_or_else(|| "没有找到要重新授权的 Trae 账号。".to_string())?;
+            let old = crate::trae_store::load(&id)?;
+            if old.account_id != credential.account_id {
+                return Err("重新授权必须使用原来的 Trae 账号。".into());
+            }
+            metadata.id = id;
             metadata.enabled = existing.enabled;
             metadata.weight = existing.weight;
         }
         authorization_cancelled(cancellation.as_deref())?;
-        let mut settings = state.settings.write().await;
         let mut next = settings.clone();
         next.ai_provider = provider;
+        if !credential
+            .models
+            .iter()
+            .any(|model| model == next.model_for(provider))
+        {
+            next.set_model_for(
+                provider,
+                credential.models.first().cloned().unwrap_or_default(),
+            );
+        }
         next.upsert_oauth_account(metadata.clone());
-        save_settings(&next)?;
+        let backup = crate::trae_store::replace(&metadata.id, &credential)?;
+        if let Err(error) = save_settings(&next) {
+            crate::trae_store::restore(&metadata.id, backup)?;
+            return Err(error);
+        }
         *settings = next;
         drop(settings);
         state
@@ -1025,8 +1019,8 @@ pub async fn authorize_ai_provider(
                 id: metadata.id,
                 provider,
                 auth_method: AiAuthMethod::OAuth,
-                models: vec![provider.default_model().to_string()],
-                weight: 1,
+                models: credential.models.clone(),
+                weight: metadata.weight,
                 strategy: AiLoadStrategy::RoundRobin,
             });
         return build_bootstrap(&state).await;
@@ -1392,29 +1386,24 @@ pub async fn remove_ai_provider_account(
 ) -> Result<BootstrapState, String> {
     require_ai(&state).await?;
     if provider == AiProviderId::Traecode {
-        let status = tauri::async_runtime::spawn_blocking(|| {
-            TraeCodeProvider::new(TraeCodeConfig::new(AiProviderId::Traecode.default_model()))
-                .logout()
-        })
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())?;
-        if !status.available || status.logged_in {
-            return Err(status.detail);
-        }
         let mut settings = state.settings.write().await;
         if !settings
             .oauth_accounts
             .iter()
             .any(|account| account.provider == provider && account.id == account_id)
         {
-            return Err("没有找到要移除的 TraeCode 登录记录。".to_string());
+            return Err("没有找到要移除的 Trae 账号。".into());
         }
         let mut next = settings.clone();
         next.oauth_accounts
             .retain(|account| account.id != account_id);
-        save_settings(&next)?;
+        let backup = crate::trae_store::take(&account_id)?;
+        if let Err(error) = save_settings(&next) {
+            crate::trae_store::restore(&account_id, backup)?;
+            return Err(error);
+        }
         *settings = next;
+        drop(settings);
         state
             .credential_balancer
             .lock()

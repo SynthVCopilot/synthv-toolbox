@@ -21,14 +21,14 @@
     "test:bridge-lyrics": "node ../../test/bridge-instance-ui.mjs && node ../../test/bridge-preview-session.mjs && node ../../test/lyric-bridge-ui-behavior.mjs"
   },
   "dependencies": {
-    "@model-auth/vue": "https://github.com/lsy-404/platform-kit/releases/download/v0.1.0/model-auth-vue-0.2.7.tgz",
+    "@model-auth/core": "https://github.com/lsy-404/platform-kit/releases/download/v0.2.0/model-auth-core-0.3.0.tgz",
+    "@model-auth/providers": "https://github.com/lsy-404/platform-kit/releases/download/v0.2.0/model-auth-providers-0.3.0.tgz",
+    "@model-auth/vue": "https://github.com/lsy-404/platform-kit/releases/download/v0.2.0/model-auth-vue-0.3.0.tgz",
     "@tauri-apps/api": "2.11.1",
     "@tauri-apps/plugin-dialog": "2.7.2",
     "lucide": "1.41.0",
     "vue": "^3.5.42",
-    "vue-i18n": "^11.4.10",
-    "@model-auth/core": "https://github.com/lsy-404/platform-kit/releases/download/v0.1.0/model-auth-core-0.2.7.tgz",
-    "@model-auth/providers": "https://github.com/lsy-404/platform-kit/releases/download/v0.1.0/model-auth-providers-0.2.7.tgz"
+    "vue-i18n": "^11.4.10"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.4",

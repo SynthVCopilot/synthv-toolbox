@@ -1,7 +1,5 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-#[cfg(unix)]
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -208,51 +206,4 @@ fn workbuddy_oauth_builds_state_url_polls_refreshes_and_reads_account() {
         .to_ascii_lowercase()
         .contains("cookie: session=test"));
     handle.join().unwrap();
-}
-
-#[cfg(unix)]
-#[test]
-fn traecode_uses_read_only_ephemeral_schema_and_parses_output() {
-    use std::os::unix::fs::PermissionsExt;
-    let directory = std::env::temp_dir().join(format!("synthv-traecode-{}", std::process::id()));
-    std::fs::create_dir_all(&directory).unwrap();
-    let script = directory.join("traecli");
-    std::fs::write(&script, "#!/bin/sh\nlog=\"$(dirname \"$0\")/argv.log\"\nif [ \"$1\" = \"login\" ]; then : > \"$log\"; if [ \"$2\" = \"status\" ]; then echo '{\"loggedIn\":true}'; else echo '{\"loggedIn\":true}'; fi; exit 0; fi\n: > \"$log\"\nfor arg in \"$@\"; do printf '%s\\n' \"$arg\" >> \"$log\"; done\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--output-last-message\" ]; then shift; printf '%s' '{\"assistantText\":\"done\",\"toolCalls\":[{\"id\":\"c1\",\"tool_name\":\"inspect\",\"arguments_json\":\"{\\\"x\\\":1}\"}]}' > \"$1\"; echo '{\"diagnostic\":true}'; exit 0; fi\n  shift\ndone\necho '{\"diagnostic\":true}'\n").unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let mut config = TraeCodeConfig::new("trae-model");
-    config.executable = Some(PathBuf::from(&script));
-    let provider = TraeCodeProvider::new(config);
-    let status = provider.login_status().unwrap();
-    assert!(status.available && status.logged_in);
-    let args = provider
-        .build_exec_args(
-            &[ChatMessage::user("read")],
-            &[tool("inspect")],
-            &directory.join("schema.json"),
-            &directory.join("last-message.json"),
-        )
-        .unwrap();
-    assert!(args
-        .windows(2)
-        .any(|pair| pair == ["--ephemeral", "--sandbox"]));
-    assert!(args.contains(&"read-only".to_string()));
-    assert!(args.contains(&"--skip-git-repo-check".to_string()));
-    assert!(!args.contains(&"--prompt".to_string()));
-    let step = provider.step(&[ChatMessage::user("read")], &[]).unwrap();
-    assert_eq!(step.assistant_text.as_deref(), Some("done"));
-    assert_eq!(step.tool_calls[0].tool_name, "inspect");
-    let argv = std::fs::read_to_string(directory.join("argv.log")).unwrap();
-    let argv = argv.lines().collect::<Vec<_>>();
-    assert_eq!(argv[0], "exec");
-    assert_eq!(argv[1], "--json");
-    assert_eq!(argv[2], "--output-schema");
-    assert!(argv[3].ends_with("/output-schema.json"));
-    assert_eq!(argv[4], "--output-last-message");
-    assert!(argv[5].ends_with("/last-message.json"));
-    assert_eq!(argv[6], "--ephemeral");
-    assert_eq!(argv[7], "--sandbox");
-    assert_eq!(argv[8], "read-only");
-    assert_eq!(argv[9], "--skip-git-repo-check");
-    assert!(argv[10].contains("\"read\""));
-    std::fs::remove_dir_all(directory).unwrap();
 }
