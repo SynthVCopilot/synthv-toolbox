@@ -18,8 +18,9 @@ Object.assign(globalThis, {
   getComputedStyle: dom.window.getComputedStyle,
 });
 
-const { registerModelAuthElement } = await import(new URL("../src/PiDesktop.Tauri/node_modules/@model-auth/vue/dist/model-auth-element.js", import.meta.url));
+const { registerModelAuthElement, registerModelConnectionPanelElement } = await import(new URL("../src/PiDesktop.Tauri/node_modules/@model-auth/vue/dist/model-auth-element.js", import.meta.url));
 registerModelAuthElement();
+registerModelConnectionPanelElement();
 const dialog = document.createElement("model-auth-dialog");
 dialog.open = true;
 dialog.catalogStatus = { state: "ready", source: "models.dev" };
@@ -78,5 +79,24 @@ dialog.addEventListener("close", () => { closed = true; });
 dialog.shadowRoot.querySelector('[data-part="confirm"]').click();
 assert.equal(selection, 0);
 assert.equal(closed, true);
+
+dialog.open = false;
+await new Promise((resolve) => setTimeout(resolve, 0));
+dialog.initialConnection = { providerId: "anthropic", method: "oauth" };
+dialog.open = true;
+await new Promise((resolve) => setTimeout(resolve, 0));
+assert.equal(dialog.shadowRoot.querySelector('[data-part="connection-info"]')?.textContent.includes("Test"), true);
+
+const panel = document.createElement("model-connection-panel");
+panel.providers = dialog.providers;
+panel.model = { providerId: "anthropic", model: "claude" };
+document.body.append(panel);
+await new Promise((resolve) => setTimeout(resolve, 0));
+assert.equal(panel.shadowRoot.querySelectorAll('[data-part="connection-card"]').length, 1);
+assert.equal(panel.shadowRoot.querySelector('[data-part="connection-account"]')?.textContent.includes("Test"), true);
+let target;
+panel.addEventListener("manage", (event) => { target = event.detail; });
+panel.shadowRoot.querySelector('[data-part="view-connection"]').click();
+assert.deepEqual(target, [{ providerId: "anthropic", method: "oauth" }]);
 
 console.log("model-auth custom-element events passed");

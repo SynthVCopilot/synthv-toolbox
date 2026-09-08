@@ -7,7 +7,7 @@ import "./i18nCommon";
 import "./i18nLyrics";
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { registerModelAuthElement } from "@model-auth/vue/custom-element";
+import { registerModelAuthElement, registerModelConnectionPanelElement } from "@model-auth/vue/custom-element";
 import { mountModelAuthDialog, type ModelAuthAction } from "./modelAuthDialog";
 import { api } from "./api";
 import { evaluateAccountEnvironment } from "./accountStatus";
@@ -82,6 +82,7 @@ import type {
 } from "./types";
 
 registerModelAuthElement();
+registerModelConnectionPanelElement();
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 if (!root) throw new Error("Missing #app root");
@@ -220,6 +221,7 @@ let ffmpegDirectoryDraft: string | undefined;
 let ffmpegConfigurationLoading = false;
 let ffmpegConfigurationGeneration = 0;
 let aiProviderPickerOpen = false;
+let modelAuthInitialConnection: { providerId: string; method: "oauth" | "api-key" } | null = null;
 let modelAuthDialog: ReturnType<typeof mountModelAuthDialog> | undefined;
 let downloadPollTimer: number | undefined;
 let mediaTaskPollTimer: number | undefined;
@@ -999,6 +1001,7 @@ function render(): void {
     shellController.afterUpdate(wireForms);
   }
   syncModelAuthDialog();
+  syncModelConnectionPanel();
   scheduleToolboxUpdateDownloadPoll();
   scheduleDownloadPoll();
   scheduleMediaTaskPoll();
@@ -2479,17 +2482,8 @@ function aiProviderMark(provider: AiProviderSummary): string {
   return provider.id === "anthropic" ? "C" : provider.id === "openai-codex" ? "O" : provider.id === "workbuddy" ? "W" : "T";
 }
 
-function syncModelAuthDialog(): void {
-  if (!modelAuthDialog && !aiProviderPickerOpen) return;
-  modelAuthDialog ??= mountModelAuthDialog({
-    execute: executeModelAuthAction,
-    cancelAuthorization: api.cancelAiAuthorization,
-    close() { aiProviderPickerOpen = false; render(); },
-    updated: render,
-    formatError,
-  });
-  const catalog = app?.model;
-  const providers = aiProviders().map((provider) => ({
+function modelAuthProviders() {
+  return aiProviders().map((provider) => ({
     id: provider.id, name: provider.displayName, description: provider.description, authMethods: provider.authMethods,
     available: provider.available, unavailableReason: provider.unavailableReason, oauthEnabled: provider.oauthEnabled,
     loadStrategy: provider.loadStrategy, mark: aiProviderMark(provider),
@@ -2498,14 +2492,55 @@ function syncModelAuthDialog(): void {
     oauthCredentials: provider.accounts.map((account) => ({ id: account.id, label: account.label, account: account.label, healthy: account.healthy, enabled: account.enabled, weight: account.weight, models: provider.oauthModels })),
     apiKeyCredentials: provider.apiKeys.map((key) => ({ id: key.id, label: key.label, healthy: key.healthy, enabled: key.enabled, weight: key.weight, models: key.models, cooldownUntilUtc: key.cooldownUntilUtc })),
   }));
+}
+
+function syncModelConnectionPanel(): void {
+  const panel = root.querySelector<HTMLElement>("model-connection-panel");
+  if (!panel) return;
+  Object.assign(panel, {
+    providers: modelAuthProviders(),
+    model: app?.model ? { providerId: app.model.activeProvider, model: activeAiProvider()?.model ?? "" } : null,
+    busy,
+    error: error ?? null,
+    styled: true,
+    theme: "system",
+  });
+  panel.addEventListener("manage", (event) => {
+    const [connection] = (event as CustomEvent).detail as [{ providerId: string; method: "oauth" | "api-key" }];
+    if (!connection?.providerId) return;
+    modelAuthInitialConnection = connection;
+    aiProviderPickerOpen = true;
+    render();
+  });
+  panel.addEventListener("add", () => {
+    modelAuthInitialConnection = null;
+    aiProviderPickerOpen = true;
+    render();
+  });
+  panel.addEventListener("refresh", () => {
+    void refreshAiProviderSummary(true).then(render).catch((reason) => { error = formatError(reason); render(); });
+  });
+}
+
+function syncModelAuthDialog(): void {
+  if (!modelAuthDialog && !aiProviderPickerOpen) return;
+  modelAuthDialog ??= mountModelAuthDialog({
+    execute: executeModelAuthAction,
+    cancelAuthorization: api.cancelAiAuthorization,
+    close() { aiProviderPickerOpen = false; modelAuthInitialConnection = null; void refreshAiProviderSummary().finally(render); },
+    updated: render,
+    formatError,
+  });
+  const catalog = app?.model;
   modelAuthDialog.update({
-    providers,
+    providers: modelAuthProviders(),
     theme: "system",
     model: catalog ? { providerId: catalog.activeProvider, model: aiProviders().find((item) => item.id === catalog.activeProvider)?.model ?? "" } : null,
     catalogStatus: catalog
       ? { state: catalog.catalogError ? "error" : "ready", source: "models.dev", checkedAt: catalog.catalogGeneratedAt ? new Date(catalog.catalogGeneratedAt).toISOString() : undefined, error: catalog.catalogError }
       : { state: "error", source: "models.dev", error: "models.dev 目录尚未加载。" },
     open: aiProviderPickerOpen,
+    initialConnection: modelAuthInitialConnection,
   });
 }
 
@@ -2562,11 +2597,8 @@ function renderAiProviderSettings(): string {
   const legacyWarning = app?.model?.legacyConfigured
     ? `<div class="ai-legacy-warning">${icon("shield", 17)}<span><strong>${t("settings.legacyCredentials")}</strong><small>${t("settings.legacyCredentialsDescription")}</small></span></div>`
     : "";
-  const activeProvider = activeAiProvider();
-  const activeVerified = Boolean(activeProvider && (activeProvider.accounts.some((account) => account.authorized) || activeProvider.apiKeys.length));
-  const activeStatus = activeVerified && activeProvider ? t("settings.oauthSummary", { count: activeProvider.accounts.filter((account) => account.authorized).length, keys: activeProvider.apiKeys.length }) : t("settings.notConfigured");
-  return `<section class="panel ai-provider-panel"><div class="section-heading"><div><h2>${t("settings.providers")}</h2><p>${t("settings.providersDescription")}</p></div><button type="button" class="primary" data-open-ai-provider-picker ${busy ? "disabled" : ""}>${t("accountUi.addConnection")}</button></div>
-    ${legacyWarning}<div class="ai-provider-summary"><div><strong>${escapeHtml(activeVerified && activeProvider ? aiProviderDisplayName(activeProvider) : t("accountUi.noConnectedProvider"))}</strong><small>${escapeHtml(activeVerified ? activeProvider?.model || t("accountUi.chooseModel") : t("accountUi.addCredentialsFirst"))}</small></div><span class="availability ${activeVerified ? "ready" : "warning"}">${activeStatus}</span></div>
+  return `<section class="panel ai-provider-panel"><div class="section-heading"><div><h2>${t("settings.providers")}</h2><p>${t("settings.providersDescription")}</p></div></div>
+    ${legacyWarning}<model-connection-panel></model-connection-panel>
   </section>`;
 }
 
@@ -3197,6 +3229,7 @@ document.addEventListener("click", (event) => {
   const target = (event.target as HTMLElement).closest<HTMLElement>("button, [data-page], [data-onboarding], [data-audio-drop-zone]");
   if (!target || target.hasAttribute("disabled")) return;
   if (target.hasAttribute("data-open-ai-provider-picker")) {
+    modelAuthInitialConnection = null;
     aiProviderPickerOpen = true;
     render();
     refreshAiCatalogLive();

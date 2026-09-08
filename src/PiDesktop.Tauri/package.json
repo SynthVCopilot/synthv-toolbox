@@ -23,7 +23,7 @@
   "dependencies": {
     "@model-auth/core": "https://github.com/lsy-404/platform-kit/releases/download/v0.2.0/model-auth-core-0.3.0.tgz",
     "@model-auth/providers": "https://github.com/lsy-404/platform-kit/releases/download/v0.2.0/model-auth-providers-0.3.0.tgz",
-    "@model-auth/vue": "https://github.com/lsy-404/platform-kit/releases/download/v0.2.0/model-auth-vue-0.3.0.tgz",
+    "@model-auth/vue": "https://github.com/lsy-404/platform-kit/releases/download/v0.3.0/model-auth-vue-0.4.0.tgz",
     "@tauri-apps/api": "2.11.1",
     "@tauri-apps/plugin-dialog": "2.7.2",
     "lucide": "1.41.0",
