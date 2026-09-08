@@ -702,6 +702,10 @@ function setFeedback(result: OperationResult): void {
   }
 }
 
+function setOpenFeedback(result: OperationResult): void {
+  if (!result.succeeded) setFeedback(result);
+}
+
 async function run(task: () => Promise<void>): Promise<void> {
   if (busy) return;
   instanceRefreshGeneration += 1;
@@ -3385,7 +3389,7 @@ document.addEventListener("click", (event) => {
   if (target.dataset.revealAudioArtifact) {
     if (!beginAudioArtifactAction()) return;
     void audioApi.revealAudioArtifact(target.dataset.revealAudioArtifact).then((result) => {
-      setFeedback(result);
+      setOpenFeedback(result);
     }).catch((reason) => { audioUiError = formatError(reason); }).finally(finishAudioArtifactAction);
     return;
   }
@@ -3721,7 +3725,7 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (target.hasAttribute("data-open-svp-default-apps")) {
-    void run(async () => { setFeedback(await api.openSvpDefaultAppsSettings()); });
+    void run(async () => { setOpenFeedback(await api.openSvpDefaultAppsSettings()); });
     return;
   }
   if (target.hasAttribute("data-close-account-manager")) {
@@ -3875,7 +3879,7 @@ document.addEventListener("click", (event) => {
   if (agentWorkMode) { void run(async () => { app = await api.setAgentWorkMode(agentWorkMode); notice = t("system.agentModeChanged", { mode: agentWorkMode === "solo" ? "Solo" : "Edit" }); }); return; }
   const toolboxProjectTarget = target.dataset.openToolboxProject as "project" | "issues" | "guide" | undefined;
   if (toolboxProjectTarget) {
-    void run(async () => { setFeedback(await api.openToolboxProject(toolboxProjectTarget)); });
+    void run(async () => { setOpenFeedback(await api.openToolboxProject(toolboxProjectTarget)); });
     return;
   }
   if (target.hasAttribute("data-check-toolbox-update")) {
@@ -3885,11 +3889,6 @@ document.addEventListener("click", (event) => {
       if (generation !== updateCheckGeneration) return;
       toolboxUpdate = result;
       toolboxUpdateDownload = await api.getToolboxUpdateDownload();
-      notice = toolboxUpdate.updateAvailable
-        ? t("system.updateFound", { version: toolboxUpdate.latestVersion })
-        : toolboxUpdate.latestVersion === toolboxUpdate.currentVersion
-          ? t("system.latest")
-          : t("system.newer");
     });
     return;
   }
@@ -3906,7 +3905,7 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (target.hasAttribute("data-open-toolbox-releases")) {
-    void run(async () => { setFeedback(await api.openToolboxReleases(toolboxUpdate?.releaseUrl)); });
+    void run(async () => { setOpenFeedback(await api.openToolboxReleases(toolboxUpdate?.releaseUrl)); });
     return;
   }
   if (target.dataset.feature) {
@@ -4058,7 +4057,7 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (target.dataset.profileActivate) { void run(async () => { profiles = await api.activateSv2Profile(target.dataset.profileActivate ?? ""); notice = t("accountNotice.activated"); }); return; }
-  if (target.dataset.profileFolder) { void run(async () => { setFeedback(await api.openSv2ProfileFolder(target.dataset.profileFolder ?? "")); }); return; }
+  if (target.dataset.profileFolder) { void run(async () => { setOpenFeedback(await api.openSv2ProfileFolder(target.dataset.profileFolder ?? "")); }); return; }
   if (target.dataset.profileConcurrentPrepare) { void run(async () => { profiles = await api.prepareSv2ConcurrentProfile(target.dataset.profileConcurrentPrepare ?? ""); notice = t("accountNotice.isolationPrepared"); }); return; }
   if (target.dataset.profileConcurrentLaunch) {
     const slotId = target.dataset.profileConcurrentLaunch;
@@ -4105,7 +4104,7 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (target.dataset.openComponentDownload) {
-    void run(async () => { setFeedback(await api.openDownloadedComponent(target.dataset.openComponentDownload ?? "")); });
+    void run(async () => { setOpenFeedback(await api.openDownloadedComponent(target.dataset.openComponentDownload ?? "")); });
     return;
   }
   if (target.hasAttribute("data-clear-ffmpeg-directory")) {
@@ -4113,7 +4112,7 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (target.hasAttribute("data-open-ffmpeg-download")) {
-    void run(async () => { setFeedback(await api.openFfmpegDownloadPage()); });
+    void run(async () => { setOpenFeedback(await api.openFfmpegDownloadPage()); });
     return;
   }
   if (target.dataset.installComponent) {
