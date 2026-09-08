@@ -1469,6 +1469,12 @@ export const api = {
     call<WorkflowResult>("export_project_lyrics", { projectPath, trackIndex, lineGapSeconds, outputName, wordOutputName }),
   reviewWorkflow: (kind: string, data: Record<string, unknown>) =>
     call<string>("review_workflow", { kind, data }),
+  pickFile: async (): Promise<string | undefined> => {
+    if (preview) return undefined;
+    const selected = await open({ multiple: false, directory: false });
+    if (Array.isArray(selected)) return selected[0];
+    return typeof selected === "string" ? selected : undefined;
+  },
   pickAudioFile: async (): Promise<string | undefined> => {
     if (preview) return undefined;
     const selected = await open({
