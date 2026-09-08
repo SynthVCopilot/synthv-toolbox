@@ -271,6 +271,38 @@ impl SlotPaths {
     }
 }
 
+pub(crate) fn recent_project_settings_files() -> Vec<PathBuf> {
+    let Ok(paths) = SlotPaths::from_environment() else {
+        return Vec::new();
+    };
+    let Ok(manifest) = load_manifest(&paths) else {
+        return vec![paths.canonical.join("settings/settings.xml")];
+    };
+    recent_project_settings_files_for(&paths, &manifest)
+}
+
+fn recent_project_settings_files_for(paths: &SlotPaths, manifest: &SlotManifest) -> Vec<PathBuf> {
+    let mut roots = vec![paths.canonical.clone()];
+    if validate_managed_roots(paths).is_ok() {
+        for slot in &manifest.slots {
+            let root = slot_data_root(paths, manifest, &slot.id);
+            #[cfg(windows)]
+            if reject_managed_descendants(&paths.vault, &root).is_err() {
+                continue;
+            }
+            #[cfg(not(windows))]
+            if reject_reparse_point(&root).is_err() {
+                continue;
+            }
+            roots.push(root);
+        }
+    }
+    roots
+        .into_iter()
+        .map(|root| root.join("settings/settings.xml"))
+        .collect()
+}
+
 pub struct Sv2ProfileService {
     paths: Result<SlotPaths, String>,
     gate: Mutex<()>,
