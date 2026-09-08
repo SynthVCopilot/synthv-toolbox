@@ -634,7 +634,7 @@ button.full { width: 100%; }
 .history-checkpoint-grid .checkpoint-list { margin-top: 14px; }
 .workflow-form { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 13px; padding-top: 17px; }
 .workflow-form h3 { grid-column: 1 / -1; margin: 0; font-size: 14px; font-weight: 600; }
-.workflow-form label { color: var(--muted); font-size: 12px; font-weight: 600; }
+.workflow-form label { min-width: 0; color: var(--muted); font-size: 12px; font-weight: 600; }
 .workflow-form input, .workflow-form select, .workflow-form textarea { display: block; width: 100%; margin-top: 7px; padding: 0 10px; border: 1px solid var(--line-strong); border-bottom-color: rgba(0,0,0,.32); border-radius: 4px; color: inherit; background: var(--control); }
 .workflow-form input, .workflow-form select { height: 34px; }
 .workflow-form textarea { min-height: 86px; padding-block: 9px; line-height: 1.5; resize: vertical; }
@@ -756,7 +756,7 @@ button.full { width: 100%; }
 .lyric-writing-layout .rhyme-search button { grid-column: auto; min-height: 34px; padding: 0 9px; font-size: 10px; }
 .lyric-writing-layout .rhyme-character-grid { max-height: 250px; }
 .workflow-check { min-height: 38px; padding: 10px 11px; border-radius: 6px; color: var(--primary) !important; background: var(--primary-soft); }
-.workflow-pair { display: grid; grid-template-columns: 2fr 1fr; gap: 10px; }
+.workflow-pair { display: grid; grid-template-columns: minmax(0,2fr) minmax(0,1fr); gap: 10px; }
 .workflow-pair.three { grid-template-columns: repeat(3,minmax(0,1fr)); }
 .workflow-split { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 .workflow-split .workflow-form { align-content: start; grid-template-columns: 1fr; }
@@ -1248,6 +1248,11 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .audio-drop-zone small { max-width: 460px; font-size: 11px; }
 .input-action { display: flex; gap: 8px; align-items: center; }
 .input-action input { min-width: 0; flex: 1; }
+.path-picker-control { display: flex; align-items: center; gap: 8px; min-width: 0; margin-top: 7px; }
+.path-picker-control > input { flex: 1 1 0; min-width: 0; margin-top: 0; }
+button.path-picker-button { display: inline-flex; flex: 0 0 34px; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; }
+.path-picker-button:not(:disabled):hover { color: var(--primary); }
+.ffmpeg-config-form .path-picker-control { margin-top: 0; }
 .optional-field { color: var(--muted); font-size: 12px; font-weight: 400; }
 .audio-probe-card { display: grid; gap: 12px; }
 .audio-probe-heading, .audio-job-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
