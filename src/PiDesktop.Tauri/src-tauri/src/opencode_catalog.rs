@@ -35,7 +35,7 @@ pub struct OpenCodeCatalog {
 #[serde(rename_all = "kebab-case")]
 pub enum RuntimeCatalogSource {
     ModelsDev,
-    BuiltInFallback,
+    Unavailable,
 }
 
 #[derive(Debug, Clone)]
@@ -50,15 +50,15 @@ pub struct RuntimeModelCatalog {
 }
 
 impl RuntimeModelCatalog {
-    pub fn fallback(error: Option<String>) -> Self {
+    pub fn unavailable(error: Option<String>) -> Self {
         Self {
-            source: RuntimeCatalogSource::BuiltInFallback,
+            source: RuntimeCatalogSource::Unavailable,
             generated_at: 0,
             error,
-            anthropic: fallback_models(AiProviderId::Anthropic),
-            openai_codex: fallback_models(AiProviderId::OpenaiCodex),
+            anthropic: Vec::new(),
+            openai_codex: Vec::new(),
             workbuddy: Vec::new(),
-            traecode: vec!["trae-account-default".to_string()],
+            traecode: Vec::new(),
         }
     }
 
@@ -72,10 +72,8 @@ impl RuntimeModelCatalog {
     }
 
     fn from_models_dev(catalog: &OpenCodeCatalog) -> Self {
-        let anthropic = catalog_models(catalog, "anthropic", |model| model.starts_with("claude-"));
-        let openai_codex = catalog_models(catalog, "openai", |model| {
-            model.starts_with("gpt-5") && !model.ends_with("-chat-latest")
-        });
+        let anthropic = catalog_models(catalog, "anthropic", |_| true);
+        let openai_codex = catalog_models(catalog, "openai", |_| true);
         Self {
             source: RuntimeCatalogSource::ModelsDev,
             generated_at: catalog.generated_at,
@@ -83,7 +81,7 @@ impl RuntimeModelCatalog {
             anthropic,
             openai_codex,
             workbuddy: workbuddy_models(catalog),
-            traecode: vec!["trae-account-default".to_string()],
+            traecode: Vec::new(),
         }
     }
 }
@@ -104,7 +102,9 @@ pub fn cached_runtime_catalog() -> RuntimeModelCatalog {
         .ok()
         .and_then(|cache| cache.as_ref().map(|entry| entry.catalog.clone()))
         .map(|catalog| RuntimeModelCatalog::from_models_dev(&catalog))
-        .unwrap_or_else(|| RuntimeModelCatalog::fallback(None))
+        .unwrap_or_else(|| {
+            RuntimeModelCatalog::unavailable(Some("models.dev 目录尚未加载。".to_string()))
+        })
 }
 
 pub fn runtime_catalog(force: bool) -> RuntimeModelCatalog {
@@ -117,7 +117,7 @@ pub fn runtime_catalog(force: bool) -> RuntimeModelCatalog {
         if let Ok(guard) = LAST_FAILURE.get_or_init(|| Mutex::new(None)).lock() {
             if let Some((checked_at, error)) = guard.as_ref() {
                 if checked_at.elapsed() < FAILURE_TTL {
-                    return RuntimeModelCatalog::fallback(Some(error.clone()));
+                    return RuntimeModelCatalog::unavailable(Some(error.clone()));
                 }
             }
         }
@@ -137,7 +137,7 @@ pub fn runtime_catalog(force: bool) -> RuntimeModelCatalog {
             if let Ok(mut failure) = LAST_FAILURE.get_or_init(|| Mutex::new(None)).lock() {
                 *failure = Some((Instant::now(), error.clone()));
             }
-            RuntimeModelCatalog::fallback(Some(error))
+            RuntimeModelCatalog::unavailable(Some(error))
         }
     }
 }
@@ -352,14 +352,6 @@ fn workbuddy_models(catalog: &OpenCodeCatalog) -> Vec<String> {
     VERIFIED
         .iter()
         .filter(|model| catalog_models.contains(**model))
-        .map(|model| (*model).to_string())
-        .collect()
-}
-
-fn fallback_models(provider: AiProviderId) -> Vec<String> {
-    provider
-        .fallback_model_options()
-        .iter()
         .map(|model| (*model).to_string())
         .collect()
 }

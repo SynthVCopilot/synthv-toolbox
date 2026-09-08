@@ -28,9 +28,7 @@ pub use openai_chat::{OpenAiChatConfig, OpenAiChatProvider};
 pub use openai_codex::{OpenAiCodexConfig, OpenAiCodexProvider};
 pub use paths::{config_path, data_root, history_dir, models_dir, output_dir, safe_join};
 pub use provider::{AnthropicConfig, AnthropicProvider};
-pub use traecode::{
-    TraeCodeConfig, TraeCodeOutput, TraeCodeProvider, TraeLoginStatus, TraeToolCall,
-};
+pub use traecode::{TraeCodeConfig, TraeCodeProvider};
 pub use workbuddy::{
     WorkBuddyAccountInfo, WorkBuddyAuthState, WorkBuddyCredential, WorkBuddyOAuth,
     WorkBuddyOAuthConfig, WorkBuddyPollState,

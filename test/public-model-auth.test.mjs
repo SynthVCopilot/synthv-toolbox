@@ -5,14 +5,15 @@ import path from "node:path";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const packageRoot = path.join(root, "src/PiDesktop.Tauri");
-const release = "https://github.com/lsy-404/platform-kit/releases/download/v0.1.0";
+const release = "https://github.com/lsy-404/platform-kit/releases/download/v0.2.0";
 const manifest = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8"));
-for (const name of ["core", "providers", "vue"]) {
+for (const name of ["core", "providers"]) {
   assert.equal(
     manifest.dependencies[`@model-auth/${name}`],
-    `${release}/model-auth-${name}-0.2.7.tgz`,
+    `${release}/model-auth-${name}-0.3.0.tgz`,
   );
 }
+assert.equal(manifest.dependencies["@model-auth/vue"], "https://github.com/lsy-404/platform-kit/releases/download/v0.3.0/model-auth-vue-0.4.0.tgz");
 const [lock, prepare, desktop, ffmpeg] = await Promise.all([
   readFile(path.join(packageRoot, "package-lock.json"), "utf8"),
   readFile(path.join(root, ".github/workflows/prepare-desktop.yml"), "utf8"),

@@ -6,7 +6,7 @@ export interface AgentFileApproval { id: string; path: string; purpose: string; 
 export type AiProviderId = "anthropic" | "openai-codex" | "workbuddy" | "traecode";
 export type AiAuthMethod = "oauth" | "api-key";
 export type AiLoadStrategy = "round-robin" | "weighted-round-robin" | "failover";
-export type ModelCatalogSource = "models-dev" | "built-in-fallback";
+export type ModelCatalogSource = "models-dev" | "unavailable";
 
 export interface AiApiKeySummary {
   id: string;

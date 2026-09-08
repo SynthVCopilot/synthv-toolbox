@@ -11,12 +11,17 @@ const [packageJson, api, main, types, commands, lib] = await Promise.all([
   readFile(new URL("src/PiDesktop.Tauri/src-tauri/src/lib.rs", root), "utf8"),
 ]);
 
-assert.match(packageJson, /https:\/\/github\.com\/lsy-404\/platform-kit\/releases\/download\/v0\.1\.0\/model-auth-vue-0\.2\.7\.tgz/);
+assert.match(packageJson, /https:\/\/github\.com\/lsy-404\/platform-kit\/releases\/download\/v0\.3\.0\/model-auth-vue-0\.4\.0\.tgz/);
 assert.doesNotMatch(packageJson, /\.platform-kit-private/);
 assert.match(api, /浏览器预览不执行 OAuth 授权/);
 assert.doesNotMatch(api, /previewAiAccountSequence|preview-anthropic-1/);
 assert.match(main, /registerModelAuthElement\(\)/);
+assert.match(main, /registerModelConnectionPanelElement\(\)/);
 assert.match(main, /mountModelAuthDialog/);
+assert.match(main, /model-connection-panel/);
+assert.match(main, /initialConnection: modelAuthInitialConnection/);
+assert.match(main, /panel\.addEventListener\("manage"/);
+assert.match(main, /panel\.addEventListener\("refresh"/);
 assert.match(main, /oauthCredentials/);
 assert.match(main, /apiKeyCredentials/);
 assert.match(main, /update-provider-strategy/);

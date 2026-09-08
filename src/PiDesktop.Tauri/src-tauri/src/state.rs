@@ -55,7 +55,8 @@ impl AppState {
         let mcp = Arc::new(McpManager::default());
         let media_tasks =
             MediaTaskManager::persistent(resource_dir.clone(), bridge_dir.clone(), mcp.clone());
-        let startup_catalog = RuntimeModelCatalog::fallback(None);
+        let startup_catalog =
+            RuntimeModelCatalog::unavailable(Some("models.dev 目录尚未加载。".to_string()));
         let credential_balancer = Arc::new(Mutex::new(CredentialBalancer::new(
             settings.credential_routes(&startup_catalog),
         )));

@@ -87,7 +87,7 @@ impl AiProviderId {
             Self::Anthropic => "claude-sonnet-4-6",
             Self::OpenaiCodex => "gpt-5.6-terra",
             Self::Workbuddy => "glm-5.2",
-            Self::Traecode => "trae-account-default",
+            Self::Traecode => "",
         }
     }
 
@@ -119,7 +119,7 @@ impl AiProviderId {
                 "deepseek-v4-pro",
                 "deepseek-v4-flash",
             ],
-            Self::Traecode => &["trae-account-default"],
+            Self::Traecode => &[],
         }
     }
 }
