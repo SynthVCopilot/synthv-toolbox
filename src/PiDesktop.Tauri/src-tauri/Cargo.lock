@@ -2468,6 +2468,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "model-auth-native"
+version = "0.4.0"
+source = "git+https://github.com/lsy-404/platform-kit.git?tag=v0.4.0#a948ada010dea5bd3e72bbf30f85658019f47d89"
+dependencies = [
+ "base64 0.22.1",
+ "serde_json",
+ "sha2",
+ "ureq",
+ "url",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "muda"
 version = "0.19.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4080,6 +4094,7 @@ dependencies = [
  "futures-util",
  "junction",
  "libc",
+ "model-auth-native",
  "p256",
  "pinyin",
  "quick-xml",
