@@ -17,6 +17,7 @@ import { icon } from "./icons";
 import { renderAboutPage } from "./about";
 import { guiFeatureCatalog, toolGroups, type FeatureCatalogItem, type ToolGroup } from "./featureCatalog";
 import { mountShell, type ShellController } from "./vue/shell";
+import { formatPercentage } from "./percentage";
 import { locale, setLocale, t } from "./i18n";
 import "./i18nHome";
 import "./i18nAccounts";
@@ -2296,7 +2297,7 @@ function usageValue(value: unknown): string {
 }
 
 function usagePercent(value: number | null | undefined): string {
-  return value === null || value === undefined || !Number.isFinite(value) ? t("ai.notAvailable") : `${value.toFixed(2)}%`;
+  return value === null || value === undefined || !Number.isFinite(value) ? t("ai.notAvailable") : `${formatPercentage(value)}%`;
 }
 
 function usageWindowSummary(account: AiProviderUsageAccount): string {
