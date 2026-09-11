@@ -16,6 +16,9 @@ const settings = main.slice(main.indexOf("function renderSettings"), main.indexO
 assert.match(main, /type Page = .*"ai"/);
 assert.match(main, /navItem\("ai", t\("nav\.ai"\)/);
 assert.match(main, /case "ai": return renderAiPage\(\)/);
+assert.match(main, /shellController\.afterUpdate\(\(\) => \{/);
+assert.match(main, /syncModelConnectionPanel\(\);/);
+assert.match(main, /toolboxEventsBound/);
 assert.match(main, /<model-connection-panel><\/model-connection-panel>/);
 assert.match(main, /data-refresh-ai-usage/);
 assert.match(main, /ai-usage-table/);

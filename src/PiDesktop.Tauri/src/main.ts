@@ -1007,12 +1007,13 @@ function render(): void {
   if (shellController) shellController.update(nextShellState);
   else shellController = mountShell(root, nextShellState);
   const wiredMarkup = `${pageHtml}\u0000${overlayHtml}`;
-  if (wiredMarkup !== lastWiredMarkup) {
-    lastWiredMarkup = wiredMarkup;
-    shellController.afterUpdate(wireForms);
-  }
+  const needsWire = wiredMarkup !== lastWiredMarkup;
+  if (needsWire) lastWiredMarkup = wiredMarkup;
+  shellController.afterUpdate(() => {
+    if (needsWire) wireForms();
+    syncModelConnectionPanel();
+  });
   syncModelAuthDialog();
-  syncModelConnectionPanel();
   scheduleToolboxUpdateDownloadPoll();
   scheduleDownloadPoll();
   scheduleMediaTaskPoll();
@@ -2629,6 +2630,8 @@ function syncModelConnectionPanel(): void {
     styled: true,
     theme: "system",
   });
+  if (panel.dataset.toolboxEventsBound === "true") return;
+  panel.dataset.toolboxEventsBound = "true";
   panel.addEventListener("manage", (event) => {
     const [connection] = (event as CustomEvent).detail as [{ providerId: string; method: "oauth" | "api-key" }];
     if (!connection?.providerId) return;
