@@ -59,6 +59,29 @@ export interface ModelSummary {
   catalogError: string | null;
 }
 
+export interface AiProviderUsageWindow {
+  name: string;
+  usedPercent: number | null;
+  remainingPercent: number | null;
+  resetAt: string | null;
+}
+
+export interface AiProviderUsageAccount {
+  provider: AiProviderId | string;
+  channel: "oauth" | "api-key" | "preview";
+  label: string;
+  plan: string | null;
+  windows: AiProviderUsageWindow[];
+  balance: string | null;
+  estimate: string | null;
+  credentialId?: string;
+}
+
+export interface AiProviderUsageSnapshot {
+  queriedAt: string;
+  accounts: AiProviderUsageAccount[];
+}
+
 export interface OpenCodeCatalogProvider {
   id: string;
   name: string;

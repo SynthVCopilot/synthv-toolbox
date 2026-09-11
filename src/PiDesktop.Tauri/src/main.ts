@@ -21,11 +21,14 @@ import { locale, setLocale, t } from "./i18n";
 import "./i18nHome";
 import "./i18nAccounts";
 import "./i18nBridge";
+import "./i18nAi";
 import type {
   AiProviderId,
   AgentWorkMode,
   AgentFileApproval,
   AiProviderSummary,
+  AiProviderUsageAccount,
+  AiProviderUsageSnapshot,
   AiLoadStrategy,
   AppMode,
   AudioCaptureCapability,
@@ -87,7 +90,7 @@ registerModelConnectionPanelElement();
 const root = document.querySelector<HTMLDivElement>("#app")!;
 if (!root) throw new Error("Missing #app root");
 
-type Page = "home" | "accounts" | "import" | "convert" | "analysis" | "quality" | "lyrics" | "history" | "copilot" | "components" | "bridge" | "connections" | "settings" | "about";
+type Page = "home" | "accounts" | "import" | "convert" | "analysis" | "quality" | "lyrics" | "history" | "copilot" | "ai" | "components" | "bridge" | "connections" | "settings" | "about";
 type AccountManagerSection = "profile" | "global" | "add";
 
 interface PendingAccountIndicatorConsent {
@@ -235,6 +238,9 @@ let accountUsageRefreshPageGeneration: number | undefined;
 let accountPageGeneration = 0;
 let cachedAccountProfiles: Sv2ProfilesState | undefined;
 let aiCatalogRefreshInFlight: Promise<void> | undefined;
+let aiUsage: AiProviderUsageSnapshot | undefined;
+let aiUsageLoading = false;
+let aiUsageGeneration = 0;
 let lyricPersistTimer: number | undefined;
 let sidebarCollapsed = (() => {
   try { return localStorage.getItem("pi.sidebar.collapsed") === "true"; }
@@ -930,6 +936,7 @@ function renderSidebar(): string {
       ${navItem("lyrics", t("nav.lyrics"), "lyrics")}
       ${navItem("history", t("nav.history"), "history")}
       ${app.mode === "ai" ? navItem("copilot", t("nav.copilot"), "bot") : ""}
+      ${app.mode === "ai" ? navItem("ai", t("nav.ai"), "sparkles") : ""}
       <span class="nav-label">${t("nav.system")}</span>
       ${navItem("components", t("nav.components"), "boxes")}
       ${navItem("bridge", t("nav.bridge"), "bridge")}
@@ -962,7 +969,7 @@ function render(): void {
     wireForms();
     return;
   }
-  if (app.mode !== "ai" && page === "copilot") page = "home";
+  if (app.mode !== "ai" && (page === "copilot" || page === "ai")) page = "home";
   const meta = pageMeta(page);
   const pageHtml = renderPage();
   const noticeHtml = notice ? `<div class="toast success">${icon("check", 18)}<pre>${escapeHtml(notice)}</pre></div>` : "";
@@ -1543,6 +1550,7 @@ function renderPage(): string {
     case "lyrics": return renderLyricsPage();
     case "history": return renderHistoryPage();
     case "copilot": return renderCopilot();
+    case "ai": return renderAiPage();
     case "components": return renderComponents();
     case "bridge": return renderBridge();
     case "connections": return renderMcp();
@@ -2282,6 +2290,38 @@ function renderCopilot(): string {
   </div>`;
 }
 
+function usageValue(value: string | number | null | undefined): string {
+  return value === null || value === undefined || value === "" ? t("ai.notAvailable") : escapeHtml(value);
+}
+
+function usageWindowSummary(account: AiProviderUsageAccount): string {
+  return account.windows.length
+    ? account.windows.map((window) => `<div class="ai-usage-window"><strong>${escapeHtml(window.name)}</strong><small>${t("ai.used")}: ${usageValue(window.usedPercent)}% · ${t("ai.remaining")}: ${usageValue(window.remainingPercent)}%</small><small>${t("ai.resetAt")}: ${window.resetAt ? escapeHtml(new Date(window.resetAt).toLocaleString(locale())) : t("ai.notAvailable")}</small></div>`).join("")
+    : `<span>${t("ai.notAvailable")}</span>`;
+}
+
+function renderAiUsageTable(): string {
+  const snapshot = aiUsage;
+  if (aiUsageLoading && !snapshot) return `<div class="empty-inline">${t("ai.loading")}</div>`;
+  if (!snapshot?.accounts.length) return `<div class="empty-inline">${t("ai.noData")}</div>`;
+  const rows = snapshot.accounts.map((account) => `<tr>
+    <td>${escapeHtml(account.provider)}</td><td>${escapeHtml(account.channel === "oauth" ? t("ai.oauth") : account.channel === "api-key" ? t("ai.apiKey") : t("ai.preview"))}</td>
+    <td>${escapeHtml(account.label)}</td><td>${usageValue(account.plan)}</td><td>${usageWindowSummary(account)}</td>
+    <td>${usageValue(account.balance)}</td><td>${usageValue(account.estimate)}</td>
+  </tr>`).join("");
+  return `<div class="ai-usage-table-wrap"><table class="ai-usage-table"><thead><tr><th>${t("ai.provider")}</th><th>${t("ai.channel")}</th><th>${t("ai.label")}</th><th>${t("ai.plan")}</th><th>${t("ai.windows")}</th><th>${t("ai.balance")}</th><th>${t("ai.estimate")}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function renderAiPage(): string {
+  const queriedAt = aiUsage?.queriedAt ? new Date(aiUsage.queriedAt).toLocaleString(locale()) : t("ai.unknown");
+  return `<div class="ai-page">
+    <section class="panel ai-connections-panel"><div class="section-heading"><div><h2>${t("ai.connections")}</h2><p>${t("settings.providersDescription")}</p></div></div><model-connection-panel></model-connection-panel></section>
+    <section class="panel ai-usage-panel"><div class="section-heading"><div><h2>${t("ai.usage")}</h2><p>${t("ai.queriedAt")}: ${escapeHtml(queriedAt)}</p></div><button class="secondary compact" type="button" data-refresh-ai-usage ${aiUsageLoading ? "disabled" : ""}>${icon("refresh", 16)} ${t("ai.refresh")}</button></div>
+      ${renderAiUsageTable()}${aiUsage?.accounts.some((account) => account.channel === "preview") ? `<p class="ai-preview-note">${t("ai.previewNote")}</p>` : ""}
+    </section>
+  </div>`;
+}
+
 function renderMessage(message: ChatMessage): string {
   const mine = message.role === "user";
   return `<div class="message ${mine ? "user" : "assistant"}"><span class="avatar">${mine ? t("copilot.you") : "π"}</span><div><small>${mine ? t("copilot.you") : "Copilot"}</small><p>${escapeHtml(message.content)}</p></div></div>`;
@@ -2538,6 +2578,7 @@ function modelAuthProviders() {
     models: provider.models, oauthModels: provider.oauthModels, apiKeyModels: provider.apiKeyModels,
     oauthCredentials: provider.accounts.map((account) => ({ id: account.id, label: account.label, account: account.label, healthy: account.healthy, enabled: account.enabled, weight: account.weight, models: provider.oauthModels })),
     apiKeyCredentials: provider.apiKeys.map((key) => ({ id: key.id, label: key.label, healthy: key.healthy, enabled: key.enabled, weight: key.weight, models: key.models, cooldownUntilUtc: key.cooldownUntilUtc })),
+    usage: aiUsage?.accounts.filter((account) => account.provider === provider.id),
   }));
 }
 
@@ -2551,7 +2592,13 @@ function syncModelConnectionPanel(): void {
     error: error ?? null,
     styled: true,
     theme: "system",
+    queryUsage: () => refreshAiUsage(true),
+    usage: aiUsage,
   });
+  if (panel.dataset.usageWired !== "true") {
+    panel.dataset.usageWired = "true";
+    panel.addEventListener("query-usage", () => { void refreshAiUsage(true); });
+  }
   panel.addEventListener("manage", (event) => {
     const [connection] = (event as CustomEvent).detail as [{ providerId: string; method: "oauth" | "api-key" }];
     if (!connection?.providerId) return;
@@ -2640,15 +2687,6 @@ async function executeModelAuthAction(action: ModelAuthAction, detail: unknown[]
   }
 }
 
-function renderAiProviderSettings(): string {
-  const legacyWarning = app?.model?.legacyConfigured
-    ? `<div class="ai-legacy-warning">${icon("shield", 17)}<span><strong>${t("settings.legacyCredentials")}</strong><small>${t("settings.legacyCredentialsDescription")}</small></span></div>`
-    : "";
-  return `<section class="panel ai-provider-panel"><div class="section-heading"><div><h2>${t("settings.providers")}</h2><p>${t("settings.providersDescription")}</p></div></div>
-    ${legacyWarning}<model-connection-panel></model-connection-panel>
-  </section>`;
-}
-
 function renderSettings(): string {
   if (!app) return "";
   const showSvpRouting = app.platform === "windows" || app.platform === "preview";
@@ -2663,7 +2701,6 @@ function renderSettings(): string {
   return `<div class="settings-layout"><section class="panel language-settings"><div class="section-heading"><div><h2>${t("settings.language")}</h2></div><label><select id="language-select" aria-label="${t("settings.language")}"><option value="zh-CN" ${locale() === "zh-CN" ? "selected" : ""}>${t("settings.chinese")}</option><option value="en" ${locale() === "en" ? "selected" : ""}>${t("settings.english")}</option></select></label></div></section>
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.autostart")}</h2><p>${t("settings.autostartDescription")}</p>${app.autostartError ? `<p class="error-text">${escapeHtml(app.autostartError)}</p>` : ""}</div><label class="fluent-switch large"><input id="autostart-enabled" type="checkbox" ${app.autostartEnabled === true ? "checked" : ""} ${busy || app.autostartEnabled == null ? "disabled" : ""} aria-label="${t("settings.autostart")}" /><span></span>${app.autostartEnabled == null ? t("settings.unknown") : app.autostartEnabled ? t("settings.enabled") : t("settings.disabled")}</label></div></section>
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.mode")}</h2><p>${t("settings.modeDescription")}</p></div></div><div class="mode-setting"><button class="setting-choice ${app.mode === "toolbox" ? "active" : ""}" data-set-mode="toolbox"><span class="mode-icon slate">${icon("toolbox", 23)}</span><span><strong>${t("settings.toolbox")}</strong><small>${t("settings.toolboxDescription")}</small></span>${app.mode === "toolbox" ? icon("check", 20) : ""}</button><button class="setting-choice ${app.mode === "ai" ? "active" : ""}" data-set-mode="ai"><span class="mode-icon purple">${icon("sparkles", 23)}</span><span><strong>${t("settings.ai")}</strong><small>${t("settings.aiDescription")}</small></span>${app.mode === "ai" ? icon("check", 20) : ""}</button></div></section>
-    ${app.mode === "ai" ? renderAiProviderSettings() : `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("bot", 24)}</span><div><h2>${t("settings.aiDisabled")}</h2><p>${t("settings.aiDisabledDescription")}</p></div></section>`}
     ${showSvpRouting ? `<section class="panel smart-route-settings"><div class="section-heading"><div><h2>${t("settings.smartRoute")}</h2><p>${t("settings.smartRouteDescription")}</p></div><label class="fluent-switch large"><input id="svp-routing-enabled" type="checkbox" ${app.smartSvpLaunchEnabled ? "checked" : ""} ${association.supported ? "" : "disabled"} aria-label="${t("settings.smartRoute")}" /><span></span>${app.smartSvpLaunchEnabled ? t("settings.enabled") : t("settings.disabled")}</label></div><label class="fluent-switch large"><input id="svp-routing-always-ask" type="checkbox" ${app.smartSvpAlwaysAsk ? "checked" : ""} ${app.smartSvpLaunchEnabled && association.supported && !busy ? "" : "disabled"} aria-label="${t("settings.alwaysAsk")}" /><span></span>${t("settings.alwaysAsk")}</label><div class="smart-route-state ${association.isDefault ? "ready" : "pending"}"><span class="feature-icon ${association.isDefault ? "emerald" : "blue"}">${icon("file", 20)}</span><div><strong>${escapeHtml(associationLabel)}</strong><p>${escapeHtml(association.detail)}</p></div><button class="secondary compact" data-open-svp-default-apps ${association.supported ? "" : "disabled"}>${t("settings.openDefaults")}</button></div></section>` : ""}
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.dataPlatform")}</h2><p>${t("settings.dataPlatformDescription")}</p></div></div><dl class="detail-list"><div><dt>${t("settings.platform")}</dt><dd>${escapeHtml(app.platform)}</dd></div><div><dt>${t("settings.config")}</dt><dd><code>${escapeHtml(app.configPath)}</code></dd></div><div><dt>${t("settings.appVersion")}</dt><dd>${escapeHtml(app.appVersion)}</dd></div></dl></section></div>`;
 }
@@ -3174,6 +3211,24 @@ async function refreshAiProviderSummary(forceCatalog = false): Promise<void> {
   if (app?.mode === "ai") app.model = await api.aiProviderState(forceCatalog);
 }
 
+async function refreshAiUsage(force = false): Promise<void> {
+  if (aiUsageLoading && !force) return;
+  const generation = ++aiUsageGeneration;
+  aiUsageLoading = true;
+  if (page === "ai") render();
+  try {
+    const snapshot = await api.aiProviderUsage();
+    if (generation === aiUsageGeneration) aiUsage = snapshot;
+  } catch (reason) {
+    if (generation === aiUsageGeneration) error = formatError(reason);
+  } finally {
+    if (generation === aiUsageGeneration) {
+      aiUsageLoading = false;
+      if (page === "ai") render();
+    }
+  }
+}
+
 function refreshAiCatalogLive(): void {
   if (app?.mode !== "ai" || aiCatalogRefreshInFlight) return;
   const request = refreshAiProviderSummary(true)
@@ -3309,6 +3364,10 @@ document.addEventListener("click", (event) => {
     const model = target.dataset.modelId;
     if (!provider || !model) return;
     selectChatModel(provider, model);
+    return;
+  }
+  if (target.hasAttribute("data-refresh-ai-usage")) {
+    void refreshAiUsage(true);
     return;
   }
   if (page === "lyrics" && document.querySelector(".lyric-workbench-grid")) syncLyricDraftFromDom();
@@ -3882,6 +3941,9 @@ document.addEventListener("click", (event) => {
     if (page === "about") scheduleToolboxUpdateDownloadPoll(0);
     autostartQueryGeneration += 1;
     if (page === "settings") void refreshAutostartStatus();
+    if (page === "ai") {
+      void refreshAiProviderSummary().then(() => refreshAiUsage()).catch((reason) => { error = formatError(reason); render(); });
+    }
     if (enteringComponents) {
       void loadFfmpegConfiguration();
     }

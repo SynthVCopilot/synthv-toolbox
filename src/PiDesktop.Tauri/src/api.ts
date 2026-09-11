@@ -6,6 +6,7 @@ import type {
   AgentWorkMode,
   AgentFileApproval,
   AiProviderSummary,
+  AiProviderUsageSnapshot,
   AppMode,
   AudioJobSnapshot,
   AudioArtifactInfo,
@@ -203,6 +204,19 @@ let previewAiProviders: AiProviderSummary[] = [{
   loadStrategy: "round-robin",
   unavailableReason: null,
 }];
+
+const previewAiUsage: AiProviderUsageSnapshot = {
+  queriedAt: "2026-09-11T12:00:00.000Z",
+  accounts: [{
+    provider: "preview",
+    channel: "preview",
+    label: "Preview sample",
+    plan: "Example data",
+    windows: [{ name: "Current window", usedPercent: 42, remainingPercent: 58, resetAt: "2026-09-12T00:00:00.000Z" }],
+    balance: "Not connected",
+    estimate: "Connect an account to query usage",
+  }],
+};
 
 function previewAiModel() {
   return {
@@ -592,6 +606,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     return previewState() as T;
   }
   if (command === "ai_provider_state") return previewAiModel() as T;
+  if (command === "ai_provider_usage") return { ...previewAiUsage, queriedAt: new Date().toISOString() } as T;
   if (command === "opencode_provider_catalog") return {
     generatedAt: Date.now(),
     providers: [
@@ -1311,6 +1326,7 @@ export const api = {
     call<BootstrapState>("remove_ai_api_key", { provider, credentialId }),
   aiProviderState: (forceCatalog = false) =>
     call<ModelSummary>("ai_provider_state", { forceCatalog }),
+  aiProviderUsage: () => call<AiProviderUsageSnapshot>("ai_provider_usage"),
   opencodeProviderCatalog: (force = false) =>
     call<OpenCodeCatalog>("opencode_provider_catalog", { force }),
   removeAiProviderAccount: (provider: AiProviderId, accountId: string) =>

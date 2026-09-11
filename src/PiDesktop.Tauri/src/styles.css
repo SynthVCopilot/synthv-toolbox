@@ -996,6 +996,16 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .checkbox input { width: 16px; height: 16px; margin: 0; accent-color: var(--primary); }
 
 .settings-layout { grid-template-columns: 1fr; max-width: 820px; }
+.ai-page { display: grid; gap: 16px; max-width: 1180px; }
+.ai-connections-panel, .ai-usage-panel { min-width: 0; }
+.ai-usage-table-wrap { overflow-x: auto; margin-top: 14px; }
+.ai-usage-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ai-usage-table th, .ai-usage-table td { padding: 11px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; white-space: nowrap; }
+.ai-usage-table th { color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.ai-usage-window { display: grid; gap: 3px; min-width: 190px; white-space: normal; }
+.ai-usage-window + .ai-usage-window { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.ai-usage-window small { color: var(--muted); font-size: 10px; }
+.ai-preview-note { margin: 12px 0 0; color: var(--muted); font-size: 11px; }
 .mode-setting { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .setting-choice { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 11px; padding: 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-subtle); cursor: pointer; text-align: left; }
 .setting-choice:hover { background: var(--control-hover); }
