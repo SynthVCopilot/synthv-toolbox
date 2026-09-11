@@ -11,7 +11,7 @@ const [packageJson, api, main, types, commands, lib] = await Promise.all([
   readFile(new URL("src/PiDesktop.Tauri/src-tauri/src/lib.rs", root), "utf8"),
 ]);
 
-assert.match(packageJson, /https:\/\/github\.com\/lsy-404\/platform-kit\/releases\/download\/v0\.5\.0\/model-auth-vue-0\.5\.0\.tgz/);
+assert.match(packageJson, /https:\/\/github\.com\/lsy-404\/platform-kit\/releases\/download\/v0\.5\.1\/model-auth-vue-0\.5\.1\.tgz/);
 assert.doesNotMatch(packageJson, /\.platform-kit-private/);
 assert.match(api, /浏览器预览不执行 OAuth 授权/);
 assert.doesNotMatch(api, /previewAiAccountSequence|preview-anthropic-1/);

@@ -2469,8 +2469,8 @@ dependencies = [
 
 [[package]]
 name = "model-auth-native"
-version = "0.5.0"
-source = "git+https://github.com/lsy-404/platform-kit.git?tag=v0.5.0#fdde6bebb74f8fd1971cc86df24a506f65e24bf1"
+version = "0.5.1"
+source = "git+https://github.com/lsy-404/platform-kit.git?tag=v0.5.1#fd51a2e3bd84d4565ace6a3fa026cff21a9a006c"
 dependencies = [
  "base64 0.22.1",
  "serde_json",
