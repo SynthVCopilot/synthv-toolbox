@@ -21,6 +21,7 @@ use crate::agent::{
     NoTools, OpenAiChatConfig, OpenAiChatProvider, OpenAiCodexConfig, OpenAiCodexProvider, Role,
     ToolDefinition, TraeCodeConfig, TraeCodeProvider, WorkBuddyOAuth, WorkBuddyOAuthConfig,
 };
+use crate::ai_usage::AiProviderUsageSnapshot;
 use crate::api_keys;
 use crate::audio_capture::{
     self, AudioCaptureCapability, AudioCaptureTarget, CaptureClipRequest, CompareClipsRequest,
@@ -1293,6 +1294,30 @@ pub async fn ai_provider_state(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn ai_provider_usage(
+    state: State<'_, AppState>,
+) -> Result<AiProviderUsageSnapshot, String> {
+    require_ai(&state).await?;
+    let accounts = state
+        .settings
+        .read()
+        .await
+        .oauth_accounts
+        .iter()
+        .filter(|account| {
+            matches!(
+                account.provider,
+                AiProviderId::Anthropic | AiProviderId::OpenaiCodex
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    tauri::async_runtime::spawn_blocking(move || Ok(crate::ai_usage::query_accounts(&accounts)))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]

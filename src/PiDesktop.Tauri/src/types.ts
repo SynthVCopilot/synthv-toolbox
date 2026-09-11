@@ -60,21 +60,40 @@ export interface ModelSummary {
 }
 
 export interface AiProviderUsageWindow {
-  name: string;
+  id: string;
+  label: string;
   usedPercent: number | null;
   remainingPercent: number | null;
-  resetAt: string | null;
+  resetAt: number | null;
+  used?: number | null;
+  limit?: number | null;
+  remaining?: number | null;
+  unit?: string | null;
+}
+
+export interface AiProviderUsage {
+  providerId: AiProviderId | string;
+  credentialId: string;
+  status: "ok" | "unknown" | "error";
+  plan: string | null;
+  planMultiplier?: number | null;
+  billingInterval?: string | null;
+  subscriptionRenewsAt?: number | null;
+  subscriptionExpiresAt?: number | null;
+  metadataError?: string | null;
+  windows: AiProviderUsageWindow[];
+  balance: { amount: number; unit: string } | null;
+  estimate?: Record<string, unknown> | null;
+  fetchedAtUtc: string;
+  error: string | null;
 }
 
 export interface AiProviderUsageAccount {
-  provider: AiProviderId | string;
-  channel: "oauth" | "api-key" | "preview";
-  label: string;
-  plan: string | null;
-  windows: AiProviderUsageWindow[];
-  balance: string | null;
-  estimate: string | null;
+  provider: AiProviderId;
+  channel: "oauth" | "preview";
   credentialId?: string;
+  label: string;
+  usage: AiProviderUsage | null;
 }
 
 export interface AiProviderUsageSnapshot {

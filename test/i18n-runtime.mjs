@@ -14,7 +14,7 @@ globalThis.document = { documentElement: { lang: "" } };
 const i18nSource = source("i18n").replace('from "vue-i18n"', `from ${JSON.stringify(runtimeUrl)}`);
 const i18nUrl = moduleUrl(i18nSource);
 const { t, locale, setLocale, i18n } = await import(i18nUrl);
-for (const name of ["i18nCommon", "i18nAccounts", "i18nBridge", "i18nHome", "i18nLyrics", "i18nWorkflows", "i18nCopilot", "i18nSystem"]) {
+for (const name of ["i18nCommon", "i18nAccounts", "i18nBridge", "i18nHome", "i18nLyrics", "i18nWorkflows", "i18nCopilot", "i18nSystem", "i18nAi"]) {
   await import(moduleUrl(source(name).replace('from "./i18n"', `from ${JSON.stringify(i18nUrl)}`)));
 }
 const literalKeys = [...source("main").matchAll(/\bt\("([^"`]+)"/g)].map(match => match[1]);

@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod agent_files;
+mod ai_usage;
 mod api_keys;
 mod audio_capture;
 mod audio_prep;
@@ -211,6 +212,7 @@ pub fn run() {
             commands::update_ai_provider,
             commands::update_ai_provider_strategy,
             commands::ai_provider_state,
+            commands::ai_provider_usage,
             commands::opencode_provider_catalog,
             commands::remove_ai_provider_account,
             commands::scan_synthv,

@@ -208,13 +208,20 @@ let previewAiProviders: AiProviderSummary[] = [{
 const previewAiUsage: AiProviderUsageSnapshot = {
   queriedAt: "2026-09-11T12:00:00.000Z",
   accounts: [{
-    provider: "preview",
+    provider: "anthropic",
     channel: "preview",
     label: "Preview sample",
-    plan: "Example data",
-    windows: [{ name: "Current window", usedPercent: 42, remainingPercent: 58, resetAt: "2026-09-12T00:00:00.000Z" }],
-    balance: "Not connected",
-    estimate: "Connect an account to query usage",
+    usage: {
+      providerId: "anthropic",
+      credentialId: "preview",
+      status: "unknown",
+      plan: "Example data",
+      windows: [{ id: "preview", label: "Current window", usedPercent: 42.12, remainingPercent: 57.88, resetAt: Date.parse("2026-09-12T00:00:00.000Z") }],
+      balance: null,
+      estimate: null,
+      fetchedAtUtc: "2026-09-11T12:00:00.000Z",
+      error: null,
+    },
   }],
 };
 

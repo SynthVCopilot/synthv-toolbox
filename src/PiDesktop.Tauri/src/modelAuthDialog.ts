@@ -2,7 +2,7 @@ type DialogElement = HTMLElement & Record<string, unknown>;
 
 const actions = [
   "authorize-oauth", "reconnect-oauth", "add-api-key", "remove-oauth", "remove-api-key",
-  "update-credential", "update-provider", "select-model", "update-provider-strategy", "refresh-catalog",
+  "update-credential", "update-provider", "select-model", "update-provider-strategy", "refresh-catalog", "query-usage",
 ] as const;
 export type ModelAuthAction = typeof actions[number];
 

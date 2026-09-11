@@ -28,6 +28,7 @@ import type {
   AgentFileApproval,
   AiProviderSummary,
   AiProviderUsageAccount,
+  AiProviderUsageWindow,
   AiProviderUsageSnapshot,
   AiLoadStrategy,
   AppMode,
@@ -2290,14 +2291,47 @@ function renderCopilot(): string {
   </div>`;
 }
 
-function usageValue(value: string | number | null | undefined): string {
+function usageValue(value: unknown): string {
   return value === null || value === undefined || value === "" ? t("ai.notAvailable") : escapeHtml(value);
 }
 
+function usagePercent(value: number | null | undefined): string {
+  return value === null || value === undefined || !Number.isFinite(value) ? t("ai.notAvailable") : `${value.toFixed(2)}%`;
+}
+
 function usageWindowSummary(account: AiProviderUsageAccount): string {
-  return account.windows.length
-    ? account.windows.map((window) => `<div class="ai-usage-window"><strong>${escapeHtml(window.name)}</strong><small>${t("ai.used")}: ${usageValue(window.usedPercent)}% · ${t("ai.remaining")}: ${usageValue(window.remainingPercent)}%</small><small>${t("ai.resetAt")}: ${window.resetAt ? escapeHtml(new Date(window.resetAt).toLocaleString(locale())) : t("ai.notAvailable")}</small></div>`).join("")
-    : `<span>${t("ai.notAvailable")}</span>`;
+  const windows = account.usage?.windows ?? [];
+  return windows.length
+    ? windows.map((window) => `<div class="ai-usage-window"><strong>${escapeHtml(window.label)}</strong><small>${t("ai.used")}: ${usagePercent(window.usedPercent)} · ${t("ai.remaining")}: ${usagePercent(window.remainingPercent)}</small><small>${usageWindowCounts(window)}</small><small>${t("ai.resetAt")}: ${window.resetAt ? escapeHtml(new Date(window.resetAt).toLocaleString(locale())) : t("ai.notAvailable")}</small></div>`).join("")
+    : `<span>${usageValue(account.usage?.error)}</span>`;
+}
+
+function usageWindowCounts(window: AiProviderUsageWindow): string {
+  if (window.used === null || window.used === undefined) return "";
+  const used = usageValue(window.used);
+  const limit = window.limit === null || window.limit === undefined ? t("ai.notAvailable") : usageValue(window.limit);
+  return `${t("ai.used")}: ${used} / ${limit}${window.unit ? ` ${escapeHtml(window.unit)}` : ""}`;
+}
+
+function usageBalance(account: AiProviderUsageAccount): string {
+  const balance = account.usage?.balance;
+  return balance ? `${usageValue(balance.amount)} ${escapeHtml(balance.unit)}` : usageValue(null);
+}
+
+function usageEstimate(account: AiProviderUsageAccount): string {
+  if (account.usage?.error) return usageValue(account.usage.error);
+  if (account.usage?.metadataError) return usageValue(account.usage.metadataError);
+  return usageValue(account.usage?.estimate);
+}
+
+function usageSubscription(account: AiProviderUsageAccount): string {
+  const usage = account.usage;
+  if (!usage) return usageValue(null);
+  const values = [
+    usage.subscriptionRenewsAt ? `${t("ai.renewal")}: ${new Date(usage.subscriptionRenewsAt).toLocaleString(locale())}` : "",
+    usage.subscriptionExpiresAt ? `${t("ai.expires")}: ${new Date(usage.subscriptionExpiresAt).toLocaleString(locale())}` : "",
+  ].filter(Boolean);
+  return values.length ? values.map(escapeHtml).join("<br />") : usageValue(null);
 }
 
 function renderAiUsageTable(): string {
@@ -2305,11 +2339,11 @@ function renderAiUsageTable(): string {
   if (aiUsageLoading && !snapshot) return `<div class="empty-inline">${t("ai.loading")}</div>`;
   if (!snapshot?.accounts.length) return `<div class="empty-inline">${t("ai.noData")}</div>`;
   const rows = snapshot.accounts.map((account) => `<tr>
-    <td>${escapeHtml(account.provider)}</td><td>${escapeHtml(account.channel === "oauth" ? t("ai.oauth") : account.channel === "api-key" ? t("ai.apiKey") : t("ai.preview"))}</td>
-    <td>${escapeHtml(account.label)}</td><td>${usageValue(account.plan)}</td><td>${usageWindowSummary(account)}</td>
-    <td>${usageValue(account.balance)}</td><td>${usageValue(account.estimate)}</td>
+    <td>${escapeHtml(aiProviders().find((provider) => provider.id === account.provider)?.displayName ?? account.provider)}</td><td>${escapeHtml(account.channel === "oauth" ? t("ai.oauth") : t("ai.preview"))}</td>
+    <td>${escapeHtml(account.label)}</td><td>${usageValue(account.usage?.plan)}</td><td>${usageSubscription(account)}</td><td>${usageWindowSummary(account)}</td>
+    <td>${usageBalance(account)}</td><td>${usageEstimate(account)}</td>
   </tr>`).join("");
-  return `<div class="ai-usage-table-wrap"><table class="ai-usage-table"><thead><tr><th>${t("ai.provider")}</th><th>${t("ai.channel")}</th><th>${t("ai.label")}</th><th>${t("ai.plan")}</th><th>${t("ai.windows")}</th><th>${t("ai.balance")}</th><th>${t("ai.estimate")}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  return `<div class="ai-usage-table-wrap"><table class="ai-usage-table"><thead><tr><th>${t("ai.provider")}</th><th>${t("ai.channel")}</th><th>${t("ai.label")}</th><th>${t("ai.plan")}</th><th>${t("ai.subscription")}</th><th>${t("ai.windows")}</th><th>${t("ai.balance")}</th><th>${t("ai.estimate")}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function renderAiPage(): string {
@@ -2570,15 +2604,16 @@ function aiProviderMark(provider: AiProviderSummary): string {
 }
 
 function modelAuthProviders() {
+  const usageByCredential = new Map((aiUsage?.accounts ?? []).filter((account) => account.channel === "oauth" && account.credentialId).map((account) => [account.credentialId!, account.usage]));
   return aiProviders().map((provider) => ({
     id: provider.id, name: provider.displayName, description: provider.description, authMethods: provider.authMethods,
     available: provider.available, unavailableReason: provider.unavailableReason, oauthEnabled: provider.oauthEnabled,
     loadStrategy: provider.loadStrategy, mark: aiProviderMark(provider),
     authorizeLabel: t("accountUi.authorizeInBrowser"),
+    usageEnabled: provider.id === "anthropic" || provider.id === "openai-codex",
     models: provider.models, oauthModels: provider.oauthModels, apiKeyModels: provider.apiKeyModels,
-    oauthCredentials: provider.accounts.map((account) => ({ id: account.id, label: account.label, account: account.label, healthy: account.healthy, enabled: account.enabled, weight: account.weight, models: provider.oauthModels })),
+    oauthCredentials: provider.accounts.map((account) => ({ id: account.id, label: account.label, account: account.label, healthy: account.healthy, enabled: account.enabled, weight: account.weight, models: provider.oauthModels, usage: usageByCredential.get(account.id) ?? null })),
     apiKeyCredentials: provider.apiKeys.map((key) => ({ id: key.id, label: key.label, healthy: key.healthy, enabled: key.enabled, weight: key.weight, models: key.models, cooldownUntilUtc: key.cooldownUntilUtc })),
-    usage: aiUsage?.accounts.filter((account) => account.provider === provider.id),
   }));
 }
 
@@ -2592,13 +2627,7 @@ function syncModelConnectionPanel(): void {
     error: error ?? null,
     styled: true,
     theme: "system",
-    queryUsage: () => refreshAiUsage(true),
-    usage: aiUsage,
   });
-  if (panel.dataset.usageWired !== "true") {
-    panel.dataset.usageWired = "true";
-    panel.addEventListener("query-usage", () => { void refreshAiUsage(true); });
-  }
   panel.addEventListener("manage", (event) => {
     const [connection] = (event as CustomEvent).detail as [{ providerId: string; method: "oauth" | "api-key" }];
     if (!connection?.providerId) return;
@@ -2612,7 +2641,7 @@ function syncModelConnectionPanel(): void {
     render();
   });
   panel.addEventListener("refresh", () => {
-    void refreshAiProviderSummary(true).then(render).catch((reason) => { error = formatError(reason); render(); });
+    void Promise.all([refreshAiProviderSummary(true), refreshAiUsage(true)]).then(render).catch((reason) => { error = formatError(reason); render(); });
   });
 }
 
@@ -2682,6 +2711,10 @@ async function executeModelAuthAction(action: ModelAuthAction, detail: unknown[]
     }
     case "refresh-catalog": {
       await refreshAiProviderSummary(true);
+      break;
+    }
+    case "query-usage": {
+      await refreshAiUsage(true);
       break;
     }
   }
