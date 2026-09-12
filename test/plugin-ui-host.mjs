@@ -13,12 +13,18 @@ const viewport = read(join(root, "src", "PiDesktop.Tauri", "src", "vue", "compon
 assert.match(registry, /export type PluginLoadStatus = "discovered" \| "loading" \| "active" \| "disabled" \| "failed"/);
 assert.match(registry, /export interface PluginPageContribution/);
 assert.match(registry, /export interface PluginActionContribution/);
+assert.match(registry, /entry: string/);
+assert.match(registry, /location: PluginActionLocation/);
+assert.match(registry, /return `plugin:\$\{pluginId\}\/\$\{entry\}`/);
+assert.match(registry, /case "project\.toolbar":/);
 assert.match(registry, /record\.status === "active"/);
 assert.match(registry, /new CustomEvent<PluginActionInvocation>\("plugin-ui:action"/);
 assert.match(registry, /new CustomEvent<PluginFrameRequest>\("plugin-ui:request"/);
 assert.match(frame, /sandbox="allow-scripts allow-forms"/);
 assert.match(frame, /referrerpolicy="no-referrer"/);
 assert.match(frame, /event\.source !== frame\.value\?\.contentWindow/);
+assert.match(frame, /plugin-ui:response/);
+assert.match(frame, /plugin-ui:event/);
 assert.doesNotMatch(frame, /@tauri-apps\/api|invoke\(/);
 assert.match(main, /pluginRegistry\.pages\(\)/);
 assert.match(main, /renderPluginActions\(page\)/);
