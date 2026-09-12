@@ -10,7 +10,47 @@ import {
   type LoadedPluginBackend,
   type PluginDiscovery,
 } from "./index.js";
-import { isHostApiCompatible, validatePluginManifest, type JsonValue, type PluginManifest } from "@synthv-toolbox/runtime-protocol";
+import {
+  PROTOCOL_VERSION,
+  encodeJsonl,
+  isHostApiCompatible,
+  parseJsonl,
+  validatePluginManifest,
+  type JsonValue,
+  type PluginManifest,
+  type RpcMessage,
+  type RpcResponseFailure,
+} from "@synthv-toolbox/runtime-protocol";
+
+class StdioHostTransport implements HostCapabilityTransport {
+  private nextId = 1;
+  private readonly pending = new Map<string, { resolve: (value: JsonValue) => void; reject: (error: Error) => void }>();
+
+  constructor(private readonly write: (line: string) => void) {}
+
+  request(method: string, params: JsonValue): Promise<JsonValue> {
+    const id = `runtime-host-${this.nextId++}`;
+    return new Promise<JsonValue>((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.write(encodeJsonl({ kind: "request", id, protocolVersion: PROTOCOL_VERSION, method, params }));
+    });
+  }
+
+  accept(message: RpcMessage): boolean {
+    if (message.kind !== "response") return false;
+    const pending = this.pending.get(message.id);
+    if (!pending) return false;
+    this.pending.delete(message.id);
+    if (message.ok) pending.resolve(message.result);
+    else pending.reject(responseError(message));
+    return true;
+  }
+
+  dispose(): void {
+    for (const pending of this.pending.values()) pending.reject(new Error("Host capability transport closed."));
+    this.pending.clear();
+  }
+}
 
 class FilePluginDiscovery implements PluginDiscovery {
   private loaded: LoadedPluginBackend[] = [];
@@ -41,15 +81,10 @@ class FilePluginDiscovery implements PluginDiscovery {
   }
 }
 
-const unavailableHost: HostCapabilityTransport = {
-  async request(): Promise<JsonValue> {
-    throw new Error("Host capability calls require a Native Host transport.");
-  },
-};
-
 export async function runStdioWorker(): Promise<void> {
-  const pluginDiscovery = new FilePluginDiscovery(unavailableHost);
-  const worker = new AgentRuntimeWorker(createPiSessionFactory(), undefined, pluginDiscovery);
+  const hostTransport = new StdioHostTransport((line) => stdout.write(line));
+  const pluginDiscovery = new FilePluginDiscovery(hostTransport);
+  const worker = new AgentRuntimeWorker(createPiSessionFactory(), hostTransport, pluginDiscovery);
   const lines = createInterface({ input: stdin, crlfDelay: Infinity });
   let queue = Promise.resolve();
   let shuttingDown = false;
@@ -58,12 +93,18 @@ export async function runStdioWorker(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     lines.close();
+    hostTransport.dispose();
     await queue;
     await worker.dispose();
     await pluginDiscovery.dispose();
   };
 
   lines.on("line", (line) => {
+    try {
+      if (hostTransport.accept(parseJsonl(line))) return;
+    } catch {
+      // Let the worker report malformed input on stderr.
+    }
     queue = queue.then(async () => {
       try {
         const responses = await worker.handleJsonl(line);
@@ -80,4 +121,8 @@ export async function runStdioWorker(): Promise<void> {
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   await runStdioWorker();
+}
+
+function responseError(response: RpcResponseFailure): Error {
+  return new Error(`${response.error.code}: ${response.error.message}`);
 }

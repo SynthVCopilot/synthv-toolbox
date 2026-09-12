@@ -111,9 +111,12 @@ test("stdio worker emits JSONL responses only and discovers compatible plugin ba
     version: "1.0.0",
     hostApi: { min: "1.0", max: "1.0" },
     backend: { entry: "backend/index.js" },
-    permissions: [],
+    permissions: ["project.read"],
   }));
-  writeFileSync(join(pluginRoot, "com.example.plugin", "backend", "index.js"), "export async function activate() {}\n");
+  writeFileSync(
+    join(pluginRoot, "com.example.plugin", "backend", "index.js"),
+    "export async function activate(context) { await context.invokeHost('project.read', 'project', 'read', { id: 'project-1' }); }\n",
+  );
 
   const workerPath = join(packageRoot, "dist", "worker.js");
   const child = spawn(process.execPath, [workerPath], { stdio: ["pipe", "pipe", "pipe"] });
@@ -121,20 +124,34 @@ test("stdio worker emits JSONL responses only and discovers compatible plugin ba
   child.stderr.setEncoding("utf8");
   let stdoutBuffer = "";
   let stderrBuffer = "";
-  const responses = [];
+  const messages = [];
   child.stdout.on("data", (chunk) => {
     stdoutBuffer += chunk;
     const lines = stdoutBuffer.split("\n");
     stdoutBuffer = lines.pop();
-    for (const line of lines) if (line) responses.push(JSON.parse(line));
+    for (const line of lines) {
+      if (!line) continue;
+      const message = JSON.parse(line);
+      messages.push(message);
+      if (message.kind === "request" && message.method === "host.capability.invoke") {
+        child.stdin.write(`${JSON.stringify({
+          kind: "response",
+          id: message.id,
+          protocolVersion: message.protocolVersion,
+          ok: true,
+          result: { granted: true },
+        })}\n`);
+      }
+    }
   });
   child.stderr.on("data", (chunk) => { stderrBuffer += chunk; });
 
   child.stdin.write(`${request("hello", "host.hello", { hostId: "host", protocol: { min: "1.0", max: "1.0" }, capabilities: [] })}\n`);
   child.stdin.write(`${request("plugins", "runtime.plugins.discover", { root: pluginRoot })}\n`);
-  await waitFor(() => responses.length === 2);
-  assert.equal(responses[0].ok, true);
-  assert.deepEqual(responses[1].result.plugins.map((plugin) => plugin.id), ["com.example.plugin"]);
+  await waitFor(() => messages.some((message) => message.kind === "request" && message.method === "host.capability.invoke")
+    && messages.some((message) => message.kind === "response" && message.id === "plugins"));
+  assert.equal(messages.find((message) => message.kind === "response" && message.id === "hello").ok, true);
+  assert.deepEqual(messages.find((message) => message.kind === "response" && message.id === "plugins").result.plugins.map((plugin) => plugin.id), ["com.example.plugin"]);
 
   child.kill("SIGTERM");
   await new Promise((resolve, reject) => {
