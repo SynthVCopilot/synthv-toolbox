@@ -44,6 +44,7 @@ mod sv2_account_probe;
 mod sv2_concurrent;
 mod sv2_profiles;
 mod sv2_session_guard;
+pub mod sv2_session_kit;
 mod sv2_sync;
 mod sv2_voice_catalog;
 mod svp_launch_router;

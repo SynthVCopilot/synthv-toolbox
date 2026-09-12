@@ -921,7 +921,7 @@ struct AccountIdentity {
     email: Option<String>,
 }
 
-fn decrypt_session(
+pub(crate) fn decrypt_session(
     mut ciphertext: Zeroizing<Vec<u8>>,
     key: &[u8; 8],
 ) -> Result<Zeroizing<Vec<u8>>, ()> {
@@ -959,7 +959,7 @@ fn decrypt_session(
     Ok(ciphertext)
 }
 
-fn encrypt_session(plaintext: &[u8], key: &[u8; 8]) -> Result<Zeroizing<Vec<u8>>, ()> {
+pub(crate) fn encrypt_session(plaintext: &[u8], key: &[u8; 8]) -> Result<Zeroizing<Vec<u8>>, ()> {
     if plaintext.is_empty() || plaintext.len() > MAX_SESSION_BYTES.saturating_sub(8) {
         return Err(());
     }
@@ -995,6 +995,13 @@ fn decode_session_credentials(ciphertext: Zeroizing<Vec<u8>>, key: &[u8; 8]) -> 
     parse_session_plaintext(plaintext)
         .map(SessionDecode::Credentials)
         .unwrap_or(SessionDecode::Invalid)
+}
+
+pub(crate) fn validate_session_plaintext_for_offline_tool(plaintext: &[u8]) -> Result<(), ()> {
+    if is_login_required_session_placeholder(plaintext) {
+        return Ok(());
+    }
+    parse_session_plaintext(Zeroizing::new(plaintext.to_vec())).map(|_| ())
 }
 
 fn is_login_required_session_placeholder(plaintext: &[u8]) -> bool {
@@ -3259,7 +3266,7 @@ fn read_bounded_response(
 }
 
 #[cfg(windows)]
-fn read_machine_key() -> Result<Zeroizing<[u8; 8]>, ()> {
+pub(crate) fn read_machine_key() -> Result<Zeroizing<[u8; 8]>, ()> {
     // Multi-character constants in JUCE/MSVC have the first character in the
     // most-significant byte.
     const PROVIDER_RSMB: u32 = u32::from_be_bytes(*b"RSMB");

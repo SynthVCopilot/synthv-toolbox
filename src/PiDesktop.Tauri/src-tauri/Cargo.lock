@@ -4092,6 +4092,7 @@ dependencies = [
  "eventsource-stream",
  "fs2",
  "futures-util",
+ "hex",
  "junction",
  "libc",
  "model-auth-native",
