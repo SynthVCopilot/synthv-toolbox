@@ -6,3 +6,4 @@
 | 编号 | 任务名称 | 任务描述 | 变更动机 | 状态 |
 | :--: | :------: | :------: | :------: | :--: |
 | 001 | [Feature]_agent_runtime_host | 增加 Node Agent Runtime 生命周期和 JSONL RPC 骨架 | 将 AI 运行时从原生宿主构建中分离 | ✅ 已完成 |
+| 002 | [Feature]_runtime_protocol_compatibility | 对齐共享协议并处理运行时向宿主发起的能力调用 | 建立可验证的双向运行时边界 | ✅ 已完成 |
