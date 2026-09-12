@@ -47,6 +47,8 @@ assert.match(workflow, /Download and smoke-test current BtbN LGPL FFmpeg/);
 assert.match(workflow, /FFMPEG_RELEASE_API: https:\/\/api\.github\.com\/repos\/BtbN\/FFmpeg-Builds\/releases\/latest/);
 assert.match(workflow, /ffmpeg-n8\.1-latest-win64-lgpl-8\.1\.zip/);
 assert.match(workflow, /asset\.digest -notmatch "\^sha256:\[0-9a-fA-F\]\{64\}\$"/);
+assert.match(workflow, /Build session kit sidecar/);
+assert.match(workflow, /cargo build --manifest-path src-tauri\/Cargo\.toml --release --target \$\{\{ matrix\.target \}\} --bin sv2-session-kit/);
 assert.match(workflow, /Smoke-test macOS system FFmpeg when available/);
 assert.match(workflow, /Clear previous Windows bundle output/);
 assert.match(workflow, /Clear previous macOS bundle output/);

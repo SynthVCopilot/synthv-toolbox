@@ -129,6 +129,9 @@ jobs:
           bundle_path="$target_root/${{ matrix.target }}/release/bundle"
           case "$bundle_path" in "$target_root"/*) ;; *) exit 1 ;; esac
           rm -rf "$bundle_path"
+      - name: Build session kit sidecar
+        working-directory: src/PiDesktop.Tauri
+        run: cargo build --manifest-path src-tauri/Cargo.toml --release --target ${{ matrix.target }} --bin sv2-session-kit
       - name: Build desktop bundle from prepared frontend
         working-directory: src/PiDesktop.Tauri
         run: npm run tauri build -- --config ../../.github/tauri-ci.conf.json --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
