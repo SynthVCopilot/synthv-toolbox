@@ -6,6 +6,7 @@ __pycache__/
 
 # Removed pi-agent submodule may remain locally to preserve uncommitted legacy work.
 /external/pi-agent/
+agents/
 
 # Tauri / web frontend
 node_modules/
