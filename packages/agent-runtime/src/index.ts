@@ -1,4 +1,5 @@
 import { CredentialRouter, type CredentialMetadata, type ProviderAdapterHost, type ProviderRequest, type ProviderRequestContext, type ProviderResponse, type ProviderStreamEvent } from "@model-auth/core";
+import { fileURLToPath } from "node:url";
 import {
   HOST_API_VERSION,
   HOST_HELLO_METHOD,
@@ -25,6 +26,7 @@ export const AGENT_RUNTIME_ID = "synthv-toolbox.agent-runtime";
 export const AGENT_RUNTIME_CAPABILITIES: CapabilityDescriptor[] = [
   { id: "agent.sessions", version: "1.0", operations: ["initialize", "send", "close"] },
   { id: "host.capabilities", version: "1.0", operations: ["invoke"] },
+  { id: "runtime.plugins", version: "1.0", operations: ["discover", "invoke"] },
 ];
 
 export interface PiSession {
@@ -46,13 +48,18 @@ export interface PluginBackendContext {
 }
 
 export interface PluginBackendModule {
+  default?: PiExtensionFactory;
   activate?(context: PluginBackendContext): void | Promise<void>;
   deactivate?(): void | Promise<void>;
+  invoke?(context: PluginBackendContext, method: string, params: JsonValue): JsonValue | Promise<JsonValue>;
 }
 
 export interface LoadedPluginBackend {
   manifest: PluginManifest;
+  entryPath: string;
+  piExtensionPath?: string;
   deactivate(): Promise<void>;
+  invoke?(method: string, params: JsonValue): Promise<JsonValue>;
 }
 
 export interface ModuleLoader {
@@ -61,6 +68,25 @@ export interface ModuleLoader {
 
 export interface PluginDiscovery {
   discover(root: string): Promise<PluginManifest[]>;
+  invoke(pluginId: string, method: string, params: JsonValue): Promise<PluginInvocationResult>;
+  extensionPaths(): readonly string[];
+}
+
+export type PluginInvocationResult =
+  | { kind: "handled"; result: JsonValue }
+  | { kind: "not-found" }
+  | { kind: "unsupported" };
+
+export type PiExtensionFactory = (pi: unknown) => void | Promise<void>;
+
+export interface PiResourceLoader {
+  reload(): Promise<void>;
+}
+
+export interface PiSdk {
+  getAgentDir(): string;
+  DefaultResourceLoader: new (options: { cwd: string; agentDir: string; additionalExtensionPaths: string[] }) => PiResourceLoader;
+  createAgentSession(options: { cwd: string; noTools: "all"; resourceLoader: PiResourceLoader }): Promise<{ session: PiSession }>;
 }
 
 export class ModelAuthGateway {
@@ -107,13 +133,24 @@ export class ModelAuthGateway {
 
 export type ModelAuthResult<T> = { kind: "ok"; value: T } | { kind: "unsupported"; reason: string };
 
-export function createPiSessionFactory(): PiSessionFactory {
+export function createPiSessionFactory(
+  additionalExtensionPaths: () => readonly string[] = () => [],
+  loadSdk: () => Promise<PiSdk> = loadPiSdk,
+): PiSessionFactory {
   return {
     async create(input) {
-      const sdk = await import("@earendil-works/pi-coding-agent");
+      const sdk = await loadSdk();
+      const cwd = input.cwd ?? process.cwd();
+      const resourceLoader = new sdk.DefaultResourceLoader({
+        cwd,
+        agentDir: sdk.getAgentDir(),
+        additionalExtensionPaths: [...additionalExtensionPaths()],
+      });
+      await resourceLoader.reload();
       const result = await sdk.createAgentSession({
-        cwd: input.cwd,
+        cwd,
         noTools: "all",
+        resourceLoader,
       });
       return {
         prompt: (text) => result.session.prompt(text),
@@ -159,6 +196,7 @@ export class AgentRuntimeWorker {
       if (request.method === "session.send") return await this.sendToSession(request);
       if (request.method === "session.close") return await this.closeSession(request);
       if (request.method === "runtime.plugins.discover") return await this.discoverPlugins(request);
+      if (request.method === "runtime.plugin.invoke") return await this.invokePlugin(request);
       return this.failure(request, "method.not-found", `Unsupported runtime method: ${request.method}`);
     } catch (error) {
       return this.failure(request, "runtime.error", error instanceof Error ? error.message : "Agent runtime failed.");
@@ -216,6 +254,18 @@ export class AgentRuntimeWorker {
     return this.success(request, { plugins: plugins as unknown as JsonValue });
   }
 
+  private async invokePlugin(request: RpcRequest): Promise<RpcResponseSuccess | RpcResponseFailure> {
+    if (!this.pluginDiscovery) return this.failure(request, "plugins.unsupported", "Plugin invocation is unavailable in this runtime.");
+    if (!isRecord(request.params) || typeof request.params.pluginId !== "string" || request.params.pluginId.length === 0
+      || typeof request.params.method !== "string" || request.params.method.length === 0 || !isJsonValue(request.params.params)) {
+      return this.failure(request, "plugins.invalid-invoke", "runtime.plugin.invoke requires pluginId, method and params.");
+    }
+    const invocation = await this.pluginDiscovery.invoke(request.params.pluginId, request.params.method, request.params.params);
+    if (invocation.kind === "not-found") return this.failure(request, "plugins.not-found", "The plugin is not loaded.");
+    if (invocation.kind === "unsupported") return this.failure(request, "plugins.invoke-unsupported", "The plugin does not expose invoke.");
+    return this.success(request, invocation.result);
+  }
+
   private success(request: RpcRequest, result: JsonValue): RpcResponseSuccess {
     return { kind: "response", id: request.id, protocolVersion: this.negotiatedVersion ?? request.protocolVersion, ok: true, result };
   }
@@ -245,7 +295,14 @@ export async function loadPluginBackends(
       },
     };
     await module.activate?.(context);
-    loaded.push({ manifest, deactivate: async () => { await module.deactivate?.(); } });
+    const entryPath = fileURLToPath(moduleUrl);
+    loaded.push({
+      manifest,
+      entryPath,
+      ...(typeof module.default === "function" ? { piExtensionPath: entryPath } : {}),
+      deactivate: async () => { await module.deactivate?.(); },
+      ...(typeof module.invoke === "function" ? { invoke: async (method, params) => module.invoke!(context, method, params) } : {}),
+    });
   }
   return loaded;
 }
@@ -276,6 +333,17 @@ function isCapabilityDescriptor(value: unknown): value is CapabilityDescriptor {
 
 function isVersionRange(value: unknown): value is { min: ApiVersion; max: ApiVersion } {
   return isRecord(value) && typeof value.min === "string" && typeof value.max === "string";
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  return isRecord(value) && Object.values(value).every(isJsonValue);
+}
+
+async function loadPiSdk(): Promise<PiSdk> {
+  return await import("@earendil-works/pi-coding-agent") as unknown as PiSdk;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
