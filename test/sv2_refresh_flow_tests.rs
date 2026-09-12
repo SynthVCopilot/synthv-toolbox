@@ -131,6 +131,7 @@ fn expired_active_and_idle_sessions_refresh_write_then_read_with_new_token() {
                 RemoteOutcome::Authorized {
                     voices: vec!["Fixture Voice".to_string()],
                     products: Vec::new(),
+                    offline_eligibility: Sv2OfflineLicenseEligibility::Unknown,
                 }
             },
         );
@@ -177,6 +178,7 @@ fn fresh_rejected_access_refreshes_once_and_never_loops_on_second_rejection() {
                             RemoteOutcome::Authorized {
                                 voices: Vec::new(),
                                 products: Vec::new(),
+                                offline_eligibility: Sv2OfflineLicenseEligibility::Unknown,
                             }
                         }
                     }

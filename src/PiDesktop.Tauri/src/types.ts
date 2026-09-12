@@ -190,6 +190,29 @@ export interface Sv2SessionProtection {
 
 export type Sv2AccountProbeSessionStatus = "ready" | "missing" | "inUse" | "expired" | "loginRequired" | "invalid" | "syncFailed" | "accountMismatch" | "unsupported" | "offline";
 export type Sv2AuthorizationStatus = "verified" | "unknown";
+export type Sv2OfflineLicenseCacheStatus = "active" | "inactive" | "unknown";
+export type Sv2OfflineLicenseEligibility = "eligible" | "ineligible" | "unknown";
+
+export interface Sv2OfflineCachedField {
+  key: string;
+  value: string;
+}
+
+export interface Sv2OfflineCachedProduct {
+  databaseId: string;
+  productId: string;
+  name: string;
+  vendor: string;
+  category: string;
+  version: string;
+  attributes: Sv2OfflineCachedField[];
+}
+
+export interface Sv2OfflineLicense {
+  cacheStatus: Sv2OfflineLicenseCacheStatus;
+  eligibility: Sv2OfflineLicenseEligibility;
+  cachedProducts: Sv2OfflineCachedProduct[];
+}
 
 export interface Sv2AuthorizedVoiceProduct {
   id: string;
@@ -205,6 +228,7 @@ export interface Sv2AccountProbe {
   authorizedVoiceCount: number;
   authorizedVoices: string[];
   authorizedVoiceProducts: Sv2AuthorizedVoiceProduct[];
+  offlineLicense: Sv2OfflineLicense;
   accountDisplayName?: string;
   accountEmail?: string;
   checkedAtUtc: string;

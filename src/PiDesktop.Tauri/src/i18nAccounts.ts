@@ -464,3 +464,33 @@ addMessages("en", { accountNotice: {
   "routingAlwaysAskEnabled": "Smart .svp launch will always ask which host to use.",
   "routingAlwaysAskDisabled": "Smart .svp launch will choose automatically when the format is unambiguous."
 } });
+
+addMessages("zh-CN", { accountUi: {
+  "offlineLicense": "离线授权",
+  "offlineLicenseActive": "本机离线缓存已启用",
+  "offlineLicenseInactive": "本机离线缓存未启用",
+  "offlineLicenseUnknown": "本机离线缓存无法确认",
+  "offlineLicenseEligible": "官方资格：可启用离线授权",
+  "offlineLicenseIneligible": "官方资格：当前不可启用离线授权",
+  "offlineLicenseEligibilityUnknown": "官方资格：尚未确认",
+  "offlineLicenseNoCachedProducts": "没有可显示的本机离线产品缓存。",
+  "offlineLicenseOfficialFlow": "离线授权只能由 SV2 的官方 Product Manager 变更。打开 SV2 后点击云图标，在 My Products 中选择 Activate Offline 或 Deactivate Offline；完成后返回此处刷新，Toolbox 会比较本机缓存与授权状态。",
+  "openSv2ForOfflineLicense": "启动 SV2 管理离线授权",
+  "vendor": "供应商",
+  "category": "类别"
+} });
+
+addMessages("en", { accountUi: {
+  "offlineLicense": "Offline license",
+  "offlineLicenseActive": "Local offline cache is active",
+  "offlineLicenseInactive": "Local offline cache is inactive",
+  "offlineLicenseUnknown": "Local offline cache cannot be confirmed",
+  "offlineLicenseEligible": "Official eligibility: offline activation is available",
+  "offlineLicenseIneligible": "Official eligibility: offline activation is unavailable",
+  "offlineLicenseEligibilityUnknown": "Official eligibility: not checked",
+  "offlineLicenseNoCachedProducts": "No local offline product cache is available to display.",
+  "offlineLicenseOfficialFlow": "Only SV2's official Product Manager can change offline activation. Open SV2, select the cloud icon, then choose Activate Offline or Deactivate Offline under My Products. Return here and refresh to compare the local cache and authorization state.",
+  "openSv2ForOfflineLicense": "Open SV2 to manage offline activation",
+  "vendor": "Vendor",
+  "category": "Category"
+} });

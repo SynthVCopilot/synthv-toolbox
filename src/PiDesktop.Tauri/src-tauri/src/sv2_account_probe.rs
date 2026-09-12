@@ -118,6 +118,59 @@ pub enum Sv2AuthorizationStatus {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Sv2OfflineLicenseCacheStatus {
+    Active,
+    Inactive,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Sv2OfflineLicenseEligibility {
+    Eligible,
+    Ineligible,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Sv2OfflineCachedField {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Sv2OfflineCachedProduct {
+    pub database_id: String,
+    pub product_id: String,
+    pub name: String,
+    pub vendor: String,
+    pub category: String,
+    pub version: String,
+    pub attributes: Vec<Sv2OfflineCachedField>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Sv2OfflineLicenseView {
+    pub cache_status: Sv2OfflineLicenseCacheStatus,
+    pub eligibility: Sv2OfflineLicenseEligibility,
+    pub cached_products: Vec<Sv2OfflineCachedProduct>,
+}
+
+impl Sv2OfflineLicenseView {
+    fn unknown() -> Self {
+        Self {
+            cache_status: Sv2OfflineLicenseCacheStatus::Unknown,
+            eligibility: Sv2OfflineLicenseEligibility::Unknown,
+            cached_products: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sv2AccountProbeView {
@@ -127,6 +180,7 @@ pub struct Sv2AccountProbeView {
     pub authorized_voice_count: usize,
     pub authorized_voices: Vec<String>,
     pub authorized_voice_products: Vec<Sv2AuthorizedVoiceProduct>,
+    pub offline_license: Sv2OfflineLicenseView,
     pub account_display_name: Option<String>,
     pub account_email: Option<String>,
     #[serde(skip)]
@@ -184,6 +238,7 @@ impl Sv2AccountProbeView {
             detail: detail.to_string(),
             authorized_voices,
             authorized_voice_products: Vec::new(),
+            offline_license: Sv2OfflineLicenseView::unknown(),
             account_display_name: None,
             account_email: None,
             account_key: None,
@@ -219,6 +274,7 @@ impl Sv2AccountProbeView {
         view.authorized_voices.clone_from(&cached.authorized_voices);
         view.authorized_voice_products
             .clone_from(&cached.authorized_voice_products);
+        view.offline_license.clone_from(&cached.offline_license);
         view.account_display_name
             .clone_from(&cached.account_display_name);
         view.account_email.clone_from(&cached.account_email);
@@ -435,8 +491,10 @@ fn cached_view_for_rewritten_session(
         SessionDecode::LoginRequired => return Sv2AccountProbeView::login_required(),
         SessionDecode::Invalid => return Sv2AccountProbeView::invalid(),
     };
-    let mut view =
-        Sv2AccountProbeView::not_checked(true).with_account_identity(credentials.access_token());
+    let mut view = with_local_offline_license(
+        Sv2AccountProbeView::not_checked(true).with_account_identity(credentials.access_token()),
+        &credentials,
+    );
     if credentials.access_expires_at <= Utc::now() {
         view.session_status = Sv2SessionInspectionStatus::Expired;
         view.detail = "本地登录缓存的 access token 已到期；请刷新账号状态。".to_string();
@@ -661,8 +719,11 @@ where
         view_from_active_license(licenses)
     } else {
         view_from_remote(licenses, EnrollOutcome::Unknown)
-    }
-    .with_account_identity(credentials.access_token());
+    };
+    let view = with_local_offline_license(
+        view.with_account_identity(credentials.access_token()),
+        credentials,
+    );
     if view.authorization_status == Sv2AuthorizationStatus::Verified {
         clear_sync_quarantine(&root.quarantine_key());
     }
@@ -680,6 +741,7 @@ enum RemoteOutcome {
     Authorized {
         voices: Vec<String>,
         products: Vec<Sv2AuthorizedVoiceProduct>,
+        offline_eligibility: Sv2OfflineLicenseEligibility,
     },
     ConcurrentUse,
     Unauthorized,
@@ -719,11 +781,23 @@ fn view_from_remote(licenses: RemoteOutcome, enroll: EnrollOutcome) -> Sv2Accoun
         } else {
             Sv2RemoteUseStatus::Unknown
         };
-    let (authorization_status, voices, products) = match licenses {
-        RemoteOutcome::Authorized { voices, products } => {
-            (Sv2AuthorizationStatus::Verified, voices, products)
-        }
-        _ => (Sv2AuthorizationStatus::Unknown, Vec::new(), Vec::new()),
+    let (authorization_status, voices, products, offline_eligibility) = match licenses {
+        RemoteOutcome::Authorized {
+            voices,
+            products,
+            offline_eligibility,
+        } => (
+            Sv2AuthorizationStatus::Verified,
+            voices,
+            products,
+            offline_eligibility,
+        ),
+        _ => (
+            Sv2AuthorizationStatus::Unknown,
+            Vec::new(),
+            Vec::new(),
+            Sv2OfflineLicenseEligibility::Unknown,
+        ),
     };
     let accepted = authorization_status == Sv2AuthorizationStatus::Verified
         || matches!(enroll, EnrollOutcome::Clear | EnrollOutcome::ConcurrentUse)
@@ -760,6 +834,7 @@ fn view_from_remote(licenses: RemoteOutcome, enroll: EnrollOutcome) -> Sv2Accoun
         detail,
     );
     view.authorized_voice_products = products;
+    view.offline_license.eligibility = offline_eligibility;
     view
 }
 
@@ -821,6 +896,36 @@ impl SessionCredentials {
 
     fn has_full_cache(&self) -> bool {
         self.user_id.is_some()
+    }
+
+    fn offline_license_view(&self) -> Sv2OfflineLicenseView {
+        let lines = self.extension_text().split('\n').collect::<Vec<_>>();
+        let Some(user_id) = lines.get(1) else {
+            return Sv2OfflineLicenseView {
+                cache_status: Sv2OfflineLicenseCacheStatus::Inactive,
+                eligibility: Sv2OfflineLicenseEligibility::Unknown,
+                cached_products: Vec::new(),
+            };
+        };
+        if user_id.is_empty() || user_id.starts_with("K1=") {
+            return Sv2OfflineLicenseView::unknown();
+        }
+        let product_lines = lines.iter().skip(2).copied().collect::<Vec<_>>();
+        if product_lines.is_empty() {
+            return Sv2OfflineLicenseView::unknown();
+        }
+        let cached_products = product_lines
+            .iter()
+            .map(|line| parse_offline_cached_product(line))
+            .collect::<Option<Vec<_>>>();
+        match cached_products {
+            Some(cached_products) if !cached_products.is_empty() => Sv2OfflineLicenseView {
+                cache_status: Sv2OfflineLicenseCacheStatus::Active,
+                eligibility: Sv2OfflineLicenseEligibility::Unknown,
+                cached_products,
+            },
+            _ => Sv2OfflineLicenseView::unknown(),
+        }
     }
 
     fn with_enrollment_identity(&self, device_id: &str, user_id: &str) -> Result<Self, ()> {
@@ -890,6 +995,72 @@ impl SessionCredentials {
         let bytes = Zeroizing::new(std::mem::take(&mut *plaintext).into_bytes());
         parse_session_plaintext(bytes)
     }
+}
+
+fn parse_offline_cached_product(line: &str) -> Option<Sv2OfflineCachedProduct> {
+    if line.is_empty() || line.len() > 4096 || line.chars().any(char::is_control) {
+        return None;
+    }
+    let mut fields = BTreeMap::new();
+    for field in line.split(';') {
+        let (key, value) = field.split_once('=')?;
+        if key.is_empty()
+            || key.len() > 16
+            || value.is_empty()
+            || value.len() > 512
+            || !key.starts_with('K')
+            || !key[1..].chars().all(|character| character.is_ascii_digit())
+            || fields.insert(key, value).is_some()
+        {
+            return None;
+        }
+    }
+    let field = |key| fields.get(key).map(|value| (*value).to_string());
+    let (
+        Some(database_id),
+        Some(product_id),
+        Some(name),
+        Some(vendor),
+        Some(category),
+        Some(version),
+    ) = (
+        field("K1"),
+        field("K2"),
+        field("K3"),
+        field("K4"),
+        field("K5"),
+        field("K6"),
+    )
+    else {
+        return None;
+    };
+    let attributes = fields
+        .into_iter()
+        .filter(|(key, _)| !matches!(*key, "K1" | "K2" | "K3" | "K4" | "K5" | "K6"))
+        .map(|(key, value)| Sv2OfflineCachedField {
+            key: key.to_string(),
+            value: value.to_string(),
+        })
+        .collect();
+    Some(Sv2OfflineCachedProduct {
+        database_id,
+        product_id,
+        name,
+        vendor,
+        category,
+        version,
+        attributes,
+    })
+}
+
+fn with_local_offline_license(
+    mut view: Sv2AccountProbeView,
+    credentials: &SessionCredentials,
+) -> Sv2AccountProbeView {
+    let eligibility = view.offline_license.eligibility;
+    view.offline_license = credentials.offline_license_view();
+    view.offline_license.eligibility = eligibility;
+    view
 }
 
 #[derive(Deserialize)]
@@ -1569,7 +1740,14 @@ fn interpret_license_response(status: u16, body: Zeroizing<Vec<u8>>) -> RemoteOu
     let Some((voices, products)) = extract_authorized_voice_products(&body) else {
         return RemoteOutcome::Unknown;
     };
-    RemoteOutcome::Authorized { voices, products }
+    let Some(offline_eligibility) = extract_offline_license_eligibility(&body) else {
+        return RemoteOutcome::Unknown;
+    };
+    RemoteOutcome::Authorized {
+        voices,
+        products,
+        offline_eligibility,
+    }
 }
 
 fn contains_json_string(body: &[u8], needle: &[u8]) -> bool {
@@ -1664,6 +1842,34 @@ fn extract_authorized_voice_products_at(
         .filter(|product| voices.contains(&product.name))
         .collect();
     Some((voices, products))
+}
+
+fn extract_offline_license_eligibility(body: &[u8]) -> Option<Sv2OfflineLicenseEligibility> {
+    let envelope: LicenseEnvelope = serde_json::from_slice(body).ok()?;
+    let licenses = envelope.data?;
+    if licenses.len() > MAX_LICENSE_ITEMS {
+        return None;
+    }
+    let now = Utc::now();
+    for license in licenses {
+        if license.status.as_deref() != Some("active")
+            || license.license_type.as_deref() != Some("permanent")
+        {
+            continue;
+        }
+        if license.valid_to.is_some_and(|timestamp| {
+            DateTime::from_timestamp(timestamp, 0).is_none_or(|expires| expires <= now)
+        }) {
+            continue;
+        }
+        let Some(name) = license.product.and_then(|product| product.name) else {
+            continue;
+        };
+        if name.eq_ignore_ascii_case("Synthesizer V Studio 2 Pro") {
+            return Some(Sv2OfflineLicenseEligibility::Eligible);
+        }
+    }
+    Some(Sv2OfflineLicenseEligibility::Ineligible)
 }
 
 fn remove_expired_authorizations(view: &mut Sv2AccountProbeView, now: DateTime<Utc>) {
@@ -2260,13 +2466,14 @@ fn cache_group_view(
 ) {
     for member in members {
         let session = &sessions[*member];
+        let member_view = with_local_offline_license(view.clone(), &session.credentials);
         cache_put(
             session.fingerprint.clone(),
             &session.root_key,
-            view,
+            &member_view,
             access_expires_at,
         );
-        results[session.request_index] = Some(view.clone());
+        results[session.request_index] = Some(member_view);
     }
 }
 
@@ -2279,10 +2486,16 @@ fn quarantine_group_view(
 ) {
     for member in members {
         let session = &mut sessions[*member];
-        set_sync_quarantine(&session.quarantine_key, view);
+        let member_view = with_local_offline_license(view.clone(), &session.credentials);
+        set_sync_quarantine(&session.quarantine_key, &member_view);
         session.sync_quarantined = true;
-        cache_put(session.fingerprint.clone(), &session.root_key, view, None);
-        results[session.request_index] = Some(view.clone());
+        cache_put(
+            session.fingerprint.clone(),
+            &session.root_key,
+            &member_view,
+            None,
+        );
+        results[session.request_index] = Some(member_view);
     }
 }
 
@@ -2936,13 +3149,15 @@ fn refresh_windows_batch(requests: &[Sv2AccountProbeRequest<'_>]) -> Vec<Sv2Acco
         for member in &members {
             let session = &sessions[*member];
             if results[session.request_index].is_none() {
+                let member_view =
+                    with_local_offline_license(group_view.clone(), &session.credentials);
                 cache_put(
                     session.fingerprint.clone(),
                     &session.root_key,
-                    &group_view,
+                    &member_view,
                     Some(session.credentials.access_expires_at),
                 );
-                results[session.request_index] = Some(group_view.clone());
+                results[session.request_index] = Some(member_view);
             }
         }
     }

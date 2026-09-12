@@ -1711,9 +1711,26 @@ function renderAccountManager(): string {
         ? `<div class="authorization-list">${authorizations.map((voice) => renderAuthorizedVoice(voice, authorizationProbe?.authorizedVoiceProducts.filter((product) => product.name === voice) ?? [], managedSlot?.id)).join("")}</div>`
         : `<div class="empty-inline">${t("accountUi.thisAccountHasNoAvailableVoiceAuthorizations")}</div>`
       : `<div class="empty-inline">${escapeHtml(authorizationUnavailable)}</div>`;
+    const offlineLicense = managedSlot?.accountProbe.offlineLicense;
+    const offlineCacheLabel = offlineLicense?.cacheStatus === "active"
+      ? t("accountUi.offlineLicenseActive")
+      : offlineLicense?.cacheStatus === "inactive"
+        ? t("accountUi.offlineLicenseInactive")
+        : t("accountUi.offlineLicenseUnknown");
+    const offlineEligibilityLabel = offlineLicense?.eligibility === "eligible"
+      ? t("accountUi.offlineLicenseEligible")
+      : offlineLicense?.eligibility === "ineligible"
+        ? t("accountUi.offlineLicenseIneligible")
+        : t("accountUi.offlineLicenseEligibilityUnknown");
+    const offlineProducts = offlineLicense?.cachedProducts ?? [];
+    const offlineProductList = offlineProducts.length
+      ? `<div class="authorization-list offline-license-products">${offlineProducts.map((product) => `<details><summary>${escapeHtml(product.name)} · ${escapeHtml(product.version)}</summary><dl class="profile-storage-list compact"><div><dt>K1</dt><dd><code>${escapeHtml(product.databaseId)}</code></dd></div><div><dt>K2</dt><dd><code>${escapeHtml(product.productId)}</code></dd></div><div><dt>${t("accountUi.vendor")}</dt><dd>${escapeHtml(product.vendor)}</dd></div><div><dt>${t("accountUi.category")}</dt><dd>${escapeHtml(product.category)}</dd></div>${product.attributes.map((attribute) => `<div><dt>${escapeHtml(attribute.key)}</dt><dd><code>${escapeHtml(attribute.value)}</code></dd></div>`).join("")}</dl></details>`).join("")}</div>`
+      : `<div class="empty-inline">${t("accountUi.offlineLicenseNoCachedProducts")}</div>`;
+    const offlineLicensePanel = managedSlot ? `<section class="authorization-panel offline-license-panel"><div class="authorization-heading"><div><strong>${t("accountUi.offlineLicense")}</strong><small>${escapeHtml(offlineCacheLabel)} · ${escapeHtml(offlineEligibilityLabel)}</small></div><span class="inventory-status ${offlineLicense?.cacheStatus === "active" ? "verified" : "unknown"}">${escapeHtml(offlineCacheLabel)}</span></div><p>${t("accountUi.offlineLicenseOfficialFlow")}</p>${offlineProductList}<div class="manager-action-row"><button class="secondary" data-profile-launch="${managedSlot.id}">${icon("play", 15)} ${t("accountUi.openSv2ForOfflineLicense")}</button><button class="secondary" data-profile-refresh-slot="${managedSlot.id}">${icon("refresh", 15)} ${t("accounts.refresh")}</button></div></section>` : "";
     body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(officialIdentity.name ?? (managedSlot.sessionCached ? t("accountUi.accountInformationNeedsRefresh") : t("accountUi.signedOut")))}</h3><p>${escapeHtml(officialIdentity.email ?? t("accountUi.accountInformationNeedsRefresh"))}</p><p>${accountUseDot(managedUseState)} ${escapeHtml(managedUseState.label)}</p></div>${managedSlot.isActive ? `<span class="profile-active-badge">${t("accountUi.currentDefault")}</span>` : ""}</div>
       <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>${t("accountUi.note")}<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" placeholder="${t("accountUi.eGProductionAccount")}" /></label><button class="secondary">${t("accountUi.saveNote")}</button></form>
       <section class="authorization-panel"><div class="authorization-heading"><div><strong>${t("accountUi.availableAuthorizations")}</strong><small>${escapeHtml(authorizationSummary)}</small></div><span class="inventory-status ${authorizationStatus ? "verified" : "unknown"}">${authorizationStatus ? t("accountUi.authorizationsDetail", { p0: authorizations.length }) : t("accountUi.notRead")}</span></div>${authorizationList}</section>
+      ${offlineLicensePanel}
       <div class="manager-action-row">${managedSlot.isActive ? "" : `<button class="secondary" data-profile-activate="${managedSlot.id}">${icon("check", 15)} ${t("accountUi.makeDefault")}</button>`}<button class="secondary" data-profile-folder="${managedSlot.id}">${icon("folder", 15)} ${t("accountUi.openAccountDataFolder")}</button><button class="secondary component-remove-action" data-delete-profile="${managedSlot.id}">${icon("trash", 15)} ${t("accountUi.deleteAccount")}</button></div>
       <dl class="profile-storage-list compact"><div><dt>${t("accountUi.accountData")}</dt><dd><code title="${escapeHtml(managedSlot.dataPath)}">${escapeHtml(managedSlot.dataPath)}</code></dd></div></dl></div>` : `<div class="empty-inline">${t("accountUi.noAccountsYetAddASlotFirst")}</div>`;
   } else if (accountManagerSection === "global" && !supportsWindowsSv2Extensions()) {

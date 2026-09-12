@@ -1,5 +1,8 @@
 use super::*;
-use crate::sv2_account_probe::{Sv2AccountProbeView, Sv2AuthorizationStatus};
+use crate::sv2_account_probe::{
+    Sv2AccountProbeView, Sv2AuthorizationStatus, Sv2OfflineLicenseCacheStatus,
+    Sv2OfflineLicenseEligibility, Sv2OfflineLicenseView,
+};
 use crate::sv2_concurrent::{
     Sv2ConcurrentContentPreferences, Sv2ConcurrentDefaults, Sv2ConcurrentProviderView,
     Sv2ConcurrentSlotView,
@@ -44,6 +47,11 @@ fn account_probe(
             .map(|voice| (*voice).to_string())
             .collect(),
         authorized_voice_products: Vec::new(),
+        offline_license: Sv2OfflineLicenseView {
+            cache_status: Sv2OfflineLicenseCacheStatus::Unknown,
+            eligibility: Sv2OfflineLicenseEligibility::Unknown,
+            cached_products: Vec::new(),
+        },
         account_display_name: None,
         account_email: None,
         account_key: None,

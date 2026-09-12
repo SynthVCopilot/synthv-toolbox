@@ -261,6 +261,11 @@ function previewAccountProbe(overrides: Partial<Sv2AccountProbe> = {}): Sv2Accou
     authorizedVoiceCount: 0,
     authorizedVoices: [],
     authorizedVoiceProducts: [],
+    offlineLicense: {
+      cacheStatus: "inactive",
+      eligibility: "unknown",
+      cachedProducts: [],
+    },
     checkedAtUtc: new Date().toISOString(),
     detail: "当前没有可用于账号预检的登录缓存。",
     ...overrides,
@@ -358,6 +363,11 @@ let previewProfiles: Sv2ProfilesState = {
       authorizedVoiceCount: 2,
       authorizedVoices: ["Mai 2", "SOLARIA"],
       authorizedVoiceProducts: [{ id: "00000000-0000-4000-8000-000000000002", name: "SOLARIA", isTrial: true, expiresAtUtc: "2099-12-31T23:59:59Z" }],
+      offlineLicense: {
+        cacheStatus: "inactive",
+        eligibility: "eligible",
+        cachedProducts: [],
+      },
       accountDisplayName: "Vocal Editor",
       accountEmail: "editor@example.com",
       detail: "官方服务已接受无踢出设备登录事件，并返回 2 个可匹配的官方声库授权。",

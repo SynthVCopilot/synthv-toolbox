@@ -8,6 +8,7 @@ fn authorized(voices: Vec<String>) -> RemoteOutcome {
     RemoteOutcome::Authorized {
         voices,
         products: Vec::new(),
+        offline_eligibility: Sv2OfflineLicenseEligibility::Unknown,
     }
 }
 
@@ -269,6 +270,51 @@ fn session_parser_accepts_device_extensions_and_validates_token_times() {
     let last = encrypted.len() - 1;
     encrypted[last] = 0;
     assert!(decrypt_session(encrypted, &key).is_err());
+}
+
+#[test]
+fn offline_cache_requires_a_user_and_complete_product_records() {
+    let _guard = PROBE_TEST_GATE.lock().unwrap();
+    let issued = DateTime::<Utc>::from_timestamp(Utc::now().timestamp(), 0).unwrap();
+    let access_expires = issued + ChronoDuration::hours(1);
+    let refresh_expires = issued + ChronoDuration::days(31);
+    let plain = make_plaintext(access_expires, refresh_expires, issued);
+    let inactive = parse_session_plaintext(Zeroizing::new(plain.into_bytes())).unwrap();
+    assert_eq!(
+        inactive.offline_license_view().cache_status,
+        Sv2OfflineLicenseCacheStatus::Inactive
+    );
+
+    let access = make_jwt(Some(access_expires.timestamp()), issued.timestamp());
+    let refresh = make_jwt(Some(refresh_expires.timestamp()), issued.timestamp());
+    let full = format!(
+        "{access}\n{refresh}\n{}\n{}\ndevice-id\nuser-id\nK1=database-id;K2=product-id;K3=Synthesizer V Studio 2 Pro;K4=Dreamtonics Co., Ltd.;K5=Synthesizer V Editor;K6=2.2.1;K7=2;K8=0;K9=0",
+        access_expires.to_rfc3339(),
+        issued.to_rfc3339(),
+    );
+    let cached = parse_session_plaintext(Zeroizing::new(full.into_bytes())).unwrap();
+    let view = cached.offline_license_view();
+    assert_eq!(view.cache_status, Sv2OfflineLicenseCacheStatus::Active);
+    assert_eq!(view.cached_products.len(), 1);
+    assert_eq!(view.cached_products[0].database_id, "database-id");
+    assert_eq!(view.cached_products[0].product_id, "product-id");
+    assert_eq!(
+        view.cached_products[0].attributes,
+        vec![
+            Sv2OfflineCachedField {
+                key: "K7".to_string(),
+                value: "2".to_string()
+            },
+            Sv2OfflineCachedField {
+                key: "K8".to_string(),
+                value: "0".to_string()
+            },
+            Sv2OfflineCachedField {
+                key: "K9".to_string(),
+                value: "0".to_string()
+            },
+        ]
+    );
 }
 
 #[test]
@@ -765,6 +811,26 @@ fn license_filter_is_active_voice_only_deduplicated_and_sorted() {
     );
     assert_eq!(view.authorized_voices, voices);
     assert_eq!(view.authorized_voice_products, products);
+}
+
+#[test]
+fn permanent_studio_2_pro_controls_offline_eligibility() {
+    let eligible = br#"{"data":[
+        {"status":"active","license_type":"permanent","product":{"name":"Synthesizer V Studio 2 Pro","type":"Synthesizer V Editor"}},
+        {"status":"active","license_type":"trial","product":{"name":"Synthesizer V Studio 2 Pro","type":"Synthesizer V Editor"}}
+    ]}"#;
+    assert_eq!(
+        extract_offline_license_eligibility(eligible),
+        Some(Sv2OfflineLicenseEligibility::Eligible)
+    );
+    let ineligible = br#"{"data":[
+        {"status":"active","license_type":"permanent","product":{"name":"Synthesizer V Studio 2 Core","type":"Synthesizer V Editor"}},
+        {"status":"active","license_type":"permanent","product":{"name":"Owned Voice","type":"Voice Database"}}
+    ]}"#;
+    assert_eq!(
+        extract_offline_license_eligibility(ineligible),
+        Some(Sv2OfflineLicenseEligibility::Ineligible)
+    );
 }
 
 #[test]

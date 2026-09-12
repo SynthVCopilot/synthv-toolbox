@@ -1,4 +1,7 @@
 use super::*;
+use crate::sv2_account_probe::{
+    Sv2OfflineLicenseCacheStatus, Sv2OfflineLicenseEligibility, Sv2OfflineLicenseView,
+};
 
 fn account_probe(
     session_status: Sv2SessionInspectionStatus,
@@ -12,6 +15,11 @@ fn account_probe(
         authorized_voice_count: 0,
         authorized_voices: Vec::new(),
         authorized_voice_products: Vec::new(),
+        offline_license: Sv2OfflineLicenseView {
+            cache_status: Sv2OfflineLicenseCacheStatus::Unknown,
+            eligibility: Sv2OfflineLicenseEligibility::Unknown,
+            cached_products: Vec::new(),
+        },
         account_display_name: None,
         account_email: None,
         account_key: None,
