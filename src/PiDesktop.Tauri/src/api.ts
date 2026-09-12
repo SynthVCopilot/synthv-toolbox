@@ -1,6 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import packageJson from "../package.json";
+import type { PluginManifest } from "@synthv-toolbox/runtime-protocol";
 import type {
   AiProviderId,
   AgentWorkMode,
@@ -537,6 +538,11 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     };
     return { ...previewHttpApiStatus } as T;
   }
+  if (command === "get_agent_runtime_status") {
+    return { running: false, protocolVersion: "1.0" } as T;
+  }
+  if (command === "discover_agent_plugins") return [] as T;
+  if (command === "invoke_agent_plugin") return { preview: true } as T;
   if (command === "set_sv2_account_indicator") {
     const enabled = Boolean(args?.enabled);
     if (enabled && !previewSv2AccountIndicatorEnabled && !Boolean(args?.acknowledged)) {
@@ -1326,6 +1332,12 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 
 export const api = {
   bootstrap: () => call<BootstrapState>("bootstrap"),
+  agentRuntimeStatus: () => call<{ running: boolean; protocolVersion: string }>("get_agent_runtime_status"),
+  startAgentRuntime: () => call<{ runtimeId: string }>("start_agent_runtime"),
+  stopAgentRuntime: () => call<void>("stop_agent_runtime"),
+  discoverAgentPlugins: () => call<PluginManifest[]>("discover_agent_plugins"),
+  invokeAgentPlugin: (pluginId: string, method: string, params: unknown) =>
+    call<unknown>("invoke_agent_plugin", { pluginId, method, params }),
   setAutostart: (enabled: boolean) => call<boolean>("set_autostart", { enabled }),
   getAutostart: () => call<{ enabled?: boolean | null; error?: string | null }>("get_autostart"),
   completeOnboarding: (mode: AppMode) => call<BootstrapState>("complete_onboarding", { mode }),

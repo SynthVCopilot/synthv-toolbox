@@ -213,6 +213,8 @@ button:disabled { cursor: default; opacity: .55; }
 .top-actions, .inline-status { display: flex; align-items: center; gap: 8px; }
 .top-actions { min-height: 32px; padding: 0 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-subtle); }
 .topbar-status-group { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
+.topbar-plugin-actions { display: flex; align-items: center; gap: 7px; }
+.topbar-plugin-actions button { display: inline-flex; align-items: center; gap: 6px; }
 .topbar-account-actions { display: flex; align-items: center; gap: 7px; }
 .topbar-icon-button { width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); background: var(--surface-subtle); cursor: pointer; }
 .topbar-icon-button:hover { color: var(--primary); border-color: color-mix(in srgb,var(--primary) 32%,var(--line)); background: var(--primary-soft); }
@@ -227,6 +229,8 @@ button:disabled { cursor: default; opacity: .55; }
 .content-flush { overflow: hidden; padding: 0; border-top: 1px solid var(--line); }
 .right-page-block { min-width: 0; }
 .content-flush .right-page-block, .copilot-page-block { height: 100%; }
+.plugin-page-frame { width: 100%; height: 100%; min-height: 0; }
+.plugin-page-frame iframe { display: block; width: 100%; height: 100%; border: 0; background: var(--surface-solid); }
 .feedback-stack:empty { display: none; }
 .page-block-forward { animation: page-block-forward-in 160ms ease both; }
 .page-block-backward { animation: page-block-backward-in 160ms ease both; }

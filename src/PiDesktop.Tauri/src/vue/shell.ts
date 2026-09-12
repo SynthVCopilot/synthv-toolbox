@@ -1,8 +1,10 @@
 import { createApp, nextTick, reactive } from "vue";
 import AppShell from "./AppShell.vue";
 import { i18n } from "../i18n";
+import type { PluginPageId, RegisteredPluginPage } from "./pluginRegistry";
 
-export type ShellPage = "home" | "accounts" | "import" | "convert" | "analysis" | "quality" | "lyrics" | "history" | "copilot" | "ai" | "components" | "bridge" | "connections" | "settings" | "about";
+export type HostShellPage = "home" | "accounts" | "import" | "convert" | "analysis" | "quality" | "lyrics" | "history" | "copilot" | "ai" | "components" | "bridge" | "connections" | "settings" | "about";
+export type ShellPage = HostShellPage | PluginPageId;
 
 export interface ShellState {
   page: ShellPage;
@@ -13,6 +15,8 @@ export interface ShellState {
   bridgeConnected: boolean;
   busy: boolean;
   pageHtml: string;
+  pageActionsHtml: string;
+  pluginPage?: RegisteredPluginPage;
   noticeHtml: string;
   errorHtml: string;
   overlayHtml: string;

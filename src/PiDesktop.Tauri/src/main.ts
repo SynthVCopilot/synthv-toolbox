@@ -17,6 +17,17 @@ import { icon } from "./icons";
 import { renderAboutPage } from "./about";
 import { guiFeatureCatalog, toolGroups, type FeatureCatalogItem, type ToolGroup } from "./featureCatalog";
 import { mountShell, type ShellController } from "./vue/shell";
+import {
+  dispatchPluginAction,
+  dispatchPluginFrameResponse,
+  isPluginPageId,
+  pluginRegistry,
+  type HostPageId,
+  type PluginActionInvocation,
+  type PluginFrameRequest,
+  type PluginPageId,
+} from "./vue/pluginRegistry";
+import type { IconName } from "./icons";
 import { formatPercentage } from "./percentage";
 import { locale, setLocale, t } from "./i18n";
 import "./i18nHome";
@@ -94,7 +105,7 @@ registerModelConnectionPanelElement();
 const root = document.querySelector<HTMLDivElement>("#app")!;
 if (!root) throw new Error("Missing #app root");
 
-type Page = "home" | "accounts" | "import" | "convert" | "analysis" | "quality" | "lyrics" | "history" | "copilot" | "ai" | "components" | "bridge" | "connections" | "settings" | "about";
+type Page = HostPageId | PluginPageId;
 type AccountManagerSection = "profile" | "global" | "add";
 
 interface PendingAccountIndicatorConsent {
@@ -264,6 +275,35 @@ let sv2VoiceCatalog: Sv2CachedVoice[] | undefined;
 let sv2VoiceCatalogLoading = false;
 let shellController: ShellController | undefined;
 let lastWiredMarkup = "";
+
+pluginRegistry.subscribe(() => render());
+window.addEventListener("plugin-ui:action", (event) => {
+  const action = (event as CustomEvent<PluginActionInvocation>).detail;
+  void api.invokeAgentPlugin(action.pluginId, `action.${action.actionId}`, {
+    targetPage: action.targetPage,
+  }).catch((reason) => {
+    error = formatError(reason);
+    render();
+  });
+});
+window.addEventListener("plugin-ui:request", (event) => {
+  const request = (event as CustomEvent<PluginFrameRequest>).detail;
+  void api.invokeAgentPlugin(request.pluginId, request.method, request.params)
+    .then((result) => dispatchPluginFrameResponse({
+      pluginId: request.pluginId,
+      pageId: request.pageId,
+      id: request.id,
+      ok: true,
+      result,
+    }))
+    .catch((reason) => dispatchPluginFrameResponse({
+      pluginId: request.pluginId,
+      pageId: request.pageId,
+      id: request.id,
+      ok: false,
+      error: { code: "plugin_request_failed", message: formatError(reason) },
+    }));
+});
 
 
 // Keep navigation available while a cancellable FFmpeg job runs.
@@ -442,6 +482,10 @@ restoreLyricWorkspace();
 if (!lyricSavedSnapshot) lyricSavedSnapshot = lyricWorkspaceSnapshot();
 
 function pageMeta(target: Page): { title: string; subtitle: string } {
+  if (isPluginPageId(target)) {
+    const pluginPage = pluginRegistry.page(target);
+    if (pluginPage) return { title: pluginPage.title, subtitle: "" };
+  }
   return { title: t(`pages.${target}.0`), subtitle: t(`pages.${target}.1`) };
 }
 
@@ -748,7 +792,8 @@ async function run(task: () => Promise<void>): Promise<void> {
 
 async function refresh(): Promise<void> {
   app = await api.bootstrap();
-  [lyricProjects, synthvProcesses, synthvShortcutProfile, bridgeSession, mediaTasks, tuningProfiles, httpApiStatus] = await Promise.all([
+  const [plugins, nextLyricProjects, nextProcesses, nextShortcutProfile, nextBridgeSession, nextMediaTasks, nextTuningProfiles, nextHttpApiStatus] = await Promise.all([
+    api.discoverAgentPlugins().catch(() => []),
     api.listLyricProjects(),
     api.listSynthvProcesses(),
     api.synthvShortcutProfile(),
@@ -757,6 +802,15 @@ async function refresh(): Promise<void> {
     api.listTuningProfiles(),
     api.getHttpApiStatus(),
   ]);
+  for (const record of pluginRegistry.recordsList()) pluginRegistry.unregister(record.manifest.id);
+  for (const manifest of plugins) pluginRegistry.register(manifest, "active");
+  lyricProjects = nextLyricProjects;
+  synthvProcesses = nextProcesses;
+  synthvShortcutProfile = nextShortcutProfile;
+  bridgeSession = nextBridgeSession;
+  mediaTasks = nextMediaTasks;
+  tuningProfiles = nextTuningProfiles;
+  httpApiStatus = nextHttpApiStatus;
   if (page === "settings") await refreshAutostartStatus();
 }
 
@@ -927,7 +981,7 @@ function scheduleMediaTaskPoll(): void {
   }, 700);
 }
 
-function navItem(target: Page, label: string, glyph: Parameters<typeof icon>[0]): string {
+function navItem(target: Page, label: string, glyph: IconName): string {
   return `<button class="nav-item ${page === target ? "active" : ""}" data-page="${target}" title="${label}" aria-label="${label}" ${page === target ? 'aria-current="page"' : ""}>
     ${icon(glyph, 19)}<span>${label}</span>
   </button>`;
@@ -948,6 +1002,7 @@ function renderSidebar(): string {
       ${navItem("history", t("nav.history"), "history")}
       ${app.mode === "ai" ? navItem("copilot", t("nav.copilot"), "bot") : ""}
       ${app.mode === "ai" ? navItem("ai", t("nav.ai"), "sparkles") : ""}
+      ${pluginRegistry.pages().length ? `<span class="nav-label">Plugins</span>${pluginRegistry.pages().map((pluginPage) => navItem(pluginPage.pageId, escapeHtml(pluginPage.title), pluginPage.icon ?? "plug")).join("")}` : ""}
       <span class="nav-label">${t("nav.system")}</span>
       ${navItem("components", t("nav.components"), "boxes")}
       ${navItem("bridge", t("nav.bridge"), "bridge")}
@@ -983,6 +1038,7 @@ function render(): void {
   if (app.mode !== "ai" && (page === "copilot" || page === "ai")) page = "home";
   const meta = pageMeta(page);
   const pageHtml = renderPage();
+  const pluginPage = isPluginPageId(page) ? pluginRegistry.page(page) : undefined;
   const noticeHtml = notice ? `<div class="toast success">${icon("check", 18)}<pre>${escapeHtml(notice)}</pre></div>` : "";
   const errorHtml = error ? `<div class="toast error"><pre>${escapeHtml(error)}</pre></div>` : "";
   const nextToastSignature = `${notice}\u0000${error}`;
@@ -1009,6 +1065,8 @@ function render(): void {
     bridgeConnected: app.bridgeConnected,
     busy,
     pageHtml,
+    pageActionsHtml: renderPluginActions(page),
+    pluginPage,
     noticeHtml,
     errorHtml,
     overlayHtml,
@@ -1569,6 +1627,7 @@ function renderOnboarding(): void {
 }
 
 function renderPage(): string {
+  if (isPluginPageId(page)) return "";
   switch (page) {
     case "home": return renderHome();
     case "accounts": return renderAccounts();
@@ -1586,6 +1645,11 @@ function renderPage(): string {
     case "settings": return renderSettings();
     case "about": return renderAboutPage({ app: app!, update: toolboxUpdate, download: toolboxUpdateDownload, busy, locale: locale(), translate: t, escapeHtml, icon });
   }
+}
+
+function renderPluginActions(target: Page): string {
+  if (isPluginPageId(target)) return "";
+  return pluginRegistry.actionsFor(target).map((action) => `<button class="secondary compact" data-plugin-action="${escapeHtml(action.id)}" data-plugin-id="${escapeHtml(action.pluginId)}" data-plugin-target-page="${escapeHtml(action.targetPage)}">${action.icon ? icon(action.icon, 16) : ""}<span>${escapeHtml(action.title)}</span></button>`).join("");
 }
 
 function renderAccounts(): string {
@@ -3450,6 +3514,14 @@ document.addEventListener("click", (event) => {
     void refreshAiUsage(true);
     return;
   }
+  if (target.dataset.pluginAction && target.dataset.pluginId && target.dataset.pluginTargetPage) {
+    dispatchPluginAction({
+      pluginId: target.dataset.pluginId,
+      actionId: target.dataset.pluginAction,
+      targetPage: target.dataset.pluginTargetPage as HostPageId,
+    });
+    return;
+  }
   if (page === "lyrics" && document.querySelector(".lyric-workbench-grid")) syncLyricDraftFromDom();
   if (target.dataset.pickPath && target.dataset.pickPathKind) {
     void pickPathIntoInput(target.dataset.pickPath, target.dataset.pickPathKind as "project" | "audio" | "directory").catch((reason) => { error = formatError(reason); render(); });
@@ -4008,6 +4080,7 @@ document.addEventListener("click", (event) => {
   }
   const targetPage = target.dataset.page as Page | undefined;
   if (targetPage) {
+    if (isPluginPageId(targetPage) && !pluginRegistry.page(targetPage)) return;
     const leavingHistory = page === "history" && targetPage !== "history";
     const enteringAccounts = targetPage === "accounts" && page !== "accounts";
     const leavingAccounts = page === "accounts" && targetPage !== "accounts";
