@@ -171,6 +171,32 @@ fn default_summary_redacts_credentials() {
 }
 
 #[test]
+fn inspection_metadata_keeps_product_fields_and_redacts_credentials() {
+    let parsed = SessionText::parse(synthetic_plaintext(
+        "K1=db;K2=product;K3=Name;K4=Vendor;K5=Category;K6=1.0;K7=2;K8=0;K9=0",
+    ))
+    .unwrap();
+    let metadata = parsed.redacted_credential_metadata();
+    assert_eq!(metadata.access_token_length, parsed.header(0).len());
+    assert_eq!(metadata.refresh_token_length, parsed.header(1).len());
+    assert_ne!(metadata.access_expiry, parsed.header(0));
+    assert_eq!(
+        metadata.user_identifier_length,
+        Some("user-synthetic".len())
+    );
+    let fields = &parsed.cached_products()[0].fields;
+    assert_eq!(fields.len(), 9);
+    assert_eq!(fields[0].key, "K1");
+    assert_eq!(
+        fields[8],
+        Sv2SessionCachedField {
+            key: "K9".to_string(),
+            value: "0".to_string()
+        }
+    );
+}
+
+#[test]
 fn source_hash_guard_refusal_preserves_destination() {
     let root = temp_root();
     let destination = root.join("session");

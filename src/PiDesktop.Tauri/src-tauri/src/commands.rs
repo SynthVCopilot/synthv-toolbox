@@ -1,10 +1,12 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex, OnceLock,
 };
+use std::time::Duration;
 
 use chrono::Utc;
 use serde::Serialize;
@@ -1599,6 +1601,74 @@ pub async fn sv2_account_precheck(
     tauri::async_runtime::spawn_blocking(move || profiles.account_precheck())
         .await
         .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn preview_sv2_offline_session_replacement(
+    slot_id: String,
+    source_path: String,
+    state: State<'_, AppState>,
+) -> Result<crate::sv2_session_kit::Sv2SessionReplacementPreview, String> {
+    let profiles = state.sv2_profiles.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        profiles.preview_offline_session_replacement(slot_id, source_path)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn schedule_sv2_offline_session_replacement(
+    slot_id: String,
+    source_path: String,
+    source_sha256: String,
+    destination_sha256: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<OperationResult, String> {
+    let profiles = state.sv2_profiles.clone();
+    let source_for_validation = source_path.clone();
+    let source_hash_for_validation = source_sha256.clone();
+    let destination_hash_for_validation = destination_sha256.clone();
+    let destination = tauri::async_runtime::spawn_blocking(move || {
+        profiles.validate_offline_session_replacement(
+            slot_id,
+            source_for_validation,
+            source_hash_for_validation,
+            destination_hash_for_validation,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("无法定位 Toolbox 会话恢复助手：{error}"))?;
+    Command::new(executable)
+        .args([
+            "--session-kit-handoff",
+            "--parent-pid",
+            &std::process::id().to_string(),
+            "--source",
+            &source_path,
+            "--destination",
+            &destination,
+            "--source-sha256",
+            &source_sha256,
+            "--destination-sha256",
+            &destination_sha256,
+        ])
+        .spawn()
+        .map_err(|error| format!("无法启动 Toolbox 会话恢复助手：{error}"))?;
+
+    let shutdown = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(350)).await;
+        shutdown.exit(0);
+    });
+    Ok(succeeded(
+        "已安排受保护的 session 恢复。",
+        "Toolbox 将退出；助手会在确认 SV2 与其它 Toolbox 实例均未运行后，重新校验哈希、创建并校验备份，再原子替换 session。",
+    ))
 }
 
 #[tauri::command]

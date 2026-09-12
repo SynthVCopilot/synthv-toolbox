@@ -214,6 +214,38 @@ export interface Sv2OfflineLicense {
   cachedProducts: Sv2OfflineCachedProduct[];
 }
 
+export interface Sv2SessionCredentialMetadata {
+  accessTokenLength: number;
+  refreshTokenLength: number;
+  accessExpiry: string;
+  writtenAt: string;
+  deviceIdentifierLength: number;
+  userIdentifierLength?: number | null;
+}
+
+export interface Sv2SessionCachedField {
+  key: string;
+  value: string;
+}
+
+export interface Sv2SessionCachedProduct {
+  fields: Sv2SessionCachedField[];
+}
+
+export interface Sv2SessionInspection {
+  path: string;
+  sha256: string;
+  encryptedBytes: number;
+  plaintextLines: number;
+  credentials: Sv2SessionCredentialMetadata;
+  cachedProducts: Sv2SessionCachedProduct[];
+}
+
+export interface Sv2SessionReplacementPreview {
+  source: Sv2SessionInspection;
+  destination: Sv2SessionInspection;
+}
+
 export interface Sv2AuthorizedVoiceProduct {
   id: string;
   name: string;

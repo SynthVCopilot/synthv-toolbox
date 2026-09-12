@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::process::Command;
 
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
@@ -31,6 +32,51 @@ struct ProductRow {
     category: String,
     version: String,
     unknown_fields: Vec<(String, String)>,
+}
+
+/// Redacted, local-only metadata exposed to the Toolbox interface.
+///
+/// This deliberately contains no JWT, device identifier, or user identifier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Sv2SessionCredentialMetadata {
+    pub access_token_length: usize,
+    pub refresh_token_length: usize,
+    pub access_expiry: String,
+    pub written_at: String,
+    pub device_identifier_length: usize,
+    pub user_identifier_length: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Sv2SessionCachedField {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Sv2SessionCachedProduct {
+    pub fields: Vec<Sv2SessionCachedField>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Sv2SessionInspection {
+    pub path: String,
+    pub sha256: String,
+    pub encrypted_bytes: usize,
+    pub plaintext_lines: usize,
+    pub credentials: Sv2SessionCredentialMetadata,
+    pub cached_products: Vec<Sv2SessionCachedProduct>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Sv2SessionReplacementPreview {
+    pub source: Sv2SessionInspection,
+    pub destination: Sv2SessionInspection,
 }
 
 impl SessionText {
@@ -71,6 +117,51 @@ impl SessionText {
             lines[4].len(),
             if lines.get(5).is_some_and(|line| line.starts_with("K1=")) { "absent".to_string() } else { lines.get(5).map(|value| format!("redacted(len={})", value.len())).unwrap_or_else(|| "absent".to_string()) },
         )
+    }
+
+    fn redacted_credential_metadata(&self) -> Sv2SessionCredentialMetadata {
+        let lines = self.plaintext.split('\n').collect::<Vec<_>>();
+        let user_identifier = lines
+            .get(5)
+            .filter(|line| !line.starts_with("K1="))
+            .map(|line| line.len());
+        Sv2SessionCredentialMetadata {
+            access_token_length: lines[0].len(),
+            refresh_token_length: lines[1].len(),
+            access_expiry: lines[2].to_string(),
+            written_at: lines[3].to_string(),
+            device_identifier_length: lines[4].len(),
+            user_identifier_length: user_identifier,
+        }
+    }
+
+    fn cached_products(&self) -> Vec<Sv2SessionCachedProduct> {
+        self.products
+            .iter()
+            .map(|product| {
+                let mut fields = vec![
+                    ("K1", product.database_id.as_str()),
+                    ("K2", product.product_id.as_str()),
+                    ("K3", product.name.as_str()),
+                    ("K4", product.vendor.as_str()),
+                    ("K5", product.category.as_str()),
+                    ("K6", product.version.as_str()),
+                ]
+                .into_iter()
+                .map(|(key, value)| Sv2SessionCachedField {
+                    key: key.to_string(),
+                    value: value.to_string(),
+                })
+                .collect::<Vec<_>>();
+                fields.extend(product.unknown_fields.iter().map(|(key, value)| {
+                    Sv2SessionCachedField {
+                        key: key.clone(),
+                        value: value.clone(),
+                    }
+                }));
+                Sv2SessionCachedProduct { fields }
+            })
+            .collect()
     }
 
     fn summary(&self) -> String {
@@ -166,6 +257,34 @@ fn decode_path(path: &Path) -> Result<SessionText, String> {
     decode_bytes(ciphertext)
 }
 
+fn inspect_path(path: &Path) -> Result<Sv2SessionInspection, String> {
+    let bytes = read_ciphertext(path)?;
+    let session = decode_bytes(bytes.clone())?;
+    Ok(Sv2SessionInspection {
+        path: path.to_string_lossy().into_owned(),
+        sha256: hash(&bytes),
+        encrypted_bytes: bytes.len(),
+        plaintext_lines: session.plaintext.lines().count(),
+        credentials: session.redacted_credential_metadata(),
+        cached_products: session.cached_products(),
+    })
+}
+
+pub fn preview_replacement(
+    source: impl AsRef<Path>,
+    destination: impl AsRef<Path>,
+) -> Result<Sv2SessionReplacementPreview, String> {
+    let source = source.as_ref();
+    let destination = destination.as_ref();
+    if fs::canonicalize(source).ok() == fs::canonicalize(destination).ok() {
+        return Err("source and destination session files must be different".to_string());
+    }
+    Ok(Sv2SessionReplacementPreview {
+        source: inspect_path(source)?,
+        destination: inspect_path(destination)?,
+    })
+}
+
 fn decode_bytes(ciphertext: Zeroizing<Vec<u8>>) -> Result<SessionText, String> {
     let key = read_machine_key().map_err(|_| "native machine key is unavailable".to_string())?;
     let plaintext = decrypt_session(ciphertext, &key)
@@ -250,7 +369,7 @@ fn write_new_restricted(path: &Path, bytes: &[u8]) -> Result<(), String> {
     result
 }
 
-fn process_conflict() -> Result<bool, String> {
+fn process_conflict(exempt_pid: Option<u32>) -> Result<bool, String> {
     #[cfg(windows)]
     {
         let output = Command::new("tasklist")
@@ -260,10 +379,16 @@ fn process_conflict() -> Result<bool, String> {
         if !output.status.success() {
             return Err("cannot inspect running processes".to_string());
         }
-        let list = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
-        Ok(["synthv-studio", "synthv-toolbox"]
-            .iter()
-            .any(|name| list.contains(name)))
+        Ok(String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+            let columns = line
+                .split(",\"")
+                .map(|part| part.trim_matches('"'))
+                .collect::<Vec<_>>();
+            let image = columns.first().copied().unwrap_or("").to_ascii_lowercase();
+            let pid = columns.get(1).and_then(|value| value.parse::<u32>().ok());
+            matches!(image.as_str(), "synthv-studio.exe" | "synthv-toolbox.exe")
+                && pid != exempt_pid
+        }))
     }
     #[cfg(not(windows))]
     {
@@ -335,16 +460,17 @@ fn replace_with_recovery(
     }
 }
 
-fn apply_verified(
+fn apply_verified_with_process_exception(
     source: &Path,
     destination: &Path,
     source_hash: &str,
     destination_hash: &str,
+    exempt_pid: Option<u32>,
 ) -> Result<PathBuf, String> {
     let source_bytes = read_ciphertext(source)?;
     verify_hash(&source_bytes, source_hash, "source")?;
     decode_bytes(source_bytes.clone())?;
-    if process_conflict()? {
+    if process_conflict(exempt_pid)? {
         return Err("SV2 or Toolbox appears to be running; close it before apply".to_string());
     }
     let destination_bytes = read_ciphertext(destination)?;
@@ -362,6 +488,128 @@ fn apply_verified(
         destination_hash,
     )?;
     Ok(backup)
+}
+
+fn apply_verified(
+    source: &Path,
+    destination: &Path,
+    source_hash: &str,
+    destination_hash: &str,
+) -> Result<PathBuf, String> {
+    apply_verified_with_process_exception(source, destination, source_hash, destination_hash, None)
+}
+
+pub fn validate_replacement_request(
+    source: impl AsRef<Path>,
+    destination: impl AsRef<Path>,
+    source_hash: &str,
+    destination_hash: &str,
+) -> Result<(), String> {
+    let source = source.as_ref();
+    let destination = destination.as_ref();
+    if fs::canonicalize(source).ok() == fs::canonicalize(destination).ok() {
+        return Err("source and destination session files must be different".to_string());
+    }
+    let source_bytes = read_ciphertext(source)?;
+    verify_hash(&source_bytes, source_hash, "source")?;
+    decode_bytes(source_bytes)?;
+    let destination_bytes = read_ciphertext(destination)?;
+    verify_hash(&destination_bytes, destination_hash, "destination")?;
+    decode_bytes(destination_bytes)?;
+    Ok(())
+}
+
+fn wait_for_process_exit(pid: u32) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        for _ in 0..150 {
+            let output = Command::new("tasklist")
+                .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+                .output()
+                .map_err(|error| format!("cannot inspect Toolbox handoff process: {error}"))?;
+            if !output.status.success() {
+                return Err("cannot inspect Toolbox handoff process".to_string());
+            }
+            let list = String::from_utf8_lossy(&output.stdout);
+            if !list.lines().any(|line| {
+                line.split(",\"")
+                    .nth(1)
+                    .map(|value| value.trim_matches('"').trim() == pid.to_string())
+                    .unwrap_or(false)
+            }) {
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        Err("Toolbox did not exit in time; session was not changed".to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
+        Err("session replacement handoff is only available on Windows".to_string())
+    }
+}
+
+pub fn run_handoff<I>(args: I) -> Result<(), String>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    let args = args.into_iter().skip(1).collect::<Vec<_>>();
+    let mut parent_pid = None;
+    let mut source = None;
+    let mut destination = None;
+    let mut source_hash = None;
+    let mut destination_hash = None;
+    let mut index = 0;
+    while index < args.len() {
+        let value = args[index].to_str();
+        let next = args.get(index + 1).map(OsString::as_os_str);
+        match value {
+            Some("--session-kit-handoff") => index += 1,
+            Some("--parent-pid") if parent_pid.is_none() => {
+                parent_pid = next
+                    .and_then(|candidate| candidate.to_str())
+                    .and_then(|candidate| candidate.parse::<u32>().ok());
+                index += 2;
+            }
+            Some("--source") if source.is_none() => {
+                source = next.map(PathBuf::from);
+                index += 2;
+            }
+            Some("--destination") if destination.is_none() => {
+                destination = next.map(PathBuf::from);
+                index += 2;
+            }
+            Some("--source-sha256") if source_hash.is_none() => {
+                source_hash = next.map(|candidate| candidate.to_string_lossy().into_owned());
+                index += 2;
+            }
+            Some("--destination-sha256") if destination_hash.is_none() => {
+                destination_hash = next.map(|candidate| candidate.to_string_lossy().into_owned());
+                index += 2;
+            }
+            _ => return Err("invalid session replacement handoff request".to_string()),
+        }
+    }
+    let parent_pid = parent_pid.ok_or_else(|| "missing Toolbox handoff process".to_string())?;
+    let source = source.ok_or_else(|| "missing session source".to_string())?;
+    let destination = destination.ok_or_else(|| "missing session destination".to_string())?;
+    let source_hash = source_hash.ok_or_else(|| "missing source hash guard".to_string())?;
+    let destination_hash =
+        destination_hash.ok_or_else(|| "missing destination hash guard".to_string())?;
+    wait_for_process_exit(parent_pid)?;
+    let backup = apply_verified_with_process_exception(
+        &source,
+        &destination,
+        &source_hash,
+        &destination_hash,
+        Some(std::process::id()),
+    )?;
+    println!(
+        "applied verified encrypted session; backup={}",
+        backup.display()
+    );
+    Ok(())
 }
 
 fn usage() -> &'static str {

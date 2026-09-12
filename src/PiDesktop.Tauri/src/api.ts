@@ -52,6 +52,7 @@ import type {
   Sv2AccountUsageSnapshot,
   Sv2IsolationPreference,
   Sv2ProfilesState,
+  Sv2SessionReplacementPreview,
   Sv2SyncCategory,
   Sv2SyncCategoryId,
   Sv2SyncManifest,
@@ -1366,6 +1367,10 @@ export const api = {
   sv2CachedProfileState: () => call<Sv2ProfilesState>("sv2_cached_profile_state"),
   sv2VoiceCatalog: () => call<import("./types").Sv2CachedVoice[]>("sv2_voice_catalog"),
   sv2AccountPrecheck: () => call<Sv2AccountPrecheck>("sv2_account_precheck"),
+  previewSv2OfflineSessionReplacement: (slotId: string, sourcePath: string) =>
+    call<Sv2SessionReplacementPreview>("preview_sv2_offline_session_replacement", { slotId, sourcePath }),
+  scheduleSv2OfflineSessionReplacement: (slotId: string, sourcePath: string, sourceSha256: string, destinationSha256: string) =>
+    call<OperationResult>("schedule_sv2_offline_session_replacement", { slotId, sourcePath, sourceSha256, destinationSha256 }),
   sv2AccountUsageSnapshot: () => call<Sv2AccountUsageSnapshot>("sv2_account_usage_snapshot"),
   sv2AccountUsageSnapshotForSlot: (slotId: string) =>
     call<Sv2AccountUsageSnapshot>("sv2_account_usage_snapshot_for_slot", { slotId }),
@@ -1518,6 +1523,16 @@ export const api = {
   pickProjectFile: async (): Promise<string | undefined> => {
     if (preview) return undefined;
     const selected = await open({ multiple: false, directory: false, filters: [{ name: "Synthesizer V Project", extensions: ["svp"] }] });
+    if (Array.isArray(selected)) return selected[0];
+    return typeof selected === "string" ? selected : undefined;
+  },
+  pickSv2SessionFile: async (): Promise<string | undefined> => {
+    if (preview) return undefined;
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: "SV2 encrypted session", extensions: ["session", "bin"] }, { name: "All files", extensions: ["*"] }],
+    });
     if (Array.isArray(selected)) return selected[0];
     return typeof selected === "string" ? selected : undefined;
   },

@@ -228,6 +228,8 @@ pub fn run() {
             commands::sv2_cached_profile_state,
             commands::sv2_voice_catalog,
             commands::sv2_account_precheck,
+            commands::preview_sv2_offline_session_replacement,
+            commands::schedule_sv2_offline_session_replacement,
             commands::sv2_account_usage_snapshot,
             commands::sv2_account_usage_snapshot_for_slot,
             commands::set_sv2_account_indicator,

@@ -449,6 +449,57 @@ impl Sv2ProfileService {
         self.build_account_usage_snapshot(true, Some(&slot_id))
     }
 
+    pub fn preview_offline_session_replacement(
+        &self,
+        slot_id: String,
+        source_path: String,
+    ) -> Result<crate::sv2_session_kit::Sv2SessionReplacementPreview, String> {
+        let destination = self.managed_session_path(&slot_id)?;
+        crate::sv2_session_kit::preview_replacement(PathBuf::from(source_path), destination)
+    }
+
+    pub fn validate_offline_session_replacement(
+        &self,
+        slot_id: String,
+        source_path: String,
+        source_sha256: String,
+        destination_sha256: String,
+    ) -> Result<String, String> {
+        let destination = self.managed_session_path(&slot_id)?;
+        crate::sv2_session_kit::validate_replacement_request(
+            PathBuf::from(source_path),
+            &destination,
+            &source_sha256,
+            &destination_sha256,
+        )?;
+        Ok(destination.to_string_lossy().into_owned())
+    }
+
+    fn managed_session_path(&self, slot_id: &str) -> Result<PathBuf, String> {
+        validate_slot_id(slot_id)?;
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| "SV2 槽位状态锁已损坏。".to_string())?;
+        let paths = self.paths.as_ref().map_err(Clone::clone)?;
+        let _file_lock = acquire_switch_lock(paths)?;
+        validate_managed_roots(paths)?;
+        let manifest = load_manifest(paths)?;
+        if !manifest.slots.iter().any(|slot| slot.id == slot_id) {
+            return Err("找不到该 SV2 槽位。".to_string());
+        }
+        let root = slot_data_root(paths, &manifest, slot_id);
+        reject_reparse_point(&root)?;
+        let license = root.join("license");
+        reject_reparse_point(&license)?;
+        let session = license.join("session");
+        reject_reparse_point(&session)?;
+        if !session.is_file() {
+            return Err("目标槽位没有可恢复的 session 文件。".to_string());
+        }
+        Ok(session)
+    }
+
     fn build_account_usage_snapshot(
         &self,
         refresh_sensitive_probe: bool,

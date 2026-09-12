@@ -70,6 +70,8 @@ import type {
   Sv2CachedVoice,
   Sv2ProfileSlot,
   Sv2ProfilesState,
+  Sv2SessionInspection,
+  Sv2SessionReplacementPreview,
   Sv2SyncCategory,
   Sv2SyncCategoryId,
   Sv2SyncManifest,
@@ -99,6 +101,12 @@ interface PendingAccountIndicatorConsent {
   refreshAfterEnable: boolean;
   refreshSlotId?: string;
   concurrentEnabled?: boolean;
+}
+
+interface PendingOfflineSessionReplacement {
+  slotId: string;
+  sourcePath: string;
+  preview: Sv2SessionReplacementPreview;
 }
 
 type Feature = FeatureCatalogItem;
@@ -220,6 +228,7 @@ let pendingComponentRemovalId: string | undefined;
 let pendingProfileDeletionId: string | undefined;
 let pendingInstanceTermination: SynthVProcess | undefined;
 let pendingAccountIndicatorConsent: PendingAccountIndicatorConsent | undefined;
+let pendingOfflineSessionReplacement: PendingOfflineSessionReplacement | undefined;
 let removingComponentId: string | undefined;
 let ffmpegDirectory: string | null | undefined;
 let ffmpegDirectoryDraft: string | undefined;
@@ -990,7 +999,7 @@ function render(): void {
       }, 4200);
     }
   }
-  const overlayHtml = pendingInstanceTermination ? renderInstanceTerminationDialog() : pendingComponentRemovalId ? renderComponentRemovalDialog() : pendingProfileDeletionId ? renderProfileDeletionDialog() : pendingBlockedSwitchSlot ? renderBlockedSwitchDialog() : pendingConcurrentLaunchSlot ? renderConcurrentDisclaimer() : pendingSvpRoute ? renderSvpRouteDialog() : pendingAccountIndicatorConsent ? renderAccountIndicatorConsent() : accountManagerOpen && page === "accounts" ? renderAccountManager() : pendingAudioPlan ? renderAudioPlanDialog() : renderAiModelPicker();
+  const overlayHtml = pendingInstanceTermination ? renderInstanceTerminationDialog() : pendingComponentRemovalId ? renderComponentRemovalDialog() : pendingProfileDeletionId ? renderProfileDeletionDialog() : pendingBlockedSwitchSlot ? renderBlockedSwitchDialog() : pendingConcurrentLaunchSlot ? renderConcurrentDisclaimer() : pendingSvpRoute ? renderSvpRouteDialog() : pendingAccountIndicatorConsent ? renderAccountIndicatorConsent() : pendingOfflineSessionReplacement ? renderOfflineSessionReplacementDialog() : accountManagerOpen && page === "accounts" ? renderAccountManager() : pendingAudioPlan ? renderAudioPlanDialog() : renderAiModelPicker();
   const nextShellState = {
     page,
     sidebarCollapsed,
@@ -1064,6 +1073,23 @@ function renderAccountIndicatorConsent(): string {
       <div class="dialog-actions"><button class="secondary" data-cancel-account-indicator>${t("accounts.cancel")}</button><button class="primary" data-confirm-account-indicator>${icon("check", 16)} ${t("accounts.consentConfirm")}</button></div>
     </section>
   </div>`;
+}
+
+function renderOfflineSessionInspection(inspection: Sv2SessionInspection, label: string): string {
+  const credentials = inspection.credentials;
+  const productFields = inspection.cachedProducts.length
+    ? inspection.cachedProducts.map((product, index) => {
+      const name = product.fields.find((field) => field.key === "K3")?.value ?? `#${index + 1}`;
+      return `<details><summary>${escapeHtml(name)}</summary><dl class="profile-storage-list compact">${product.fields.map((field) => `<div><dt>${escapeHtml(field.key)}</dt><dd><code>${escapeHtml(field.value)}</code></dd></div>`).join("")}</dl></details>`;
+    }).join("")
+    : `<div class="empty-inline">${t("accountUi.restoreOfflineSessionNoProducts")}</div>`;
+  return `<section class="authorization-panel offline-session-inspection"><div class="authorization-heading"><div><strong>${escapeHtml(label)}</strong><small><code>${escapeHtml(inspection.path)}</code></small></div></div><dl class="profile-storage-list compact"><div><dt>SHA-256</dt><dd><code>${escapeHtml(inspection.sha256)}</code></dd></div><div><dt>Encrypted bytes</dt><dd>${inspection.encryptedBytes}</dd></div><div><dt>Plaintext lines</dt><dd>${inspection.plaintextLines}</dd></div></dl><details><summary>${t("accountUi.restoreOfflineSessionCredentials")}</summary><dl class="profile-storage-list compact"><div><dt>access</dt><dd>redacted (${credentials.accessTokenLength})</dd></div><div><dt>refresh</dt><dd>redacted (${credentials.refreshTokenLength})</dd></div><div><dt>expiry</dt><dd>${escapeHtml(credentials.accessExpiry)}</dd></div><div><dt>written</dt><dd>${escapeHtml(credentials.writtenAt)}</dd></div><div><dt>device</dt><dd>redacted (${credentials.deviceIdentifierLength})</dd></div><div><dt>user</dt><dd>${credentials.userIdentifierLength == null ? "absent" : `redacted (${credentials.userIdentifierLength})`}</dd></div></dl></details><details><summary>${t("accountUi.restoreOfflineSessionProducts")}</summary>${productFields}</details></section>`;
+}
+
+function renderOfflineSessionReplacementDialog(): string {
+  const pending = pendingOfflineSessionReplacement;
+  if (!pending) return "";
+  return `<div class="dialog-backdrop" role="presentation"><section class="fluent-dialog switch-dialog offline-session-replacement-dialog" role="alertdialog" aria-modal="true" aria-labelledby="offline-session-replacement-title"><span class="dialog-icon danger">${icon("shield", 24)}</span><div><span class="eyebrow">${t("accountUi.offlineLicense")}</span><h2 id="offline-session-replacement-title">${t("accountUi.restoreOfflineSessionTitle")}</h2></div>${renderOfflineSessionInspection(pending.preview.source, t("accountUi.restoreOfflineSessionSource"))}${renderOfflineSessionInspection(pending.preview.destination, t("accountUi.restoreOfflineSessionDestination"))}<p class="dialog-choice-note">${t("accountUi.restoreOfflineSessionGuard")}</p><div class="dialog-actions"><button class="secondary" data-cancel-offline-session-replacement>${t("accounts.cancel")}</button><button class="danger-action" data-confirm-offline-session-replacement>${icon("check", 16)} ${t("accountUi.restoreOfflineSessionConfirm")}</button></div></section></div>`;
 }
 
 function renderInstanceTerminationDialog(): string {
@@ -1726,7 +1752,7 @@ function renderAccountManager(): string {
     const offlineProductList = offlineProducts.length
       ? `<div class="authorization-list offline-license-products">${offlineProducts.map((product) => `<details><summary>${escapeHtml(product.name)} · ${escapeHtml(product.version)}</summary><dl class="profile-storage-list compact"><div><dt>K1</dt><dd><code>${escapeHtml(product.databaseId)}</code></dd></div><div><dt>K2</dt><dd><code>${escapeHtml(product.productId)}</code></dd></div><div><dt>${t("accountUi.vendor")}</dt><dd>${escapeHtml(product.vendor)}</dd></div><div><dt>${t("accountUi.category")}</dt><dd>${escapeHtml(product.category)}</dd></div>${product.attributes.map((attribute) => `<div><dt>${escapeHtml(attribute.key)}</dt><dd><code>${escapeHtml(attribute.value)}</code></dd></div>`).join("")}</dl></details>`).join("")}</div>`
       : `<div class="empty-inline">${t("accountUi.offlineLicenseNoCachedProducts")}</div>`;
-    const offlineLicensePanel = managedSlot ? `<section class="authorization-panel offline-license-panel"><div class="authorization-heading"><div><strong>${t("accountUi.offlineLicense")}</strong><small>${escapeHtml(offlineCacheLabel)} · ${escapeHtml(offlineEligibilityLabel)}</small></div><span class="inventory-status ${offlineLicense?.cacheStatus === "active" ? "verified" : "unknown"}">${escapeHtml(offlineCacheLabel)}</span></div><p>${t("accountUi.offlineLicenseOfficialFlow")}</p>${offlineProductList}<div class="manager-action-row"><button class="secondary" data-profile-launch="${managedSlot.id}">${icon("play", 15)} ${t("accountUi.openSv2ForOfflineLicense")}</button><button class="secondary" data-profile-refresh-slot="${managedSlot.id}">${icon("refresh", 15)} ${t("accounts.refresh")}</button></div></section>` : "";
+    const offlineLicensePanel = managedSlot ? `<section class="authorization-panel offline-license-panel"><div class="authorization-heading"><div><strong>${t("accountUi.offlineLicense")}</strong><small>${escapeHtml(offlineCacheLabel)} · ${escapeHtml(offlineEligibilityLabel)}</small></div><span class="inventory-status ${offlineLicense?.cacheStatus === "active" ? "verified" : "unknown"}">${escapeHtml(offlineCacheLabel)}</span></div><p>${t("accountUi.offlineLicenseOfficialFlow")}</p>${offlineProductList}<div class="manager-action-row"><button class="secondary" data-profile-launch="${managedSlot.id}">${icon("play", 15)} ${t("accountUi.openSv2ForOfflineLicense")}</button><button class="secondary" data-offline-session-restore="${managedSlot.id}">${icon("shield", 15)} ${t("accountUi.restoreOfflineSession")}</button><button class="secondary" data-profile-refresh-slot="${managedSlot.id}">${icon("refresh", 15)} ${t("accounts.refresh")}</button></div></section>` : "";
     body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(officialIdentity.name ?? (managedSlot.sessionCached ? t("accountUi.accountInformationNeedsRefresh") : t("accountUi.signedOut")))}</h3><p>${escapeHtml(officialIdentity.email ?? t("accountUi.accountInformationNeedsRefresh"))}</p><p>${accountUseDot(managedUseState)} ${escapeHtml(managedUseState.label)}</p></div>${managedSlot.isActive ? `<span class="profile-active-badge">${t("accountUi.currentDefault")}</span>` : ""}</div>
       <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>${t("accountUi.note")}<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" placeholder="${t("accountUi.eGProductionAccount")}" /></label><button class="secondary">${t("accountUi.saveNote")}</button></form>
       <section class="authorization-panel"><div class="authorization-heading"><div><strong>${t("accountUi.availableAuthorizations")}</strong><small>${escapeHtml(authorizationSummary)}</small></div><span class="inventory-status ${authorizationStatus ? "verified" : "unknown"}">${authorizationStatus ? t("accountUi.authorizationsDetail", { p0: authorizations.length }) : t("accountUi.notRead")}</span></div>${authorizationList}</section>
@@ -4173,6 +4199,36 @@ document.addEventListener("click", (event) => {
         await refresh();
       });
     }
+    return;
+  }
+  if (target.dataset.offlineSessionRestore) {
+    const slotId = target.dataset.offlineSessionRestore;
+    void run(async () => {
+      const sourcePath = await api.pickSv2SessionFile();
+      if (!sourcePath) return;
+      const preview = await api.previewSv2OfflineSessionReplacement(slotId, sourcePath);
+      pendingOfflineSessionReplacement = { slotId, sourcePath, preview };
+    });
+    return;
+  }
+  if (target.hasAttribute("data-cancel-offline-session-replacement")) {
+    pendingOfflineSessionReplacement = undefined;
+    render();
+    return;
+  }
+  if (target.hasAttribute("data-confirm-offline-session-replacement")) {
+    const pending = pendingOfflineSessionReplacement;
+    if (!pending) return;
+    pendingOfflineSessionReplacement = undefined;
+    void run(async () => {
+      const result = await api.scheduleSv2OfflineSessionReplacement(
+        pending.slotId,
+        pending.sourcePath,
+        pending.preview.source.sha256,
+        pending.preview.destination.sha256,
+      );
+      setFeedback(result);
+    });
     return;
   }
   if (target.hasAttribute("data-profile-refresh")) {

@@ -476,6 +476,16 @@ addMessages("zh-CN", { accountUi: {
   "offlineLicenseNoCachedProducts": "没有可显示的本机离线产品缓存。",
   "offlineLicenseOfficialFlow": "离线授权只能由 SV2 的官方 Product Manager 变更。打开 SV2 后点击云图标，在 My Products 中选择 Activate Offline 或 Deactivate Offline；完成后返回此处刷新，Toolbox 会比较本机缓存与授权状态。",
   "openSv2ForOfflineLicense": "启动 SV2 管理离线授权",
+  "restoreOfflineSession": "从已验证 session 恢复",
+  "restoreOfflineSessionTitle": "确认恢复加密 session",
+  "restoreOfflineSessionChoose": "选择加密 session 文件",
+  "restoreOfflineSessionSource": "选定来源",
+  "restoreOfflineSessionDestination": "当前槽位",
+  "restoreOfflineSessionCredentials": "凭据元数据（已脱敏）",
+  "restoreOfflineSessionProducts": "本地缓存产品原始字段",
+  "restoreOfflineSessionNoProducts": "没有本地离线产品缓存记录。",
+  "restoreOfflineSessionGuard": "确认后 Toolbox 会退出。独立助手会在 SV2 和其它 Toolbox 实例均关闭后重新验证两个 SHA-256、校验来源可解密、创建并校验备份，再原子替换整个 session。access、refresh、设备和用户标识不会显示，也不能逐字段修改。",
+  "restoreOfflineSessionConfirm": "退出 Toolbox 并恢复",
   "vendor": "供应商",
   "category": "类别"
 } });
@@ -491,6 +501,16 @@ addMessages("en", { accountUi: {
   "offlineLicenseNoCachedProducts": "No local offline product cache is available to display.",
   "offlineLicenseOfficialFlow": "Only SV2's official Product Manager can change offline activation. Open SV2, select the cloud icon, then choose Activate Offline or Deactivate Offline under My Products. Return here and refresh to compare the local cache and authorization state.",
   "openSv2ForOfflineLicense": "Open SV2 to manage offline activation",
+  "restoreOfflineSession": "Restore from a verified session",
+  "restoreOfflineSessionTitle": "Confirm encrypted session restore",
+  "restoreOfflineSessionChoose": "Choose encrypted session file",
+  "restoreOfflineSessionSource": "Selected source",
+  "restoreOfflineSessionDestination": "Current slot",
+  "restoreOfflineSessionCredentials": "Credential metadata (redacted)",
+  "restoreOfflineSessionProducts": "Raw local cached-product fields",
+  "restoreOfflineSessionNoProducts": "No local offline product cache is present.",
+  "restoreOfflineSessionGuard": "After confirmation Toolbox exits. A separate helper waits for SV2 and any other Toolbox instance to close, revalidates both SHA-256 values and decryptability, creates and verifies a backup, then atomically replaces the whole session. Access, refresh, device, and user identifiers are never shown and cannot be changed field by field.",
+  "restoreOfflineSessionConfirm": "Exit Toolbox and restore",
   "vendor": "Vendor",
   "category": "Category"
 } });
