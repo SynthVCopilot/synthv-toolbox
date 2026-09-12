@@ -12,6 +12,9 @@
   "files": [
     "dist"
   ],
+  "bin": {
+    "synthv-agent-runtime": "./dist/worker.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit"
@@ -22,6 +25,7 @@
     "@synthv-toolbox/runtime-protocol": "file:../runtime-protocol"
   },
   "devDependencies": {
+    "@types/node": "^22.20.2",
     "typescript": "7.0.2"
   }
 }

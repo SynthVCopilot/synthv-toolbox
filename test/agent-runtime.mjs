@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
 import test from "node:test";
@@ -98,3 +98,55 @@ test("model auth uses adapter request contracts and reports missing stream suppo
   const stream = await gateway.stream("example", { modelId: "model-1", input: "hi" });
   assert.equal(stream.kind, "unsupported");
 });
+
+test("stdio worker emits JSONL responses only and discovers compatible plugin backends", async () => {
+  const pluginRoot = join(root, "test", ".tmp", "agent-runtime-cli-plugins");
+  rmSync(pluginRoot, { recursive: true, force: true });
+  mkdirSync(join(pluginRoot, "com.example.plugin", "backend"), { recursive: true });
+  writeFileSync(join(pluginRoot, "com.example.plugin", "package.json"), '{"type":"module"}\n');
+  writeFileSync(join(pluginRoot, "com.example.plugin", "manifest.json"), JSON.stringify({
+    schemaVersion: 1,
+    id: "com.example.plugin",
+    name: "Example plugin",
+    version: "1.0.0",
+    hostApi: { min: "1.0", max: "1.0" },
+    backend: { entry: "backend/index.js" },
+    permissions: [],
+  }));
+  writeFileSync(join(pluginRoot, "com.example.plugin", "backend", "index.js"), "export async function activate() {}\n");
+
+  const workerPath = join(packageRoot, "dist", "worker.js");
+  const child = spawn(process.execPath, [workerPath], { stdio: ["pipe", "pipe", "pipe"] });
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  let stdoutBuffer = "";
+  let stderrBuffer = "";
+  const responses = [];
+  child.stdout.on("data", (chunk) => {
+    stdoutBuffer += chunk;
+    const lines = stdoutBuffer.split("\n");
+    stdoutBuffer = lines.pop();
+    for (const line of lines) if (line) responses.push(JSON.parse(line));
+  });
+  child.stderr.on("data", (chunk) => { stderrBuffer += chunk; });
+
+  child.stdin.write(`${request("hello", "host.hello", { hostId: "host", protocol: { min: "1.0", max: "1.0" }, capabilities: [] })}\n`);
+  child.stdin.write(`${request("plugins", "runtime.plugins.discover", { root: pluginRoot })}\n`);
+  await waitFor(() => responses.length === 2);
+  assert.equal(responses[0].ok, true);
+  assert.deepEqual(responses[1].result.plugins.map((plugin) => plugin.id), ["com.example.plugin"]);
+
+  child.kill("SIGTERM");
+  await new Promise((resolve, reject) => {
+    child.once("exit", (code) => code === 0 || code === null ? resolve() : reject(new Error(`worker exited with ${code}`)));
+  });
+  assert.equal(stderrBuffer, "");
+});
+
+async function waitFor(predicate, timeoutMs = 3_000) {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > timeoutMs) throw new Error("Timed out waiting for the worker response.");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}

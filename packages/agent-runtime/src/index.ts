@@ -59,6 +59,10 @@ export interface ModuleLoader {
   (url: URL): Promise<unknown>;
 }
 
+export interface PluginDiscovery {
+  discover(root: string): Promise<PluginManifest[]>;
+}
+
 export class ModelAuthGateway {
   readonly router: CredentialRouter;
 
@@ -126,6 +130,7 @@ export class AgentRuntimeWorker {
   constructor(
     private readonly sessionsFactory: PiSessionFactory = createPiSessionFactory(),
     private readonly hostCapabilities?: HostCapabilityTransport,
+    private readonly pluginDiscovery?: PluginDiscovery,
   ) {}
 
   async handleJsonl(line: string): Promise<string[]> {
@@ -139,6 +144,12 @@ export class AgentRuntimeWorker {
     return this.hostCapabilities.request("host.capability.invoke", { capability, operation, params });
   }
 
+  async dispose(): Promise<void> {
+    const activeSessions = [...this.sessions.values()];
+    this.sessions.clear();
+    await Promise.all(activeSessions.map(async (session) => { await session.dispose(); }));
+  }
+
   private async handleRequest(request: RpcRequest): Promise<RpcResponseSuccess | RpcResponseFailure> {
     try {
       if (request.method === HOST_HELLO_METHOD) return this.handleHostHello(request);
@@ -147,6 +158,7 @@ export class AgentRuntimeWorker {
       if (request.method === "session.initialize") return await this.initializeSession(request);
       if (request.method === "session.send") return await this.sendToSession(request);
       if (request.method === "session.close") return await this.closeSession(request);
+      if (request.method === "runtime.plugins.discover") return await this.discoverPlugins(request);
       return this.failure(request, "method.not-found", `Unsupported runtime method: ${request.method}`);
     } catch (error) {
       return this.failure(request, "runtime.error", error instanceof Error ? error.message : "Agent runtime failed.");
@@ -193,6 +205,15 @@ export class AgentRuntimeWorker {
     await session.dispose();
     this.sessions.delete(params.sessionId);
     return this.success(request, { sessionId: params.sessionId, closed: true });
+  }
+
+  private async discoverPlugins(request: RpcRequest): Promise<RpcResponseSuccess | RpcResponseFailure> {
+    if (!this.pluginDiscovery) return this.failure(request, "plugins.unsupported", "Plugin discovery is unavailable in this runtime.");
+    if (!isRecord(request.params) || typeof request.params.root !== "string" || request.params.root.length === 0) {
+      return this.failure(request, "plugins.invalid-root", "runtime.plugins.discover requires a plugin root path.");
+    }
+    const plugins = await this.pluginDiscovery.discover(request.params.root);
+    return this.success(request, { plugins: plugins as unknown as JsonValue });
   }
 
   private success(request: RpcRequest, result: JsonValue): RpcResponseSuccess {
