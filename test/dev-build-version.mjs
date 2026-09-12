@@ -63,8 +63,8 @@ try {
   }));
   write("src/PiDesktop.Tauri/src-tauri/tauri.conf.json", JSON.stringify({ version: "1.2.3" }));
   write("src/PiDesktop.Tauri/src-tauri/Cargo.toml", "[package]\nname = \"fixture\"\nversion = \"1.2.3\"\n");
-  execFileSync(process.execPath, [join(root, ".github", "scripts", "set-dev-version.mjs"), "AbC1234f", fixture, "--next-minor"]);
-  assert.equal(JSON.parse(readFileSync(join(desktop, "package.json"), "utf8")).version, "1.3.0-dev.abc1234");
+  execFileSync(process.execPath, [join(root, ".github", "scripts", "set-dev-version.mjs"), "AbC1234f", fixture, "--next-patch"]);
+  assert.equal(JSON.parse(readFileSync(join(desktop, "package.json"), "utf8")).version, "1.2.4-dev.abc1234");
 } finally {
   rmSync(fixture, { recursive: true, force: true });
 }

@@ -18,7 +18,7 @@ jobs:
     uses: ./.github/workflows/prepare-desktop.yml
     with:
       release: false
-      next_minor: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      next_patch: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
   verify:
     needs: prepare

@@ -6,8 +6,8 @@ if (!/^[0-9a-f]{7,40}$/i.test(commit)) {
   throw new Error(`Development build commit must be a Git SHA: ${commit}`);
 }
 
-const nextMinor = options.includes("--next-minor");
-const repositoryOption = options.find((option) => option !== "--next-minor");
+const nextPatch = options.includes("--next-patch");
+const repositoryOption = options.find((option) => option !== "--next-patch");
 const repository = path.resolve(repositoryOption ?? path.join(import.meta.dirname, "../.."));
 const desktop = path.join(repository, "src/PiDesktop.Tauri");
 const hash = commit.slice(0, 7).toLowerCase();
@@ -48,13 +48,13 @@ const baseVersionMatch = /^(\d+)\.(\d+)\.(\d+)$/.exec(baseVersion);
 if (!baseVersionMatch) {
   throw new Error(`Desktop manifests must use a stable semantic version: ${packageJson.version}`);
 }
-const developmentBaseVersion = nextMinor
-  ? `${baseVersionMatch[1]}.${Number(baseVersionMatch[2]) + 1}.0`
+const developmentBaseVersion = nextPatch
+  ? `${baseVersionMatch[1]}.${baseVersionMatch[2]}.${Number(baseVersionMatch[3]) + 1}`
   : baseVersion;
 
 const suffix = `-dev.${hash}`;
 let version;
-if (!nextMinor && packageJson.version.includes("-dev.")) {
+if (!nextPatch && packageJson.version.includes("-dev.")) {
   if (!packageJson.version.endsWith(suffix)) {
     throw new Error(`Desktop manifests already contain a different development version: ${packageJson.version}`);
   }

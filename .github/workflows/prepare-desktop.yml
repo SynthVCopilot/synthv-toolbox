@@ -6,7 +6,7 @@ on:
       release:
         required: true
         type: boolean
-      next_minor:
+      next_patch:
         required: false
         default: false
         type: boolean
@@ -57,7 +57,7 @@ jobs:
       - name: Apply development version from source commit
         id: development-version
         if: ${{ !inputs.release }}
-        run: node .github/scripts/set-dev-version.mjs "${{ github.sha }}" ${{ inputs.next_minor && '--next-minor' || '' }}
+        run: node .github/scripts/set-dev-version.mjs "${{ github.sha }}" ${{ inputs.next_patch && '--next-patch' || '' }}
 
       - name: Check Python component sources
         run: python -m py_compile src/PiDesktop.Tauri/src-tauri/components/pi-audio/pi_audio.py src/PiDesktop.Tauri/src-tauri/components/cvrs/cvrs.py src/PiDesktop.Tauri/src-tauri/components/vocal-separation/separate.py

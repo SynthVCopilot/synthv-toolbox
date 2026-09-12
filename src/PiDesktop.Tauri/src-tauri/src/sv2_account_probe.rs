@@ -3510,6 +3510,11 @@ pub(crate) fn read_machine_key() -> Result<Zeroizing<[u8; 8]>, ()> {
     derive_machine_key_from_raw_smbios(&raw)
 }
 
+#[cfg(not(windows))]
+pub(crate) fn read_machine_key() -> Result<Zeroizing<[u8; 8]>, ()> {
+    Err(())
+}
+
 #[cfg(windows)]
 struct OwnedHandle(HANDLE);
 

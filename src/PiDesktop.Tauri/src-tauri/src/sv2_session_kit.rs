@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
 use std::process::Command;
 
 use sha2::{Digest, Sha256};
@@ -97,7 +98,7 @@ impl ProductRow {
     fn parse(line: &str) -> Option<Self> {
         let fields = line
             .split(';')
-            .map(|field| field.split_once('=').map(|(key, value)| (key, value)))
+            .map(|field| field.split_once('='))
             .collect::<Option<Vec<_>>>()?;
         let value = |key| {
             fields
@@ -260,9 +261,9 @@ fn process_conflict() -> Result<bool, String> {
             return Err("cannot inspect running processes".to_string());
         }
         let list = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
-        return Ok(["synthv-studio", "synthv-toolbox"]
+        Ok(["synthv-studio", "synthv-toolbox"]
             .iter()
-            .any(|name| list.contains(name)));
+            .any(|name| list.contains(name)))
     }
     #[cfg(not(windows))]
     {
