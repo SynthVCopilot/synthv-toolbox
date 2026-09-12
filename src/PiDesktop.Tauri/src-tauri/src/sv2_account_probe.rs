@@ -3308,7 +3308,7 @@ impl Drop for OwnedHandle {
 }
 
 #[cfg(windows)]
-fn current_user_sid_hash() -> Result<u32, ()> {
+pub(crate) fn current_user_sid() -> Result<String, ()> {
     let mut raw_token: HANDLE = std::ptr::null_mut();
     if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut raw_token) } == 0
         || raw_token.is_null()
@@ -3348,10 +3348,20 @@ fn current_user_sid_hash() -> Result<u32, ()> {
         unsafe { LocalFree(sid_text.cast()) };
         return Err(());
     };
-    let bytes = unsafe { std::slice::from_raw_parts(sid_text.cast::<u8>(), length * 2) };
-    let hash = xxh32(bytes, 6);
+    let text =
+        String::from_utf16(unsafe { std::slice::from_raw_parts(sid_text, length) }).map_err(|_| ());
     unsafe { LocalFree(sid_text.cast()) };
-    Ok(hash)
+    text
+}
+
+#[cfg(windows)]
+fn current_user_sid_hash() -> Result<u32, ()> {
+    let sid = current_user_sid()?;
+    let bytes = sid
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    Ok(xxh32(&bytes, 6))
 }
 
 #[cfg(windows)]

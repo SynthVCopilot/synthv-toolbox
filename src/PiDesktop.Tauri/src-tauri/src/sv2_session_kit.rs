@@ -143,6 +143,14 @@ fn hash(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
+fn verify_hash(bytes: &[u8], expected: &str, label: &str) -> Result<(), String> {
+    if hash(bytes) == expected {
+        Ok(())
+    } else {
+        Err(format!("{label} hash guard did not match"))
+    }
+}
+
 fn read_ciphertext(path: &Path) -> Result<Zeroizing<Vec<u8>>, String> {
     let bytes =
         fs::read(path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
@@ -189,17 +197,17 @@ fn require_new_path(path: &Path) -> Result<(), String> {
 fn restrict_permissions(path: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
-        let user = std::env::var("USERNAME")
-            .map_err(|_| "cannot determine current user for output ACL".to_string())?;
-        let grant = format!("{user}:(R,W)");
-        let status = Command::new("icacls")
+        let sid = crate::sv2_account_probe::current_user_sid()
+            .map_err(|_| "cannot determine process user SID for output ACL".to_string())?;
+        let grant = format!("*{sid}:(R,W)");
+        let output = Command::new("icacls")
             .arg(path)
             .arg("/inheritance:r")
             .arg("/grant:r")
             .arg(grant)
-            .status()
+            .output()
             .map_err(|error| format!("cannot set output ACL: {error}"))?;
-        if !status.success() {
+        if !output.status.success() {
             return Err("cannot set output ACL".to_string());
         }
     }
@@ -214,6 +222,7 @@ fn restrict_permissions(path: &Path) -> Result<(), String> {
 
 fn write_new_restricted(path: &Path, bytes: &[u8]) -> Result<(), String> {
     require_new_path(path)?;
+    let mut created = false;
     let result = (|| {
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
@@ -225,6 +234,7 @@ fn write_new_restricted(path: &Path, bytes: &[u8]) -> Result<(), String> {
         let mut file = options
             .open(path)
             .map_err(|error| format!("cannot create {}: {error}", path.display()))?;
+        created = true;
         restrict_permissions(path)?;
         file.write_all(bytes)
             .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
@@ -233,7 +243,7 @@ fn write_new_restricted(path: &Path, bytes: &[u8]) -> Result<(), String> {
         drop(file);
         Ok(())
     })();
-    if result.is_err() {
+    if result.is_err() && created {
         let _ = fs::remove_file(path);
     }
     result
@@ -287,6 +297,43 @@ fn create_verified_backup(
     Ok(backup)
 }
 
+fn replace_with_recovery(
+    destination: &Path,
+    source: &[u8],
+    original: &[u8],
+    source_hash: &str,
+    destination_hash: &str,
+) -> Result<(), String> {
+    verify_hash(original, destination_hash, "recovery image")?;
+    let temporary = destination.with_extension(format!("session-kit-{}.tmp", std::process::id()));
+    write_new_restricted(&temporary, source)?;
+    fs::rename(&temporary, destination)
+        .map_err(|error| format!("atomic replace failed; destination preserved: {error}"))?;
+    if read_ciphertext(destination)
+        .map(|bytes| hash(&bytes) == source_hash)
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+    let restore =
+        destination.with_extension(format!("session-kit-restore-{}.tmp", std::process::id()));
+    write_new_restricted(&restore, original)?;
+    fs::rename(&restore, destination).map_err(|error| {
+        format!("replacement verification failed and backup restoration failed: {error}")
+    })?;
+    if read_ciphertext(destination)
+        .map(|bytes| hash(&bytes) == destination_hash)
+        .unwrap_or(false)
+    {
+        Err("replacement verification failed; verified backup was restored".to_string())
+    } else {
+        Err(
+            "replacement verification failed and backup restoration verification failed"
+                .to_string(),
+        )
+    }
+}
+
 fn apply_verified(
     source: &Path,
     destination: &Path,
@@ -294,55 +341,25 @@ fn apply_verified(
     destination_hash: &str,
 ) -> Result<PathBuf, String> {
     let source_bytes = read_ciphertext(source)?;
-    if hash(&source_bytes) != source_hash {
-        return Err("source hash guard did not match".to_string());
-    }
+    verify_hash(&source_bytes, source_hash, "source")?;
     decode_bytes(source_bytes.clone())?;
     if process_conflict()? {
         return Err("SV2 or Toolbox appears to be running; close it before apply".to_string());
     }
     let destination_bytes = read_ciphertext(destination)?;
-    if hash(&destination_bytes) != destination_hash {
-        return Err("destination hash guard did not match".to_string());
-    }
+    verify_hash(&destination_bytes, destination_hash, "destination")?;
     decode_bytes(destination_bytes.clone())?;
     let backup = create_verified_backup(destination, &destination_bytes, destination_hash)?;
     if hash(&read_ciphertext(destination)?) != destination_hash {
         return Err("destination changed after preview; refusing replace".to_string());
     }
-    let temporary = destination.with_extension(format!("session-kit-{}.tmp", std::process::id()));
-    write_new_restricted(&temporary, &source_bytes)?;
-    if let Err(error) = fs::rename(&temporary, destination) {
-        let _ = fs::remove_file(&temporary);
-        return Err(format!(
-            "atomic replace failed; destination preserved: {error}"
-        ));
-    }
-    if hash(&read_ciphertext(destination)?) != source_hash {
-        let restore =
-            destination.with_extension(format!("session-kit-restore-{}.tmp", std::process::id()));
-        let backup_bytes = read_ciphertext(&backup)?;
-        if hash(&backup_bytes) != destination_hash || decode_bytes(backup_bytes.clone()).is_err() {
-            return Err(
-                "replacement verification failed and verified backup is no longer intact"
-                    .to_string(),
-            );
-        }
-        write_new_restricted(&restore, &backup_bytes)?;
-        if let Err(error) = fs::rename(&restore, destination) {
-            let _ = fs::remove_file(&restore);
-            return Err(format!(
-                "replacement verification failed and backup restoration failed: {error}"
-            ));
-        }
-        if hash(&read_ciphertext(destination)?) != destination_hash {
-            return Err(
-                "replacement verification failed and backup restoration verification failed"
-                    .to_string(),
-            );
-        }
-        return Err("replacement verification failed; verified backup was restored".to_string());
-    }
+    replace_with_recovery(
+        destination,
+        &source_bytes,
+        &destination_bytes,
+        source_hash,
+        destination_hash,
+    )?;
     Ok(backup)
 }
 
@@ -370,12 +387,16 @@ where
             );
         }
         "compare" if args.len() == 3 => {
-            let left = decode_path(Path::new(&args[1]))?;
-            let right = decode_path(Path::new(&args[2]))?;
+            let left_bytes = read_ciphertext(Path::new(&args[1]))?;
+            let right_bytes = read_ciphertext(Path::new(&args[2]))?;
+            let left_hash = hash(&left_bytes);
+            let right_hash = hash(&right_bytes);
+            let left = decode_bytes(left_bytes)?;
+            let right = decode_bytes(right_bytes)?;
             println!(
-                "left_sha256={}\nright_sha256={}\naccess_changed={}\nrefresh_changed={}\ndevice_changed={}\nuser_changed={}\nproducts_added={}\nproducts_removed={}",
-                hash(&read_ciphertext(Path::new(&args[1]))?),
-                hash(&read_ciphertext(Path::new(&args[2]))?),
+                "left_sha256={}\nright_sha256={}\naccess_changed={}\nrefresh_changed={}\ndevice_changed={}\nuser_id_field_changed={}\nproducts_added={}\nproducts_removed={}",
+                left_hash,
+                right_hash,
                 left.header(0) != right.header(0), left.header(1) != right.header(1),
                 left.header(4) != right.header(4), left.header(5) != right.header(5),
                 right.products.iter().filter(|product| !left.products.contains(product)).count(),
