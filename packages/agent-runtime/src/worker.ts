@@ -9,6 +9,7 @@ import {
   type HostCapabilityTransport,
   type LoadedPluginBackend,
   type PluginDiscovery,
+  type PluginInvocationResult,
 } from "./index.js";
 import {
   PROTOCOL_VERSION,
@@ -79,12 +80,23 @@ class FilePluginDiscovery implements PluginDiscovery {
     await Promise.all(this.loaded.map(async (plugin) => { await plugin.deactivate(); }));
     this.loaded = [];
   }
+
+  async invoke(pluginId: string, method: string, params: JsonValue): Promise<PluginInvocationResult> {
+    const plugin = this.loaded.find(({ manifest }) => manifest.id === pluginId);
+    if (!plugin) return { kind: "not-found" };
+    if (!plugin.invoke) return { kind: "unsupported" };
+    return { kind: "handled", result: await plugin.invoke(method, params) };
+  }
+
+  extensionPaths(): readonly string[] {
+    return this.loaded.flatMap((plugin) => plugin.piExtensionPath ? [plugin.piExtensionPath] : []);
+  }
 }
 
 export async function runStdioWorker(): Promise<void> {
   const hostTransport = new StdioHostTransport((line) => stdout.write(line));
   const pluginDiscovery = new FilePluginDiscovery(hostTransport);
-  const worker = new AgentRuntimeWorker(createPiSessionFactory(), hostTransport, pluginDiscovery);
+  const worker = new AgentRuntimeWorker(createPiSessionFactory(() => pluginDiscovery.extensionPaths()), hostTransport, pluginDiscovery);
   const lines = createInterface({ input: stdin, crlfDelay: Infinity });
   let queue = Promise.resolve();
   let shuttingDown = false;

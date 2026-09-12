@@ -63,11 +63,16 @@ test("worker forwards explicit host-capability calls and plugin backends receive
     backend: { entry: "backend/index.js" },
     permissions: ["project.read"],
   };
-  const loaded = await runtime.loadPluginBackends("file:///plugins", [manifest], host, async () => ({
+  const loaded = await runtime.loadPluginBackends(pathToFileURL(join(root, "test", ".tmp", "virtual-plugin-root")).href, [manifest], host, async () => ({
+    default: () => {},
     activate: async (context) => {
       activated = true;
       pluginContext = context;
       await context.invokeHost("project.read", "project", "read", { id: "project-1" });
+    },
+    invoke: async (context, method, params) => {
+      await context.invokeHost("project.read", "project", "read", { id: "project-1" });
+      return { method, params };
     },
   }));
   assert.equal(activated, true);
@@ -77,6 +82,54 @@ test("worker forwards explicit host-capability calls and plugin backends receive
     () => pluginContext.invokeHost("project.write", "project", "write", {}),
     /has not declared/,
   );
+
+  assert.equal(loaded[0].piExtensionPath, loaded[0].entryPath);
+  const pluginDiscovery = {
+    discover: async () => [manifest],
+    extensionPaths: () => [loaded[0].piExtensionPath],
+    invoke: async (pluginId, method, params) => {
+      const plugin = loaded.find(({ manifest: item }) => item.id === pluginId);
+      if (!plugin) return { kind: "not-found" };
+      if (!plugin.invoke) return { kind: "unsupported" };
+      return { kind: "handled", result: await plugin.invoke(method, params) };
+    },
+  };
+  const pluginWorker = new runtime.AgentRuntimeWorker({ create: async () => ({ prompt: async () => {}, dispose: () => {} }) }, host, pluginDiscovery);
+  await pluginWorker.handleJsonl(request("plugin-hello", "host.hello", { hostId: "host", protocol: { min: "1.0", max: "1.0" }, capabilities: [] }));
+  const invoked = JSON.parse((await pluginWorker.handleJsonl(request("plugin-invoke", "runtime.plugin.invoke", {
+    pluginId: manifest.id,
+    method: "run",
+    params: { strength: 5 },
+  })))[0]);
+  assert.deepEqual(invoked.result, { method: "run", params: { strength: 5 } });
+  const unknown = JSON.parse((await pluginWorker.handleJsonl(request("plugin-missing", "runtime.plugin.invoke", {
+    pluginId: "com.example.missing",
+    method: "run",
+    params: {},
+  })))[0]);
+  assert.equal(unknown.error.code, "plugins.not-found");
+});
+
+test("Pi session factory injects discovered default extension paths into the resource loader", async () => {
+  let loaderOptions;
+  let createOptions;
+  const session = { prompt: async () => {}, dispose: () => {} };
+  const factory = runtime.createPiSessionFactory(
+    () => ["C:/plugins/com.example/backend/index.js"],
+    async () => ({
+      getAgentDir: () => "C:/agent",
+      DefaultResourceLoader: class {
+        constructor(options) { loaderOptions = options; }
+        async reload() {}
+      },
+      createAgentSession: async (options) => { createOptions = options; return { session }; },
+    }),
+  );
+  const created = await factory.create({ sessionId: "s1", cwd: "C:/project" });
+  assert.equal(typeof created.prompt, "function");
+  assert.deepEqual(loaderOptions.additionalExtensionPaths, ["C:/plugins/com.example/backend/index.js"]);
+  assert.equal(createOptions.resourceLoader instanceof Object, true);
+  assert.equal(createOptions.noTools, "all");
 });
 
 test("model auth uses adapter request contracts and reports missing stream support", async () => {
