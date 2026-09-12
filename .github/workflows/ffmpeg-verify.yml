@@ -129,9 +129,25 @@ jobs:
           bundle_path="$target_root/${{ matrix.target }}/release/bundle"
           case "$bundle_path" in "$target_root"/*) ;; *) exit 1 ;; esac
           rm -rf "$bundle_path"
-      - name: Build session kit sidecar
+      - name: Build Windows session kit sidecar
+        if: runner.os == 'Windows'
         working-directory: src/PiDesktop.Tauri
         run: cargo build --manifest-path src-tauri/Cargo.toml --release --target ${{ matrix.target }} --bin sv2-session-kit
+      - name: Build macOS universal session kit sidecar
+        if: runner.os == 'macOS'
+        working-directory: src/PiDesktop.Tauri
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --manifest-path src-tauri/Cargo.toml --release --target "$target" --bin sv2-session-kit
+          done
+          output="src-tauri/target/universal-apple-darwin/release/sv2-session-kit"
+          mkdir -p "$(dirname "$output")"
+          lipo -create \
+            "src-tauri/target/aarch64-apple-darwin/release/sv2-session-kit" \
+            "src-tauri/target/x86_64-apple-darwin/release/sv2-session-kit" \
+            -output "$output"
       - name: Build desktop bundle from prepared frontend
         working-directory: src/PiDesktop.Tauri
         run: npm run tauri build -- --config ../../.github/tauri-ci.conf.json --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
