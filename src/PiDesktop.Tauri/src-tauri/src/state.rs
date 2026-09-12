@@ -5,6 +5,7 @@ use tokio::sync::RwLock;
 
 use crate::agent::ChatMessage;
 use crate::agent_files::FileApprovalManager;
+use crate::agent_runtime::AgentRuntime;
 use crate::audio_prep::AudioPreparationService;
 use crate::config::ToolboxSettings;
 use crate::credential_balancer::CredentialBalancer;
@@ -27,6 +28,8 @@ pub struct AgentSession {
 pub struct AppState {
     pub settings: Arc<RwLock<ToolboxSettings>>,
     pub agent: Arc<Mutex<AgentSession>>,
+    #[allow(dead_code)]
+    pub agent_runtime: Arc<AgentRuntime>,
     pub file_approvals: Arc<FileApprovalManager>,
     pub mcp: Arc<McpManager>,
     pub resource_dir: PathBuf,
@@ -63,6 +66,7 @@ impl AppState {
         Self {
             settings: Arc::new(RwLock::new(settings)),
             agent: Arc::new(Mutex::new(AgentSession::default())),
+            agent_runtime: Arc::new(AgentRuntime::new()),
             file_approvals: Arc::new(FileApprovalManager::default()),
             mcp,
             resource_dir,
