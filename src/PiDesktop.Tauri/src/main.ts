@@ -448,7 +448,7 @@ if (!lyricSavedSnapshot) lyricSavedSnapshot = lyricWorkspaceSnapshot();
 function pageMeta(target: Page): { title: string; subtitle: string } {
   if (isPluginPageId(target)) {
     const pluginPage = pluginRegistry.page(target);
-    if (pluginPage) return { title: pluginPage.title, subtitle: pluginPage.subtitle ?? "" };
+    if (pluginPage) return { title: pluginPage.title, subtitle: "" };
   }
   return { title: t(`pages.${target}.0`), subtitle: t(`pages.${target}.1`) };
 }
