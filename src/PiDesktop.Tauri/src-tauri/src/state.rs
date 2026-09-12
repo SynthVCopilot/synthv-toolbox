@@ -28,7 +28,6 @@ pub struct AgentSession {
 pub struct AppState {
     pub settings: Arc<RwLock<ToolboxSettings>>,
     pub agent: Arc<Mutex<AgentSession>>,
-    #[allow(dead_code)]
     pub agent_runtime: Arc<AgentRuntime>,
     pub file_approvals: Arc<FileApprovalManager>,
     pub mcp: Arc<McpManager>,

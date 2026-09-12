@@ -131,7 +131,7 @@ pub struct RpcResponse {
 }
 
 impl RpcResponse {
-    fn success(id: impl Into<String>, result: Value) -> Self {
+    pub fn success(id: impl Into<String>, result: Value) -> Self {
         Self {
             id: id.into(),
             protocol_version: PROTOCOL_VERSION.to_string(),
@@ -534,24 +534,5 @@ async fn dispatch_capability(request: RpcRequest, inner: Arc<Mutex<RuntimeInner>
         .is_err()
     {
         eprintln!("could not send Agent Runtime capability response");
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn protocol_messages_match_the_shared_wire_schema() {
-        let message = RuntimeMessage::Response(RpcResponse::success(
-            "request-1",
-            serde_json::json!({ "value": 1 }),
-        ));
-        assert_eq!(
-            serde_json::to_value(message).unwrap(),
-            serde_json::json!({
-                "kind": "response", "id": "request-1", "protocolVersion": "1.0", "ok": true, "result": { "value": 1 }
-            })
-        );
     }
 }

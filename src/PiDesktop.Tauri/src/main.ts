@@ -17,7 +17,16 @@ import { icon } from "./icons";
 import { renderAboutPage } from "./about";
 import { guiFeatureCatalog, toolGroups, type FeatureCatalogItem, type ToolGroup } from "./featureCatalog";
 import { mountShell, type ShellController } from "./vue/shell";
-import { dispatchPluginAction, isPluginPageId, pluginRegistry, type HostPageId, type PluginPageId } from "./vue/pluginRegistry";
+import {
+  dispatchPluginAction,
+  dispatchPluginFrameResponse,
+  isPluginPageId,
+  pluginRegistry,
+  type HostPageId,
+  type PluginActionInvocation,
+  type PluginFrameRequest,
+  type PluginPageId,
+} from "./vue/pluginRegistry";
 import type { IconName } from "./icons";
 import { formatPercentage } from "./percentage";
 import { locale, setLocale, t } from "./i18n";
@@ -268,6 +277,33 @@ let shellController: ShellController | undefined;
 let lastWiredMarkup = "";
 
 pluginRegistry.subscribe(() => render());
+window.addEventListener("plugin-ui:action", (event) => {
+  const action = (event as CustomEvent<PluginActionInvocation>).detail;
+  void api.invokeAgentPlugin(action.pluginId, `action.${action.actionId}`, {
+    targetPage: action.targetPage,
+  }).catch((reason) => {
+    error = formatError(reason);
+    render();
+  });
+});
+window.addEventListener("plugin-ui:request", (event) => {
+  const request = (event as CustomEvent<PluginFrameRequest>).detail;
+  void api.invokeAgentPlugin(request.pluginId, request.method, request.params)
+    .then((result) => dispatchPluginFrameResponse({
+      pluginId: request.pluginId,
+      pageId: request.pageId,
+      id: request.id,
+      ok: true,
+      result,
+    }))
+    .catch((reason) => dispatchPluginFrameResponse({
+      pluginId: request.pluginId,
+      pageId: request.pageId,
+      id: request.id,
+      ok: false,
+      error: { code: "plugin_request_failed", message: formatError(reason) },
+    }));
+});
 
 
 // Keep navigation available while a cancellable FFmpeg job runs.
@@ -756,7 +792,8 @@ async function run(task: () => Promise<void>): Promise<void> {
 
 async function refresh(): Promise<void> {
   app = await api.bootstrap();
-  [lyricProjects, synthvProcesses, synthvShortcutProfile, bridgeSession, mediaTasks, tuningProfiles, httpApiStatus] = await Promise.all([
+  const [plugins, nextLyricProjects, nextProcesses, nextShortcutProfile, nextBridgeSession, nextMediaTasks, nextTuningProfiles, nextHttpApiStatus] = await Promise.all([
+    api.discoverAgentPlugins().catch(() => []),
     api.listLyricProjects(),
     api.listSynthvProcesses(),
     api.synthvShortcutProfile(),
@@ -765,6 +802,15 @@ async function refresh(): Promise<void> {
     api.listTuningProfiles(),
     api.getHttpApiStatus(),
   ]);
+  for (const record of pluginRegistry.recordsList()) pluginRegistry.unregister(record.manifest.id);
+  for (const manifest of plugins) pluginRegistry.register(manifest, "active");
+  lyricProjects = nextLyricProjects;
+  synthvProcesses = nextProcesses;
+  synthvShortcutProfile = nextShortcutProfile;
+  bridgeSession = nextBridgeSession;
+  mediaTasks = nextMediaTasks;
+  tuningProfiles = nextTuningProfiles;
+  httpApiStatus = nextHttpApiStatus;
   if (page === "settings") await refreshAutostartStatus();
 }
 

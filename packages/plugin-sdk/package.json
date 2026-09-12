@@ -16,6 +16,9 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit"
   },
+  "dependencies": {
+    "@synthv-toolbox/runtime-protocol": "file:../runtime-protocol"
+  },
   "devDependencies": {
     "typescript": "7.0.2"
   }

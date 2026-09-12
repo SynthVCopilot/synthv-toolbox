@@ -1,44 +1,16 @@
-export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
-export type ApiVersion = `${number}.${number}`;
+import type { JsonValue, PluginManifest } from "@synthv-toolbox/runtime-protocol";
 
-export interface VersionRange {
-  min: ApiVersion;
-  max: ApiVersion;
-}
-
-export type PluginPermission = "agent.tools" | "host.read" | "host.execute" | "project.read" | "project.write";
-export type PluginActionLocation = "home.toolbar" | "project.toolbar" | "project.context" | "conversation.toolbar";
-
-export interface PluginBackend {
-  entry: string;
-}
-
-export interface PluginPageContribution {
-  id: string;
-  title: string;
-  entry: string;
-  icon?: string;
-}
-
-export interface PluginActionContribution {
-  id: string;
-  location: PluginActionLocation;
-  title: string;
-  icon?: string;
-  whenCapability?: string;
-}
-
-export interface PluginManifest {
-  schemaVersion: 1;
-  id: string;
-  name: string;
-  version: string;
-  hostApi: VersionRange;
-  backend?: PluginBackend;
-  pages?: PluginPageContribution[];
-  actions?: PluginActionContribution[];
-  permissions: PluginPermission[];
-}
+export type {
+  ApiVersion,
+  JsonValue,
+  PluginActionContribution,
+  PluginActionLocation,
+  PluginBackend,
+  PluginManifest,
+  PluginPageContribution,
+  PluginPermission,
+  VersionRange,
+} from "@synthv-toolbox/runtime-protocol";
 
 export function definePlugin<const T extends PluginManifest>(manifest: T): T {
   return manifest;

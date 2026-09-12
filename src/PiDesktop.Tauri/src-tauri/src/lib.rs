@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod agent_files;
 pub mod agent_runtime;
+mod agent_runtime_commands;
 mod ai_usage;
 mod api_keys;
 mod audio_capture;
@@ -30,6 +31,7 @@ mod media_import;
 mod media_tasks;
 mod oauth;
 pub mod opencode_catalog;
+pub mod plugin_assets;
 mod process_tree;
 pub mod project_backups;
 #[cfg(test)]
@@ -106,6 +108,9 @@ pub fn run() {
                 .state::<AppState>()
                 .audio_preparation
                 .serve_audio_artifact_request(&request)
+        })
+        .register_uri_scheme_protocol("toolbox-plugin", |_context, request| {
+            crate::plugin_assets::serve(&request)
         })
         .setup(move |app| {
             let resource_dir = app
@@ -199,6 +204,11 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
+            agent_runtime_commands::get_agent_runtime_status,
+            agent_runtime_commands::start_agent_runtime,
+            agent_runtime_commands::stop_agent_runtime,
+            agent_runtime_commands::discover_agent_plugins,
+            agent_runtime_commands::invoke_agent_plugin,
             commands::set_autostart,
             commands::get_autostart,
             commands::complete_onboarding,

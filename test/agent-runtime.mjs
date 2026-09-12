@@ -50,7 +50,7 @@ test("worker forwards explicit host-capability calls and plugin backends receive
   const calls = [];
   const host = { request: async (method, params) => { calls.push({ method, params }); return { succeeded: true }; } };
   const worker = new runtime.AgentRuntimeWorker({ create: async () => ({ prompt: async () => {}, dispose: () => {} }) }, host);
-  assert.deepEqual(await worker.invokeHost("project", "read", { id: "project-1" }), { succeeded: true });
+  assert.deepEqual(await worker.invokeHost("host.read", "project", "read", { id: "project-1" }), { succeeded: true });
 
   let activated = false;
   let pluginContext;
@@ -152,7 +152,7 @@ test("model auth uses adapter request contracts and reports missing stream suppo
   assert.equal(stream.kind, "unsupported");
 });
 
-test("stdio worker emits JSONL responses only and discovers compatible plugin backends", async () => {
+test("stdio worker emits JSONL responses and discovers backend and UI-only plugins", async () => {
   const pluginRoot = join(root, "test", ".tmp", "agent-runtime-cli-plugins");
   rmSync(pluginRoot, { recursive: true, force: true });
   mkdirSync(join(pluginRoot, "com.example.plugin", "backend"), { recursive: true });
@@ -170,6 +170,16 @@ test("stdio worker emits JSONL responses only and discovers compatible plugin ba
     join(pluginRoot, "com.example.plugin", "backend", "index.js"),
     "export async function activate(context) { await context.invokeHost('project.read', 'project', 'read', { id: 'project-1' }); }\n",
   );
+  mkdirSync(join(pluginRoot, "com.example.ui"), { recursive: true });
+  writeFileSync(join(pluginRoot, "com.example.ui", "manifest.json"), JSON.stringify({
+    schemaVersion: 1,
+    id: "com.example.ui",
+    name: "Example UI plugin",
+    version: "1.0.0",
+    hostApi: { min: "1.0", max: "1.0" },
+    pages: [{ id: "main", title: "Example", entry: "ui/index.html" }],
+    permissions: [],
+  }));
 
   const workerPath = join(packageRoot, "dist", "worker.js");
   const child = spawn(process.execPath, [workerPath], { stdio: ["pipe", "pipe", "pipe"] });
@@ -204,7 +214,10 @@ test("stdio worker emits JSONL responses only and discovers compatible plugin ba
   await waitFor(() => messages.some((message) => message.kind === "request" && message.method === "host.capability.invoke")
     && messages.some((message) => message.kind === "response" && message.id === "plugins"));
   assert.equal(messages.find((message) => message.kind === "response" && message.id === "hello").ok, true);
-  assert.deepEqual(messages.find((message) => message.kind === "response" && message.id === "plugins").result.plugins.map((plugin) => plugin.id), ["com.example.plugin"]);
+  assert.deepEqual(
+    messages.find((message) => message.kind === "response" && message.id === "plugins").result.plugins.map((plugin) => plugin.id).sort(),
+    ["com.example.plugin", "com.example.ui"],
+  );
 
   child.kill("SIGTERM");
   await new Promise((resolve, reject) => {

@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use serde_json::json;
 use synthv_toolbox_lib::agent_runtime::{
-    AgentRuntime, HostHello, RuntimeCommand, VersionRange, PROTOCOL_VERSION,
+    AgentRuntime, HostHello, RpcResponse, RuntimeCommand, RuntimeMessage, VersionRange,
+    PROTOCOL_VERSION,
 };
 
 fn node_command(script: &str) -> RuntimeCommand {
@@ -20,6 +21,18 @@ fn host_hello() -> HostHello {
         protocol: VersionRange::exact(PROTOCOL_VERSION),
         capabilities: Vec::new(),
     }
+}
+
+#[test]
+fn protocol_messages_match_the_shared_wire_schema() {
+    let message =
+        RuntimeMessage::Response(RpcResponse::success("request-1", json!({ "value": 1 })));
+    assert_eq!(
+        serde_json::to_value(message).unwrap(),
+        json!({
+            "kind": "response", "id": "request-1", "protocolVersion": "1.0", "ok": true, "result": { "value": 1 }
+        })
+    );
 }
 
 #[tokio::test]

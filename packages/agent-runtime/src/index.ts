@@ -176,9 +176,9 @@ export class AgentRuntimeWorker {
     return [encodeJsonl(await this.handleRequest(message))];
   }
 
-  async invokeHost(capability: string, operation: string, params: JsonValue): Promise<JsonValue> {
+  async invokeHost(permission: PluginPermission, capability: string, operation: string, params: JsonValue): Promise<JsonValue> {
     if (!this.hostCapabilities) throw new Error("Host capability transport is unavailable.");
-    return this.hostCapabilities.request("host.capability.invoke", { capability, operation, params });
+    return this.hostCapabilities.request("host.capability.invoke", { permission, capability, operation, params });
   }
 
   async dispose(): Promise<void> {

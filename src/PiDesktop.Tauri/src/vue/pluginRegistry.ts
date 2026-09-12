@@ -1,42 +1,14 @@
 import type { IconName } from "../icons";
+import type {
+  PluginActionLocation,
+  PluginManifest,
+} from "@synthv-toolbox/runtime-protocol";
+
+export type { PluginManifest } from "@synthv-toolbox/runtime-protocol";
 
 export type HostPageId = "home" | "accounts" | "import" | "convert" | "analysis" | "quality" | "lyrics" | "history" | "copilot" | "ai" | "components" | "bridge" | "connections" | "settings" | "about";
 export type PluginPageId = `plugin:${string}`;
 export type PluginLoadStatus = "discovered" | "loading" | "active" | "disabled" | "failed";
-export type PluginActionLocation = "home.toolbar" | "project.toolbar" | "project.context" | "conversation.toolbar";
-export type PluginPermission = "agent.tools" | "host.read" | "host.execute" | "project.read" | "project.write";
-
-export interface VersionRange {
-  min: `${number}.${number}`;
-  max: `${number}.${number}`;
-}
-
-export interface PluginPageContribution {
-  id: string;
-  title: string;
-  entry: string;
-  icon?: string;
-}
-
-export interface PluginActionContribution {
-  id: string;
-  location: PluginActionLocation;
-  title: string;
-  icon?: string;
-  whenCapability?: string;
-}
-
-export interface PluginManifest {
-  schemaVersion: 1;
-  id: string;
-  name: string;
-  version: string;
-  hostApi: VersionRange;
-  backend?: { entry: string };
-  pages?: PluginPageContribution[];
-  actions?: PluginActionContribution[];
-  permissions: PluginPermission[];
-}
 
 export interface PluginRecord {
   manifest: PluginManifest;
@@ -114,7 +86,7 @@ function pageId(pluginId: string, contributionId: string): PluginPageId {
 }
 
 function pageSource(pluginId: string, entry: string): string {
-  return `plugin:${pluginId}/${entry}`;
+  return `toolbox-plugin://localhost/${pluginId}/${entry}`;
 }
 
 function actionTarget(location: PluginActionLocation): HostPageId {

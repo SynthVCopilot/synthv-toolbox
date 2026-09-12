@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: data:; media-src 'self' toolbox-audio: http://toolbox-audio.localhost; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; img-src 'self' asset: data:; media-src 'self' toolbox-audio: http://toolbox-audio.localhost; frame-src toolbox-plugin: http://toolbox-plugin.localhost; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost"
     }
   },
   "bundle": {
@@ -46,6 +46,9 @@
     },
     "resources": {
       "../../../LICENSE": "LICENSE",
+      "../../../packages/agent-runtime/dist": "agent-runtime",
+      "../../../packages/agent-runtime/node_modules": "agent-runtime/node_modules",
+      "../../../packages/agent-runtime/package.json": "agent-runtime/package.json",
       "components/synthv-agent-bridge/dist": "components/synthv-agent-bridge/dist",
       "components/synthv-agent-bridge/scripts": "components/synthv-agent-bridge/scripts",
       "components/synthv-agent-bridge/synthv": "components/synthv-agent-bridge/synthv",

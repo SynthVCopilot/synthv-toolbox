@@ -73,7 +73,7 @@ class FilePluginDiscovery implements PluginDiscovery {
       .map(validatePluginManifest)
       .filter((manifest): manifest is PluginManifest => manifest !== undefined && isHostApiCompatible(manifest));
     this.loaded = await loadPluginBackends(pathToFileURL(root).href, accepted, this.host);
-    return this.loaded.map(({ manifest }) => manifest);
+    return accepted;
   }
 
   async dispose(): Promise<void> {
