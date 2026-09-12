@@ -77,19 +77,22 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Lint Rust core
         run: cargo clippy --manifest-path src/PiDesktop.Tauri/src-tauri/Cargo.toml --lib --bins -- -D warnings
-      - name: Download and smoke-test fixed BtbN LGPL FFmpeg
+      - name: Download and smoke-test current BtbN LGPL FFmpeg
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          FFMPEG_URL: https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-29-13-12/ffmpeg-n8.1.2-50-g1a748fe2cd-win64-lgpl-8.1.zip
-          FFMPEG_SHA256: e1cafe80e9fb3e4e4024923a2ed2544bc3a0545af09b6a7861a7193210988c63
+          FFMPEG_RELEASE_API: https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest
         run: |
           $smokeRoot = Join-Path $env:RUNNER_TEMP "synthv-toolbox-ffmpeg-smoke"
           New-Item -ItemType Directory -Force -Path $smokeRoot | Out-Null
           $archive = Join-Path $smokeRoot "ffmpeg.zip"
-          Invoke-WebRequest -Uri $env:FFMPEG_URL -OutFile $archive
+          $release = Invoke-RestMethod -Uri $env:FFMPEG_RELEASE_API -Headers @{ Accept = "application/vnd.github+json" }
+          $asset = @($release.assets | Where-Object { $_.name -eq "ffmpeg-n8.1-latest-win64-lgpl-8.1.zip" }) | Select-Object -First 1
+          if ($null -eq $asset -or $asset.digest -notmatch "^sha256:[0-9a-fA-F]{64}$") { throw "BtbN latest release did not expose a SHA-256 digest for the expected LGPL asset" }
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $archive
           $actual = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLowerInvariant()
-          if ($actual -ne $env:FFMPEG_SHA256) { throw "FFmpeg SHA-256 mismatch: expected $env:FFMPEG_SHA256, got $actual" }
+          $expected = $asset.digest.Substring("sha256:".Length).ToLowerInvariant()
+          if ($actual -ne $expected) { throw "FFmpeg SHA-256 mismatch: expected $expected, got $actual" }
           Expand-Archive -Path $archive -DestinationPath $smokeRoot -Force
           $ffmpeg = Get-ChildItem -Path $smokeRoot -Recurse -Filter ffmpeg.exe | Select-Object -First 1
           $ffprobe = Get-ChildItem -Path $smokeRoot -Recurse -Filter ffprobe.exe | Select-Object -First 1
