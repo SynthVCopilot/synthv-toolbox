@@ -1,14 +1,80 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 use uuid::Uuid;
+
+pub const PROTOCOL_VERSION: &str = "1.0";
+pub const HOST_HELLO_METHOD: &str = "host.hello";
+pub const RUNTIME_HELLO_METHOD: &str = "runtime.hello";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VersionRange {
+    pub min: String,
+    pub max: String,
+}
+
+impl VersionRange {
+    pub fn exact(version: impl Into<String>) -> Self {
+        let version = version.into();
+        Self {
+            min: version.clone(),
+            max: version,
+        }
+    }
+
+    fn includes(&self, version: &str) -> bool {
+        let (Some(min), Some(version), Some(max)) = (
+            parse_api_version(&self.min),
+            parse_api_version(version),
+            parse_api_version(&self.max),
+        ) else {
+            return false;
+        };
+        min <= version && version <= max
+    }
+}
+
+fn parse_api_version(value: &str) -> Option<(u64, u64)> {
+    let mut segments = value.split('.');
+    let major = segments.next()?.parse().ok()?;
+    let minor = segments.next()?.parse().ok()?;
+    if segments.next().is_some() {
+        return None;
+    }
+    Some((major, minor))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapabilityDescriptor {
+    pub id: String,
+    pub version: String,
+    pub operations: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostHello {
+    #[serde(rename = "hostId")]
+    pub host_id: String,
+    pub protocol: VersionRange,
+    pub capabilities: Vec<CapabilityDescriptor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeHello {
+    #[serde(rename = "runtimeId")]
+    pub runtime_id: String,
+    pub protocol: VersionRange,
+    pub capabilities: Vec<CapabilityDescriptor>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeError {
@@ -16,7 +82,11 @@ pub enum RuntimeError {
     NotRunning,
     Io(String),
     Protocol(String),
-    Remote { code: String, message: String },
+    Remote {
+        code: String,
+        message: String,
+        data: Option<Value>,
+    },
     Closed,
 }
 
@@ -29,7 +99,7 @@ impl Display for RuntimeError {
             Self::Protocol(message) => {
                 write!(formatter, "Agent Runtime protocol failed: {message}")
             }
-            Self::Remote { code, message } => {
+            Self::Remote { code, message, .. } => {
                 write!(formatter, "Agent Runtime returned {code}: {message}")
             }
             Self::Closed => write!(formatter, "Agent Runtime closed before replying."),
@@ -42,40 +112,72 @@ impl std::error::Error for RuntimeError {}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RpcRequest {
     pub id: String,
+    #[serde(rename = "protocolVersion")]
+    pub protocol_version: String,
     pub method: String,
-    #[serde(default)]
     pub params: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RpcResponse {
     pub id: String,
+    #[serde(rename = "protocolVersion")]
+    pub protocol_version: String,
+    pub ok: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<RpcError>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+impl RpcResponse {
+    fn success(id: impl Into<String>, result: Value) -> Self {
+        Self {
+            id: id.into(),
+            protocol_version: PROTOCOL_VERSION.to_string(),
+            ok: true,
+            result: Some(result),
+            error: None,
+        }
+    }
+
+    fn failure(id: impl Into<String>, error: RpcError) -> Self {
+        Self {
+            id: id.into(),
+            protocol_version: PROTOCOL_VERSION.to_string(),
+            ok: false,
+            result: None,
+            error: Some(error),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RpcError {
     pub code: String,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RpcNotification {
-    pub method: String,
-    #[serde(default)]
+    #[serde(rename = "protocolVersion")]
+    pub protocol_version: String,
+    pub event: String,
     pub params: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "lowercase")]
 pub enum RuntimeMessage {
     Request(RpcRequest),
     Response(RpcResponse),
     Notification(RpcNotification),
 }
+
+pub type CapabilityFuture = Pin<Box<dyn Future<Output = Result<Value, RpcError>> + Send>>;
+pub type CapabilityHandler = Arc<dyn Fn(Value) -> CapabilityFuture + Send + Sync>;
 
 #[derive(Debug, Clone)]
 pub struct RuntimeCommand {
@@ -96,12 +198,14 @@ impl RuntimeCommand {
 
 pub struct AgentRuntime {
     inner: Arc<Mutex<RuntimeInner>>,
+    notifications: broadcast::Sender<RpcNotification>,
 }
 
 struct RuntimeInner {
     child: Option<Child>,
     writer: Option<mpsc::Sender<RuntimeMessage>>,
     pending: HashMap<String, oneshot::Sender<Result<Value, RuntimeError>>>,
+    capabilities: HashMap<String, CapabilityHandler>,
 }
 
 impl Default for AgentRuntime {
@@ -112,16 +216,71 @@ impl Default for AgentRuntime {
 
 impl AgentRuntime {
     pub fn new() -> Self {
+        let (notifications, _) = broadcast::channel(64);
         Self {
             inner: Arc::new(Mutex::new(RuntimeInner {
                 child: None,
                 writer: None,
                 pending: HashMap::new(),
+                capabilities: HashMap::new(),
             })),
+            notifications,
         }
     }
 
-    pub async fn start(&self, command: RuntimeCommand) -> Result<(), RuntimeError> {
+    pub async fn register_capability(&self, method: impl Into<String>, handler: CapabilityHandler) {
+        self.inner
+            .lock()
+            .await
+            .capabilities
+            .insert(method.into(), handler);
+    }
+
+    pub fn subscribe_notifications(&self) -> broadcast::Receiver<RpcNotification> {
+        self.notifications.subscribe()
+    }
+
+    pub async fn start(
+        &self,
+        command: RuntimeCommand,
+        hello: HostHello,
+    ) -> Result<RuntimeHello, RuntimeError> {
+        self.start_process(command).await?;
+        let response = self
+            .request(
+                HOST_HELLO_METHOD,
+                serde_json::to_value(&hello).unwrap_or(Value::Null),
+            )
+            .await;
+        let runtime_hello = response.and_then(|value| {
+            serde_json::from_value::<RuntimeHello>(value)
+                .map_err(|error| RuntimeError::Protocol(format!("invalid runtime hello: {error}")))
+        });
+        match runtime_hello {
+            Ok(runtime_hello)
+                if hello.protocol.includes(PROTOCOL_VERSION)
+                    && runtime_hello.protocol.includes(PROTOCOL_VERSION) =>
+            {
+                Ok(runtime_hello)
+            }
+            Ok(runtime_hello) => {
+                let _ = self.shutdown().await;
+                Err(RuntimeError::Protocol(format!(
+                    "no compatible protocol version for host {}-{} and runtime {}-{}",
+                    hello.protocol.min,
+                    hello.protocol.max,
+                    runtime_hello.protocol.min,
+                    runtime_hello.protocol.max
+                )))
+            }
+            Err(error) => {
+                let _ = self.shutdown().await;
+                Err(error)
+            }
+        }
+    }
+
+    async fn start_process(&self, command: RuntimeCommand) -> Result<(), RuntimeError> {
         let mut inner = self.inner.lock().await;
         if let Some(child) = inner.child.as_mut() {
             if child
@@ -134,7 +293,6 @@ impl AgentRuntime {
             inner.child = None;
             inner.writer = None;
         }
-
         let mut process = Command::new(command.program);
         process
             .args(command.args)
@@ -159,9 +317,12 @@ impl AgentRuntime {
         inner.child = Some(child);
         inner.writer = Some(writer);
         drop(inner);
-
         tokio::spawn(write_messages(stdin, receiver));
-        tokio::spawn(read_messages(stdout, self.inner.clone()));
+        tokio::spawn(read_messages(
+            stdout,
+            self.inner.clone(),
+            self.notifications.clone(),
+        ));
         Ok(())
     }
 
@@ -172,6 +333,7 @@ impl AgentRuntime {
     ) -> Result<Value, RuntimeError> {
         let request = RpcRequest {
             id: Uuid::new_v4().to_string(),
+            protocol_version: PROTOCOL_VERSION.to_string(),
             method: method.into(),
             params,
         };
@@ -195,7 +357,7 @@ impl AgentRuntime {
 
     pub async fn notify(
         &self,
-        method: impl Into<String>,
+        event: impl Into<String>,
         params: Value,
     ) -> Result<(), RuntimeError> {
         let writer = self
@@ -207,7 +369,8 @@ impl AgentRuntime {
             .ok_or(RuntimeError::NotRunning)?;
         writer
             .send(RuntimeMessage::Notification(RpcNotification {
-                method: method.into(),
+                protocol_version: PROTOCOL_VERSION.to_string(),
+                event: event.into(),
                 params,
             }))
             .await
@@ -219,8 +382,7 @@ impl AgentRuntime {
             let mut inner = self.inner.lock().await;
             inner.writer.take();
             let child = inner.child.take().ok_or(RuntimeError::NotRunning)?;
-            let pending = std::mem::take(&mut inner.pending);
-            (child, pending)
+            (child, std::mem::take(&mut inner.pending))
         };
         for sender in pending.into_values() {
             let _ = sender.send(Err(RuntimeError::Closed));
@@ -273,28 +435,22 @@ async fn write_messages(
     }
 }
 
-async fn read_messages(stdout: tokio::process::ChildStdout, inner: Arc<Mutex<RuntimeInner>>) {
+async fn read_messages(
+    stdout: tokio::process::ChildStdout,
+    inner: Arc<Mutex<RuntimeInner>>,
+    notifications: broadcast::Sender<RpcNotification>,
+) {
     let mut lines = BufReader::new(stdout).lines();
     while let Ok(Some(line)) = lines.next_line().await {
-        let message = match serde_json::from_str::<RuntimeMessage>(&line) {
-            Ok(message) => message,
-            Err(_) => continue,
-        };
-        if let RuntimeMessage::Response(response) = message {
-            let sender = inner.lock().await.pending.remove(&response.id);
-            if let Some(sender) = sender {
-                let result = match (response.result, response.error) {
-                    (_, Some(error)) => Err(RuntimeError::Remote {
-                        code: error.code,
-                        message: error.message,
-                    }),
-                    (Some(result), None) => Ok(result),
-                    (None, None) => Err(RuntimeError::Protocol(
-                        "response did not contain a result or error".to_string(),
-                    )),
-                };
-                let _ = sender.send(result);
+        match serde_json::from_str::<RuntimeMessage>(&line) {
+            Ok(RuntimeMessage::Response(response)) => resolve_response(response, &inner).await,
+            Ok(RuntimeMessage::Request(request)) => {
+                dispatch_capability(request, inner.clone()).await
             }
+            Ok(RuntimeMessage::Notification(notification)) => {
+                let _ = notifications.send(notification);
+            }
+            Err(error) => eprintln!("ignoring invalid Agent Runtime message: {error}"),
         }
     }
     let pending = {
@@ -307,25 +463,94 @@ async fn read_messages(stdout: tokio::process::ChildStdout, inner: Arc<Mutex<Run
     }
 }
 
+async fn resolve_response(response: RpcResponse, inner: &Arc<Mutex<RuntimeInner>>) {
+    let sender = inner.lock().await.pending.remove(&response.id);
+    let Some(sender) = sender else {
+        eprintln!(
+            "received Agent Runtime response with no pending request: {}",
+            response.id
+        );
+        return;
+    };
+    if response.protocol_version != PROTOCOL_VERSION {
+        let _ = sender.send(Err(RuntimeError::Protocol(format!(
+            "response protocol version {} is unsupported",
+            response.protocol_version
+        ))));
+        return;
+    }
+    let result = match (response.ok, response.result, response.error) {
+        (true, Some(result), None) => Ok(result),
+        (false, None, Some(error)) => Err(RuntimeError::Remote {
+            code: error.code,
+            message: error.message,
+            data: error.data,
+        }),
+        _ => Err(RuntimeError::Protocol(
+            "response must contain exactly a result or an error".to_string(),
+        )),
+    };
+    let _ = sender.send(result);
+}
+
+async fn dispatch_capability(request: RpcRequest, inner: Arc<Mutex<RuntimeInner>>) {
+    let (writer, handler) = {
+        let state = inner.lock().await;
+        (
+            state.writer.clone(),
+            state.capabilities.get(&request.method).cloned(),
+        )
+    };
+    let Some(writer) = writer else {
+        return;
+    };
+    let response = if request.protocol_version != PROTOCOL_VERSION {
+        RpcResponse::failure(
+            request.id,
+            RpcError {
+                code: "unsupported_protocol_version".to_string(),
+                message: format!("Unsupported protocol version {}.", request.protocol_version),
+                data: Some(serde_json::json!({ "supported": PROTOCOL_VERSION })),
+            },
+        )
+    } else if let Some(handler) = handler {
+        match handler(request.params).await {
+            Ok(result) => RpcResponse::success(request.id, result),
+            Err(error) => RpcResponse::failure(request.id, error),
+        }
+    } else {
+        RpcResponse::failure(
+            request.id,
+            RpcError {
+                code: "capability_not_available".to_string(),
+                message: format!("No host capability is registered for {}.", request.method),
+                data: None,
+            },
+        )
+    };
+    if writer
+        .send(RuntimeMessage::Response(response))
+        .await
+        .is_err()
+    {
+        eprintln!("could not send Agent Runtime capability response");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn protocol_messages_use_a_stable_type_tag() {
-        let message = RuntimeMessage::Request(RpcRequest {
-            id: "request-1".to_string(),
-            method: "runtime.ping".to_string(),
-            params: serde_json::json!({ "value": 1 }),
-        });
-
+    fn protocol_messages_match_the_shared_wire_schema() {
+        let message = RuntimeMessage::Response(RpcResponse::success(
+            "request-1",
+            serde_json::json!({ "value": 1 }),
+        ));
         assert_eq!(
             serde_json::to_value(message).unwrap(),
             serde_json::json!({
-                "type": "request",
-                "id": "request-1",
-                "method": "runtime.ping",
-                "params": { "value": 1 }
+                "kind": "response", "id": "request-1", "protocolVersion": "1.0", "ok": true, "result": { "value": 1 }
             })
         );
     }
