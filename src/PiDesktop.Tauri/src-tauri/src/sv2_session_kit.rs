@@ -369,7 +369,7 @@ fn write_new_restricted(path: &Path, bytes: &[u8]) -> Result<(), String> {
     result
 }
 
-fn process_conflict(exempt_pid: Option<u32>) -> Result<bool, String> {
+fn process_conflict(_exempt_pid: Option<u32>) -> Result<bool, String> {
     #[cfg(windows)]
     {
         let output = Command::new("tasklist")
@@ -387,7 +387,7 @@ fn process_conflict(exempt_pid: Option<u32>) -> Result<bool, String> {
             let image = columns.first().copied().unwrap_or("").to_ascii_lowercase();
             let pid = columns.get(1).and_then(|value| value.parse::<u32>().ok());
             matches!(image.as_str(), "synthv-studio.exe" | "synthv-toolbox.exe")
-                && pid != exempt_pid
+                && pid != _exempt_pid
         }))
     }
     #[cfg(not(windows))]
