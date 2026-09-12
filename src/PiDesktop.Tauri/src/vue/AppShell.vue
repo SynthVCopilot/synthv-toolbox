@@ -17,12 +17,14 @@ defineProps<{ state: ShellState }>();
         :subtitle="state.subtitle"
         :page="state.page"
         :busy="state.busy"
+        :actions-html="state.pageActionsHtml"
       />
       <PageViewport
         :page="state.page"
         :html="state.pageHtml"
         :notice-html="state.noticeHtml"
         :error-html="state.errorHtml"
+        :plugin-page="state.pluginPage"
       />
     </main>
   </div>
