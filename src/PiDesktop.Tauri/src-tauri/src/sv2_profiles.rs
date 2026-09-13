@@ -953,6 +953,97 @@ impl Sv2ProfileService {
         build_state(paths, &manifest, false, String::new())
     }
 
+    pub fn force_activate_slot(&self, slot_id: String) -> Result<Sv2ProfilesState, String> {
+        validate_slot_id(&slot_id)?;
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| "SV2 槽位状态锁已损坏。".to_string())?;
+        let paths = self.paths.as_ref().map_err(Clone::clone)?;
+        let _file_lock = acquire_switch_lock(paths)?;
+        recover_if_needed(paths)?;
+        terminate_blockers(paths)?;
+        let mut manifest = load_manifest(paths)?;
+        converge_legacy_sandboxes(paths, &manifest)?;
+        switch_slot(paths, &mut manifest, &slot_id)?;
+        build_state(paths, &manifest, false, String::new())
+    }
+
+    pub fn recover_slot_switch(&self) -> Result<Sv2ProfilesState, String> {
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| "SV2 槽位状态锁已损坏。".to_string())?;
+        let paths = self.paths.as_ref().map_err(Clone::clone)?;
+        let _file_lock = acquire_switch_lock(paths)?;
+        recover_if_needed(paths)?;
+        let manifest = load_manifest(paths)?;
+        build_state(paths, &manifest, false, String::new())
+    }
+
+    pub fn clear_local_session(&self, slot_id: String) -> Result<OperationResult, String> {
+        validate_slot_id(&slot_id)?;
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| "SV2 槽位状态锁已损坏。".to_string())?;
+        let paths = self.paths.as_ref().map_err(Clone::clone)?;
+        let _file_lock = acquire_switch_lock(paths)?;
+        recover_if_needed(paths)?;
+        reject_blockers(paths)?;
+        let manifest = load_manifest(paths)?;
+        if !manifest.slots.iter().any(|slot| slot.id == slot_id) {
+            return Err("找不到该 SV2 槽位。".to_string());
+        }
+        let root = slot_data_root(paths, &manifest, &slot_id);
+        verify_marker(&root, &slot_id)?;
+        let license = root.join("license");
+        reject_reparse_point(&license)?;
+        let session = license.join("session");
+        reject_reparse_point(&session)?;
+        if session.is_file() {
+            fs::remove_file(&session).map_err(|error| format!("无法清除本地 session：{error}"))?;
+        }
+        Sv2SessionGuardStore::new(&paths.metadata).remove_slot(&slot_id)?;
+        Ok(succeeded(
+            "已清除该槽位的本地 session。",
+            "这会移除本地登录态与本地授权缓存，但不会撤销远端会话或官方授权。",
+        ))
+    }
+
+    pub fn clear_offline_license_cache(&self, slot_id: String) -> Result<OperationResult, String> {
+        validate_slot_id(&slot_id)?;
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| "SV2 槽位状态锁已损坏。".to_string())?;
+        let paths = self.paths.as_ref().map_err(Clone::clone)?;
+        let _file_lock = acquire_switch_lock(paths)?;
+        recover_if_needed(paths)?;
+        reject_blockers(paths)?;
+        let manifest = load_manifest(paths)?;
+        if !manifest.slots.iter().any(|slot| slot.id == slot_id) {
+            return Err("找不到该 SV2 槽位。".to_string());
+        }
+        let root = slot_data_root(paths, &manifest, &slot_id);
+        verify_marker(&root, &slot_id)?;
+        let license = root.join("license");
+        reject_reparse_point(&license)?;
+        let session = license.join("session");
+        reject_reparse_point(&session)?;
+        let result = crate::sv2_session_kit::clear_offline_cached_products(&session)?;
+        Sv2SessionGuardStore::new(&paths.metadata).remove_slot(&slot_id)?;
+        let detail = if result.removed_products == 0 {
+            "该槽位没有可清除的本地离线授权缓存。".to_string()
+        } else {
+            format!(
+                "已清除 {} 项本地离线授权缓存，并写入受限权限备份：{}",
+                result.removed_products, result.backup_path
+            )
+        };
+        Ok(succeeded("已清除本地离线授权缓存。", detail))
+    }
+
     pub fn launch_slot(
         &self,
         slot_id: String,
@@ -1072,6 +1163,27 @@ impl Sv2ProfileService {
                 "",
             ))
         }
+    }
+
+    pub fn slot_folder_path(&self, slot_id: String) -> Result<String, String> {
+        validate_slot_id(&slot_id)?;
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| "SV2 槽位状态锁已损坏。".to_string())?;
+        let paths = self.paths.as_ref().map_err(Clone::clone)?;
+        let _file_lock = acquire_switch_lock(paths)?;
+        validate_managed_roots(paths)?;
+        let manifest = load_manifest(paths)?;
+        if !manifest.slots.iter().any(|slot| slot.id == slot_id) {
+            return Err("找不到该 SV2 槽位。".to_string());
+        }
+        let path = slot_data_root(paths, &manifest, &slot_id);
+        reject_reparse_point(&path)?;
+        if !path.is_dir() {
+            return Err("槽位数据目录不存在。".to_string());
+        }
+        Ok(path.to_string_lossy().into_owned())
     }
 
     pub fn prepare_concurrent_slot(&self, slot_id: String) -> Result<Sv2ProfilesState, String> {
@@ -1218,6 +1330,30 @@ impl Sv2ProfileService {
         #[cfg(not(windows))]
         {
             Ok(crate::synthv::failed("并发隔离当前仅支持 Windows。", ""))
+        }
+    }
+
+    pub fn sandbox_folder_path(&self, slot_id: String) -> Result<String, String> {
+        validate_slot_id(&slot_id)?;
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| "SV2 槽位状态锁已损坏。".to_string())?;
+        let paths = self.paths.as_ref().map_err(Clone::clone)?;
+        let _file_lock = acquire_switch_lock(paths)?;
+        validate_managed_roots(paths)?;
+        let manifest = load_manifest(paths)?;
+        if !manifest.slots.iter().any(|slot| slot.id == slot_id) {
+            return Err("找不到该 SV2 槽位。".to_string());
+        }
+        #[cfg(windows)]
+        {
+            let path = concurrent_folder(&paths.vault, &slot_id)?;
+            Ok(path.to_string_lossy().into_owned())
+        }
+        #[cfg(not(windows))]
+        {
+            Err("并发隔离当前仅支持 Windows。".to_string())
         }
     }
 }
