@@ -476,7 +476,7 @@ addMessages("zh-CN", { accountUi: {
   "offlineLicenseIneligible": "离线资格：未发现有效永久 SV2 Pro",
   "offlineLicenseEligibilityUnknown": "离线资格：尚未确认",
   "offlineLicenseNoCachedProducts": "没有可显示的本机离线产品缓存。",
-  "offlineLicenseDirectGuard": "操作前会完整备份 SV2 数据及授权目录，且必须关闭 SV2；启用会覆盖本机永久授权缓存。",
+  "offlineLicenseDirectGuard": "操作前只备份当前槽位的加密 session 文件，且必须关闭 SV2；启用会覆盖本机永久授权缓存。",
   "enableOfflineLicense": "启用离线授权",
   "disableOfflineLicense": "停用离线授权",
   "offlineRemoteStatus": "{state} · {device} · 检查于 {checkedAt}",
@@ -485,8 +485,8 @@ addMessages("zh-CN", { accountUi: {
   "offlineRemoteDisabled": "服务端离线授权未启用",
   "offlineCurrentDevice": "当前设备",
   "offlineOtherDevice": "离线授权属于其他设备，请在原设备上停用。",
-  "offlineCheckFirst": "请先检查离线状态，再启用或停用。",
-  "offlineCheck": "检查离线状态",
+  "offlineCheckFirst": "正在读取服务端离线授权状态…",
+  "offlineCheck": "重新读取离线状态",
   "offlineChanged": "已变化",
   "offlineUnchanged": "未变化",
   "offlineLicenseId": "授权 ID",
@@ -515,13 +515,16 @@ addMessages("zh-CN", { accountUi: {
   ,"user": "用户字段"
   ,"notAvailable": "未找到"
   ,"sessionDetailsLoaded": "已读取完整 session 授权明细。"
+  ,"copyAccess": "复制 access"
+  ,"copyRefresh": "复制 refresh"
+  ,"copied": "已复制"
   ,"editFullSession": "编辑完整明文"
   ,"saveSession": "保存 session"
   ,"sessionSaved": "session 已保存，备份与新哈希："
   ,"sessionProductRow": "产品行"
   ,"offlineProgressDescription": "操作正在执行，当前步骤会持续更新；失败会停在出错步骤。"
   ,"offlineStepPreflight": "预检 SV2 与当前授权状态"
-  ,"offlineStepBackup": "备份 SV2 数据与授权目录"
+  ,"offlineStepBackup": "备份当前槽位的加密 session"
   ,"offlineStepRemote": "提交远程离线授权请求"
   ,"offlineStepLocal": "写入或清理本地离线缓存"
   ,"offlineStepRead": "重新读取并核验结果"
@@ -536,7 +539,7 @@ addMessages("en", { accountUi: {
   "offlineLicenseIneligible": "License eligibility: no active permanent SV2 Pro found",
   "offlineLicenseEligibilityUnknown": "License eligibility: not checked",
   "offlineLicenseNoCachedProducts": "No local offline product cache is available to display.",
-  "offlineLicenseDirectGuard": "The operation fully backs up SV2 data and authorization directories and requires SV2 to be closed. Enabling overwrites the local permanent-license cache.",
+  "offlineLicenseDirectGuard": "The operation backs up only the current slot's encrypted session file and requires SV2 to be closed. Enabling overwrites the local permanent-license cache.",
   "enableOfflineLicense": "Enable offline license",
   "disableOfflineLicense": "Disable offline license",
   "offlineRemoteStatus": "{state} · {device} · checked {checkedAt}",
@@ -545,8 +548,8 @@ addMessages("en", { accountUi: {
   "offlineRemoteDisabled": "Server offline authorization is disabled",
   "offlineCurrentDevice": "Current device",
   "offlineOtherDevice": "Offline authorization belongs to another device. Disable it on that device first.",
-  "offlineCheckFirst": "Check offline status before enabling or disabling it.",
-  "offlineCheck": "Check offline status",
+  "offlineCheckFirst": "Reading the server offline authorization status…",
+  "offlineCheck": "Read offline status again",
   "offlineChanged": "changed",
   "offlineUnchanged": "unchanged",
   "offlineLicenseId": "License ID",
@@ -575,13 +578,16 @@ addMessages("en", { accountUi: {
   ,"user": "User field"
   ,"notAvailable": "Not found"
   ,"sessionDetailsLoaded": "Complete session authorization details loaded."
+  ,"copyAccess": "Copy access"
+  ,"copyRefresh": "Copy refresh"
+  ,"copied": "Copied"
   ,"editFullSession": "Edit complete plaintext"
   ,"saveSession": "Save session"
   ,"sessionSaved": "Session saved. Backup and new hash:"
   ,"sessionProductRow": "Product row"
   ,"offlineProgressDescription": "The operation is running. The current step will update continuously; failures stay on the failed step."
   ,"offlineStepPreflight": "Preflight SV2 and authorization state"
-  ,"offlineStepBackup": "Back up SV2 data and authorization"
+  ,"offlineStepBackup": "Back up the current slot's encrypted session"
   ,"offlineStepRemote": "Submit remote offline authorization request"
   ,"offlineStepLocal": "Write or clear the local offline cache"
   ,"offlineStepRead": "Read back and verify the result"

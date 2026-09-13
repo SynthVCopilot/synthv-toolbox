@@ -864,7 +864,10 @@ async function refreshAccountUsage(slotId?: string, pageGeneration = accountPage
       const snapshot = slotId
         ? await api.sv2AccountUsageSnapshotForSlot(slotId)
         : await api.sv2AccountUsageSnapshot();
-      if (page === "accounts" && pageGeneration === accountPageGeneration) profiles = snapshot.profiles;
+      if (page === "accounts" && pageGeneration === accountPageGeneration) {
+        profiles = snapshot.profiles;
+        await refreshOfflineLicenseStatuses(snapshot.profiles, slotId, pageGeneration);
+      }
     } finally {
       if (page === "accounts" && pageGeneration === accountPageGeneration) render();
     }
@@ -881,6 +884,26 @@ async function refreshAccountUsage(slotId?: string, pageGeneration = accountPage
       accountUsageRefreshPageGeneration = undefined;
     }
   }
+}
+
+async function refreshOfflineLicenseStatuses(
+  profileState: Sv2ProfilesState,
+  slotId: string | undefined,
+  pageGeneration: number,
+): Promise<void> {
+  const slots = (profileState.slots ?? []).filter((slot) => !slotId || slot.id === slotId);
+  if (typeof api.sv2InspectOfflineLicense !== "function") return;
+  slots.forEach((slot) => offlineLicenseStatuses.delete(slot.id));
+  await Promise.allSettled(slots.map(async (slot) => {
+    try {
+      const status = await api.sv2InspectOfflineLicense(slot.id);
+      if (page === "accounts" && pageGeneration === accountPageGeneration) {
+        offlineLicenseStatuses.set(slot.id, status);
+      }
+    } catch {
+      // The account probe remains usable when the optional offline endpoint is unavailable.
+    }
+  }));
 }
 
 function refreshAccountPageInBackground(pageGeneration: number): void {
@@ -1857,17 +1880,24 @@ function renderSessionDocument(slot: Sv2ProfileSlot): string {
   if (!document) return `<div class="session-detail-empty"><button class="secondary" data-read-sv2-session="${escapeHtml(slot.id)}">${icon("shield", 14)} ${t("accountUi.showSessionDetails")}</button></div>`;
   const lines = document.plaintext.split("\n");
   const productStart = lines[5]?.startsWith("K1=") ? 5 : 6;
-  const fields: Array<[string, string]> = [
-    ["access", lines[0] ?? ""],
-    ["refresh", lines[1] ?? ""],
-    [t("accountUi.accessExpiry"), lines[2] ?? ""],
-    [t("accountUi.sessionWrittenAt"), lines[3] ?? ""],
-    [t("accountUi.device"), lines[4] ?? ""],
-    [t("accountUi.user"), productStart === 6 ? (lines[5] ?? "") : ""],
+  const fields: Array<[string, string, "access" | "refresh" | undefined]> = [
+    ["access", lines[0] ?? "", "access"],
+    ["refresh", lines[1] ?? "", "refresh"],
+    [t("accountUi.accessExpiry"), lines[2] ?? "", undefined],
+    [t("accountUi.sessionWrittenAt"), lines[3] ?? "", undefined],
+    [t("accountUi.device"), lines[4] ?? "", undefined],
+    [t("accountUi.user"), productStart === 6 ? (lines[5] ?? "") : "", undefined],
   ];
   const products = lines.slice(productStart).filter(Boolean);
   const productFields = products.length ? `<dl class="profile-storage-list compact session-product-list">${products.map((value, index) => `<div><dt>${t("accountUi.sessionProductRow")} ${index + 1}</dt><dd><code>${escapeHtml(value)}</code></dd></div>`).join("")}</dl>` : "";
-  return `<details class="session-document-details" open><summary>${t("accountUi.sessionDetails")}</summary><dl class="profile-storage-list compact session-credential-list">${fields.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd><code>${escapeHtml(value || t("accountUi.notAvailable"))}</code></dd></div>`).join("")}<div><dt>SHA-256</dt><dd><code>${escapeHtml(document.encryptedSha256)}</code></dd></div><div><dt>${t("accountUi.sessionPath")}</dt><dd><code>${escapeHtml(document.path)}</code></dd></div></dl>${productFields}<form class="session-editor" data-write-sv2-session="${escapeHtml(slot.id)}"><label>${t("accountUi.editFullSession")}<textarea name="plaintext" spellcheck="false">${escapeHtml(document.plaintext)}</textarea></label><button class="secondary" type="submit">${icon("check", 14)} ${t("accountUi.saveSession")}</button></form><details class="session-raw-details"><summary>${t("accountUi.rawSessionData")}</summary><pre>${escapeHtml(document.plaintext)}</pre></details><button class="secondary" data-read-sv2-session="${escapeHtml(slot.id)}">${icon("refresh", 14)} ${t("accountUi.refreshSessionDetails")}</button></details>`;
+  const credentialFields = fields.map(([label, value, copyField]) => {
+    const display = value || t("accountUi.notAvailable");
+    const copyButton = copyField && value
+      ? `<button type="button" class="secondary compact session-copy-button" data-copy-session-field="${copyField}" data-copy-session-slot="${escapeHtml(slot.id)}">${t(copyField === "access" ? "accountUi.copyAccess" : "accountUi.copyRefresh")}</button>`
+      : "";
+    return `<div class="session-credential-row"><dt>${escapeHtml(label)}</dt><dd>${copyField ? `<span class="session-credential-value"><code>${escapeHtml(display)}</code>${copyButton}</span>` : `<code>${escapeHtml(display)}</code>`}</dd></div>`;
+  }).join("");
+  return `<details class="session-document-details" open><summary>${t("accountUi.sessionDetails")}</summary><dl class="profile-storage-list compact session-credential-list">${credentialFields}<div><dt>SHA-256</dt><dd><code>${escapeHtml(document.encryptedSha256)}</code></dd></div><div><dt>${t("accountUi.sessionPath")}</dt><dd><code>${escapeHtml(document.path)}</code></dd></div></dl>${productFields}<form class="session-editor" data-write-sv2-session="${escapeHtml(slot.id)}"><label>${t("accountUi.editFullSession")}<textarea name="plaintext" spellcheck="false">${escapeHtml(document.plaintext)}</textarea></label><button class="secondary" type="submit">${icon("check", 14)} ${t("accountUi.saveSession")}</button></form><details class="session-raw-details"><summary>${t("accountUi.rawSessionData")}</summary><pre>${escapeHtml(document.plaintext)}</pre></details><button class="secondary" data-read-sv2-session="${escapeHtml(slot.id)}">${icon("refresh", 14)} ${t("accountUi.refreshSessionDetails")}</button></details>`;
 }
 
 function renderOfflineLicenseSteps(): string {
@@ -1929,7 +1959,7 @@ function renderAccountManager(): string {
     const remoteSummary = remoteOffline ? `<small>${escapeHtml(t("accountUi.offlineRemoteStatus", { state: t(remoteOffline.enabled ? "accountUi.offlineRemoteEnabled" : "accountUi.offlineRemoteDisabled"), device: remoteOffline.deviceName ?? t("accountUi.offlineCurrentDevice"), checkedAt: new Date(remoteOffline.checkedAtUtc).toLocaleString(locale()) }))}</small>${remoteOffline.currentDevice ? "" : `<small>${t("accountUi.offlineOtherDevice")}</small>`}` : `<small>${t("accountUi.offlineCheckFirst")}</small>`;
     const canSetOffline = !!remoteOffline && remoteOffline.currentDevice && (remoteOffline.enabled || remoteOffline.eligible) && !busy;
     const sessionDocumentHtml = renderSessionDocument(managedSlot);
-    const offlineLicensePanel = managedSlot ? `<section class="authorization-panel offline-license-panel"><div class="authorization-heading"><div><strong>${t("accountUi.offlineLicense")}</strong><small>${escapeHtml(offlineCacheLabel)} · ${escapeHtml(offlineEligibilityLabel)}</small>${remoteSummary}</div><span class="inventory-status ${remoteOffline?.enabled ? "verified" : "unknown"}">${remoteOffline ? t(remoteOffline.enabled ? "accountUi.offlineRemoteEnabled" : "accountUi.offlineRemoteDisabled") : offlineCacheLabel}</span></div><p>${t("accountUi.offlineLicenseDirectGuard")}</p>${offlineProductList}<div class="manager-action-row"><button class="secondary" data-offline-license-check="${managedSlot.id}" ${busy ? "disabled" : ""}>${icon("refresh", 15)} ${t("accountUi.offlineCheck")}</button><button class="secondary" data-offline-license-set="${managedSlot.id}" data-offline-license-enabled="${!remoteOffline?.enabled}" ${canSetOffline ? "" : "disabled"}>${remoteOffline?.enabled ? t("accountUi.disableOfflineLicense") : t("accountUi.enableOfflineLicense")}</button><button class="secondary" data-offline-session-restore="${managedSlot.id}" ${busy ? "disabled" : ""}>${icon("shield", 15)} ${t("accountUi.restoreOfflineSession")}</button></div></section><section class="authorization-panel session-document-panel"><div class="authorization-heading"><div><strong>${t("accountUi.sessionDetails")}</strong><small>${t("accountUi.sessionDetailsDescription")}</small></div></div>${sessionDocumentHtml}</section>` : "";
+    const offlineLicensePanel = managedSlot ? `<section class="authorization-panel offline-license-panel"><div class="authorization-heading"><div><strong>${t("accountUi.offlineLicense")}</strong><small>${escapeHtml(offlineCacheLabel)} · ${escapeHtml(offlineEligibilityLabel)}</small>${remoteSummary}</div><span class="inventory-status ${remoteOffline?.enabled ? "verified" : "unknown"}">${remoteOffline ? t(remoteOffline.enabled ? "accountUi.offlineRemoteEnabled" : "accountUi.offlineRemoteDisabled") : offlineCacheLabel}</span></div><p>${t("accountUi.offlineLicenseDirectGuard")}</p>${offlineProductList}<div class="manager-action-row"><button class="secondary" data-offline-license-set="${managedSlot.id}" data-offline-license-enabled="${!remoteOffline?.enabled}" ${canSetOffline ? "" : "disabled"}>${remoteOffline?.enabled ? t("accountUi.disableOfflineLicense") : t("accountUi.enableOfflineLicense")}</button><button class="secondary" data-offline-session-restore="${managedSlot.id}" ${busy ? "disabled" : ""}>${icon("shield", 15)} ${t("accountUi.restoreOfflineSession")}</button></div></section><section class="authorization-panel session-document-panel"><div class="authorization-heading"><div><strong>${t("accountUi.sessionDetails")}</strong><small>${t("accountUi.sessionDetailsDescription")}</small></div></div>${sessionDocumentHtml}</section>` : "";
     body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(officialIdentity.name ?? (managedSlot.sessionCached ? t("accountUi.accountInformationNeedsRefresh") : t("accountUi.signedOut")))}</h3><p>${escapeHtml(officialIdentity.email ?? t("accountUi.accountInformationNeedsRefresh"))}</p><p>${accountUseDot(managedUseState)} ${escapeHtml(managedUseState.label)}</p></div>${managedSlot.isActive ? `<span class="profile-active-badge">${t("accountUi.currentDefault")}</span>` : ""}</div>
       <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>${t("accountUi.note")}<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" placeholder="${t("accountUi.eGProductionAccount")}" /></label><button class="secondary">${t("accountUi.saveNote")}</button></form>
       <section class="authorization-panel"><div class="authorization-heading"><div><strong>${t("accountUi.availableAuthorizations")}</strong><small>${escapeHtml(authorizationSummary)}</small></div><span class="inventory-status ${authorizationStatus ? "verified" : "unknown"}">${authorizationStatus ? t("accountUi.authorizationsDetail", { p0: authorizations.length }) : t("accountUi.notRead")}</span></div>${authorizationList}</section>
@@ -3646,6 +3676,20 @@ document.addEventListener("keydown", (event) => {
 document.addEventListener("click", (event) => {
   const target = (event.target as HTMLElement).closest<HTMLElement>("button, [data-page], [data-onboarding], [data-audio-drop-zone]");
   if (!target || target.hasAttribute("disabled")) return;
+  if (target.dataset.copySessionField && target.dataset.copySessionSlot) {
+    const document = sv2SessionDocuments.get(target.dataset.copySessionSlot);
+    const index = target.dataset.copySessionField === "access" ? 0 : target.dataset.copySessionField === "refresh" ? 1 : -1;
+    const value = index >= 0 ? document?.plaintext.split("\n")[index] ?? "" : "";
+    if (!value) return;
+    void navigator.clipboard.writeText(value).then(() => {
+      notice = t("accountUi.copied");
+      render();
+    }).catch((reason) => {
+      error = formatError(reason);
+      render();
+    });
+    return;
+  }
   if (target.hasAttribute("data-install-plugin-archive") || target.hasAttribute("data-install-plugin-directory")) {
     void run(async () => {
       const sourcePath = target.hasAttribute("data-install-plugin-archive")
@@ -4538,15 +4582,6 @@ document.addEventListener("click", (event) => {
         }
       });
     }
-    return;
-  }
-  if (target.dataset.offlineLicenseCheck) {
-    const slotId = target.dataset.offlineLicenseCheck;
-    void run(async () => {
-      const status = await api.sv2InspectOfflineLicense(slotId);
-      offlineLicenseStatuses.set(slotId, status);
-      notice = t(status.enabled ? "accountUi.offlineRemoteEnabled" : "accountUi.offlineRemoteDisabled");
-    });
     return;
   }
   if (target.dataset.offlineLicenseSet) {

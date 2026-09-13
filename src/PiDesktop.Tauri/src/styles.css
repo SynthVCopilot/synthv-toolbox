@@ -546,22 +546,30 @@ button.full { width: 100%; }
 .voice-cover { width: 28px; height: 28px; flex: 0 0 28px; border-radius: 4px; object-fit: cover; }
 .voice-cover.placeholder { display: grid; place-items: center; color: var(--muted); background: var(--surface-subtle); }
 .authorization-panel { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: end; gap: 9px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
+.authorization-panel > * { min-width: 0; }
+.offline-license-panel, .session-document-panel { grid-template-columns: minmax(0,1fr); align-items: start; }
 .offline-license-panel > p, .offline-license-panel > .authorization-list, .offline-license-panel > .manager-action-row, .session-document-panel > .session-document-details { grid-column: 1 / -1; }
 .session-document-details { display: grid; gap: 9px; }
 .session-editor { display: grid; gap: 7px; }
 .session-editor label { display: grid; gap: 5px; color: var(--muted); font-size: 10px; }
 .session-editor textarea { min-height: 180px; width: 100%; box-sizing: border-box; resize: vertical; padding: 9px; border: 1px solid var(--line); border-radius: 5px; color: var(--text); background: var(--surface-solid); font: 10px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .session-document-details > summary, .session-raw-details > summary { cursor: pointer; font-size: 11px; font-weight: 600; }
-.session-credential-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 12px; }
+.session-credential-list { display: grid; grid-template-columns: repeat(2, minmax(240px, 1fr)); gap: 6px 12px; }
 .session-credential-list > div { min-width: 0; }
 .session-credential-list code, .session-product-list code { overflow: visible; text-overflow: clip; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.session-credential-row dd { min-width: 0; }
+.session-credential-value { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.session-credential-value code { min-width: 0; flex: 1 1 auto; overflow-x: auto; white-space: nowrap; overflow-wrap: normal; word-break: normal; }
+.session-copy-button { flex: 0 0 auto; min-height: 26px; padding: 4px 8px; font-size: 10px; }
 .session-product-list > div { grid-template-columns: 86px minmax(0, 1fr); }
 .session-raw-details pre { max-height: 240px; overflow: auto; margin: 7px 0 0; padding: 9px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); background: var(--surface-subtle); font: 10px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-.offline-license-progress-dialog { width: min(460px, calc(100% - 32px)); padding: 22px; }
+.offline-license-progress-dialog { width: min(560px, calc(100% - 32px)); max-height: min(720px, calc(100vh - 48px)); grid-template-columns: minmax(0,1fr); gap: 10px; overflow: auto; padding: 22px; }
+.offline-license-progress-dialog > * { grid-column: 1 / -1; min-width: 0; }
 .offline-license-progress-dialog h2 { margin: 4px 0 7px; font-size: 19px; }
 .offline-license-progress-dialog p { margin: 0 0 14px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .offline-license-steps { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.offline-license-steps li { display: flex; align-items: flex-start; gap: 9px; padding: 8px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-subtle); }
+.offline-license-steps li { display: grid; grid-template-columns: 22px minmax(0,1fr); align-items: start; gap: 9px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-subtle); }
+.offline-license-steps li > span:last-child { min-width: 0; }
 .offline-license-steps .step-marker { width: 18px; height: 18px; flex: 0 0 18px; display: grid; place-items: center; border-radius: 50%; color: var(--muted); background: var(--surface); font-size: 12px; }
 .offline-license-steps li.step-active { border-color: var(--primary); }
 .offline-license-steps li.step-active .step-marker { color: var(--primary); }
@@ -1468,6 +1476,7 @@ button.path-picker-button { display: inline-flex; flex: 0 0 34px; align-items: c
   .isolation-content-form { grid-template-columns: 1fr 1fr; }
   .isolation-content-form > button { grid-column: 1 / -1; }
   .authorization-panel { grid-template-columns: 1fr; }
+  .session-credential-list { grid-template-columns: 1fr; }
   .account-manager-backdrop { padding: 12px; }
   .account-manager-dialog { max-height: calc(100vh - 24px); }
   .account-precheck { grid-template-columns: auto minmax(0,1fr); align-items: start; }

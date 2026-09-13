@@ -22,7 +22,8 @@
 | 015 | [BugFix]_前端协议依赖安装 | 恢复 CI 安装后缺失的 runtime-protocol 本地依赖 | 让开发构建能在干净安装环境中完成 | ✅ 已完成 |
 | 016 | [Feature]_MCP服务器特权开关 | 为本地 MCP 服务增加内部函数与高级功能独立开关并按授权发布能力 | 让 MCP 客户端也能在明确授权后调用宿主底层能力 | ✅ 已完成 |
 | 017 | [Feature]_Session内部读写 | 为插件提供完整 session 明文读取与受保护写入能力 | 让获得内部函数授权的插件安全处理完整授权文档 | ✅ 已完成 |
-| 018 | [Architecture]_Electron完全迁移 | 以 Electron/Node 替代 Tauri/Rust Shell 并加入应用内自动更新 | 统一扩展运行时、减少编译与资源打包复杂度 | 进行中 |
+| 018 | [Architecture]_Electron完全迁移 | 以 Electron/Node 替代 Tauri/Rust Shell 并加入应用内自动更新 | 统一扩展运行时、减少编译与资源打包复杂度 | ✅ 已完成 |
 | 019 | [Feature]_SynthV系统服务 | 迁移 SynthV 系统层基础能力 | 使 Electron Main 能承担系统和槽位调用 | ✅ 已完成 |
 | 020 | [Feature]_SynthV命令映射 | 注册 SynthV Node 服务命令 | 保持前端 API 参数和 Electron 服务解耦 | ✅ 已完成 |
 | 021 | [Feature]_SynthV命令补齐 | 补充系统命令映射和可用实现 | 使前端调用获得明确的执行或不可用结果 | ✅ 已完成 |
+| 018 | [BugFix]_离线授权界面与备份 | 缩小离线切换备份范围，自动读取离线状态并修正进度与凭据控件布局 | 降低切换卡顿并让账户授权信息直接可读可操作 | ✅ 已完成 |
