@@ -152,7 +152,17 @@ async function initializeServices(): Promise<void> {
   await runtimeHost.attachHttpServer(httpServer);
   const desktop = new DesktopStateService(userData, app.getVersion(), runtimeHost, ai, synthv);
   await desktop.load();
-  commandRegistry = new ElectronCommandRegistry(runtimeHost, { ai, creative, desktop, synthv, componentAudio: { dataRoot: join(userData, "components") } }, (event, payload) => {
+  commandRegistry = new ElectronCommandRegistry(runtimeHost, { ai, creative, desktop, synthv, componentAudio: {
+    dataRoot: join(userData, "components"),
+    openExternal: url => shell.openExternal(url),
+    reveal: async path => { shell.showItemInFolder(path); },
+    saveFile: async defaultName => {
+      const result = mainWindow
+        ? await dialog.showSaveDialog(mainWindow, { defaultPath: defaultName })
+        : await dialog.showSaveDialog({ defaultPath: defaultName });
+      return result.canceled ? undefined : result.filePath;
+    },
+  } }, (event, payload) => {
     mainWindow?.webContents.send("toolbox:event", { event, payload });
   });
 }
