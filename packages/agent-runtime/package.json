@@ -17,8 +17,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "check": "tsc -p tsconfig.json --noEmit",
-    "prepare": "npm run build"
+    "check": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.85.1",

@@ -43,13 +43,39 @@ jobs:
         run: npm run build:electron
       - name: Package development artifacts
         run: npm exec --prefix src/PiDesktop.Tauri -- electron-builder --config electron-builder.yml ${{ matrix.target }} --publish never
-      - name: Publish nightly update metadata
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: npm exec --prefix src/PiDesktop.Tauri -- electron-builder --config electron-builder.yml ${{ matrix.target }} --config.publish.channel=nightly --config.publish.releaseType=prerelease --publish always
       - uses: actions/upload-artifact@v4
         with:
           name: synthv-toolbox-${{ matrix.name }}
           path: ${{ matrix.artifact }}
           if-no-files-found: error
+
+  publish-nightly:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: --win
+          - os: macos-14
+            target: --mac
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22.19.0"
+          cache: npm
+          cache-dependency-path: src/PiDesktop.Tauri/package-lock.json
+      - name: Install desktop dependencies
+        working-directory: src/PiDesktop.Tauri
+        run: npm ci --no-audit --no-fund
+      - name: Build desktop assets
+        working-directory: src/PiDesktop.Tauri
+        run: npm run build:electron
+      - name: Publish nightly update metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: npm exec --prefix src/PiDesktop.Tauri -- electron-builder --config electron-builder.yml ${{ matrix.target }} --config.publish.channel=nightly --config.publish.releaseType=prerelease --publish always
