@@ -9,7 +9,7 @@ export interface CreativeService {
   invoke(command: string, args: Data): Promise<unknown>;
 }
 
-export function createCreativeService(dataRoot: string, executeTask: TaskExecutor = async () => ({ succeeded: false, summary: "No component executor is configured." })): CreativeService {
+export function createCreativeService(dataRoot: string, executeTask: TaskExecutor = async command => { throw new Error(`No component executor is configured for ${command}.`); }): CreativeService {
   const root = resolve(dataRoot);
   const safe = (...parts: string[]) => {
     const path = resolve(root, ...parts);
@@ -65,7 +65,7 @@ export function createCreativeService(dataRoot: string, executeTask: TaskExecuto
     if (command === "restore_project_checkpoint") { const entry = (await list<Data>(safe("project-checkpoints", "entries.json"))).find((item) => item.id === args.id); if (!entry) throw new Error("Checkpoint was not found."); const output = resolve(dirname(String(entry.sourcePath)), String(args.outputName ?? `restored-${basename(String(entry.sourcePath))}`)); if (relative(dirname(String(entry.sourcePath)), output).startsWith("..")) throw new Error("Restore output escapes the source directory."); await copyFile(String(entry.snapshotPath), output); return { succeeded: true, summary: "Checkpoint restored.", detail: output }; }
     if (["media_tasks", "audio_tasks"].includes(command)) return list<Data>(tasks);
     if (["cancel_media_task", "cancel_audio_task", "retry_media_task", "retry_audio_task"].includes(command)) { const all = await list<Data>(tasks); const task = all.find((item) => item.id === args.taskId); if (!task) throw new Error("Task was not found."); task.status = command.startsWith("cancel") ? "cancelled" : "queued"; task.updatedAt = now(); await writeJson(tasks, all); return task; }
-    if (command.startsWith("run_") || command.startsWith("start_") || command === "enqueue_media_task") { const task = { id: id(), kind: command, status: "queued", args, createdAt: now(), updatedAt: now() }; const all = await list<Data>(tasks); all.unshift(task); await writeJson(tasks, all); try { const result = await executeTask(command, args); task.status = "completed"; (task as Data).result = result; } catch (error) { task.status = "failed"; (task as Data).error = error instanceof Error ? error.message : String(error); } task.updatedAt = now(); await writeJson(tasks, all); return task; }
+    if (command.startsWith("run_") || command.startsWith("start_") || command === "enqueue_media_task") { const task = { id: id(), kind: command, status: "queued", args, createdAt: now(), updatedAt: now() }; const all = await list<Data>(tasks); all.unshift(task); await writeJson(tasks, all); try { const result = await executeTask(command, args); if (result.succeeded === false) throw new Error(String(result.summary ?? "Component execution failed.")); task.status = "completed"; (task as Data).result = result; } catch (error) { task.status = "failed"; (task as Data).error = error instanceof Error ? error.message : String(error); } task.updatedAt = now(); await writeJson(tasks, all); return task; }
     return executeTask(command, args);
   } };
 }

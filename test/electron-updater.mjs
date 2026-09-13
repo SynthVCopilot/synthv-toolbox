@@ -16,6 +16,8 @@ assert.match(updater, /update-available/);
 assert.match(updater, /download-progress/);
 assert.match(updater, /update-downloaded[\s\S]*quitAndInstall\(false, true\)/);
 assert.match(updater, /phase: "error"/);
+assert.match(updater, /client\.channel = channel === "nightly" \? "nightly" : "latest"/);
+assert.match(updater, /client\.allowPrerelease = channel === "nightly"/);
 
 assert.match(builder, /^asar: true$/m);
 assert.match(builder, /^asarUnpack:$/m);

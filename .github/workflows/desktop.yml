@@ -44,7 +44,6 @@ jobs:
           $missing = @("CSC_LINK", "CSC_KEY_PASSWORD", "CSC_NAME") | Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) }
           if ($missing.Count -gt 0) { throw "Missing code-signing environment: $($missing -join ', ')" }
       - name: Package and publish update artifacts
-        working-directory: src/PiDesktop.Tauri
         env:
           GH_TOKEN: ${{ github.token }}
-        run: npx electron-builder --config ../../electron-builder.yml ${{ matrix.target }} --publish always
+        run: npm exec --prefix src/PiDesktop.Tauri -- electron-builder --config electron-builder.yml ${{ matrix.target }} --publish always

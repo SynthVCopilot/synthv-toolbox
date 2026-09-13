@@ -2,8 +2,7 @@ import type { BootstrapState, ToolboxUpdateCheck, ToolboxUpdateDownload } from "
 import type { IconName } from "./icons";
 interface AboutPageOptions { app: BootstrapState; update: ToolboxUpdateCheck | undefined; download: ToolboxUpdateDownload | undefined; busy: boolean; locale: string; translate: (key: string) => string; escapeHtml: (value: unknown) => string; icon: (name: IconName, size?: number) => string; }
 export function renderAboutPage(options: AboutPageOptions): string {
-  const { app, update, escapeHtml, icon, translate: t } = options;
-  const available = Boolean(update?.updateAvailable);
-  const release = update ? `<section class="about-release-result"><h3>${escapeHtml(update.releaseName)}</h3>${available ? `<button class="primary" data-install-toolbox-update ${options.busy ? "disabled" : ""}>${icon("download", 16)} ${t("about.updateNow")}</button>` : ""}</section>` : "";
+  const { app, update, escapeHtml, translate: t } = options;
+  const release = update ? `<section class="about-release-result"><h3>${escapeHtml(update.releaseName)}</h3></section>` : "";
   return `<div class="panel about-layout"><section class="about-product"><h2>Synthesizer V Toolbox</h2><p>${t("about.productDescription")}</p><dl><dt>${t("about.build")}</dt><dd>v${escapeHtml(app.appVersion)}</dd></dl></section><section class="about-updates"><h2>${t("about.updates")}</h2><p>${t("about.updatesDescription")}</p><label><span>${t("about.channel")}</span><select id="update-channel" ${options.busy ? "disabled" : ""}><option value="stable">${t("about.stable")}</option><option value="nightly">${t("about.nightly")}</option></select></label><button class="secondary" data-check-toolbox-update ${options.busy ? "disabled" : ""}>${t("about.check")}</button>${release}</section></div>`;
 }

@@ -6,13 +6,13 @@
 
 ## 阶段
 
-1. 建立 Electron Main、preload、类型化 IPC 与现有 Vue/Vite renderer 的最小端到端启动。
-2. 将 Tauri command 表面迁移为 Node 服务并让现有 `api.ts` 切换到 Electron bridge。
-3. 合并 PI Runtime、model-auth、插件 GUI 与 MCP 权限代理，删除独立 Node 分发层。
-4. 迁移平台功能、数据存储、SynthV 管理、组件任务和更新服务。
-5. 使用 Electron Builder 生成签名就绪安装包与更新元数据，接入下载、安装和重启流程。
-6. 删除 `src-tauri`、Cargo、Tauri 依赖和旧发布工作流，修订全部合同测试。
-7. 完成干净安装、开发启动、生产构建、安装包和更新链路验证后交付。
+1. [x] 建立 Electron Main、preload、类型化 IPC 与现有 Vue/Vite renderer 的最小端到端启动。
+2. [x] 将 Tauri command 表面迁移为 Node 服务并让现有 `api.ts` 切换到 Electron bridge。
+3. [x] 合并 PI Runtime、model-auth、插件 GUI 与 MCP 权限代理，删除独立 Node 分发层。
+4. [x] 迁移平台功能、数据存储、SynthV 管理、组件任务和更新服务。
+5. [x] 使用 Electron Builder 生成签名就绪安装包与更新元数据，接入下载、安装和重启流程。
+6. [x] 删除 `src-tauri`、Cargo、Tauri 依赖和旧发布工作流，修订全部合同测试。
+7. [x] 完成最终安装包、更新元数据和分支交付验证。
 
 ## 强制边界
 

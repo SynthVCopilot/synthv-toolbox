@@ -10,11 +10,13 @@
     "predev": "npm run build:bridge && npm run build:protocol",
     "prebuild": "npm run build:bridge && npm run build:protocol",
     "dev": "vite --host 127.0.0.1 --port 1420",
-    "build": "tsc && vite build",
-    "build:electron": "npm run build && tsc -p electron/tsconfig.json",
+    "build": "npm run build:renderer",
+    "build:renderer": "tsc && vite build",
+    "build:host": "npm run build:bridge && npm run build:protocol && tsc -p electron/tsconfig.json",
+    "build:electron": "npm run build:renderer && npm run build:host",
     "electron:dev": "npm run build:electron && electron dist/electron/main.js --dev-server-url=http://127.0.0.1:1420",
     "electron:start": "npm run build:electron && electron dist/electron/main.js",
-    "test:contracts": "node --test ../../test/electron-shell.mjs ../../test/electron-updater.mjs ../../test/electron-runtime-host.mjs ../../test/synthv-service.mjs ../../test/synthv-commands.mjs && node ../../test/electron-command-registry.mjs && node ../../test/electron-command-coverage.mjs && node ../../test/electron-ai-service.mjs && node ../../test/creative-service.mjs && node ../../test/electron-http-mcp-server.mjs && node ../../test/component-audio-commands.mjs && node ../../test/plugin-manager-ui.mjs && node ../../test/plugin-ui-host.mjs && node ../../test/plugin-pages-render.mjs && node ../../test/about-updates.mjs && node ../../test/bridge-installations.mjs && node ../../test/i18n-ui.mjs && node ../../test/dev-build-version.mjs && node ../../test/dev-build-artifacts-workflow.mjs",
+    "test:contracts": "node --experimental-transform-types --test ../../test/electron-shell.mjs ../../test/electron-updater.mjs ../../test/electron-runtime-host.mjs ../../test/synthv-service.mjs ../../test/synthv-commands.mjs && node ../../test/electron-command-registry.mjs && node ../../test/electron-command-coverage.mjs && node ../../test/electron-ai-service.mjs && node ../../test/creative-service.mjs && node ../../test/electron-http-mcp-server.mjs && node ../../test/component-audio-commands.mjs && node ../../test/component-executor.mjs && node ../../test/audio-preparation-ui.mjs && node ../../test/plugin-manager-ui.mjs && node ../../test/plugin-ui-host.mjs && node ../../test/about-updates.mjs && node ../../test/bridge-installations.mjs && node ../../test/i18n-ui.mjs && node ../../test/dev-build-version.mjs && node ../../test/dev-build-artifacts-workflow.mjs",
     "test:usability": "node ../../test/path-picker-behavior.mjs && node ../../test/tool-navigation.mjs && node ../../test/quiet-open-actions.mjs",
     "test:midi": "node --test ../../test/midi-marker-import.mjs",
     "test:audio-preparation-ui": "node ../../test/audio-preparation-ui.mjs",
@@ -41,15 +43,5 @@
     "jsdom": "27.4.0",
     "typescript": "7.0.2",
     "vite": "8.2.2"
-  },
-  "build": {
-    "appId": "com.synthv.toolbox",
-    "asar": true,
-    "files": [
-      "dist/**",
-      "package.json",
-      "!resources/node/**",
-      "!node_modules/@synthv-toolbox/agent-runtime/node_modules/**"
-    ]
   }
 }

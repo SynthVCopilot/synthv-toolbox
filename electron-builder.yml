@@ -1,5 +1,6 @@
 appId: com.synthvcopilot.toolbox
 productName: Synthesizer V Toolbox
+electronVersion: 39.2.7
 directories:
   app: src/PiDesktop.Tauri
   output: release
@@ -31,7 +32,7 @@ win:
   icon: src/PiDesktop.Tauri/electron/assets/icon.ico
   target:
     - nsis
-  artifactName: "${productName}-${version}-setup.${ext}"
+  artifactName: "Synthesizer-V-Toolbox-${version}-setup.${ext}"
 nsis:
   oneClick: true
   perMachine: false
@@ -46,7 +47,7 @@ mac:
   identity: "${env.CSC_NAME}"
 dmg:
   license: src/PiDesktop.Tauri/electron/assets/TERMS-OF-USE.rtf
-  artifactName: "${productName}-${version}.${ext}"
+  artifactName: "Synthesizer-V-Toolbox-${version}.${ext}"
 publish:
   provider: github
   channel: latest

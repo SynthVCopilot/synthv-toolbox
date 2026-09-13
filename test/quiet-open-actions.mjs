@@ -37,12 +37,12 @@ for (const action of [
 ]) {
   assert.match(source, new RegExp(`setOpenFeedback\\(await (?:audioApi|api)\\.${action}`), `${action} is quiet on success`);
 }
-const updateCheckHandler = source.match(/if \(target\.hasAttribute\("data-check-toolbox-update"\)\) \{([\s\S]*?)\n  \}\n  if \(target\.hasAttribute\("data-download-toolbox-update"\)\)/)?.[1];
+const updateCheckHandler = source.match(/if \(target\.hasAttribute\("data-check-toolbox-update"\)\) \{([\s\S]*?)\n  \}\n  if \(target\.hasAttribute\("data-open-toolbox-releases"\)\)/)?.[1];
 assert.ok(updateCheckHandler, 'Update check handler is present');
 assert.match(updateCheckHandler, /toolboxUpdate = result/);
 assert.match(updateCheckHandler, /toolboxUpdateDownload = await api\.getToolboxUpdateDownload\(\)/);
 assert.doesNotMatch(updateCheckHandler, /notice\s*=/, 'Checking for an update leaves status to the update card');
-assert.match(source, /setFeedback\(await api\.installToolboxUpdate\(\)\)/, 'Installing an update still reports its result');
+assert.doesNotMatch(source, /installToolboxUpdate\(\)/, 'Updates install automatically after the check action');
 assert.match(source, /setFeedback\(result\);\s*\n\s*}\)\.finally\(\(\) => \{\s*\n\s*if \(removingComponentId/, 'Component removal still reports its result');
 
 console.log('Quiet external open actions preserve failures and suppress successful notices.');

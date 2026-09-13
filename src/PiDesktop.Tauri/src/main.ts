@@ -4348,18 +4348,6 @@ document.addEventListener("click", (event) => {
     });
     return;
   }
-  if (target.hasAttribute("data-download-toolbox-update")) {
-    void run(async () => { toolboxUpdateDownload = await api.downloadToolboxUpdate(); });
-    return;
-  }
-  if (target.hasAttribute("data-cancel-toolbox-update")) {
-    void run(async () => { toolboxUpdateDownload = await api.cancelToolboxUpdateDownload(); });
-    return;
-  }
-  if (target.hasAttribute("data-install-toolbox-update")) {
-    void run(async () => { setFeedback(await api.installToolboxUpdate()); });
-    return;
-  }
   if (target.hasAttribute("data-open-toolbox-releases")) {
     void run(async () => { setOpenFeedback(await api.openToolboxReleases(toolboxUpdate?.releaseUrl)); });
     return;

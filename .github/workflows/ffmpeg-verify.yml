@@ -42,14 +42,12 @@ jobs:
         working-directory: src/PiDesktop.Tauri
         run: npm run build:electron
       - name: Package development artifacts
-        working-directory: src/PiDesktop.Tauri
-        run: npx electron-builder --config ../../electron-builder.yml ${{ matrix.target }} --publish never
+        run: npm exec --prefix src/PiDesktop.Tauri -- electron-builder --config electron-builder.yml ${{ matrix.target }} --publish never
       - name: Publish nightly update metadata
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        working-directory: src/PiDesktop.Tauri
         env:
           GH_TOKEN: ${{ github.token }}
-        run: npx electron-builder --config ../../electron-builder.yml ${{ matrix.target }} --config.publish.channel=nightly --config.publish.releaseType=prerelease --publish always
+        run: npm exec --prefix src/PiDesktop.Tauri -- electron-builder --config electron-builder.yml ${{ matrix.target }} --config.publish.channel=nightly --config.publish.releaseType=prerelease --publish always
       - uses: actions/upload-artifact@v4
         with:
           name: synthv-toolbox-${{ matrix.name }}

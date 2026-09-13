@@ -7,6 +7,7 @@ import { ElectronRuntimeHost } from "./services/runtime-host.js";
 import { ElectronCommandRegistry } from "./services/command-registry.js";
 import { AiService, agentRuntimePort, type AiProviderId } from "./services/ai-service.js";
 import { createCreativeService } from "./services/creative-service.js";
+import { createComponentExecutor } from "./services/component-executor.js";
 import { DesktopStateService } from "./services/desktop-state.js";
 import { HostCapabilities } from "./services/host-capabilities.js";
 import { HttpMcpServer } from "./services/http-mcp-server.js";
@@ -20,6 +21,7 @@ const currentDirectory = dirname(fileURLToPath(import.meta.url));
 const developmentUrl = process.env.ELECTRON_RENDERER_URL ?? process.argv.find((argument) => argument.startsWith("--dev-server-url="))?.slice("--dev-server-url=".length);
 let mainWindow: BrowserWindow | undefined;
 const updater = createUpdaterService();
+let updateChannel: "stable" | "nightly" = "stable";
 type HostArguments = Record<string, unknown>;
 type HostHandler = (args: HostArguments) => Promise<unknown>;
 
@@ -44,7 +46,7 @@ handlers.register("updater.restart", async () => updater.restart());
 handlers.register("updater.state", async () => updater.state());
 handlers.register("check_toolbox_update", async () => {
   const state = await updater.check();
-  return { channel: "stable", currentVersion: app.getVersion(), latestVersion: state.version ?? app.getVersion(), updateAvailable: state.phase !== "idle" && state.phase !== "error", releaseName: state.version ? `Version ${state.version}` : "", releaseUrl: "https://github.com/SynthVCopilot/synthv-toolbox/releases", releaseNotes: "", checkedAtUtc: new Date().toISOString(), installer: null };
+  return { channel: updateChannel, currentVersion: app.getVersion(), latestVersion: state.version ?? app.getVersion(), updateAvailable: state.phase !== "idle" && state.phase !== "error", releaseName: state.version ? `Version ${state.version}` : "", releaseUrl: "https://github.com/SynthVCopilot/synthv-toolbox/releases", releaseNotes: "", checkedAtUtc: new Date().toISOString(), installer: null };
 });
 handlers.register("get_toolbox_update_download", async () => updaterDownloadState());
 handlers.register("download_toolbox_update", async () => { await updater.check(); return updaterDownloadState(); });
@@ -134,7 +136,8 @@ async function initializeServices(): Promise<void> {
   const userData = app.getPath("userData");
   const bridgeDirectory = app.isPackaged ? join(process.resourcesPath, "components", "synthv-agent-bridge") : resolve(currentDirectory, "../../components/synthv-agent-bridge");
   const synthv = new SynthVService(join(userData, "synthv"), bridgeDirectory);
-  const creative = createCreativeService(join(userData, "creative"));
+  const componentsRoot = app.isPackaged ? join(process.resourcesPath, "components") : resolve(currentDirectory, "../../components");
+  const creative = createCreativeService(join(userData, "creative"), createComponentExecutor(componentsRoot));
   let ai: AiService;
   let capabilities: HostCapabilities;
   const runtimeHost = new ElectronRuntimeHost(join(userData, "runtime"), {
@@ -150,7 +153,7 @@ async function initializeServices(): Promise<void> {
     agentChat: async (input, conversationId) => { const conversation = conversationId ? await ai.open_conversation(conversationId) : await ai.new_conversation(); return ai.send_message(conversation.id, input); },
   });
   await runtimeHost.attachHttpServer(httpServer);
-  const desktop = new DesktopStateService(userData, app.getVersion(), runtimeHost, ai, synthv);
+  const desktop = new DesktopStateService(userData, app.getVersion(), runtimeHost, ai, synthv, channel => { updateChannel = channel; updater.setChannel(channel); });
   await desktop.load();
   commandRegistry = new ElectronCommandRegistry(runtimeHost, { ai, creative, desktop, synthv, componentAudio: {
     dataRoot: join(userData, "components"),

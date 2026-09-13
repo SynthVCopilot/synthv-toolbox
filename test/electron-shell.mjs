@@ -10,6 +10,7 @@ const updater = readFileSync(new URL("../src/PiDesktop.Tauri/electron/updater.ts
 const runtimeHost = readFileSync(new URL("../src/PiDesktop.Tauri/electron/services/runtime-host.ts", import.meta.url), "utf8");
 const api = readFileSync(new URL("../src/PiDesktop.Tauri/src/api.ts", import.meta.url), "utf8");
 const rendererMain = readFileSync(new URL("../src/PiDesktop.Tauri/src/main.ts", import.meta.url), "utf8");
+const builder = readFileSync(new URL("../electron-builder.yml", import.meta.url), "utf8");
 
 test("Electron shell enables the secure window boundary and single instance lock", () => {
   for (const marker of ["contextIsolation: true", "sandbox: true", "nodeIntegration: false", "requestSingleInstanceLock", "second-instance"]) {
@@ -46,7 +47,7 @@ test("Electron build and launch scripts compile the shell", () => {
   assert.equal(typeof packageJson.dependencies["electron-updater"], "string");
   assert.equal(typeof packageJson.devDependencies["electron-builder"], "string");
   assert.equal(packageJson.dependencies["@tauri-apps/api"], undefined);
-  assert.equal(packageJson.build.asar, true);
+  assert.match(builder, /^asar: true$/m);
 });
 
 test("Electron host routes updater, runtime, plugin, and MCP commands through registered services", () => {

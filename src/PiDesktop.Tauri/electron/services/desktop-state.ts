@@ -24,20 +24,21 @@ const defaults = (): DesktopSettings => ({ onboardingCompleted: false, mode: "to
 
 export class DesktopStateService {
   private settings = defaults();
-  constructor(private readonly root: string, private readonly appVersion: string, private readonly runtime: ElectronRuntimeHost, private readonly ai: AiService, private readonly synthv: SynthVService) {}
+  constructor(private readonly root: string, private readonly appVersion: string, private readonly runtime: ElectronRuntimeHost, private readonly ai: AiService, private readonly synthv: SynthVService, private readonly applyUpdateChannel?: (channel: "stable" | "nightly") => void) {}
 
   async load(): Promise<void> {
     try { this.settings = { ...defaults(), ...JSON.parse(await readFile(this.path(), "utf8")) }; }
     catch { this.settings = defaults(); }
+    this.applyUpdateChannel?.(this.settings.updateChannel);
   }
 
   async bootstrap(): Promise<Data> {
     const runtime = this.runtime.settingsSnapshot();
     const [model, installations, profiles, autostart] = await Promise.all([this.ai.ai_provider_state(false), this.synthv.scanInstallations(), this.synthv.profileState(), this.synthv.getAutostart()]);
-    return { ...this.settings, platform: process.platform, appVersion: this.appVersion, configPath: this.path(), settingsLoadError: null, model, bridgeBundled: true, bridgeConnected: false, installations, components: [], downloads: [], pluginInternalFunctionsEnabled: runtime.pluginInternalFunctionsEnabled, pluginAdvancedFunctionsEnabled: runtime.pluginAdvancedFunctionsEnabled, autostartEnabled: autostart.enabled, autostartError: autostart.error, svpAssociation: { registered: false, currentHandler: null, detail: "Electron launch routing is available after the application is installed." }, sv2Profiles: profiles };
+    return { ...this.settings, platform: process.platform, appVersion: this.appVersion, configPath: this.path(), settingsLoadError: null, model, bridgeBundled: true, bridgeConnected: false, installations, components: componentCatalog(profiles), downloads: [], pluginInternalFunctionsEnabled: runtime.pluginInternalFunctionsEnabled, pluginAdvancedFunctionsEnabled: runtime.pluginAdvancedFunctionsEnabled, autostartEnabled: autostart.enabled, autostartError: autostart.error, svpAssociation: { supported: process.platform === "win32", registered: false, isDefault: false, detail: "Electron launch routing is available after the application is installed." }, sv2Profiles: profiles };
   }
 
-  async update(values: Partial<DesktopSettings>): Promise<Data> { this.settings = { ...this.settings, ...values }; await this.persist(); return this.bootstrap(); }
+  async update(values: Partial<DesktopSettings>): Promise<Data> { this.settings = { ...this.settings, ...values }; if (values.updateChannel) this.applyUpdateChannel?.(values.updateChannel); await this.persist(); return this.bootstrap(); }
   async saveMcpServer(server: Data): Promise<Data> { const id = requiredText(server.id, "server.id"); const next = this.settings.mcpServers.filter(item => item.id !== id); next.push({ ...server, id }); return this.update({ mcpServers: next }); }
   async deleteMcpServer(id: string): Promise<Data> { return this.update({ mcpServers: this.settings.mcpServers.filter(item => item.id !== id) }); }
   private path(): string { return join(this.root, "desktop-settings.json"); }
@@ -45,3 +46,13 @@ export class DesktopStateService {
 }
 
 function requiredText(value: unknown, label: string): string { if (typeof value !== "string" || !value.trim()) throw new Error(`${label} must be a non-empty string.`); return value; }
+function componentCatalog(profiles: Data): Data[] {
+  const sandbox = profiles.concurrentProvider as Data | undefined;
+  return [
+    { id: "ffmpeg", displayName: "FFmpeg", description: "Audio and video conversion runtime.", audience: "AI and manual workflows", installed: false, downloaded: false, installable: true, removable: false, status: "Use a system installation or choose an FFmpeg directory." },
+    { id: "pi-audio", displayName: "pi-audio", description: "Audio feature and score analysis component.", audience: "AI and manual workflows", installed: true, downloaded: false, installable: true, removable: false, status: "Bundled with the application." },
+    { id: "cvrs", displayName: "CVRS", description: "SynthV project inspection and export component.", audience: "AI and manual workflows", installed: true, downloaded: false, installable: true, removable: false, status: "Bundled with the application." },
+    { id: "vocal-separation", displayName: "Vocal separation", description: "Local vocal and accompaniment separation component.", audience: "AI and manual workflows", installed: true, downloaded: false, installable: true, removable: false, status: "Bundled with the application." },
+    { id: "sandboxie", displayName: "Sandboxie", description: "Windows isolation provider for concurrent SynthV profiles.", audience: "Windows concurrent profiles", installed: sandbox?.available === true, downloaded: false, installable: false, removable: false, status: String(sandbox?.detail ?? "Unavailable on this platform.") },
+  ];
+}

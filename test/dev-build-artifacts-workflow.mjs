@@ -14,7 +14,7 @@ for (const workflow of [release, development]) {
   assert.match(workflow, /actions\/setup-node@v6/);
   assert.match(workflow, /npm ci --no-audit --no-fund/);
   assert.match(workflow, /npm run build/);
-  assert.match(workflow, /npx electron-builder --config \.\.\/\.\.\/electron-builder\.yml/);
+  assert.match(workflow, /npm exec --prefix src\/PiDesktop\.Tauri -- electron-builder --config electron-builder\.yml/);
   assert.doesNotMatch(workflow, /cargo |tauri |tauri-action|gh release|download-artifact|nightly-release/);
 }
 
@@ -43,9 +43,11 @@ assert.match(prepare, /npm run build:electron/);
 assert.match(prepare, /test\/electron-ai-service\.mjs/);
 assert.match(prepare, /test\/electron-http-mcp-server\.mjs/);
 assert.doesNotMatch(prepare, /cargo|tauri|src-tauri|rust-toolchain|setup-python/);
+assert.match(release, /npm exec --prefix src\/PiDesktop\.Tauri -- electron-builder --config electron-builder\.yml/);
 assert.equal(packageJson.scripts.tauri, undefined);
 assert.equal(packageJson.scripts["prepare:bundled-node"], undefined);
-assert.equal(packageJson.scripts["build:electron"], "npm run build");
+assert.equal(packageJson.scripts["build:electron"], "npm run build:renderer && npm run build:host");
+assert.match(packageJson.scripts["build:host"], /electron\/tsconfig\.json/);
 assert.match(packageJson.scripts["test:contracts"], /electron-http-mcp-server\.mjs/);
 
 console.log("Electron Builder workflow contracts passed.");

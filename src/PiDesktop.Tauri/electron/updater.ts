@@ -11,6 +11,7 @@ export interface UpdaterState {
 
 export interface UpdaterService {
   check(): Promise<UpdaterState>;
+  setChannel(channel: "stable" | "nightly"): void;
   restart(): Promise<UpdaterState>;
   state(): UpdaterState;
   onState(listener: (state: UpdaterState) => void): () => void;
@@ -38,6 +39,10 @@ export function createUpdaterService(client: AppUpdater = autoUpdater): UpdaterS
   client.on("error", (error) => setState({ phase: "error", error: error.message }));
 
   return {
+    setChannel(channel) {
+      client.channel = channel === "nightly" ? "nightly" : "latest";
+      client.allowPrerelease = channel === "nightly";
+    },
     async check() {
       setState({ phase: "checking" });
       await client.checkForUpdates();
