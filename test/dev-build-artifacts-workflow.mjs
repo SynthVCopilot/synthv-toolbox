@@ -126,3 +126,4 @@ assert.match(release, /cargo test --manifest-path test\/synthv-control-regressio
 console.log("Shared preparation workflow contracts passed.");
 execFileSync(process.execPath, [join(root, "test", "dev-build-version.mjs")], { stdio: "inherit" });
 execFileSync(process.execPath, [join(root, "test", "nightly-release.mjs")], { stdio: "inherit", cwd: root });
+execFileSync(process.execPath, [join(root, "test", "agent-runtime-resource-staging.mjs")], { stdio: "inherit", cwd: root });
