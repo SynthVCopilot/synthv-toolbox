@@ -1,4 +1,4 @@
-name: Prepare Desktop Build
+name: Prepare Electron Desktop Build
 
 on:
   workflow_call:
@@ -26,61 +26,41 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-
       - uses: actions/setup-node@v6
         with:
           node-version: "22.19.0"
           cache: npm
           cache-dependency-path: |
             src/PiDesktop.Tauri/package-lock.json
-            src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/package-lock.json
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-
+            src/PiDesktop.Tauri/components/synthv-agent-bridge/package-lock.json
       - name: Validate release notes
         if: inputs.release
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: test -s "docs/releases/${RELEASE_TAG}.md"
-
       - name: Apply version from release tag
         id: release-version
         if: inputs.release
         run: node .github/scripts/set-version.mjs "${{ github.ref_name }}"
-
       - name: Apply development version from source commit
         id: development-version
         if: ${{ !inputs.release }}
         run: node .github/scripts/set-dev-version.mjs "${{ github.sha }}" ${{ inputs.next_patch && '--next-patch' || '' }}
-
-      - name: Check Python component sources
-        run: python -m py_compile src/PiDesktop.Tauri/src-tauri/components/pi-audio/pi_audio.py src/PiDesktop.Tauri/src-tauri/components/cvrs/cvrs.py src/PiDesktop.Tauri/src-tauri/components/vocal-separation/separate.py
-
-      - name: Build bundled SynthV Bridge
-        working-directory: src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge
+      - name: Build SynthV Bridge
+        working-directory: src/PiDesktop.Tauri/components/synthv-agent-bridge
         run: |
           npm ci --no-audit --no-fund
           npm run build
-
       - name: Install desktop dependencies
         working-directory: src/PiDesktop.Tauri
         run: npm ci --no-audit --no-fund
-
-      - name: Build frontend and test desktop contracts
+      - name: Build Electron desktop and run Electron contracts
         working-directory: src/PiDesktop.Tauri
         run: |
-          npm run build
-          npm run test:contracts
-
-      - name: Check Rust formatting
-        run: cargo fmt --manifest-path src/PiDesktop.Tauri/src-tauri/Cargo.toml -- --check
-
+          npm run build:electron
+          node ../../test/electron-updater.mjs
+          node ../../test/electron-ai-service.mjs
+          node ../../test/electron-http-mcp-server.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: prepared-desktop
@@ -88,8 +68,7 @@ jobs:
           retention-days: 1
           path: |
             src/PiDesktop.Tauri/dist
+            src/PiDesktop.Tauri/electron/dist
             src/PiDesktop.Tauri/package.json
             src/PiDesktop.Tauri/package-lock.json
-            src/PiDesktop.Tauri/src-tauri/Cargo.toml
-            src/PiDesktop.Tauri/src-tauri/tauri.conf.json
-            src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/dist
+            src/PiDesktop.Tauri/components/synthv-agent-bridge/dist

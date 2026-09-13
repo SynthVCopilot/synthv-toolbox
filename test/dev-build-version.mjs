@@ -12,61 +12,40 @@ const output = join(fixture, "github-output.txt");
 
 function write(relative, contents) {
   const filename = join(fixture, relative);
-  const directory = dirname(filename);
-  if (directory !== fixture) {
-    mkdirSync(directory, { recursive: true });
-  }
+  mkdirSync(dirname(filename), { recursive: true });
   writeFileSync(filename, contents);
+}
+
+function versions() {
+  const packageJson = JSON.parse(readFileSync(join(desktop, "package.json"), "utf8"));
+  const packageLock = JSON.parse(readFileSync(join(desktop, "package-lock.json"), "utf8"));
+  return [packageJson.version, packageLock.version, packageLock.packages[""].version];
 }
 
 try {
   write("src/PiDesktop.Tauri/package.json", JSON.stringify({ version: "1.2.3" }));
-  write("src/PiDesktop.Tauri/package-lock.json", JSON.stringify({
-    version: "1.2.3",
-    packages: { "": { version: "1.2.3" } },
-  }));
-  write("src/PiDesktop.Tauri/src-tauri/tauri.conf.json", JSON.stringify({ version: "1.2.3" }));
-  write("src/PiDesktop.Tauri/src-tauri/Cargo.toml", "[package]\nname = \"fixture\"\nversion = \"1.2.3\"\n");
+  write("src/PiDesktop.Tauri/package-lock.json", JSON.stringify({ version: "1.2.3", packages: { "": { version: "1.2.3" } } }));
 
   execFileSync(process.execPath, [join(root, ".github", "scripts", "set-dev-version.mjs"), "AbC1234f", fixture], {
     env: { ...process.env, GITHUB_OUTPUT: output },
   });
-
   const version = "1.2.3-dev.abc1234";
-  assert.equal(JSON.parse(readFileSync(join(desktop, "package.json"), "utf8")).version, version);
-  assert.equal(JSON.parse(readFileSync(join(desktop, "package-lock.json"), "utf8")).version, version);
-  assert.equal(JSON.parse(readFileSync(join(desktop, "package-lock.json"), "utf8")).packages[""].version, version);
-  assert.equal(JSON.parse(readFileSync(join(desktop, "src-tauri", "tauri.conf.json"), "utf8")).version, version);
-  assert.match(readFileSync(join(desktop, "src-tauri", "Cargo.toml"), "utf8"), /version = "1\.2\.3-dev\.abc1234"/);
+  assert.deepEqual(versions(), [version, version, version]);
   assert.equal(readFileSync(output, "utf8"), `version=${version}\n`);
 
   execFileSync(process.execPath, [join(root, ".github", "scripts", "set-dev-version.mjs"), "AbC1234f", fixture]);
-  assert.equal(JSON.parse(readFileSync(join(desktop, "package.json"), "utf8")).version, version);
-
-  assert.throws(
-    () => execFileSync(process.execPath, [join(root, ".github", "scripts", "set-dev-version.mjs"), "def5678", fixture], { stdio: "pipe" }),
-    /different development version/,
-  );
-  assert.equal(JSON.parse(readFileSync(join(desktop, "package.json"), "utf8")).version, version);
-
-  writeFileSync(join(desktop, "src-tauri", "tauri.conf.json"), JSON.stringify({ version: "1.2.4" }));
-  assert.throws(
-    () => execFileSync(process.execPath, [join(root, ".github", "scripts", "set-dev-version.mjs"), "AbC1234f", fixture], { stdio: "pipe" }),
-    /same base version/,
-  );
-  assert.equal(JSON.parse(readFileSync(join(desktop, "package.json"), "utf8")).version, version);
+  assert.deepEqual(versions(), [version, version, version]);
+  assert.throws(() => execFileSync(process.execPath, [join(root, ".github", "scripts", "set-dev-version.mjs"), "def5678", fixture], { stdio: "pipe" }), /different development version/);
 
   write("src/PiDesktop.Tauri/package.json", JSON.stringify({ version: "1.2.3" }));
-  write("src/PiDesktop.Tauri/package-lock.json", JSON.stringify({
-    version: "1.2.3",
-    packages: { "": { version: "1.2.3" } },
-  }));
-  write("src/PiDesktop.Tauri/src-tauri/tauri.conf.json", JSON.stringify({ version: "1.2.3" }));
-  write("src/PiDesktop.Tauri/src-tauri/Cargo.toml", "[package]\nname = \"fixture\"\nversion = \"1.2.3\"\n");
+  write("src/PiDesktop.Tauri/package-lock.json", JSON.stringify({ version: "1.2.3", packages: { "": { version: "1.2.3" } } }));
   execFileSync(process.execPath, [join(root, ".github", "scripts", "set-dev-version.mjs"), "AbC1234f", fixture, "--next-patch"]);
-  assert.equal(JSON.parse(readFileSync(join(desktop, "package.json"), "utf8")).version, "1.2.4-dev.abc1234");
+  assert.deepEqual(versions(), ["1.2.4-dev.abc1234", "1.2.4-dev.abc1234", "1.2.4-dev.abc1234"]);
+
+  execFileSync(process.execPath, [join(root, ".github", "scripts", "set-version.mjs"), "v2.0.0", fixture]);
+  assert.deepEqual(versions(), ["2.0.0", "2.0.0", "2.0.0"]);
 } finally {
   rmSync(fixture, { recursive: true, force: true });
 }
 
-console.log("Development build version contracts passed.");
+console.log("Electron development build version contracts passed.");

@@ -7,6 +7,7 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const read = (filename) => readFileSync(join(root, filename), "utf8").replace(/\r\n/g, "\n");
 const release = read(".github/workflows/desktop.yml");
 const development = read(".github/workflows/ffmpeg-verify.yml");
+const prepare = read(".github/workflows/prepare-desktop.yml");
 
 for (const workflow of [release, development]) {
   assert.match(workflow, /actions\/setup-node@v6/);
@@ -35,5 +36,11 @@ assert.match(development, /--config\.publish\.channel=nightly/);
 assert.match(development, /--config\.publish\.releaseType=prerelease/);
 assert.match(development, /--publish always/);
 assert.match(development, /actions\/upload-artifact@v4/);
+assert.match(prepare, /^name: Prepare Electron Desktop Build/m);
+assert.match(prepare, /src\/PiDesktop\.Tauri\/components\/synthv-agent-bridge/);
+assert.match(prepare, /npm run build:electron/);
+assert.match(prepare, /test\/electron-ai-service\.mjs/);
+assert.match(prepare, /test\/electron-http-mcp-server\.mjs/);
+assert.doesNotMatch(prepare, /cargo|tauri|src-tauri|rust-toolchain|setup-python/);
 
 console.log("Electron Builder workflow contracts passed.");

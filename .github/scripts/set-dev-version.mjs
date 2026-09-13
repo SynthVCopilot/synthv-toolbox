@@ -22,22 +22,10 @@ const packageFile = path.join(desktop, "package.json");
 const packageJson = JSON.parse(fs.readFileSync(packageFile, "utf8"));
 const lockFile = path.join(desktop, "package-lock.json");
 const packageLock = JSON.parse(fs.readFileSync(lockFile, "utf8"));
-const tauriFile = path.join(desktop, "src-tauri/tauri.conf.json");
-const tauriConfig = JSON.parse(fs.readFileSync(tauriFile, "utf8"));
-const cargoFile = path.join(desktop, "src-tauri/Cargo.toml");
-const cargo = fs.readFileSync(cargoFile, "utf8");
-const packageVersion = /(\[package\][\s\S]*?\r?\nversion\s*=\s*)"([^"]+)"/;
-const cargoMatch = cargo.match(packageVersion);
-if (!cargoMatch) {
-  throw new Error("Could not locate the Cargo package version");
-}
-
 const versions = [
   packageJson.version,
   packageLock.version,
   packageLock.packages?.[""]?.version,
-  tauriConfig.version,
-  cargoMatch[2],
 ];
 if (versions.some((current) => current !== packageJson.version)) {
   throw new Error("Desktop manifests must use the same base version before a development build");
@@ -70,12 +58,6 @@ updateJson(lockFile, (value) => {
   value.version = version;
   if (value.packages?.[""]) value.packages[""].version = version;
 });
-updateJson(tauriFile, (value) => {
-  value.version = version;
-});
-
-fs.writeFileSync(cargoFile, cargo.replace(packageVersion, `$1"${version}"`));
-
 if (process.env.GITHUB_OUTPUT) {
   fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
 }
