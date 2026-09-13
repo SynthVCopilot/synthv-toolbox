@@ -24,3 +24,4 @@
 | 017 | [Feature]_Session内部读写 | 为插件提供完整 session 明文读取与受保护写入能力 | 让获得内部函数授权的插件安全处理完整授权文档 | ✅ 已完成 |
 | 018 | [Architecture]_Electron完全迁移 | 以 Electron/Node 替代 Tauri/Rust Shell 并加入应用内自动更新 | 统一扩展运行时、减少编译与资源打包复杂度 | 进行中 |
 | 019 | [Feature]_SynthV系统服务 | 迁移 SynthV 系统层基础能力 | 使 Electron Main 能承担系统和槽位调用 | ✅ 已完成 |
+| 020 | [Feature]_SynthV命令映射 | 注册 SynthV Node 服务命令 | 保持前端 API 参数和 Electron 服务解耦 | ✅ 已完成 |
