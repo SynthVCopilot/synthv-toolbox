@@ -9,10 +9,10 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 1420,
   },
-  envPrefix: ["VITE_", "TAURI_ENV_*"],
+  envPrefix: ["VITE_", "ELECTRON_"],
   build: {
     target: ["chrome111", "safari15"],
-    minify: process.env.TAURI_ENV_DEBUG ? false : "oxc",
-    sourcemap: Boolean(process.env.TAURI_ENV_DEBUG),
+    minify: process.env.ELECTRON_RENDERER_DEBUG ? false : "oxc",
+    sourcemap: Boolean(process.env.ELECTRON_RENDERER_DEBUG),
   },
 });
