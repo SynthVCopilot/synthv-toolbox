@@ -1,4 +1,4 @@
-name: Toolbox Dev Build
+name: Desktop Development Build
 
 on:
   pull_request:
@@ -9,369 +9,43 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: toolbox-dev-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  prepare:
-    uses: ./.github/workflows/prepare-desktop.yml
-    with:
-      release: false
-      next_patch: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-
   verify:
-    needs: prepare
-    name: ${{ matrix.name }}
+    name: Package ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: Windows x64
+          - name: Windows
             os: windows-latest
-            target: x86_64-pc-windows-msvc
-            rust_targets: x86_64-pc-windows-msvc
-            bundles: nsis
-            artifact_suffix: -nsis.exe
-          - name: macOS Universal
+            target: --win
+            artifact: release/*.exe
+          - name: macOS
             os: macos-14
-            target: universal-apple-darwin
-            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
-            bundles: app,dmg
-            artifact_suffix: .dmg
+            target: --mac
+            artifact: release/*.dmg
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - uses: actions/download-artifact@v5
-        with:
-          name: prepared-desktop
-          path: src/PiDesktop.Tauri
       - uses: actions/setup-node@v6
         with:
           node-version: "22.19.0"
           cache: npm
-          cache-dependency-path: |
-            src/PiDesktop.Tauri/package-lock.json
-            src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/package-lock.json
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust_targets }}
-          components: clippy
-      - uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src/PiDesktop.Tauri/src-tauri/target
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('src/PiDesktop.Tauri/src-tauri/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.target }}-cargo-
-            ${{ runner.os }}-cargo-
-      - name: Install platform dependencies
+          cache-dependency-path: src/PiDesktop.Tauri/package-lock.json
+      - name: Install desktop dependencies
         working-directory: src/PiDesktop.Tauri
         run: npm ci --no-audit --no-fund
-      - name: Build bundled Agent Runtime
+      - name: Run desktop contract tests
         working-directory: src/PiDesktop.Tauri
-        run: npm run build:runtime
-      - name: Prepare bundled Node runtime
+        run: npm run test:contracts
+      - name: Build desktop assets
         working-directory: src/PiDesktop.Tauri
-        env:
-          SYNTHV_TOOLBOX_NODE_TARGET: ${{ matrix.target }}
-        run: npm run prepare:bundled-node
-      - name: Lint Rust core
-        run: cargo clippy --manifest-path src/PiDesktop.Tauri/src-tauri/Cargo.toml --lib --bins -- -D warnings
-      - name: Download and smoke-test current BtbN LGPL FFmpeg
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          FFMPEG_RELEASE_API: https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest
-        run: |
-          $smokeRoot = Join-Path $env:RUNNER_TEMP "synthv-toolbox-ffmpeg-smoke"
-          New-Item -ItemType Directory -Force -Path $smokeRoot | Out-Null
-          $archive = Join-Path $smokeRoot "ffmpeg.zip"
-          $release = Invoke-RestMethod -Uri $env:FFMPEG_RELEASE_API -Headers @{ Accept = "application/vnd.github+json" }
-          $asset = @($release.assets | Where-Object { $_.name -eq "ffmpeg-n8.1-latest-win64-lgpl-8.1.zip" }) | Select-Object -First 1
-          if ($null -eq $asset -or $asset.digest -notmatch "^sha256:[0-9a-fA-F]{64}$") { throw "BtbN latest release did not expose a SHA-256 digest for the expected LGPL asset" }
-          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $archive
-          $actual = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLowerInvariant()
-          $expected = $asset.digest.Substring("sha256:".Length).ToLowerInvariant()
-          if ($actual -ne $expected) { throw "FFmpeg SHA-256 mismatch: expected $expected, got $actual" }
-          Expand-Archive -Path $archive -DestinationPath $smokeRoot -Force
-          $ffmpeg = Get-ChildItem -Path $smokeRoot -Recurse -Filter ffmpeg.exe | Select-Object -First 1
-          $ffprobe = Get-ChildItem -Path $smokeRoot -Recurse -Filter ffprobe.exe | Select-Object -First 1
-          if ($null -eq $ffmpeg -or $null -eq $ffprobe) { throw "The verified archive did not contain ffmpeg.exe and ffprobe.exe" }
-          $fixture = Join-Path $smokeRoot "fixture.wav"
-          & $ffmpeg.FullName -hide_banner -loglevel error -f lavfi -i "sine=frequency=440:duration=0.25" -c:a pcm_s24le $fixture
-          if ($LASTEXITCODE -ne 0) { throw "Verified FFmpeg failed to create a PCM WAV" }
-          $probe = & $ffprobe.FullName -v error -show_entries stream=codec_name,sample_rate,channels,bits_per_sample -of json $fixture | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $probe.streams[0].codec_name -ne "pcm_s24le") { throw "Verified FFprobe did not report the expected 24-bit PCM stream" }
-      - name: Smoke-test macOS system FFmpeg when available
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then exit 0; fi
-          ffmpeg -hide_banner -loglevel error -f lavfi -i "sine=frequency=440:duration=0.25" -c:a pcm_s24le "$RUNNER_TEMP/fixture.wav"
-          ffprobe -v error -show_entries stream=codec_name,sample_rate,channels,bits_per_sample -of json "$RUNNER_TEMP/fixture.wav" | grep -q 'pcm_s24le'
-      - name: Clear previous Windows bundle output
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $targetRoot = [System.IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE "src/PiDesktop.Tauri/src-tauri/target"))
-          $bundlePath = [System.IO.Path]::GetFullPath((Join-Path $targetRoot "${{ matrix.target }}/release/bundle"))
-          if (-not $bundlePath.StartsWith("$targetRoot$([System.IO.Path]::DirectorySeparatorChar)", [System.StringComparison]::OrdinalIgnoreCase)) { throw "Bundle path must remain inside the desktop target directory: $bundlePath" }
-          if (Test-Path -LiteralPath $bundlePath) { Remove-Item -LiteralPath $bundlePath -Recurse -Force }
-      - name: Clear previous macOS bundle output
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          target_root="$GITHUB_WORKSPACE/src/PiDesktop.Tauri/src-tauri/target"
-          mkdir -p "$target_root"
-          target_root="$(cd "$target_root" && pwd -P)"
-          bundle_path="$target_root/${{ matrix.target }}/release/bundle"
-          case "$bundle_path" in "$target_root"/*) ;; *) exit 1 ;; esac
-          rm -rf "$bundle_path"
-      - name: Build Windows session kit sidecar
-        if: runner.os == 'Windows'
+        run: npm run build
+      - name: Package development artifacts
         working-directory: src/PiDesktop.Tauri
-        run: cargo build --manifest-path src-tauri/Cargo.toml --release --target ${{ matrix.target }} --bin sv2-session-kit
-      - name: Build macOS universal session kit sidecar
-        if: runner.os == 'macOS'
-        working-directory: src/PiDesktop.Tauri
-        shell: bash
-        run: |
-          set -euo pipefail
-          for target in aarch64-apple-darwin x86_64-apple-darwin; do
-            cargo build --manifest-path src-tauri/Cargo.toml --release --target "$target" --bin sv2-session-kit
-          done
-          output="src-tauri/target/universal-apple-darwin/release/sv2-session-kit"
-          mkdir -p "$(dirname "$output")"
-          lipo -create \
-            "src-tauri/target/aarch64-apple-darwin/release/sv2-session-kit" \
-            "src-tauri/target/x86_64-apple-darwin/release/sv2-session-kit" \
-            -output "$output"
-      - name: Build desktop bundle from prepared frontend
-        working-directory: src/PiDesktop.Tauri
-        run: npm run tauri build -- --config ../../.github/tauri-ci.conf.json --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
-      - name: Verify Windows NSIS output
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $bundle = "src/PiDesktop.Tauri/src-tauri/target/${{ matrix.target }}/release/bundle/nsis"
-          $installers = @(Get-ChildItem -Path $bundle -Filter *.exe -File)
-          if ($installers.Count -ne 1) { throw "Expected one NSIS bundle, found $($installers.Count)" }
-          $artifactRoot = Join-Path $env:RUNNER_TEMP "synthv-toolbox-artifacts/${{ matrix.target }}"
-          New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
-          Copy-Item -LiteralPath $installers[0].FullName -Destination (Join-Path $artifactRoot "synthv-toolbox-${{ needs.prepare.outputs.version }}-${{ matrix.target }}-nsis.exe")
-      - name: Verify macOS universal app and DMG output
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          bundle_root="src/PiDesktop.Tauri/src-tauri/target/${{ matrix.target }}/release/bundle"
-          dmg_count="$(find "$bundle_root/dmg" -maxdepth 1 -name '*.dmg' -print | wc -l | tr -d ' ')"
-          test "$dmg_count" -eq 1
-          dmg_path="$(find "$bundle_root/dmg" -maxdepth 1 -name '*.dmg' -print -quit)"
-          app_count="$(find "$bundle_root/macos" -maxdepth 1 -name '*.app' -print | wc -l | tr -d ' ')"
-          test "$app_count" -eq 1
-          app_path="$(find "$bundle_root/macos" -maxdepth 1 -name '*.app' -print -quit)"
-          test -n "$dmg_path" && test -n "$app_path"
-          test "$(plutil -extract CFBundleShortVersionString raw "$app_path/Contents/Info.plist")" = "${{ needs.prepare.outputs.version }}"
-          archs="$(lipo -archs "$(find "$app_path/Contents/MacOS" -maxdepth 1 -type f -print -quit)")"
-          test "$archs" = "x86_64 arm64" || test "$archs" = "arm64 x86_64"
-          artifact_root="$RUNNER_TEMP/synthv-toolbox-artifacts/${{ matrix.target }}"
-          mkdir -p "$artifact_root"
-          cp "$dmg_path" "$artifact_root/synthv-toolbox-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.dmg"
-      - name: Upload development build artifact
-        uses: actions/upload-artifact@v7
+        run: npx electron-builder --config ../../electron-builder.yml ${{ matrix.target }} --publish never
+      - uses: actions/upload-artifact@v4
         with:
-          path: ${{ runner.temp }}/synthv-toolbox-artifacts/${{ matrix.target }}/synthv-toolbox-${{ needs.prepare.outputs.version }}-${{ matrix.target }}${{ matrix.artifact_suffix }}
-          archive: false
+          name: synthv-toolbox-${{ matrix.name }}
+          path: ${{ matrix.artifact }}
           if-no-files-found: error
-          retention-days: 14
-
-  rust_tests:
-    needs: prepare
-    name: Rust tests (${{ matrix.name }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Windows x64
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
-          - name: macOS native
-            os: macos-14
-            target: aarch64-apple-darwin
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - uses: actions/download-artifact@v5
-        with:
-          name: prepared-desktop
-          path: src/PiDesktop.Tauri
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "22.19.0"
-          cache: npm
-          cache-dependency-path: |
-            src/PiDesktop.Tauri/package-lock.json
-            src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/package-lock.json
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src/PiDesktop.Tauri/src-tauri/target
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-tests-${{ hashFiles('src/PiDesktop.Tauri/src-tauri/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.target }}-cargo-tests-
-            ${{ runner.os }}-${{ matrix.target }}-cargo-
-      - name: Install platform dependencies
-        working-directory: src/PiDesktop.Tauri
-        run: npm ci --no-audit --no-fund
-      - name: Build bundled Agent Runtime
-        working-directory: src/PiDesktop.Tauri
-        run: npm run build:runtime
-      - name: Prepare bundled Node runtime
-        working-directory: src/PiDesktop.Tauri
-        env:
-          SYNTHV_TOOLBOX_NODE_TARGET: ${{ matrix.target }}
-        run: npm run prepare:bundled-node
-      - name: Test Rust core and FFmpeg fixtures
-        run: cargo test --manifest-path src/PiDesktop.Tauri/src-tauri/Cargo.toml --all-targets -- --test-threads=1
-      - name: Test precise SynthV instance controls
-        run: cargo test --manifest-path test/synthv-control-regression/Cargo.toml
-
-  publish_nightly:
-    name: Publish nightly prerelease
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [prepare, verify, rust_tests]
-    runs-on: ubuntu-latest
-    concurrency:
-      group: synthv-toolbox-nightly-publication
-      cancel-in-progress: false
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: synthv-toolbox-*
-          path: release-assets
-          merge-multiple: true
-      - name: Publish distinct nightly assets and update manifest
-        env:
-          GH_TOKEN: ${{ github.token }}
-          DEVELOPMENT_VERSION: ${{ needs.prepare.outputs.version }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          windows_source="$(find release-assets -maxdepth 1 -type f -name '*x86_64-pc-windows-msvc-nsis.exe' -print -quit)"
-          macos_source="$(find release-assets -maxdepth 1 -type f -name '*universal-apple-darwin.dmg' -print -quit)"
-          test -n "$windows_source" && test -n "$macos_source"
-          test "$(find release-assets -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 2
-
-          mkdir -p nightly-assets
-          base_version="${DEVELOPMENT_VERSION%-dev.*}"
-          tag="v${base_version}-nightly"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            if [[ "$(gh release view "$tag" --json isImmutable --jq .isImmutable)" == "true" ]]; then
-              echo "Nightly release ${tag} is immutable and cannot accept another build. Disable immutable releases or publish a new base version."
-              exit 1
-            fi
-            if [[ "$(gh release view "$tag" --json assets --jq '[.assets[].name] | index("versions.json") != null')" == "true" ]]; then
-              gh release download "$tag" --pattern versions.json --dir nightly-assets --clobber
-            fi
-          else
-            gh release create "$tag" --target "$GITHUB_SHA" --prerelease --latest=false --title "SynthV Toolbox v${base_version} Pre-release" --notes "## 更新内容"
-          fi
-
-          node .github/scripts/nightly-release.mjs plan "$DEVELOPMENT_VERSION" "$GITHUB_SHA" "$GITHUB_RUN_ID" nightly-assets/versions.json > nightly-assets/plan.json
-          if [[ "$(jq -r .publish nightly-assets/plan.json)" != "true" ]]; then
-            echo "Skipping nightly publication: $(jq -r .reason nightly-assets/plan.json)"
-            exit 0
-          fi
-          base_version="$(jq -r .baseVersion nightly-assets/plan.json)"
-          short_commit="$(jq -r .commit nightly-assets/plan.json)"
-          range="$(jq -r .range nightly-assets/plan.json)"
-          source_committed_at="$(jq -r .sourceCommittedAtUtc nightly-assets/plan.json)"
-          windows_asset="SynthV.Toolbox_${base_version}_dev.${short_commit}_x64-setup.exe"
-          macos_asset="SynthV.Toolbox_${base_version}_dev.${short_commit}_universal.dmg"
-
-          git log "$range" --reverse --pretty=format:'%s%x09%h' > nightly-assets/changes.tsv
-          git log "$range" --reverse --pretty=format:"- %s ([%h](https://github.com/${GITHUB_REPOSITORY}/commit/%H))" > nightly-assets/new-release-notes.md
-          mv "$windows_source" "nightly-assets/$windows_asset"
-          mv "$macos_source" "nightly-assets/$macos_asset"
-          windows_sha="$(sha256sum "nightly-assets/$windows_asset" | awk '{print $1}')"
-          macos_sha="$(sha256sum "nightly-assets/$macos_asset" | awk '{print $1}')"
-          windows_size="$(stat -c%s "nightly-assets/$windows_asset")"
-          macos_size="$(stat -c%s "nightly-assets/$macos_asset")"
-          test "$windows_size" -gt 0 && test "$macos_size" -gt 0
-          release_url="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}"
-          published_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          node .github/scripts/nightly-release.mjs changes nightly-assets/changes.tsv > nightly-assets/changes.json
-          jq -n \
-            --arg version "$DEVELOPMENT_VERSION" \
-            --arg commit "$short_commit" \
-            --arg sourceCommittedAtUtc "$source_committed_at" \
-            --arg publishedAtUtc "$published_at" \
-            --argjson runId "$GITHUB_RUN_ID" \
-            --arg releaseUrl "$release_url" \
-            --slurpfile changes nightly-assets/changes.json \
-            --arg windowsName "$windows_asset" \
-            --arg windowsUrl "https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${windows_asset}" \
-            --arg windowsSha "$windows_sha" \
-            --argjson windowsSize "$windows_size" \
-            --arg macosName "$macos_asset" \
-            --arg macosUrl "https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${macos_asset}" \
-            --arg macosSha "$macos_sha" \
-            --argjson macosSize "$macos_size" \
-            '{version: $version, commit: $commit, sourceCommittedAtUtc: $sourceCommittedAtUtc, publishedAtUtc: $publishedAtUtc, runId: $runId, releaseUrl: $releaseUrl, changes: $changes[0], assets: [{name: $windowsName, url: $windowsUrl, sha256: $windowsSha, size: $windowsSize}, {name: $macosName, url: $macosUrl, sha256: $macosSha, size: $macosSize}]}' > nightly-assets/build.json
-          gh release view "$tag" --json assets > nightly-assets/release-assets.json
-          upload_immutable_asset() {
-            local asset_path="$1"
-            local asset_name expected_digest existing_digest
-            asset_name="$(basename "$asset_path")"
-            expected_digest="sha256:$(sha256sum "$asset_path" | awk '{print $1}')"
-            existing_digest="$(jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .digest // empty' nightly-assets/release-assets.json)"
-            if [[ -n "$existing_digest" ]]; then
-              if [[ "$existing_digest" != "$expected_digest" ]]; then
-                echo "Historical nightly asset $asset_name already exists with a different digest."
-                exit 1
-              fi
-              return
-            fi
-            gh release upload "$tag" "$asset_path"
-          }
-          upload_immutable_asset "nightly-assets/$windows_asset"
-          upload_immutable_asset "nightly-assets/$macos_asset"
-          existing_notes="$(gh release view "$tag" --json body --jq .body)"
-          note_marker="<!-- nightly-commit:${GITHUB_SHA} -->"
-          if [[ "$existing_notes" != *"$note_marker"* ]]; then
-            {
-              printf '%s\n' "$existing_notes"
-              cat nightly-assets/new-release-notes.md
-              printf '\n%s\n' "$note_marker"
-            } > nightly-assets/release-notes.md
-            gh release edit "$tag" --title "SynthV Toolbox v${base_version} Pre-release" --notes-file nightly-assets/release-notes.md
-          fi
-          node .github/scripts/nightly-release.mjs merge nightly-assets/versions.json nightly-assets/build.json > nightly-assets/versions.next.json
-          mv nightly-assets/versions.next.json nightly-assets/versions.json
-          gh release upload "$tag" nightly-assets/versions.json --clobber

@@ -1,0 +1,58 @@
+appId: com.synthvcopilot.toolbox
+productName: Synthesizer V Toolbox
+directories:
+  app: src/PiDesktop.Tauri
+  output: release
+files:
+  - dist/**/*
+  - package.json
+asar: true
+asarUnpack:
+  - "**/*.node"
+extraResources:
+  - from: LICENSE
+    to: LICENSE
+  - from: packages/agent-runtime/dist
+    to: agent-runtime
+  - from: packages/agent-runtime/node_modules
+    to: agent-runtime/node_modules
+  - from: packages/agent-runtime/package.json
+    to: agent-runtime/package.json
+  - from: src/PiDesktop.Tauri/resources/node
+    to: node
+  - from: src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/dist
+    to: components/synthv-agent-bridge/dist
+  - from: src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/scripts
+    to: components/synthv-agent-bridge/scripts
+  - from: src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/synthv
+    to: components/synthv-agent-bridge/synthv
+  - from: src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/legacy-sv1
+    to: components/synthv-agent-bridge/legacy-sv1
+  - from: src/PiDesktop.Tauri/src-tauri/components/cvrs/cvrs.py
+    to: components/cvrs/cvrs.py
+  - from: src/PiDesktop.Tauri/src-tauri/components/pi-audio
+    to: components/pi-audio
+  - from: src/PiDesktop.Tauri/src-tauri/components/vocal-separation
+    to: components/vocal-separation
+win:
+  target:
+    - nsis
+  artifactName: "${productName}-${version}-setup.${ext}"
+nsis:
+  oneClick: true
+  perMachine: false
+  allowToChangeInstallationDirectory: false
+mac:
+  target:
+    - dmg
+  category: public.app-category.music
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  identity: "${env.CSC_NAME}"
+dmg:
+  artifactName: "${productName}-${version}.${ext}"
+publish:
+  provider: github
+  owner: SynthVCopilot
+  repo: synthv-toolbox
+  releaseType: release
