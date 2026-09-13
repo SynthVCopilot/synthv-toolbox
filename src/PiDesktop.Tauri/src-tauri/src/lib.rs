@@ -42,6 +42,10 @@ mod solo_tuning;
 mod state;
 mod sv2_account_probe;
 mod sv2_concurrent;
+pub mod sv2_data_backup;
+#[cfg(test)]
+#[path = "../../../../test/sv2_data_backup.rs"]
+mod sv2_data_backup_tests;
 mod sv2_profiles;
 mod sv2_session_guard;
 pub mod sv2_session_kit;
