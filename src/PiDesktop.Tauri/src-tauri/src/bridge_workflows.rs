@@ -4,7 +4,7 @@ use std::process::Command;
 use serde_json::{json, Value};
 
 use crate::mcp::{extract_mcp_json, McpManager};
-use crate::synthv::find_node;
+use crate::synthv::{find_node, quiet_command};
 use crate::tuning_profiles::TuningProfile;
 
 const LOCAL_SCORE_EXTENSIONS: &[&str] = &["xml", "musicxml", "mxl", "mid", "midi"];
@@ -112,7 +112,7 @@ pub fn parse_cover_midi(bridge_dir: &Path, midi_path: &str) -> Result<Value, Str
     if !script.is_file() || !bridge_dir.join("dist/src/score-import.js").is_file() {
         return Err("当前应用包不包含 Cover 曲谱转换器。".to_string());
     }
-    let output = Command::new(node)
+    let output = quiet_command(node)
         .arg(script)
         .arg(path)
         .current_dir(bridge_dir)
