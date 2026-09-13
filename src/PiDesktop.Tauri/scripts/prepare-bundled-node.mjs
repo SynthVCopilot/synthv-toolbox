@@ -68,5 +68,9 @@ try {
   else await cp(staged[0].executable, executable);
   if (!executable.endsWith(".exe")) await chmod(executable, 0o755);
   await cp(staged[0].license, join(output, "LICENSE"));
+  await writeFile(
+    join(output, "NOTICE"),
+    `This application bundles Node.js v${NODE_VERSION} from https://nodejs.org/.\nNode.js is distributed under the MIT License; the complete license is staged beside the executable as LICENSE.\n`,
+  );
   await writeFile(join(output, "manifest.json"), JSON.stringify({ version: NODE_VERSION, target, executable: executable.split(/[\\/]/).pop() }, null, 2) + "\n");
 } finally { await rm(temp, { recursive: true, force: true }); }
