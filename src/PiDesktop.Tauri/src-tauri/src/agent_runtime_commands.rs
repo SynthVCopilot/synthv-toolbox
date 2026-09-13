@@ -45,10 +45,27 @@ pub async fn start_agent_runtime(state: State<'_, AppState>) -> Result<RuntimeHe
     if state.agent_runtime.is_running().await {
         return Err("Agent Runtime 已经在运行。".to_string());
     }
+    start_agent_runtime_inner(state.inner()).await
+}
 
-    register_host_capabilities(&state).await;
+pub(crate) async fn ensure_agent_runtime(state: &AppState) -> Result<(), String> {
+    if state.agent_runtime.is_running().await {
+        return Ok(());
+    }
+    start_agent_runtime_inner(state).await.map(|_| ())
+}
+
+async fn start_agent_runtime_inner(state: &AppState) -> Result<RuntimeHello, String> {
+    register_host_capabilities(state).await;
     let entrypoint = runtime_entrypoint(&state.resource_dir)?;
-    let node = crate::synthv::find_node()
+    let bundled_node = if cfg!(target_os = "windows") {
+        state.resource_dir.join("node").join("node.exe")
+    } else {
+        state.resource_dir.join("node").join("bin").join("node")
+    };
+    let node = bundled_node
+        .is_file()
+        .then(|| bundled_node.to_string_lossy().into_owned())
         .ok_or_else(|| "未找到可运行 Agent Runtime 的 Node.js。".to_string())?;
     let current_dir = entrypoint.parent().map(Path::to_path_buf);
     let command = RuntimeCommand {
@@ -144,6 +161,7 @@ fn host_hello() -> HostHello {
                 "synthv.accounts",
                 ["state", "precheck", "activate", "launch"],
             ),
+            capability("host.model", ["resolve"]),
         ],
     }
 }
@@ -254,6 +272,19 @@ async fn register_host_capabilities(state: &AppState) {
     state
         .agent_runtime
         .register_capability("host.capability.invoke", handler)
+        .await;
+    let settings = state.settings.clone();
+    let model_handler: CapabilityHandler = Arc::new(move |_params| {
+        let settings = settings.clone();
+        Box::pin(async move {
+            crate::commands::runtime_model_selection(&settings)
+                .await
+                .map_err(|message| rpc_error("model_unavailable", message))
+        })
+    });
+    state
+        .agent_runtime
+        .register_capability("host.model.resolve", model_handler)
         .await;
 }
 

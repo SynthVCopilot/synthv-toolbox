@@ -22,11 +22,13 @@ test("JSONL worker negotiates before creating, sending to and closing a Pi sessi
   const prompts = [];
   let disposed = false;
   const worker = new runtime.AgentRuntimeWorker({
-    create: async ({ sessionId }) => ({
-      prompt: async (input) => { prompts.push(`${sessionId}:${input}`); },
+    create: async ({ sessionId, model }) => ({
+      prompt: async (input) => { prompts.push(`${sessionId}:${model.providerId}:${input}`); return "assistant reply"; },
       dispose: () => { disposed = true; },
     }),
-  });
+  }, { request: async (method) => method === "host.model.resolve" ? {
+    providerId: "openai", modelId: "gpt-4.1", credentials: [{ id: "credential-1", providerId: "openai", modelId: "gpt-4.1", authMethod: "api-key", apiKey: "temporary" }],
+  } : {} });
 
   const beforeHello = JSON.parse((await worker.handleJsonl(request("1", "session.initialize", { sessionId: "s1" })))[0]);
   assert.equal(beforeHello.error.code, "protocol.not-negotiated");
@@ -40,8 +42,10 @@ test("JSONL worker negotiates before creating, sending to and closing a Pi sessi
   assert.equal(hello.result.runtimeId, runtime.AGENT_RUNTIME_ID);
 
   assert.equal(JSON.parse((await worker.handleJsonl(request("3", "session.initialize", { sessionId: "s1" })))[0]).ok, true);
-  assert.equal(JSON.parse((await worker.handleJsonl(request("4", "session.send", { sessionId: "s1", input: "hello" })))[0]).result.accepted, true);
-  assert.deepEqual(prompts, ["s1:hello"]);
+  const sent = JSON.parse((await worker.handleJsonl(request("4", "session.send", { sessionId: "s1", input: "hello" })))[0]);
+  assert.equal(sent.result.accepted, true);
+  assert.equal(sent.result.message, "assistant reply");
+  assert.deepEqual(prompts, ["s1:openai:hello"]);
   assert.equal(JSON.parse((await worker.handleJsonl(request("5", "session.close", { sessionId: "s1" })))[0]).result.closed, true);
   assert.equal(disposed, true);
 });
@@ -122,14 +126,22 @@ test("Pi session factory injects discovered default extension paths into the res
         constructor(options) { loaderOptions = options; }
         async reload() {}
       },
+      ModelRuntime: {
+        create: async () => ({
+          setRuntimeApiKey: async () => {},
+          getModel: () => ({ id: "model-1" }),
+        }),
+      },
       createAgentSession: async (options) => { createOptions = options; return { session }; },
     }),
   );
-  const created = await factory.create({ sessionId: "s1", cwd: "C:/project" });
+  const created = await factory.create({ sessionId: "s1", cwd: "C:/project", model: { providerId: "example", modelId: "model-1", apiKey: "temporary" } });
   assert.equal(typeof created.prompt, "function");
   assert.deepEqual(loaderOptions.additionalExtensionPaths, ["C:/plugins/com.example/backend/index.js"]);
   assert.equal(createOptions.resourceLoader instanceof Object, true);
   assert.equal(createOptions.noTools, "all");
+  assert.deepEqual(createOptions.model, { id: "model-1" });
+  assert.equal(createOptions.modelRuntime instanceof Object, true);
 });
 
 test("model auth uses adapter request contracts and reports missing stream support", async () => {
@@ -150,6 +162,17 @@ test("model auth uses adapter request contracts and reports missing stream suppo
   assert.deepEqual(result, { kind: "ok", value: { output: "credential-1:model-1" } });
   const stream = await gateway.stream("example", { modelId: "model-1", input: "hi" });
   assert.equal(stream.kind, "unsupported");
+});
+
+test("session initialization rejects a host model selection without credentials", async () => {
+  const worker = new runtime.AgentRuntimeWorker(
+    { create: async () => ({ prompt: async () => "", dispose: () => {} }) },
+    { request: async () => ({ providerId: "openai", modelId: "gpt-4.1", credentials: [] }) },
+  );
+  await worker.handleJsonl(request("hello", "host.hello", { hostId: "host", protocol: { min: "1.0", max: "1.0" }, capabilities: [] }));
+  const response = JSON.parse((await worker.handleJsonl(request("init", "session.initialize", { sessionId: "s1" })))[0]);
+  assert.equal(response.ok, false);
+  assert.match(response.error.message, /No eligible credential/);
 });
 
 test("stdio worker emits JSONL responses and discovers backend and UI-only plugins", async () => {
