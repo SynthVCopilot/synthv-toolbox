@@ -5,30 +5,23 @@ import { fileURLToPath } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const read = (filename) => readFileSync(join(root, filename), "utf8").replace(/\r\n/g, "\n");
-const updater = read("electron/updater.ts");
+const updater = read("src/PiDesktop.Tauri/electron/updater.ts");
 const builder = read("electron-builder.yml");
 
 assert.match(updater, /from "electron-updater"/);
-assert.match(updater, /export type UpdateChannel = "stable" \| "nightly"/);
-assert.match(updater, /this\.updater\.channel = this\.channel/);
-assert.match(updater, /this\.updater\.allowPrerelease = this\.channel === "nightly"/);
-assert.match(updater, /this\.updater\.autoDownload = false/);
-assert.match(updater, /this\.updater\.autoInstallOnAppQuit = true/);
+assert.match(updater, /client\.autoDownload = true/);
+assert.match(updater, /client\.autoInstallOnAppQuit = true/);
 assert.match(updater, /checkForUpdates\(\)/);
-assert.match(updater, /update-available[\s\S]*void this\.download\(\)/);
+assert.match(updater, /update-available/);
 assert.match(updater, /download-progress/);
-assert.match(updater, /update-downloaded[\s\S]*restartRequired: true/);
-assert.match(updater, /quitAndInstall\(false, true\)/);
-assert.match(updater, /status: "error"/);
+assert.match(updater, /update-downloaded[\s\S]*quitAndInstall\(false, true\)/);
+assert.match(updater, /phase: "error"/);
 
 assert.match(builder, /^asar: true$/m);
 assert.match(builder, /^asarUnpack:$/m);
 assert.match(builder, /\*\*\/\*\.node/);
-assert.match(builder, /from: electron\/dist\/main\.js\n    to: electron\/main\.js/);
-assert.match(builder, /from: electron\/dist\/preload\.js\n    to: electron\/preload\.js/);
-assert.match(builder, /from: electron\/dist\/updater\.js\n    to: electron\/updater\.js/);
-assert.match(builder, /from: packages\/agent-runtime\/dist\n    to: agent-runtime\/dist/);
-assert.match(builder, /from: packages\/agent-runtime\/node_modules\n    to: agent-runtime\/node_modules/);
+assert.match(builder, /^  - dist\/\*\*\/\*$/m);
+assert.doesNotMatch(builder, /electron\/dist|packages\/agent-runtime\/node_modules|resources\/node/);
 assert.match(builder, /^win:[\s\S]*^  target:[\s\S]*^    - nsis$/m);
 assert.match(builder, /^mac:[\s\S]*^  target:[\s\S]*^    - dmg$/m);
 assert.match(builder, /hardenedRuntime: true/);

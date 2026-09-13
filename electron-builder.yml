@@ -6,20 +6,6 @@ directories:
 files:
   - dist/**/*
   - package.json
-  - from: electron/dist/main.js
-    to: electron/main.js
-  - from: electron/dist/preload.js
-    to: electron/preload.js
-  - from: electron/dist/updater.js
-    to: electron/updater.js
-  - from: packages/agent-runtime/dist
-    to: agent-runtime/dist
-  - from: packages/agent-runtime/node_modules
-    to: agent-runtime/node_modules
-  - from: packages/agent-runtime/package.json
-    to: agent-runtime/package.json
-  - from: packages/runtime-protocol/dist
-    to: runtime-protocol
 asar: true
 asarUnpack:
   - "**/*.node"

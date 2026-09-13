@@ -25,11 +25,16 @@ export function createUpdaterService(client: AppUpdater = autoUpdater): UpdaterS
   };
   const version = (info: UpdateInfo) => info.version;
 
+  client.autoDownload = true;
+  client.autoInstallOnAppQuit = true;
   client.on("checking-for-update", () => setState({ phase: "checking" }));
   client.on("update-available", (info) => setState({ phase: "available", version: version(info) }));
   client.on("update-not-available", () => setState({ phase: "idle" }));
   client.on("download-progress", (progress: ProgressInfo) => setState({ phase: "downloading", progress: progress.percent }));
-  client.on("update-downloaded", (info) => setState({ phase: "ready", version: version(info) }));
+  client.on("update-downloaded", (info) => {
+    setState({ phase: "ready", version: version(info) });
+    client.quitAndInstall(false, true);
+  });
   client.on("error", (error) => setState({ phase: "error", error: error.message }));
 
   return {

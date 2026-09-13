@@ -33,7 +33,7 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Build desktop assets
         working-directory: src/PiDesktop.Tauri
-        run: npm run build
+        run: npm run build:electron
       - name: Validate code-signing environment
         shell: pwsh
         env:

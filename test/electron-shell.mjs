@@ -7,7 +7,7 @@ const electronMain = readFileSync(new URL("../src/PiDesktop.Tauri/electron/main.
 const preload = readFileSync(new URL("../src/PiDesktop.Tauri/electron/preload.ts", import.meta.url), "utf8");
 const bridge = readFileSync(new URL("../src/PiDesktop.Tauri/electron/bridge.ts", import.meta.url), "utf8");
 const updater = readFileSync(new URL("../src/PiDesktop.Tauri/electron/updater.ts", import.meta.url), "utf8");
-const runtimeHost = readFileSync(new URL("../src/PiDesktop.Tauri/services/runtime-host.ts", import.meta.url), "utf8");
+const runtimeHost = readFileSync(new URL("../src/PiDesktop.Tauri/electron/services/runtime-host.ts", import.meta.url), "utf8");
 const api = readFileSync(new URL("../src/PiDesktop.Tauri/src/api.ts", import.meta.url), "utf8");
 const rendererMain = readFileSync(new URL("../src/PiDesktop.Tauri/src/main.ts", import.meta.url), "utf8");
 
@@ -55,5 +55,5 @@ test("Electron host routes updater, runtime, plugin, and MCP commands through re
   }
   assert.match(electronMain, /webContents\.send\("toolbox:event"/);
   assert.match(updater, /autoUpdater/);
-  assert.match(runtimeHost, /createRuntimeHost/);
+  assert.match(runtimeHost, /class ElectronRuntimeHost/);
 });
