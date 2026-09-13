@@ -150,6 +150,15 @@ fn required_privileged_permissions_keep_a_plugin_disabled_until_every_grant_exis
         ["com.example.required"]
     );
 
+    let revoked =
+        plugin_manager::set_internal_functions_enabled(&installed, "com.example.required", false)
+            .unwrap();
+    assert!(!revoked.enabled);
+    plugin_manager::set_internal_functions_enabled(&installed, "com.example.required", true)
+        .unwrap();
+    assert!(!plugin_manager::list(&installed).unwrap()[0].enabled);
+    plugin_manager::set_enabled(&installed, "com.example.required", true, true, true).unwrap();
+
     plugin_manager::disable_plugins_requiring_permission(&installed, "host.internal").unwrap();
     assert!(!plugin_manager::list(&installed).unwrap()[0].enabled);
     assert!(plugin_manager::runnable_plugin_ids(&installed, true, true)

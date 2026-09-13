@@ -4,3 +4,4 @@
 - 新格式采用权限名到 `none`、`optional`、`required` 的映射；缺少键等同 `none`，旧数组格式直接判为无效。
 - `none` 始终禁止逐插件授权；`optional` 可在全局开关开启后逐插件授权；`required` 在未获全局和逐插件授权时阻止插件启用及 Runtime 加载。
 - 宿主调用仍在每次 capability 分派前重新鉴权，插件状态和前端禁用逻辑不能代替宿主检查。
+- Rust 宿主计算可运行插件白名单并交给 Node Runtime；撤销 required 权限会持久停用插件，重新授权后仍需用户明确启用。

@@ -206,6 +206,9 @@ pub fn set_internal_functions_enabled(
     }
     let mut state = read_state(&path)?;
     state.internal_functions_enabled = enabled;
+    if !enabled && permission_level(&manifest, "host.internal") == PluginPermission::Required {
+        state.enabled = false;
+    }
     write_state(&path, &state)?;
     Ok(installed_plugin(manifest, state))
 }
@@ -222,6 +225,9 @@ pub fn set_advanced_functions_enabled(
     }
     let mut state = read_state(&path)?;
     state.advanced_functions_enabled = enabled;
+    if !enabled && permission_level(&manifest, "host.advanced") == PluginPermission::Required {
+        state.enabled = false;
+    }
     write_state(&path, &state)?;
     Ok(installed_plugin(manifest, state))
 }
