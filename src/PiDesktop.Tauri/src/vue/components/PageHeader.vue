@@ -8,7 +8,7 @@ const { t } = useI18n();
 </script>
 
 <template>
-  <header class="topbar" data-tauri-drag-region>
+  <header class="topbar">
     <div>
       <h1>{{ title }}</h1>
       <p>{{ subtitle }}</p>
