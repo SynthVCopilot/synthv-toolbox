@@ -531,6 +531,58 @@ fn build_ai_provider(
     })
 }
 
+pub(crate) async fn runtime_model_selection(
+    settings: &tokio::sync::RwLock<ToolboxSettings>,
+) -> Result<Value, String> {
+    let settings = settings.read().await.clone();
+    let provider = settings.ai_provider;
+    let model = settings.model_for(provider).to_string();
+    let mut credentials = Vec::new();
+    for key in settings
+        .api_keys_for(provider)
+        .iter()
+        .filter(|key| key.enabled && key.models.iter().any(|available| available == &model))
+    {
+        let api_key = api_keys::load(provider, &key.id)?;
+        credentials.push(json!({
+            "id": key.id,
+            "providerId": provider.as_str(),
+            "modelId": model,
+            "authMethod": "api-key",
+            "apiKey": api_key.as_str(),
+        }));
+    }
+    for account in settings.oauth_accounts.iter().filter(|account| {
+        account.provider == provider && account.enabled && settings.oauth_enabled(provider)
+    }) {
+        if !matches!(
+            provider,
+            AiProviderId::Anthropic | AiProviderId::OpenaiCodex
+        ) {
+            continue;
+        }
+        let credential = oauth::load_ready_credential(account)?;
+        if credential.access.trim().is_empty() {
+            continue;
+        }
+        credentials.push(json!({
+            "id": account.id,
+            "providerId": provider.as_str(),
+            "modelId": model,
+            "authMethod": "oauth",
+            "apiKey": credential.access,
+        }));
+    }
+    if credentials.is_empty() {
+        return Err("当前模型没有可用凭据。请在设置中配置 API Key 或登录 OAuth 账号。".to_string());
+    }
+    Ok(json!({
+        "providerId": provider.as_str(),
+        "modelId": model,
+        "credentials": credentials,
+    }))
+}
+
 fn eligible_accounts_for_model(
     provider: AiProviderId,
     model: &str,
@@ -3726,58 +3778,56 @@ pub(crate) async fn run_agent_message(
     if input.chars().count() > 32_000 {
         return Err("消息超过 32,000 字符限制。".to_string());
     }
-    let ai_settings = state.settings.read().await.clone();
-    let agent_work_mode = ai_settings.agent_work_mode;
-    let mcp_configs = ai_settings.mcp_servers.clone();
-    state.mcp.ensure_configured(&mcp_configs).await?;
-    let bindings = state.mcp.bindings().await;
-    let runtime = Handle::current();
-    let state_mcp = state.mcp.clone();
-    let bridge_dir = state.bridge_dir.clone();
-    let resource_dir = state.resource_dir.clone();
-    let components_dir = state.components_dir.clone();
-    let downloads = state.downloads.clone();
-    let media_tasks = state.media_tasks.clone();
-    let file_approvals = state.file_approvals.clone();
-    let session = state.agent.clone();
-    let credential_balancer_for_agent = state.credential_balancer.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let provider = build_ai_provider(&ai_settings, credential_balancer_for_agent)?;
-        let mut session = session.lock().map_err(|_| "会话状态锁已损坏".to_string())?;
+    crate::agent_runtime_commands::ensure_agent_runtime(state).await?;
+    let conversation_id = {
+        let mut session = state
+            .agent
+            .lock()
+            .map_err(|_| "会话状态锁已损坏".to_string())?;
         ensure_session(&mut session);
-        let conversation_id = session
+        session
             .id
             .clone()
-            .ok_or_else(|| "会话尚未初始化".to_string())?;
-        apply_agent_work_mode(&mut session.messages, agent_work_mode);
-        let mcp_executor = McpToolExecutor::new(bindings, runtime.clone());
-        let executor = ToolboxAudioToolExecutor::new(
-            mcp_executor,
-            ToolboxAudioToolContext {
-                manager: state_mcp,
-                runtime,
-                bridge_dir,
-                resource_dir,
-                components_dir,
-                downloads,
-                media_tasks,
-                file_approvals,
-                conversation_id,
-                work_mode: agent_work_mode,
-            },
-        );
-        let added = AgentLoop::new(&provider, &executor)
-            .run_turn(&mut session.messages, &input)
-            .map_err(|error| error.to_string())?;
-        if session.title == "新对话" {
-            session.title = input.chars().take(28).collect();
-        }
-        let conversation = session_to_conversation(&session, Utc::now().to_rfc3339())?;
-        save_conversation(&conversation)?;
-        Ok(visible_messages(&added))
-    })
-    .await
-    .map_err(|error| error.to_string())?
+            .ok_or_else(|| "会话尚未初始化".to_string())?
+    };
+    state.agent_runtime.request(
+        "session.initialize",
+        json!({ "sessionId": conversation_id, "cwd": crate::agent::data_root().join("sessions").join(&conversation_id) }),
+    ).await.map_err(|error| error.to_string())?;
+    let result = state
+        .agent_runtime
+        .request(
+            "session.send",
+            json!({ "sessionId": conversation_id, "input": input }),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let assistant = result
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if assistant.is_empty() {
+        return Err("Agent Runtime 没有返回助手消息。".to_string());
+    }
+    let mut session = state
+        .agent
+        .lock()
+        .map_err(|_| "会话状态锁已损坏".to_string())?;
+    let added = vec![ChatMessage::user(input), ChatMessage::assistant(assistant)];
+    session.messages.extend(added.clone());
+    if session.title == "新对话" {
+        session.title = session
+            .messages
+            .iter()
+            .find(|message| message.role == Role::User)
+            .map(|message| message.content.chars().take(28).collect())
+            .unwrap_or_else(|| "新对话".to_string());
+    }
+    let conversation = session_to_conversation(&session, Utc::now().to_rfc3339())?;
+    save_conversation(&conversation)?;
+    Ok(added)
 }
 
 #[tauri::command]
