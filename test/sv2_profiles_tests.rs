@@ -492,6 +492,7 @@ fn internal_clear_local_session_removes_only_the_managed_session_file() {
 }
 
 #[test]
+#[cfg(windows)]
 fn internal_force_activate_reuses_the_transactional_slot_switch() {
     let (root, paths) = fixture();
     let mut manifest = import_fixture(&paths, "A");
@@ -504,6 +505,25 @@ fn internal_force_activate_reuses_the_transactional_slot_switch() {
     let state = service.force_activate_slot(target.clone()).unwrap();
 
     assert_eq!(state.active_slot_id.as_deref(), Some(target.as_str()));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[cfg(not(windows))]
+fn internal_force_activate_rejects_unsupported_platform_without_switching() {
+    let (root, paths) = fixture();
+    let mut manifest = import_fixture(&paths, "A");
+    let original = manifest.active_slot_id.clone();
+    let target = add_parked(&paths, &mut manifest, "B");
+    let service = Sv2ProfileService {
+        paths: Ok(paths),
+        gate: Mutex::new(()),
+    };
+
+    let error = service.force_activate_slot(target).unwrap_err();
+
+    assert!(error.contains("仅支持 Windows"));
+    assert_eq!(service.cached_state().unwrap().active_slot_id, original);
     fs::remove_dir_all(root).unwrap();
 }
 
