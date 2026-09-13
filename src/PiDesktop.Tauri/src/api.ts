@@ -27,6 +27,7 @@ import type {
   ChatMessage,
   ChineseRhymeLookup,
   ComponentDownload,
+  InstalledPlugin,
   CoverTaskRequest,
   CreativeHistoryEntry,
   ConversationSnapshot,
@@ -83,6 +84,8 @@ let previewSv2ConcurrentEnabled = true;
 let previewSv2AccountIndicatorEnabled = false;
 let previewSmartSvpLaunchEnabled = false;
 let previewSmartSvpAlwaysAsk = false;
+let previewPluginInternalFunctionsEnabled = false;
+let previewPluginAdvancedFunctionsEnabled = false;
 let previewHttpApiStatus: HttpApiStatus = {
   enabled: false,
   agentEnabled: false,
@@ -449,6 +452,8 @@ const previewState = (): BootstrapState => ({
   sv2AccountIndicatorEnabled: previewSv2AccountIndicatorEnabled,
   smartSvpLaunchEnabled: previewSmartSvpLaunchEnabled,
   smartSvpAlwaysAsk: previewSmartSvpAlwaysAsk,
+  pluginInternalFunctionsEnabled: previewPluginInternalFunctionsEnabled,
+  pluginAdvancedFunctionsEnabled: previewPluginAdvancedFunctionsEnabled,
   autostartEnabled: undefined,
   autostartError: undefined,
   svpAssociation: {
@@ -504,6 +509,14 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     return previewState() as T;
   }
   if (command === "set_svp_always_ask") { previewSmartSvpAlwaysAsk = Boolean(args?.alwaysAsk); return previewState() as T; }
+  if (command === "set_plugin_internal_functions_enabled") {
+    previewPluginInternalFunctionsEnabled = Boolean(args?.enabled);
+    return previewState() as T;
+  }
+  if (command === "set_plugin_advanced_functions_enabled") {
+    previewPluginAdvancedFunctionsEnabled = Boolean(args?.enabled);
+    return previewState() as T;
+  }
   if (command === "pending_svp_route") return null as T;
   if (command === "get_http_api_status") return { ...previewHttpApiStatus } as T;
   if (command === "get_ffmpeg_configuration") return { directory: previewFfmpegDirectory } as T;
@@ -543,6 +556,10 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   }
   if (command === "discover_agent_plugins") return [] as T;
   if (command === "invoke_agent_plugin") return { preview: true } as T;
+  if (command === "list_installed_plugins") return [] as T;
+  if (command === "install_agent_plugin" || command === "set_agent_plugin_enabled" || command === "set_agent_plugin_internal_functions_enabled" || command === "set_agent_plugin_advanced_functions_enabled" || command === "uninstall_agent_plugin") {
+    throw new Error("浏览器预览不修改本机插件。请在桌面应用中管理插件。");
+  }
   if (command === "set_sv2_account_indicator") {
     const enabled = Boolean(args?.enabled);
     if (enabled && !previewSv2AccountIndicatorEnabled && !Boolean(args?.acknowledged)) {
@@ -1427,6 +1444,10 @@ export const api = {
     call<BootstrapState>("set_svp_launch_routing", { enabled }),
   setSvpLaunchAlwaysAsk: (alwaysAsk: boolean) =>
     call<BootstrapState>("set_svp_always_ask", { alwaysAsk }),
+  setPluginInternalFunctionsEnabled: (enabled: boolean) =>
+    call<BootstrapState>("set_plugin_internal_functions_enabled", { enabled }),
+  setPluginAdvancedFunctionsEnabled: (enabled: boolean) =>
+    call<BootstrapState>("set_plugin_advanced_functions_enabled", { enabled }),
   getPendingSvpRoute: () => call<SvpRoutePlan | null>("pending_svp_route"),
   openSvpDefaultAppsSettings: () =>
     call<OperationResult>("open_svp_default_apps_settings"),
@@ -1461,6 +1482,14 @@ export const api = {
   retryComponentInstall: (taskId: string) => call<ComponentDownload[]>("retry_component_install", { taskId }),
   openDownloadedComponent: (id: string) => call<OperationResult>("open_downloaded_component", { id }),
   removeLocalComponent: (id: string) => call<OperationResult>("remove_local_component", { id }),
+  listInstalledPlugins: () => call<InstalledPlugin[]>("list_installed_plugins"),
+  installAgentPlugin: (sourcePath: string) => call<InstalledPlugin>("install_agent_plugin", { sourcePath }),
+  setAgentPluginEnabled: (pluginId: string, enabled: boolean) => call<InstalledPlugin>("set_agent_plugin_enabled", { pluginId, enabled }),
+  setAgentPluginInternalFunctionsEnabled: (pluginId: string, enabled: boolean) =>
+    call<InstalledPlugin>("set_agent_plugin_internal_functions_enabled", { pluginId, enabled }),
+  setAgentPluginAdvancedFunctionsEnabled: (pluginId: string, enabled: boolean) =>
+    call<InstalledPlugin>("set_agent_plugin_advanced_functions_enabled", { pluginId, enabled }),
+  uninstallAgentPlugin: (pluginId: string) => call<void>("uninstall_agent_plugin", { pluginId }),
   listWorkflowRecipes: () => call<WorkflowRecipe[]>("list_workflow_recipes"),
   listCreativeHistory: (limit = 50) => call<CreativeHistoryEntry[]>("list_creative_history", { limit }),
   listProjectCheckpoints: (limit = 50) => call<ProjectCheckpoint[]>("list_project_checkpoints", { limit }),
@@ -1561,6 +1590,12 @@ export const api = {
   pickDirectory: async (): Promise<string | undefined> => {
     if (preview) return undefined;
     const selected = await open({ multiple: false, directory: true });
+    if (Array.isArray(selected)) return selected[0];
+    return typeof selected === "string" ? selected : undefined;
+  },
+  pickPluginArchive: async (): Promise<string | undefined> => {
+    if (preview) return undefined;
+    const selected = await open({ multiple: false, directory: false, filters: [{ name: "Plugin archive", extensions: ["zip"] }] });
     if (Array.isArray(selected)) return selected[0];
     return typeof selected === "string" ? selected : undefined;
   },

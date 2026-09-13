@@ -1,0 +1,2 @@
+<!doctype html>
+<html lang="en"><body><main><h1>Auto Tune</h1><button id="run">Run</button></main><script type="module">window.parent.postMessage({type:"plugin-ui:ready"}, "*");document.querySelector("#run").addEventListener("click", () => window.parent.postMessage({type:"plugin-ui:request",id:"run",method:"action.run",params:null}, "*"));</script></body></html>

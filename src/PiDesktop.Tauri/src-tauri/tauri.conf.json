@@ -49,6 +49,7 @@
       "../../../packages/agent-runtime/dist": "agent-runtime",
       "../../../packages/agent-runtime/node_modules": "agent-runtime/node_modules",
       "../../../packages/agent-runtime/package.json": "agent-runtime/package.json",
+      "resources/node": "node",
       "components/synthv-agent-bridge/dist": "components/synthv-agent-bridge/dist",
       "components/synthv-agent-bridge/scripts": "components/synthv-agent-bridge/scripts",
       "components/synthv-agent-bridge/synthv": "components/synthv-agent-bridge/synthv",

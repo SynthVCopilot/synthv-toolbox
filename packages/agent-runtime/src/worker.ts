@@ -64,6 +64,8 @@ class FilePluginDiscovery implements PluginDiscovery {
     for (const entry of await readdir(root, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       try {
+        const state = await readPluginState(`${root}/${entry.name}`);
+        if (!state.enabled) continue;
         manifests.push(JSON.parse(await readFile(`${root}/${entry.name}/manifest.json`, "utf8")));
       } catch {
         // A malformed or absent manifest is not a plugin candidate.
@@ -90,6 +92,15 @@ class FilePluginDiscovery implements PluginDiscovery {
 
   extensionPaths(): readonly string[] {
     return this.loaded.flatMap((plugin) => plugin.piExtensionPath ? [plugin.piExtensionPath] : []);
+  }
+}
+
+async function readPluginState(root: string): Promise<{ enabled: boolean }> {
+  try {
+    const state = JSON.parse(await readFile(`${root}/.toolbox-plugin-state.json`, "utf8")) as { enabled?: unknown };
+    return { enabled: state.enabled !== false };
+  } catch {
+    return { enabled: true };
   }
 }
 

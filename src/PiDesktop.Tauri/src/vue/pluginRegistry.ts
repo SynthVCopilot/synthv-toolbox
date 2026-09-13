@@ -6,7 +6,7 @@ import type {
 
 export type { PluginManifest } from "@synthv-toolbox/runtime-protocol";
 
-export type HostPageId = "home" | "accounts" | "import" | "convert" | "analysis" | "quality" | "lyrics" | "history" | "copilot" | "ai" | "components" | "bridge" | "connections" | "settings" | "about";
+export type HostPageId = "home" | "accounts" | "import" | "convert" | "analysis" | "quality" | "lyrics" | "history" | "copilot" | "ai" | "components" | "bridge" | "connections" | "plugins" | "settings" | "about";
 export type PluginPageId = `plugin:${string}`;
 export type PluginLoadStatus = "discovered" | "loading" | "active" | "disabled" | "failed";
 

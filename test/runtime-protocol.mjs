@@ -60,3 +60,16 @@ test("accepts a GUI-capable plugin manifest only when its contributions are safe
   assert.equal(protocol.validatePluginManifest({ ...manifest, pages: [{ ...manifest.pages[0], entry: "../ui/index.html" }] }), undefined);
   assert.equal(protocol.validatePluginManifest({ ...manifest, permissions: ["host.root"] }), undefined);
 });
+
+test("recognizes explicit privileged plugin permissions", () => {
+  const manifest = {
+    schemaVersion: 1,
+    id: "com.example.privileged",
+    name: "Privileged plugin",
+    version: "1.0.0",
+    hostApi: { min: "1.0", max: "1.0" },
+    permissions: ["host.internal", "host.advanced"],
+  };
+  assert.deepEqual(protocol.validatePluginManifest(manifest), manifest);
+  assert.equal(protocol.validatePluginManifest({ ...manifest, permissions: ["host.internal", "host.internal"] }), undefined);
+});

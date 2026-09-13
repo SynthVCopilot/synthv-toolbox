@@ -1,4 +1,4 @@
-import { CredentialRouter, type CredentialMetadata, type ProviderAdapterHost, type ProviderRequest, type ProviderRequestContext, type ProviderResponse, type ProviderStreamEvent } from "@model-auth/core";
+import { CredentialRouter, createCredentialMetadata, type CredentialMetadata, type ProviderAdapterHost, type ProviderRequest, type ProviderRequestContext, type ProviderResponse, type ProviderStreamEvent } from "@model-auth/core";
 import { fileURLToPath } from "node:url";
 import {
   HOST_API_VERSION,
@@ -30,13 +30,22 @@ export const AGENT_RUNTIME_CAPABILITIES: CapabilityDescriptor[] = [
 ];
 
 export interface PiSession {
-  prompt(input: string): Promise<void>;
+  prompt(input: string): Promise<string>;
   dispose(): void | Promise<void>;
 }
 
 export interface PiSessionFactory {
-  create(input: { sessionId: string; cwd?: string }): Promise<PiSession>;
+  create(input: { sessionId: string; cwd?: string; systemPrompt?: string; model?: PiModelSelection }): Promise<PiSession>;
 }
+
+export interface PiModelSelection {
+  providerId: string;
+  modelId: string;
+  apiKey: string;
+  credentialId?: string;
+}
+
+interface HostModelCredential extends PiModelSelection { id: string; authMethod: "api-key" | "oauth"; }
 
 export interface HostCapabilityTransport {
   request(method: string, params: JsonValue): Promise<JsonValue>;
@@ -85,8 +94,9 @@ export interface PiResourceLoader {
 
 export interface PiSdk {
   getAgentDir(): string;
-  DefaultResourceLoader: new (options: { cwd: string; agentDir: string; additionalExtensionPaths: string[] }) => PiResourceLoader;
-  createAgentSession(options: { cwd: string; noTools: "all"; resourceLoader: PiResourceLoader }): Promise<{ session: PiSession }>;
+  DefaultResourceLoader: new (options: { cwd: string; agentDir: string; additionalExtensionPaths: string[]; systemPrompt?: string }) => PiResourceLoader;
+  ModelRuntime: { create(options: { refreshOnCreate: false }): Promise<{ setRuntimeApiKey(providerId: string, apiKey: string): Promise<void>; getModel(providerId: string, modelId: string): unknown }> };
+  createAgentSession(options: { cwd: string; noTools: "builtin"; resourceLoader: PiResourceLoader; modelRuntime?: unknown; model?: unknown }): Promise<{ session: { prompt(input: string): Promise<void>; dispose(): void | Promise<void>; agent?: { state?: { messages?: unknown[] } } } }>;
 }
 
 export class ModelAuthGateway {
@@ -145,15 +155,26 @@ export function createPiSessionFactory(
         cwd,
         agentDir: sdk.getAgentDir(),
         additionalExtensionPaths: [...additionalExtensionPaths()],
+        ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
       });
       await resourceLoader.reload();
+      if (!input.model) throw new Error("A host-selected model is required to create a Pi session.");
+      const modelRuntime = await sdk.ModelRuntime.create({ refreshOnCreate: false });
+      await modelRuntime.setRuntimeApiKey(input.model.providerId, input.model.apiKey);
+      const model = modelRuntime.getModel(input.model.providerId, input.model.modelId);
+      if (!model) throw new Error(`Pi does not support ${input.model.providerId}/${input.model.modelId}.`);
       const result = await sdk.createAgentSession({
         cwd,
-        noTools: "all",
+        noTools: "builtin",
         resourceLoader,
+        modelRuntime,
+        model,
       });
       return {
-        prompt: (text) => result.session.prompt(text),
+        prompt: async (text) => {
+          await result.session.prompt(text);
+          return assistantText(result.session.agent?.state?.messages);
+        },
         dispose: () => result.session.dispose(),
       };
     },
@@ -162,7 +183,7 @@ export function createPiSessionFactory(
 
 export class AgentRuntimeWorker {
   private negotiatedVersion: ApiVersion | undefined;
-  private readonly sessions = new Map<string, PiSession>();
+  private readonly sessions = new Map<string, { session: PiSession; signature: string }>();
 
   constructor(
     private readonly sessionsFactory: PiSessionFactory = createPiSessionFactory(),
@@ -184,7 +205,7 @@ export class AgentRuntimeWorker {
   async dispose(): Promise<void> {
     const activeSessions = [...this.sessions.values()];
     this.sessions.clear();
-    await Promise.all(activeSessions.map(async (session) => { await session.dispose(); }));
+    await Promise.all(activeSessions.map(async ({ session }) => { await session.dispose(); }));
   }
 
   private async handleRequest(request: RpcRequest): Promise<RpcResponseSuccess | RpcResponseFailure> {
@@ -220,27 +241,64 @@ export class AgentRuntimeWorker {
   private async initializeSession(request: RpcRequest): Promise<RpcResponseSuccess | RpcResponseFailure> {
     const params = readSessionParams(request.params, false);
     if (!params) return this.failure(request, "session.invalid", "session.initialize requires sessionId and an optional cwd.");
-    if (this.sessions.has(params.sessionId)) return this.failure(request, "session.exists", "The session is already initialized.");
-    const session = await this.sessionsFactory.create(params);
-    this.sessions.set(params.sessionId, session);
+    const model = await this.hostModelSelection();
+    const signature = JSON.stringify([params.cwd ?? "", params.systemPrompt ?? "", model.providerId, model.modelId, model.credentialId ?? ""]);
+    const existing = this.sessions.get(params.sessionId);
+    if (existing?.signature === signature) return this.success(request, { sessionId: params.sessionId, reused: true });
+    if (existing) await existing.session.dispose();
+    const session = await this.sessionsFactory.create({ ...params, model });
+    this.sessions.set(params.sessionId, { session, signature });
     return this.success(request, { sessionId: params.sessionId });
   }
 
   private async sendToSession(request: RpcRequest): Promise<RpcResponseSuccess | RpcResponseFailure> {
     const params = readSessionParams(request.params, true);
     if (!params) return this.failure(request, "session.invalid", "session.send requires sessionId and input.");
-    const session = this.sessions.get(params.sessionId);
-    if (!session) return this.failure(request, "session.not-found", "The session is not initialized.");
-    await session.prompt(params.input);
-    return this.success(request, { sessionId: params.sessionId, accepted: true });
+    const record = this.sessions.get(params.sessionId);
+    if (!record) return this.failure(request, "session.not-found", "The session is not initialized.");
+    const message = await record.session.prompt(params.input);
+    return this.success(request, { sessionId: params.sessionId, accepted: true, message });
+  }
+
+  private async hostModelSelection(): Promise<PiModelSelection> {
+    if (!this.hostCapabilities) throw new Error("Host model capability is unavailable.");
+    const value = await this.hostCapabilities.request("host.model.resolve", {});
+    if (!isRecord(value) || typeof value.providerId !== "string" || typeof value.modelId !== "string" || !Array.isArray(value.credentials)
+      || !value.providerId || !value.modelId) {
+      throw new Error("Host returned an invalid model selection.");
+    }
+    const credentials = (value.credentials as unknown[]).filter(isHostModelCredential);
+    if (!credentials.length) throw new Error("No eligible credential is available for the selected model.");
+    const adapter: ProviderAdapterHost = {
+      authorize: async () => { throw new Error("Authentication is managed by the native host."); },
+      remove: async () => {},
+      request: async (credentialId) => {
+        const credential = credentials.find((item) => item.id === credentialId);
+        if (!credential) throw new Error("The routed credential is no longer available.");
+        return { output: credential };
+      },
+    };
+    const gateway = new ModelAuthGateway(
+      credentials.map((credential) => createCredentialMetadata({
+        id: credential.id,
+        providerId: credential.providerId,
+        authMethod: credential.authMethod,
+        modelIds: [credential.modelId],
+      })),
+      new Map([[value.providerId, adapter]]),
+    );
+    const routed = await gateway.request(value.providerId, { modelId: value.modelId, input: null });
+    if (routed.kind !== "ok" || !isHostModelCredential(routed.value.output)) throw new Error("The selected model is unsupported.");
+    const selected = routed.value.output;
+    return { providerId: selected.providerId, modelId: selected.modelId, apiKey: selected.apiKey, credentialId: selected.id };
   }
 
   private async closeSession(request: RpcRequest): Promise<RpcResponseSuccess | RpcResponseFailure> {
     const params = readSessionParams(request.params, false);
     if (!params) return this.failure(request, "session.invalid", "session.close requires sessionId.");
-    const session = this.sessions.get(params.sessionId);
-    if (!session) return this.failure(request, "session.not-found", "The session is not initialized.");
-    await session.dispose();
+    const record = this.sessions.get(params.sessionId);
+    if (!record) return this.failure(request, "session.not-found", "The session is not initialized.");
+    await record.session.dispose();
     this.sessions.delete(params.sessionId);
     return this.success(request, { sessionId: params.sessionId, closed: true });
   }
@@ -319,11 +377,12 @@ function parseHostHello(value: JsonValue): HostHello | undefined {
   return { hostId: value.hostId, protocol: value.protocol, capabilities };
 }
 
-function readSessionParams(value: JsonValue, requiresInput: boolean): { sessionId: string; cwd?: string; input: string } | undefined {
+function readSessionParams(value: JsonValue, requiresInput: boolean): { sessionId: string; cwd?: string; systemPrompt?: string; input: string } | undefined {
   if (!isRecord(value) || typeof value.sessionId !== "string" || value.sessionId.length === 0) return undefined;
   if (value.cwd !== undefined && typeof value.cwd !== "string") return undefined;
+  if (value.systemPrompt !== undefined && (typeof value.systemPrompt !== "string" || value.systemPrompt.length === 0)) return undefined;
   if (requiresInput && (typeof value.input !== "string" || value.input.length === 0)) return undefined;
-  return { sessionId: value.sessionId, ...(typeof value.cwd === "string" ? { cwd: value.cwd } : {}), input: typeof value.input === "string" ? value.input : "" };
+  return { sessionId: value.sessionId, ...(typeof value.cwd === "string" ? { cwd: value.cwd } : {}), ...(typeof value.systemPrompt === "string" ? { systemPrompt: value.systemPrompt } : {}), input: typeof value.input === "string" ? value.input : "" };
 }
 
 function isCapabilityDescriptor(value: unknown): value is CapabilityDescriptor {
@@ -357,4 +416,23 @@ function unsupported<T>(reason: string): ModelAuthResult<T> {
 function toRouteError(error: unknown): { kind: "http"; status: number } | { kind: "transport" } {
   if (isRecord(error) && typeof error.status === "number") return { kind: "http", status: error.status };
   return { kind: "transport" };
+}
+
+function assistantText(messages: unknown[] | undefined): string {
+  if (!messages) return "";
+  for (const message of [...messages].reverse()) {
+    if (!isRecord(message) || message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    const text = message.content
+      .filter((part): part is Record<string, unknown> => isRecord(part) && part.type === "text" && typeof part.text === "string")
+      .map((part) => part.text as string)
+      .join("");
+    if (text) return text;
+  }
+  return "";
+}
+
+function isHostModelCredential(value: unknown): value is HostModelCredential {
+  return isRecord(value) && typeof value.id === "string" && typeof value.providerId === "string" && typeof value.modelId === "string"
+    && typeof value.apiKey === "string" && (value.authMethod === "api-key" || value.authMethod === "oauth")
+    && value.id.length > 0 && value.providerId.length > 0 && value.modelId.length > 0 && value.apiKey.length > 0;
 }

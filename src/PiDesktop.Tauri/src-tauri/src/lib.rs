@@ -10,6 +10,7 @@ mod audio_prep;
 #[path = "../../../../test/bridge_session_flow.rs"]
 mod bridge_session_flow_tests;
 mod bridge_workflows;
+pub mod bundled_node;
 mod commands;
 mod components;
 mod config;
@@ -32,6 +33,7 @@ mod media_tasks;
 mod oauth;
 pub mod opencode_catalog;
 pub mod plugin_assets;
+pub mod plugin_manager;
 mod process_tree;
 pub mod project_backups;
 #[cfg(test)]
@@ -209,6 +211,12 @@ pub fn run() {
             agent_runtime_commands::stop_agent_runtime,
             agent_runtime_commands::discover_agent_plugins,
             agent_runtime_commands::invoke_agent_plugin,
+            agent_runtime_commands::list_installed_plugins,
+            agent_runtime_commands::install_agent_plugin,
+            agent_runtime_commands::set_agent_plugin_enabled,
+            agent_runtime_commands::set_agent_plugin_internal_functions_enabled,
+            agent_runtime_commands::set_agent_plugin_advanced_functions_enabled,
+            agent_runtime_commands::uninstall_agent_plugin,
             commands::set_autostart,
             commands::get_autostart,
             commands::complete_onboarding,
@@ -245,6 +253,8 @@ pub fn run() {
             commands::sv2_account_usage_snapshot_for_slot,
             commands::set_sv2_account_indicator,
             commands::set_sv2_concurrent_enabled,
+            commands::set_plugin_internal_functions_enabled,
+            commands::set_plugin_advanced_functions_enabled,
             commands::sv2_sync_categories,
             commands::preview_sv2_selective_sync,
             commands::execute_sv2_selective_sync,
