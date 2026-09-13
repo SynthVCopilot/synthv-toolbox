@@ -85,6 +85,7 @@ import type {
   Sv2ProfilesState,
   Sv2SessionInspection,
   Sv2SessionReplacementPreview,
+  Sv2OfflineLicenseStatus,
   Sv2SyncCategory,
   Sv2SyncCategoryId,
   Sv2SyncManifest,
@@ -275,6 +276,7 @@ let accountManagerOpen = false;
 let accountManagerSection: AccountManagerSection = "global";
 let managedProfileSlotId: string | undefined;
 let sv2VoiceCatalog: Sv2CachedVoice[] | undefined;
+const offlineLicenseStatuses = new Map<string, Sv2OfflineLicenseStatus>();
 let sv2VoiceCatalogLoading = false;
 let shellController: ShellController | undefined;
 let lastWiredMarkup = "";
@@ -1876,7 +1878,10 @@ function renderAccountManager(): string {
     const offlineProductList = offlineProducts.length
       ? `<div class="authorization-list offline-license-products">${offlineProducts.map((product) => `<details><summary>${escapeHtml(product.name)} · ${escapeHtml(product.version)}</summary><dl class="profile-storage-list compact"><div><dt>授权 ID</dt><dd><code>${escapeHtml(product.databaseId)}</code></dd></div><div><dt>K2</dt><dd><code>${escapeHtml(product.productId)}</code></dd></div><div><dt>${t("accountUi.vendor")}</dt><dd>${escapeHtml(product.vendor)}</dd></div><div><dt>${t("accountUi.category")}</dt><dd>${escapeHtml(product.category)}</dd></div>${product.attributes.map((attribute) => `<div><dt>${escapeHtml(attribute.key)}</dt><dd><code>${escapeHtml(attribute.value)}</code></dd></div>`).join("")}</dl></details>`).join("")}</div>`
       : `<div class="empty-inline">${t("accountUi.offlineLicenseNoCachedProducts")}</div>`;
-    const offlineLicensePanel = managedSlot ? `<section class="authorization-panel offline-license-panel"><div class="authorization-heading"><div><strong>${t("accountUi.offlineLicense")}</strong><small>${escapeHtml(offlineCacheLabel)} · ${escapeHtml(offlineEligibilityLabel)}</small></div><span class="inventory-status ${offlineLicense?.cacheStatus === "active" ? "verified" : "unknown"}">${escapeHtml(offlineCacheLabel)}</span></div><p>操作前会完整备份当前 session，且必须关闭 SV2；启用会覆盖本机永久授权缓存。</p>${offlineProductList}<div class="manager-action-row"><button class="secondary" data-offline-license-check="${managedSlot.id}">${icon("refresh", 15)} ${t("accounts.refresh")}</button><button class="secondary" data-offline-license-set="${managedSlot.id}" data-offline-license-enabled="${offlineLicense?.cacheStatus !== "active"}">${offlineLicense?.cacheStatus === "active" ? "停用离线授权" : "启用离线授权"}</button><button class="secondary" data-offline-session-restore="${managedSlot.id}">${icon("shield", 15)} ${t("accountUi.restoreOfflineSession")}</button></div></section>` : "";
+    const remoteOffline = offlineLicenseStatuses.get(managedSlot?.id ?? "");
+    const remoteSummary = remoteOffline ? `<small>${t("accountUi.offlineRemoteStatus", { enabled: remoteOffline.enabled, eligible: remoteOffline.eligible, currentDevice: remoteOffline.currentDevice, checkedAt: remoteOffline.checkedAtUtc })}</small>` : "";
+    const canSetOffline = !!remoteOffline && remoteOffline.currentDevice && remoteOffline.eligible && !busy;
+    const offlineLicensePanel = managedSlot ? `<section class="authorization-panel offline-license-panel"><div class="authorization-heading"><div><strong>${t("accountUi.offlineLicense")}</strong><small>${escapeHtml(offlineCacheLabel)} · ${escapeHtml(offlineEligibilityLabel)}</small>${remoteSummary}</div><span class="inventory-status ${remoteOffline?.enabled ? "verified" : "unknown"}">${remoteOffline?.enabled ? t("accountUi.offlineLicenseActive") : offlineCacheLabel}</span></div><p>${t("accountUi.offlineLicenseDirectGuard")}</p>${offlineProductList}<div class="manager-action-row"><button class="secondary" data-offline-license-check="${managedSlot.id}" ${busy ? "disabled" : ""}>${icon("refresh", 15)} ${t("accounts.refresh")}</button><button class="secondary" data-offline-license-set="${managedSlot.id}" data-offline-license-enabled="${!remoteOffline?.enabled}" ${canSetOffline ? "" : "disabled"}>${remoteOffline?.enabled ? t("accountUi.disableOfflineLicense") : t("accountUi.enableOfflineLicense")}</button><button class="secondary" data-offline-session-restore="${managedSlot.id}" ${busy ? "disabled" : ""}>${icon("shield", 15)} ${t("accountUi.restoreOfflineSession")}</button></div></section>` : "";
     body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(officialIdentity.name ?? (managedSlot.sessionCached ? t("accountUi.accountInformationNeedsRefresh") : t("accountUi.signedOut")))}</h3><p>${escapeHtml(officialIdentity.email ?? t("accountUi.accountInformationNeedsRefresh"))}</p><p>${accountUseDot(managedUseState)} ${escapeHtml(managedUseState.label)}</p></div>${managedSlot.isActive ? `<span class="profile-active-badge">${t("accountUi.currentDefault")}</span>` : ""}</div>
       <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>${t("accountUi.note")}<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" placeholder="${t("accountUi.eGProductionAccount")}" /></label><button class="secondary">${t("accountUi.saveNote")}</button></form>
       <section class="authorization-panel"><div class="authorization-heading"><div><strong>${t("accountUi.availableAuthorizations")}</strong><small>${escapeHtml(authorizationSummary)}</small></div><span class="inventory-status ${authorizationStatus ? "verified" : "unknown"}">${authorizationStatus ? t("accountUi.authorizationsDetail", { p0: authorizations.length }) : t("accountUi.notRead")}</span></div>${authorizationList}</section>
@@ -4472,8 +4477,8 @@ document.addEventListener("click", (event) => {
     target.setAttribute("disabled", "true");
     void run(async () => {
       const status = await api.sv2InspectOfflineLicense(slotId);
-      notice = status.enabled ? "本机离线授权已启用。" : "本机离线授权未启用。";
-      await refreshAccountUsage(slotId);
+      offlineLicenseStatuses.set(slotId, status);
+      notice = status.enabled ? t("accountUi.offlineLicenseActive") : t("accountUi.offlineLicenseInactive");
     }).finally(() => target.removeAttribute("disabled"));
     return;
   }
@@ -4483,8 +4488,8 @@ document.addEventListener("click", (event) => {
     target.setAttribute("disabled", "true");
     void run(async () => {
       const operation = await api.sv2SetOfflineLicense(slotId, enabled);
-      notice = `${operation.detail} ${operation.backupPath ? `备份：${operation.backupPath}` : ""}`;
-      await refreshAccountUsage(slotId);
+      offlineLicenseStatuses.set(slotId, operation.status);
+      notice = `${operation.detail} ${t("accountUi.offlineOperationResult", { backupPath: operation.backupPath, accessChanged: operation.accessChanged, refreshChanged: operation.refreshChanged })}`;
     }).finally(() => target.removeAttribute("disabled"));
     return;
   }
