@@ -1,13 +1,11 @@
-use std::net::{IpAddr, SocketAddr};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
-use futures_util::StreamExt;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::State;
-use url::Url;
 
 use crate::agent_runtime::{
     CapabilityDescriptor, CapabilityHandler, HostHello, RpcError, RuntimeCommand, RuntimeHello,
@@ -16,7 +14,6 @@ use crate::agent_runtime::{
 use crate::state::AppState;
 
 const HOST_ID: &str = "synthv-toolbox.native-host";
-const NETWORK_RESPONSE_LIMIT: usize = 1_048_576;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -237,6 +234,19 @@ fn host_hello() -> HostHello {
             capability("synthv.sandbox", ["prepare", "remove"]),
             capability("synthv.authorization", ["set-enabled"]),
             capability("host.network", ["request"]),
+            capability(
+                "host.filesystem",
+                [
+                    "read",
+                    "write",
+                    "list",
+                    "metadata",
+                    "create-directory",
+                    "copy",
+                    "move",
+                    "remove",
+                ],
+            ),
             capability("host.model", ["resolve"]),
         ],
     }
@@ -409,16 +419,14 @@ async fn register_host_capabilities(state: &AppState) {
                 }
                 "host.network" if invocation.operation == "request" => {
                     require_permission(&invocation.permission, "host.advanced")?;
-                    let url = invocation
-                        .params
-                        .get("url")
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| {
-                            rpc_error("invalid_capability_request", "联网请求需要 url。")
-                        })?;
-                    restricted_network_get(url)
+                    unrestricted_network_request(&invocation.params)
                         .await
                         .map_err(|error| rpc_error("network_error", error))
+                }
+                "host.filesystem" => {
+                    require_permission(&invocation.permission, "host.advanced")?;
+                    unrestricted_filesystem_request(&invocation.operation, &invocation.params)
+                        .map_err(|error| rpc_error("filesystem_error", error))
                 }
                 _ => Err(rpc_error(
                     "capability_not_available",
@@ -499,93 +507,254 @@ async fn set_credential_enabled(
     Ok(json!({ "credentialId": credential_id, "enabled" : enabled }))
 }
 
-async fn restricted_network_get(raw_url: &str) -> Result<Value, String> {
-    let url = Url::parse(raw_url).map_err(|_| "联网请求 URL 无效。".to_string())?;
-    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
-        return Err("联网请求只允许不含用户信息的 HTTPS URL。".to_string());
-    }
-    let host = url
-        .host_str()
-        .ok_or_else(|| "联网请求 URL 缺少主机名。".to_string())?;
-    let port = url
-        .port_or_known_default()
-        .ok_or_else(|| "联网请求端口无效。".to_string())?;
-    let addresses = tokio::net::lookup_host((host, port))
-        .await
-        .map_err(|_| "无法解析联网请求主机。".to_string())?
-        .collect::<Vec<SocketAddr>>();
-    if addresses.is_empty()
-        || addresses
-            .iter()
-            .any(|address| !is_public_address(address.ip()))
-    {
-        return Err("联网请求目标不是允许的公网地址。".to_string());
-    }
+pub async fn unrestricted_network_request(params: &Value) -> Result<Value, String> {
+    let url = params
+        .get("url")
+        .and_then(Value::as_str)
+        .filter(|url| !url.is_empty())
+        .ok_or_else(|| "联网请求需要 url。".to_string())?;
+    let method = params
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or("GET")
+        .parse::<reqwest::Method>()
+        .map_err(|_| "联网请求 method 无效。".to_string())?;
     let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(10))
-        .resolve_to_addrs(host, &addresses)
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            attempt.follow()
+        }))
         .build()
         .map_err(|_| "无法创建联网请求客户端。".to_string())?;
-    let response = client
-        .get(url)
+    let mut request = client.request(method, url);
+    if let Some(headers) = params.get("headers") {
+        let headers = headers
+            .as_object()
+            .ok_or_else(|| "联网请求 headers 必须是对象。".to_string())?;
+        for (name, value) in headers {
+            let value = value
+                .as_str()
+                .ok_or_else(|| "联网请求 header 值必须是字符串。".to_string())?;
+            request = request.header(name, value);
+        }
+    }
+    let body = match (params.get("body"), params.get("bodyBase64")) {
+        (Some(_), Some(_)) => return Err("联网请求 body 与 bodyBase64 不能同时提供。".to_string()),
+        (Some(body), None) => match body {
+            Value::String(value) => value.as_bytes().to_vec(),
+            value => serde_json::to_vec(value)
+                .map_err(|error| format!("联网请求 body 无法编码：{error}"))?,
+        },
+        (None, Some(Value::String(body))) => base64::engine::general_purpose::STANDARD
+            .decode(body)
+            .map_err(|_| "联网请求 bodyBase64 无效。".to_string())?,
+        (None, Some(_)) => return Err("联网请求 bodyBase64 必须是字符串。".to_string()),
+        (None, None) => Vec::new(),
+    };
+    if !body.is_empty() {
+        request = request.body(body);
+    }
+    let response = request
         .send()
         .await
         .map_err(|_| "联网请求失败。".to_string())?;
-    if response.status().is_redirection() {
-        return Err("联网请求不允许重定向。".to_string());
-    }
-    if response
-        .content_length()
-        .is_some_and(|length| length > NETWORK_RESPONSE_LIMIT as u64)
-    {
-        return Err("联网响应超过大小限制。".to_string());
-    }
     let status = response.status().as_u16();
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default()
-        .to_string();
-    let mut body = Vec::new();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|_| "联网响应中断。".to_string())?;
-        if body.len() + chunk.len() > NETWORK_RESPONSE_LIMIT {
-            return Err("联网响应超过大小限制。".to_string());
+    let mut headers = serde_json::Map::new();
+    for (name, value) in response.headers() {
+        let name = name.as_str().to_string();
+        let value = value.to_str().unwrap_or_default().to_string();
+        match headers.get_mut(&name) {
+            Some(Value::Array(values)) => values.push(Value::String(value)),
+            Some(existing) => {
+                let previous = std::mem::replace(existing, Value::Array(Vec::new()));
+                *existing = Value::Array(vec![previous, Value::String(value)]);
+            }
+            None => {
+                headers.insert(name, Value::String(value));
+            }
         }
-        body.extend_from_slice(&chunk);
     }
+    let body = response
+        .bytes()
+        .await
+        .map_err(|_| "联网响应读取失败。".to_string())?;
     Ok(json!({
         "status": status,
-        "contentType": content_type,
+        "headers": headers,
         "body": String::from_utf8_lossy(&body),
+        "bodyBase64": base64::engine::general_purpose::STANDARD.encode(body),
     }))
 }
 
-fn is_public_address(address: IpAddr) -> bool {
-    match address {
-        IpAddr::V4(address) => {
-            !address.is_private()
-                && !address.is_loopback()
-                && !address.is_link_local()
-                && !address.is_unspecified()
-                && !address.is_broadcast()
-                && !address.is_documentation()
-                && !address.is_multicast()
-                && !(address.octets()[0] == 100 && (64..=127).contains(&address.octets()[1]))
+pub fn unrestricted_filesystem_request(operation: &str, params: &Value) -> Result<Value, String> {
+    match operation {
+        "read" => {
+            let path = filesystem_path(params, "path")?;
+            let bytes = fs::read(&path).map_err(|error| format!("读取文件失败：{error}"))?;
+            Ok(filesystem_content_response(
+                &path,
+                bytes,
+                filesystem_encoding(params)?,
+            ))
         }
-        IpAddr::V6(address) => {
-            !address.is_loopback()
-                && !address.is_unspecified()
-                && !address.is_unique_local()
-                && !address.is_unicast_link_local()
-                && !address.is_multicast()
-                && address.octets()[..4] != [0x20, 0x01, 0x0d, 0xb8]
+        "write" => {
+            let path = filesystem_path(params, "path")?;
+            let bytes = filesystem_content(params)?;
+            fs::write(&path, bytes).map_err(|error| format!("写入文件失败：{error}"))?;
+            Ok(filesystem_metadata_response(&path)?)
         }
+        "list" => {
+            let path = filesystem_path(params, "path")?;
+            let mut entries = fs::read_dir(&path)
+                .map_err(|error| format!("列出目录失败：{error}"))?
+                .map(|entry| entry.map_err(|error| format!("读取目录项失败：{error}")))
+                .collect::<Result<Vec<_>, _>>()?;
+            entries.sort_by_key(|entry| entry.file_name());
+            let entries = entries
+                .into_iter()
+                .map(|entry| filesystem_metadata_response(&entry.path()))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(json!({ "path": path, "entries": entries }))
+        }
+        "metadata" => filesystem_metadata_response(&filesystem_path(params, "path")?),
+        "create-directory" => {
+            let path = filesystem_path(params, "path")?;
+            if params
+                .get("recursive")
+                .and_then(Value::as_bool)
+                .unwrap_or(true)
+            {
+                fs::create_dir_all(&path).map_err(|error| format!("创建目录失败：{error}"))?;
+            } else {
+                fs::create_dir(&path).map_err(|error| format!("创建目录失败：{error}"))?;
+            }
+            filesystem_metadata_response(&path)
+        }
+        "copy" => {
+            let source = filesystem_path(params, "sourcePath")?;
+            let destination = filesystem_path(params, "destinationPath")?;
+            copy_filesystem_path(&source, &destination)?;
+            filesystem_metadata_response(&destination)
+        }
+        "move" => {
+            let source = filesystem_path(params, "sourcePath")?;
+            let destination = filesystem_path(params, "destinationPath")?;
+            if fs::rename(&source, &destination).is_err() {
+                copy_filesystem_path(&source, &destination)?;
+                remove_filesystem_path(&source, true)?;
+            }
+            filesystem_metadata_response(&destination)
+        }
+        "remove" => {
+            let path = filesystem_path(params, "path")?;
+            remove_filesystem_path(
+                &path,
+                params
+                    .get("recursive")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            )?;
+            Ok(json!({ "path": path, "removed": true }))
+        }
+        _ => Err("不支持的文件系统操作。".to_string()),
     }
+}
+
+fn filesystem_path(params: &Value, field: &str) -> Result<PathBuf, String> {
+    params
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("文件系统操作需要 {field}。"))
+}
+
+fn filesystem_encoding(params: &Value) -> Result<&str, String> {
+    match params
+        .get("encoding")
+        .and_then(Value::as_str)
+        .unwrap_or("text")
+    {
+        "text" => Ok("text"),
+        "base64" => Ok("base64"),
+        _ => Err("文件内容 encoding 仅支持 text 或 base64。".to_string()),
+    }
+}
+
+fn filesystem_content(params: &Value) -> Result<Vec<u8>, String> {
+    let content = params
+        .get("content")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "写入文件需要 content。".to_string())?;
+    match filesystem_encoding(params)? {
+        "text" => Ok(content.as_bytes().to_vec()),
+        "base64" => base64::engine::general_purpose::STANDARD
+            .decode(content)
+            .map_err(|_| "文件 content 的 Base64 编码无效。".to_string()),
+        _ => unreachable!(),
+    }
+}
+
+fn filesystem_content_response(path: &Path, bytes: Vec<u8>, encoding: &str) -> Value {
+    let content = match encoding {
+        "text" => String::from_utf8_lossy(&bytes).into_owned(),
+        "base64" => base64::engine::general_purpose::STANDARD.encode(&bytes),
+        _ => unreachable!(),
+    };
+    json!({
+        "path": path,
+        "encoding": encoding,
+        "content": content,
+    })
+}
+
+fn filesystem_metadata_response(path: &Path) -> Result<Value, String> {
+    let metadata = fs::metadata(path).map_err(|error| format!("读取文件属性失败：{error}"))?;
+    let kind = if metadata.is_dir() {
+        "directory"
+    } else if metadata.is_file() {
+        "file"
+    } else {
+        "other"
+    };
+    let modified_at_unix_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as u64);
+    Ok(json!({
+        "path": path,
+        "kind": kind,
+        "size": metadata.len(),
+        "modifiedAtUnixMs": modified_at_unix_ms,
+    }))
+}
+
+fn copy_filesystem_path(source: &Path, destination: &Path) -> Result<(), String> {
+    if source.is_dir() {
+        fs::create_dir_all(destination).map_err(|error| format!("复制目录失败：{error}"))?;
+        for entry in fs::read_dir(source).map_err(|error| format!("读取目录失败：{error}"))?
+        {
+            let entry = entry.map_err(|error| format!("读取目录项失败：{error}"))?;
+            copy_filesystem_path(&entry.path(), &destination.join(entry.file_name()))?;
+        }
+        Ok(())
+    } else {
+        fs::copy(source, destination).map_err(|error| format!("复制文件失败：{error}"))?;
+        Ok(())
+    }
+}
+
+fn remove_filesystem_path(path: &Path, recursive: bool) -> Result<(), String> {
+    if path.is_dir() {
+        if recursive {
+            fs::remove_dir_all(path).map_err(|error| format!("删除目录失败：{error}"))?;
+        } else {
+            fs::remove_dir(path).map_err(|error| format!("删除目录失败：{error}"))?;
+        }
+    } else {
+        fs::remove_file(path).map_err(|error| format!("删除文件失败：{error}"))?;
+    }
+    Ok(())
 }
 
 fn rpc_error(code: &str, message: impl Into<String>) -> RpcError {

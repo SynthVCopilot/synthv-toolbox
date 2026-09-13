@@ -1,3 +1,7 @@
 # 进度记录
 
 - 2026-09-12：建立内部函数扩展与开放高级网络能力任务。
+- 2026-09-12：确认网络限制全部位于能力处理器的请求函数；授权检查位于其前且无需改动。
+- 2026-09-12：`host.network/request` 改为通用 HTTP 请求，支持方法、请求头、文本或 Base64 请求正文；响应同时返回文本和 Base64 正文，不限制私网、DNS、重定向或响应大小。
+- 2026-09-12：注册 `host.filesystem` 并实现 read、write、list、metadata、create-directory、copy、move、remove；所有路径均由插件指定，沿用 `host.advanced` 三层授权。
+- 2026-09-12：Rust 实测通过本地 HTTP、POST、重定向、Base64 正文和临时目录文件操作；Node 契约测试通过。
