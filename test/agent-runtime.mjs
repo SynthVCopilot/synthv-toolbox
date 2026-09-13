@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { join } from "node:path";
 import test from "node:test";
 
-const root = new URL("..", import.meta.url).pathname.slice(1);
+const root = fileURLToPath(new URL("..", import.meta.url));
 const packageRoot = join(root, "packages", "agent-runtime");
 const tsc = join(packageRoot, "node_modules", "typescript", "bin", "tsc");
 
