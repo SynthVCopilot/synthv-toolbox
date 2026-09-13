@@ -54,5 +54,5 @@ test("Electron host routes updater, runtime, plugin, and MCP commands through re
   assert.match(electronMain, /webContents\.send\("toolbox:event"/);
   assert.match(updater, /autoUpdater/);
   assert.match(runtimeHost, /class ElectronRuntimeHost/);
-  assert.match(electronMain, /new ElectronCommandRegistry\(runtimeHost, \{ ai, creative, desktop, synthv \}/);
+  assert.match(electronMain, /new ElectronCommandRegistry\(runtimeHost, \{ ai, creative, desktop, synthv, componentAudio:/);
 });

@@ -1,5 +1,6 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { JsonValue } from "@synthv-toolbox/runtime-protocol";
 import type { AiService, AiProviderId } from "./ai-service.js";
 import type { CreativeService } from "./creative-service.js";
@@ -41,9 +42,11 @@ export class HostCapabilities {
       if (operation === "delete") { await rm(path, { recursive: true, force: true }); return { path }; }
     }
     if (capability === "sandbox") {
-      const path = resolve(text(params, "path"));
-      if (operation === "add") { await mkdir(path, { recursive: true }); return { path }; }
-      if (operation === "delete") { await rm(path, { recursive: true, force: true }); return { path }; }
+      const name = text(params, "name");
+      if (!/^[A-Za-z][A-Za-z0-9_]{0,31}$/.test(name)) throw new Error("Sandbox name is invalid.");
+      const provider = await sandboxie();
+      if (operation === "add") { const root = text(params, "root"); if (!isAbsolute(root)) throw new Error("Sandbox root must be absolute."); await mkdir(root, { recursive: true }); for (const [setting, value] of [["Enabled", "y"], ["FileRootPath", root], ["SeparateUserFolders", "y"], ["AutoRecover", "n"], ["NeverDelete", "y"]]) await run(provider.ini, ["set", name, setting, value]); await run(provider.start, ["/silent", "/reload"]); return { name, root }; }
+      if (operation === "delete") { await run(provider.ini, ["delete", name]); await run(provider.start, ["/silent", "/reload"]); return { name }; }
     }
     if (capability === "authorization") {
       const provider = providerId(params.provider);
@@ -65,3 +68,5 @@ function boolean(params: Data, key: string): boolean { if (typeof params[key] !=
 function number(params: Data, key: string): number { if (typeof params[key] !== "number" || !Number.isFinite(params[key])) throw new Error(`${key} must be a number.`); return params[key] as number; }
 function stringRecord(value: Data): Record<string, string> { return Object.fromEntries(Object.entries(value).map(([key, item]) => { if (typeof item !== "string") throw new Error("Header values must be strings."); return [key, item]; })); }
 function providerId(value: unknown): AiProviderId { if (value === "anthropic" || value === "openai-codex" || value === "workbuddy" || value === "traecode") return value; throw new Error("provider is invalid."); }
+async function sandboxie(): Promise<{ start: string; ini: string }> { for (const base of [process.env.SYNTHV_TOOLBOX_SANDBOXIE_HOME, process.env.ProgramW6432 && join(process.env.ProgramW6432, "Sandboxie-Plus"), process.env.ProgramFiles && join(process.env.ProgramFiles, "Sandboxie-Plus"), process.env["ProgramFiles(x86)"] && join(process.env["ProgramFiles(x86)"]!, "Sandboxie")]) { if (!base) continue; const start = join(base, "Start.exe"); const ini = join(base, "SbieIni.exe"); try { await Promise.all([access(start), access(ini)]); return { start, ini }; } catch {} } throw new Error("Sandboxie Plus or Classic is not installed."); }
+async function run(file: string, args: string[]): Promise<void> { await new Promise<void>((resolveRun, reject) => { const child = spawn(file, args, { windowsHide: true, shell: false, stdio: ["ignore", "pipe", "pipe"] }); let error = ""; child.stderr.on("data", chunk => { error += chunk; }); child.once("error", reject); child.once("close", code => code === 0 ? resolveRun() : reject(new Error(error || `${file} exited with ${code}`))); }); }

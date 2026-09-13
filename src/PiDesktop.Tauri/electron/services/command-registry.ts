@@ -1,6 +1,7 @@
 import type { JsonValue } from "@synthv-toolbox/runtime-protocol";
 import type { AiService, AiProviderId, AiLoadStrategy } from "./ai-service.js";
 import type { CreativeService } from "./creative-service.js";
+import { registerComponentAudioCommands, type ComponentAudioOptions } from "./component-audio-commands.js";
 import type { DesktopStateService } from "./desktop-state.js";
 import type { ElectronRuntimeHost } from "./runtime-host.js";
 import { registerSynthVCommands } from "./synthv-commands.js";
@@ -8,7 +9,7 @@ import type { SynthVService } from "./synthv-service.js";
 
 export type EventSink = (event: string, payload: JsonValue) => void;
 export type CommandHandler = (params: Record<string, unknown>) => Promise<unknown>;
-export interface ElectronServices { ai: AiService; creative: CreativeService; desktop: DesktopStateService; synthv: SynthVService; }
+export interface ElectronServices { ai: AiService; creative: CreativeService; desktop: DesktopStateService; synthv: SynthVService; componentAudio: ComponentAudioOptions; }
 
 const CREATIVE_COMMANDS = [
   "list_workflow_recipes", "list_creative_history", "list_project_checkpoints", "get_project_backup_state", "restore_project_checkpoint", "export_workflow_report", "lookup_chinese_rhyme", "build_lyric_template", "generate_lyric_candidates", "list_lyric_projects", "create_lyric_project", "save_lyric_project", "load_lyric_project", "restore_lyric_project_version", "export_lyric_project_text", "read_lyric_bridge_selection", "preview_lyric_bridge_fit", "confirm_lyric_bridge_fit", "run_project_doctor", "run_pronunciation_diagnostics", "run_render_review", "run_audio_to_project", "run_score_to_synthv", "run_retake_workbench", "run_batch_workflow", "run_audio_probe", "preview_media_source", "media_tasks", "queue_media_import", "queue_media_separation", "queue_cover", "cancel_media_task", "retry_media_task", "list_tuning_profiles", "learn_tuning_profile", "record_tuning_outcome", "apply_tuning_profile", "run_solo_tuning", "run_game_to_midi", "run_project_probe", "add_project_reference", "export_project_without_parameters", "export_project_lyrics", "review_workflow", "ffmpeg_status", "get_ffmpeg_configuration", "set_ffmpeg_directory", "open_ffmpeg_download_page", "probe_media", "plan_audio_prepare", "start_audio_prepare", "analyze_loudness", "plan_loudness_normalize", "start_loudness_normalize", "audio_job_snapshot", "cancel_audio_job", "audio_artifact_info", "reveal_audio_artifact", "save_audio_artifact",
@@ -60,7 +61,8 @@ export class ElectronCommandRegistry {
     this.register("test_mcp_server", async p => ({ succeeded: true, summary: "MCP server configuration is valid.", detail: stringParam(p, "id") }));
     this.registerAi(s.ai, state);
     registerSynthVCommands(this, s.synthv);
-    for (const command of CREATIVE_COMMANDS) this.register(command, params => s.creative.invoke(command, params));
+    registerComponentAudioCommands(this, s.componentAudio);
+    for (const command of CREATIVE_COMMANDS) if (!this.handlers.has(command)) this.register(command, params => s.creative.invoke(command, params));
     this.register("agent_file_approvals", async () => []);
     this.register("decide_agent_file_approval", async () => null);
   }

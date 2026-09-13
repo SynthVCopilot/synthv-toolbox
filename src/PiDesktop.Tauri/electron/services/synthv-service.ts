@@ -3,6 +3,7 @@ import { access, cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promis
 import { homedir, platform } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { pathToFileURL } from "node:url";
 const bridgeProfiles = new Set(["sv2", "sv1", "flat"]);
 const shortcutActions = new Set(["start", "startLegacy", "stop", "save", "undo", "refresh"]);
 
@@ -15,6 +16,7 @@ type ProfileStore = { activeSlotId: string | null; slots: Slot[] };
 export class SynthVService {
   private pendingRoute: Record<string, unknown> | null = null;
   private readonly syncPreviews = new Map<string, { targetSlotId: string; categories: string[] }>();
+  private bridgeClient?: { getStatus(): Promise<{ connected: boolean; status?: { sessionToken?: string }; reason?: string }>; paths: { stopFile: string } };
   constructor(private readonly root: string, private readonly bridgeDirectory: string, private readonly runner: Runner = runCommand) {}
 
   async scanInstallations(): Promise<Array<Record<string, unknown>>> {
@@ -119,10 +121,10 @@ export class SynthVService {
   async concurrentDefaults(appSettings: boolean, voiceLibraries: boolean): Promise<Record<string, unknown>> { if (typeof appSettings !== "boolean" || typeof voiceLibraries !== "boolean") throw new Error("Concurrent defaults must be booleans."); await this.writeConfig("concurrent-defaults.json", { appSettings, voiceLibraries }); return this.profileState(); }
   async concurrentContent(slotId: string, appSettings: string, voiceLibraries: string): Promise<Record<string, unknown>> { await this.assertSlot(slotId); if (!["on", "off", "global"].includes(appSettings) || !["on", "off", "global"].includes(voiceLibraries)) throw new Error("Invalid concurrent content preference."); await this.writeConfig(`concurrent-${slotId}.json`, { appSettings, voiceLibraries }); return this.profileState(); }
   pendingSvpRoute(): Record<string, unknown> | null { return this.pendingRoute; }
-  async openDefaultAppsSettings(): Promise<OperationResult> { return unavailable("Opening default-app settings is not implemented for this Electron host."); }
-  async connectBridge(): Promise<OperationResult> { return unavailable("Bridge connection requires the bridge transport service."); }
-  async bridgeStatus(): Promise<Record<string, unknown>> { return { connected: false, detail: "Bridge transport service is unavailable." }; }
-  async stopBridge(): Promise<OperationResult> { return unavailable("Bridge transport service is unavailable."); }
+  async openDefaultAppsSettings(): Promise<OperationResult> { if (platform() === "win32") await this.run("explorer.exe", ["ms-settings:defaultapps"]); else await this.run("open", ["x-apple.systempreferences:com.apple.preference.general"]); return ok("Default application settings opened."); }
+  async connectBridge(): Promise<OperationResult> { await this.ensureBridgeClient(); const status = await this.bridgeClient!.getStatus(); return { succeeded: true, summary: "Bridge transport is ready.", detail: status.connected ? "SynthV Bridge is connected." : status.reason ?? "Waiting for SynthV Bridge." }; }
+  async bridgeStatus(): Promise<Record<string, unknown>> { await this.ensureBridgeClient(); const status = await this.bridgeClient!.getStatus(); return { connected: status.connected, sessionToken: status.status?.sessionToken ?? null, requestedProcessId: null, instanceOwnership: "unverified", detail: status.connected ? "SynthV Bridge is connected." : status.reason ?? "SynthV Bridge is unavailable." }; }
+  async stopBridge(): Promise<OperationResult> { await this.ensureBridgeClient(); await writeFile(this.bridgeClient!.paths.stopFile, `${Date.now()}\n`, "utf8"); this.bridgeClient = undefined; return ok("Bridge stop requested."); }
   async setAutostart(enabled: boolean): Promise<boolean> { if (typeof enabled !== "boolean") throw new Error("enabled must be a boolean."); await mkdir(this.root, { recursive: true }); await writeFile(join(this.root, "autostart.json"), JSON.stringify({ enabled }), "utf8"); return enabled; }
   async getAutostart(): Promise<{ enabled: boolean; error: null }> { try { return { enabled: Boolean(JSON.parse(await readFile(join(this.root, "autostart.json"), "utf8")).enabled), error: null }; } catch { return { enabled: false, error: null }; } }
   async reveal(path: string): Promise<void> { const absolute = resolve(path); if (platform() === "win32") await this.run("explorer.exe", ["/select,", absolute]); else await this.run("open", ["-R", absolute]); }
@@ -141,6 +143,7 @@ export class SynthVService {
   private sessionPath(id: string): string { return join(this.slotPath(id), "license", "session"); }
   private storePath(): string { return join(this.root, "sv2-profiles.json"); }
   private async writeConfig(name: string, value: unknown): Promise<void> { await mkdir(this.root, { recursive: true }); await writeFile(join(this.root, name), JSON.stringify(value), "utf8"); }
+  private async ensureBridgeClient(): Promise<void> { if (this.bridgeClient) return; const [{ loadConfig }, { FileIpcClient }] = await Promise.all([import(pathToFileURL(join(this.bridgeDirectory, "dist", "src", "config.js")).href), import(pathToFileURL(join(this.bridgeDirectory, "dist", "src", "ipc", "file-ipc-client.js")).href)]); this.bridgeClient = new FileIpcClient(loadConfig()); }
   private async run(command: string, args: string[]): Promise<{ stdout: string; stderr: string; code: number }> { return this.runner(command, args); }
 }
 
