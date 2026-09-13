@@ -13,8 +13,10 @@ const STATE_FILE: &str = ".toolbox-plugin-state.json";
 const MAX_ARCHIVE_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_ARCHIVE_TOTAL_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 2_048;
-const PERMISSIONS: [&str; 5] = [
+const PERMISSIONS: [&str; 7] = [
     "agent.tools",
+    "host.advanced",
+    "host.internal",
     "host.read",
     "host.execute",
     "project.read",
@@ -72,11 +74,33 @@ pub struct PluginAction {
 pub struct InstalledPlugin {
     pub manifest: PluginManifest,
     pub enabled: bool,
+    pub internal_functions_enabled: bool,
+    pub advanced_functions_enabled: bool,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct PluginState {
+    #[serde(default = "default_enabled")]
     enabled: bool,
+    #[serde(default)]
+    internal_functions_enabled: bool,
+    #[serde(default)]
+    advanced_functions_enabled: bool,
+}
+
+impl Default for PluginState {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            internal_functions_enabled: false,
+            advanced_functions_enabled: false,
+        }
+    }
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 pub fn plugins_root() -> PathBuf {
@@ -99,10 +123,7 @@ pub fn list(root: &Path) -> Result<Vec<InstalledPlugin>, String> {
             Ok(manifest) => manifest,
             Err(_) => continue,
         };
-        plugins.push(InstalledPlugin {
-            enabled: read_state(&path)?,
-            manifest,
-        });
+        plugins.push(installed_plugin(manifest, read_state(&path)?));
     }
     plugins.sort_by(|left, right| left.manifest.name.cmp(&right.manifest.name));
     Ok(plugins)
@@ -131,10 +152,9 @@ pub fn install(source: &Path, root: &Path) -> Result<InstalledPlugin, String> {
         let manifest = read_manifest(&staging)?;
         let target = root.join(&manifest.id);
         replace_directory(&staging, &target)?;
-        Ok(InstalledPlugin {
-            manifest,
-            enabled: true,
-        })
+        let state = PluginState::default();
+        write_state(&target, &state)?;
+        Ok(installed_plugin(manifest, state))
     })();
     if staging.exists() {
         let _ = fs::remove_dir_all(&staging);
@@ -145,8 +165,73 @@ pub fn install(source: &Path, root: &Path) -> Result<InstalledPlugin, String> {
 pub fn set_enabled(root: &Path, plugin_id: &str, enabled: bool) -> Result<InstalledPlugin, String> {
     let path = plugin_path(root, plugin_id)?;
     let manifest = read_manifest(&path)?;
-    write_state(&path, enabled)?;
-    Ok(InstalledPlugin { manifest, enabled })
+    let mut state = read_state(&path)?;
+    state.enabled = enabled;
+    write_state(&path, &state)?;
+    Ok(installed_plugin(manifest, state))
+}
+
+pub fn set_internal_functions_enabled(
+    root: &Path,
+    plugin_id: &str,
+    enabled: bool,
+) -> Result<InstalledPlugin, String> {
+    let path = plugin_path(root, plugin_id)?;
+    let manifest = read_manifest(&path)?;
+    let mut state = read_state(&path)?;
+    state.internal_functions_enabled = enabled;
+    write_state(&path, &state)?;
+    Ok(installed_plugin(manifest, state))
+}
+
+pub fn set_advanced_functions_enabled(
+    root: &Path,
+    plugin_id: &str,
+    enabled: bool,
+) -> Result<InstalledPlugin, String> {
+    let path = plugin_path(root, plugin_id)?;
+    let manifest = read_manifest(&path)?;
+    let mut state = read_state(&path)?;
+    state.advanced_functions_enabled = enabled;
+    write_state(&path, &state)?;
+    Ok(installed_plugin(manifest, state))
+}
+
+pub fn authorize_capability(
+    root: &Path,
+    plugin_id: &str,
+    permission: &str,
+    internal_functions_globally_enabled: bool,
+    advanced_functions_globally_enabled: bool,
+) -> Result<(), String> {
+    let path = plugin_path(root, plugin_id)?;
+    let manifest = read_manifest(&path)?;
+    let state = read_state(&path)?;
+    if !state.enabled {
+        return Err("插件已停用。".to_string());
+    }
+    if !manifest
+        .permissions
+        .iter()
+        .any(|declared| declared == permission)
+    {
+        return Err("插件未声明该宿主权限。".to_string());
+    }
+    match permission {
+        "host.internal" if !internal_functions_globally_enabled => {
+            Err("设置中尚未启用插件内部函数。".to_string())
+        }
+        "host.internal" if !state.internal_functions_enabled => {
+            Err("尚未为此插件启用内部函数。".to_string())
+        }
+        "host.advanced" if !advanced_functions_globally_enabled => {
+            Err("设置中尚未启用插件高级功能。".to_string())
+        }
+        "host.advanced" if !state.advanced_functions_enabled => {
+            Err("尚未为此插件启用高级功能。".to_string())
+        }
+        _ => Ok(()),
+    }
 }
 
 pub fn uninstall(root: &Path, plugin_id: &str) -> Result<(), String> {
@@ -287,22 +372,30 @@ fn io_error(error: io::Error) -> String {
     error.to_string()
 }
 
-fn read_state(root: &Path) -> Result<bool, String> {
+fn installed_plugin(manifest: PluginManifest, state: PluginState) -> InstalledPlugin {
+    InstalledPlugin {
+        manifest,
+        enabled: state.enabled,
+        internal_functions_enabled: state.internal_functions_enabled,
+        advanced_functions_enabled: state.advanced_functions_enabled,
+    }
+}
+
+fn read_state(root: &Path) -> Result<PluginState, String> {
     let path = root.join(STATE_FILE);
     if !path.exists() {
-        return Ok(true);
+        return Ok(PluginState::default());
     }
     reject_symlink(&path)?;
     serde_json::from_slice::<PluginState>(&fs::read(path).map_err(io_error)?)
-        .map(|value| value.enabled)
         .map_err(|error| format!("插件状态无效：{error}"))
 }
-fn write_state(root: &Path, enabled: bool) -> Result<(), String> {
+fn write_state(root: &Path, state: &PluginState) -> Result<(), String> {
     let target = root.join(STATE_FILE);
     let temporary = root.join(format!("{STATE_FILE}.{}", Uuid::new_v4()));
     fs::write(
         &temporary,
-        serde_json::to_vec(&PluginState { enabled }).map_err(|error| error.to_string())?,
+        serde_json::to_vec(state).map_err(|error| error.to_string())?,
     )
     .map_err(io_error)?;
     fs::rename(temporary, target).map_err(io_error)

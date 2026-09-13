@@ -25,6 +25,8 @@ fn installs_lists_and_disables_a_directory_plugin() {
 
     let plugin = plugin_manager::install(&source, &installed).unwrap();
     assert!(plugin.enabled);
+    assert!(!plugin.internal_functions_enabled);
+    assert!(!plugin.advanced_functions_enabled);
     assert_eq!(plugin.manifest.id, "com.example.plugin");
     assert_eq!(plugin_manager::list(&installed).unwrap().len(), 1);
     assert!(
@@ -35,6 +37,67 @@ fn installs_lists_and_disables_a_directory_plugin() {
     assert!(!plugin_manager::list(&installed).unwrap()[0].enabled);
     plugin_manager::uninstall(&installed, "com.example.plugin").unwrap();
     assert!(plugin_manager::list(&installed).unwrap().is_empty());
+    let _ = fs::remove_dir_all(temporary);
+}
+
+#[test]
+fn requires_global_and_plugin_specific_consent_for_privileged_permissions() {
+    let temporary = temporary_root();
+    let source = temporary.join("source");
+    let installed = temporary.join("plugins");
+    write_plugin(&source, "com.example.plugin");
+    let manifest = fs::read_to_string(source.join("manifest.json")).unwrap();
+    fs::write(
+        source.join("manifest.json"),
+        manifest.replace("[\"host.read\"]", "[\"host.internal\",\"host.advanced\"]"),
+    )
+    .unwrap();
+    plugin_manager::install(&source, &installed).unwrap();
+
+    assert!(plugin_manager::authorize_capability(
+        &installed,
+        "com.example.plugin",
+        "host.internal",
+        false,
+        false,
+    )
+    .is_err());
+    plugin_manager::set_internal_functions_enabled(&installed, "com.example.plugin", true).unwrap();
+    assert!(plugin_manager::authorize_capability(
+        &installed,
+        "com.example.plugin",
+        "host.internal",
+        true,
+        false,
+    )
+    .is_ok());
+
+    assert!(plugin_manager::authorize_capability(
+        &installed,
+        "com.example.plugin",
+        "host.advanced",
+        true,
+        false,
+    )
+    .is_err());
+    plugin_manager::set_advanced_functions_enabled(&installed, "com.example.plugin", true).unwrap();
+    assert!(plugin_manager::authorize_capability(
+        &installed,
+        "com.example.plugin",
+        "host.advanced",
+        true,
+        true,
+    )
+    .is_ok());
+    plugin_manager::set_enabled(&installed, "com.example.plugin", false).unwrap();
+    assert!(plugin_manager::authorize_capability(
+        &installed,
+        "com.example.plugin",
+        "host.advanced",
+        true,
+        true,
+    )
+    .is_err());
     let _ = fs::remove_dir_all(temporary);
 }
 

@@ -214,6 +214,8 @@ pub fn run() {
             agent_runtime_commands::list_installed_plugins,
             agent_runtime_commands::install_agent_plugin,
             agent_runtime_commands::set_agent_plugin_enabled,
+            agent_runtime_commands::set_agent_plugin_internal_functions_enabled,
+            agent_runtime_commands::set_agent_plugin_advanced_functions_enabled,
             agent_runtime_commands::uninstall_agent_plugin,
             commands::set_autostart,
             commands::get_autostart,
