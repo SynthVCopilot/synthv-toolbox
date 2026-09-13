@@ -14,8 +14,8 @@ test("plugin manifests expose permission levels as a record", () => {
 test("plugin privilege controls honor declared levels and required grants", () => {
   assert.match(main, /manifest\.permissions\["host\.internal"\] \?\? "none"/);
   assert.match(main, /manifest\.permissions\["host\.advanced"\] \?\? "none"/);
-  assert.match(main, /internalFunctionsLevel === "required"/);
-  assert.match(main, /advancedFunctionsLevel === "required"/);
+  assert.match(main, /internalFunctionsLevel === "required" && \(!internalFunctionsAvailable \|\| !internalFunctionsEnabled\)/);
+  assert.match(main, /advancedFunctionsLevel === "required" && \(!advancedFunctionsAvailable \|\| !advancedFunctionsEnabled\)/);
   assert.match(main, /!enabled && missingRequiredGrant \? "disabled" : ""/);
   assert.match(main, /plugins\.requiredGrantMissing/);
   assert.match(main, /setPluginInternalFunctionsEnabled\(enabled\);\s*await reloadPluginState\(\)/);

@@ -1674,8 +1674,8 @@ function renderPlugins(): string {
     const requestsAdvancedFunctions = advancedFunctionsLevel !== "none";
     const canGrantInternalFunctions = internalFunctionsAvailable && requestsInternalFunctions;
     const canGrantAdvancedFunctions = advancedFunctionsAvailable && requestsAdvancedFunctions;
-    const missingRequiredGrant = (internalFunctionsLevel === "required" && !internalFunctionsEnabled)
-      || (advancedFunctionsLevel === "required" && !advancedFunctionsEnabled);
+    const missingRequiredGrant = (internalFunctionsLevel === "required" && (!internalFunctionsAvailable || !internalFunctionsEnabled))
+      || (advancedFunctionsLevel === "required" && (!advancedFunctionsAvailable || !advancedFunctionsEnabled));
     const contributions = [
       manifest.backend ? t("plugins.backend") : "",
       manifest.pages.length ? t("plugins.pageCount", { count: manifest.pages.length }) : "",
