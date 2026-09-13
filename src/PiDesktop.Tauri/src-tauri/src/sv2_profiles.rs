@@ -449,6 +449,53 @@ impl Sv2ProfileService {
         self.build_account_usage_snapshot(true, Some(&slot_id))
     }
 
+    pub fn inspect_offline_license(
+        &self,
+        slot_id: String,
+    ) -> Result<crate::sv2_account_probe::Sv2OfflineLicenseStatus, String> {
+        self.with_offline_license_slot(&slot_id, |root, _backup, in_use| {
+            crate::sv2_account_probe::inspect_offline_license(root, in_use)
+        })
+    }
+
+    pub fn set_offline_license(
+        &self,
+        slot_id: String,
+        enabled: bool,
+    ) -> Result<crate::sv2_account_probe::Sv2OfflineLicenseOperation, String> {
+        self.with_offline_license_slot(&slot_id, |root, backup, in_use| {
+            crate::sv2_account_probe::set_offline_license(root, backup, enabled, in_use)
+        })
+    }
+
+    fn with_offline_license_slot<T>(
+        &self,
+        slot_id: &str,
+        operation: impl FnOnce(&Path, &Path, bool) -> Result<T, String>,
+    ) -> Result<T, String> {
+        validate_slot_id(slot_id)?;
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| "SV2 槽位状态锁已损坏。".to_string())?;
+        let paths = self.paths.as_ref().map_err(Clone::clone)?;
+        let _file_lock = acquire_switch_lock(paths)?;
+        validate_managed_roots(paths)?;
+        reject_blockers(paths)?;
+        let manifest = load_manifest(paths)?;
+        if !manifest.slots.iter().any(|slot| slot.id == slot_id) {
+            return Err("找不到该 SV2 槽位。".to_string());
+        }
+        if !slot_running_pids(paths, &manifest, slot_id)?.is_empty() {
+            return Err("该账号槽位正在被并发 SV2 实例使用。".to_string());
+        }
+        let root = slot_data_root(paths, &manifest, slot_id);
+        let backup = paths.vault.join("offline-license-backups").join(slot_id);
+        fs::create_dir_all(&backup)
+            .map_err(|error| format!("无法创建离线授权备份目录：{error}"))?;
+        operation(&root, &backup, false)
+    }
+
     pub fn preview_offline_session_replacement(
         &self,
         slot_id: String,

@@ -1347,6 +1347,29 @@ pub async fn sv2_account_precheck(
 }
 
 #[tauri::command]
+pub async fn sv2_inspect_offline_license(
+    slot_id: String,
+    state: State<'_, AppState>,
+) -> Result<crate::sv2_account_probe::Sv2OfflineLicenseStatus, String> {
+    let profiles = state.sv2_profiles.clone();
+    tauri::async_runtime::spawn_blocking(move || profiles.inspect_offline_license(slot_id))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn sv2_set_offline_license(
+    slot_id: String,
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<crate::sv2_account_probe::Sv2OfflineLicenseOperation, String> {
+    let profiles = state.sv2_profiles.clone();
+    tauri::async_runtime::spawn_blocking(move || profiles.set_offline_license(slot_id, enabled))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 pub async fn preview_sv2_offline_session_replacement(
     slot_id: String,
     source_path: String,

@@ -251,6 +251,8 @@ pub fn run() {
             commands::sv2_cached_profile_state,
             commands::sv2_voice_catalog,
             commands::sv2_account_precheck,
+            commands::sv2_inspect_offline_license,
+            commands::sv2_set_offline_license,
             commands::preview_sv2_offline_session_replacement,
             commands::schedule_sv2_offline_session_replacement,
             commands::sv2_account_usage_snapshot,
