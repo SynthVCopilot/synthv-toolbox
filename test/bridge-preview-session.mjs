@@ -9,13 +9,10 @@ let source = readFileSync(join(root, "src", "PiDesktop.Tauri", "src", "api.ts"),
 source = source
   .replace(/^import[^;]+;\r?\n/gmu, "")
   .replace(/^import type \{[\s\S]*?\} from "\.\/types";\r?\n/mu, "")
-  .replace("const preview = import.meta.env.DEV && !isTauri();", "const preview = true;")
+  .replace("const preview = !hasDesktopBridge();", "const preview = true;")
   .replace("export const api =", "const api =");
 source = stripTypeScriptTypes(source);
-const api = Function("invoke", "isTauri", "open", "packageJson", `${source}; return api;`)(
-  () => { throw new Error("preview must not invoke Tauri"); },
-  () => false,
-  async () => null,
+const api = Function("packageJson", `${source}; return api;`)(
   { version: "preview" },
 );
 

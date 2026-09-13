@@ -58,9 +58,9 @@ assert.doesNotMatch(api, /copyAudioArtifactPath/);
 assert.equal(packageJson.dependencies["@tauri-apps/plugin-dialog"], "2.7.2", "dialog plugin must stay pinned to the Rust-compatible version");
 assert.equal(packageLock.packages["node_modules/@tauri-apps/plugin-dialog"]?.version, "2.7.2", "lockfile must preserve the pinned dialog plugin");
 assert.match(packageJson.scripts["test:contracts"], /audio-preparation-ui\.mjs/, "CI contract suite must execute this guard");
-assert.match(api, /from\s+["']@tauri-apps\/plugin-dialog["']/);
+assert.match(api, /openDesktopDialog/);
 assert.match(api, /pickAudioFile:\s*async\s*\(\):\s*Promise<string \| undefined>/);
-assert.match(api, /open\(\{[\s\S]*?multiple:\s*false[\s\S]*?directory:\s*false[\s\S]*?filters:/);
+assert.match(api, /openDesktopDialog\(\{[\s\S]*?multiple:\s*false[\s\S]*?directory:\s*false[\s\S]*?filters:/);
 assert.match(api, /Array\.isArray\(selected\)/);
 assert.match(api, /typeof selected === ["']string["']/);
 

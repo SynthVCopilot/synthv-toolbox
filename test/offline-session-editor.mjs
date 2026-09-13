@@ -51,7 +51,7 @@ assert.match(api, /previewSv2OfflineSessionReplacement/);
 assert.match(api, /scheduleSv2OfflineSessionReplacement/);
 assert.match(api, /readSv2SessionDocument/);
 assert.match(api, /writeSv2SessionDocument/);
-assert.match(api, /new Channel<string>/);
+assert.match(api, /listenDesktop<string>/);
 assert.match(main, /function renderOfflineSessionInspection/);
 assert.match(main, /product\.fields/);
 assert.match(main, /data-offline-session-restore/);

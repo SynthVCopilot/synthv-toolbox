@@ -1,7 +1,6 @@
-import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
 import packageJson from "../package.json";
 import type { PluginManifest } from "@synthv-toolbox/runtime-protocol";
+import { hasDesktopBridge, invokeDesktop, listenDesktop, openDesktopDialog } from "../electron/bridge";
 import type {
   AiProviderId,
   AgentWorkMode,
@@ -73,7 +72,7 @@ import type {
   RhymeMatchMode,
 } from "./types";
 
-const preview = import.meta.env.DEV && !isTauri();
+const preview = !hasDesktopBridge();
 const AUDIO_FILE_EXTENSIONS = ["wav", "flac", "mp3", "m4a", "aac", "ogg", "opus", "aif", "aiff"];
 let previewMode: AppMode = "toolbox";
 let previewUpdateChannel: "stable" | "nightly" = "stable";
@@ -511,7 +510,7 @@ function previewAccountPrecheck(): Sv2AccountPrecheck {
 }
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
-  if (!preview) return invoke<T>(command, args);
+  if (!preview) return invokeDesktop<T>(command, args);
   await new Promise((resolve) => setTimeout(resolve, 80));
   if (command === "complete_onboarding" || command === "set_mode") {
     previewMode = args?.mode as AppMode;
@@ -1465,9 +1464,12 @@ export const api = {
       }
       return call<import("./types").Sv2OfflineLicenseOperation>("sv2_set_offline_license", { slotId, enabled });
     }
-    const onEvent = new Channel<string>();
-    onEvent.onmessage = (step) => onProgress?.(step);
-    return call<import("./types").Sv2OfflineLicenseOperation>("sv2_set_offline_license", { slotId, enabled, onEvent });
+    const unlisten = await listenDesktop<string>("sv2-offline-license-progress", (step) => onProgress?.(step));
+    try {
+      return await call<import("./types").Sv2OfflineLicenseOperation>("sv2_set_offline_license", { slotId, enabled });
+    } finally {
+      unlisten();
+    }
   },
   previewSv2OfflineSessionReplacement: (slotId: string, sourcePath: string) =>
     call<Sv2SessionReplacementPreview>("preview_sv2_offline_session_replacement", { slotId, sourcePath }),
@@ -1638,13 +1640,13 @@ export const api = {
     call<string>("review_workflow", { kind, data }),
   pickProjectFile: async (): Promise<string | undefined> => {
     if (preview) return undefined;
-    const selected = await open({ multiple: false, directory: false, filters: [{ name: "Synthesizer V Project", extensions: ["svp"] }] });
+    const selected = await openDesktopDialog({ multiple: false, directory: false, filters: [{ name: "Synthesizer V Project", extensions: ["svp"] }] });
     if (Array.isArray(selected)) return selected[0];
     return typeof selected === "string" ? selected : undefined;
   },
   pickSv2SessionFile: async (): Promise<string | undefined> => {
     if (preview) return undefined;
-    const selected = await open({
+    const selected = await openDesktopDialog({
       multiple: false,
       directory: false,
       filters: [{ name: "SV2 encrypted session", extensions: ["session", "bin"] }, { name: "All files", extensions: ["*"] }],
@@ -1654,7 +1656,7 @@ export const api = {
   },
   pickAudioFile: async (): Promise<string | undefined> => {
     if (preview) return undefined;
-    const selected = await open({
+    const selected = await openDesktopDialog({
       multiple: false,
       directory: false,
       filters: [{ name: "Audio", extensions: AUDIO_FILE_EXTENSIONS }],
@@ -1664,13 +1666,13 @@ export const api = {
   },
   pickDirectory: async (): Promise<string | undefined> => {
     if (preview) return undefined;
-    const selected = await open({ multiple: false, directory: true });
+    const selected = await openDesktopDialog({ multiple: false, directory: true });
     if (Array.isArray(selected)) return selected[0];
     return typeof selected === "string" ? selected : undefined;
   },
   pickPluginArchive: async (): Promise<string | undefined> => {
     if (preview) return undefined;
-    const selected = await open({ multiple: false, directory: false, filters: [{ name: "Plugin archive", extensions: ["zip"] }] });
+    const selected = await openDesktopDialog({ multiple: false, directory: false, filters: [{ name: "Plugin archive", extensions: ["zip"] }] });
     if (Array.isArray(selected)) return selected[0];
     return typeof selected === "string" ? selected : undefined;
   },

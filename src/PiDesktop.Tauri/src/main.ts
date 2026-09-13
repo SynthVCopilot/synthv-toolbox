@@ -6,8 +6,7 @@ import "./i18nPlugins";
 import "./styles.css";
 import "./i18nCommon";
 import "./i18nLyrics";
-import { isTauri } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { hasDesktopBridge, listenDesktop, listenForDesktopFileDrops } from "../electron/bridge";
 import { registerModelAuthElement, registerModelConnectionPanelElement } from "@model-auth/vue/custom-element";
 import { mountModelAuthDialog, type ModelAuthAction } from "./modelAuthDialog";
 import { api } from "./api";
@@ -2306,14 +2305,13 @@ async function pickAudioToProjectOutputDirectory(): Promise<void> {
   await pickPathIntoInput("pipeline-output-directory", "directory");
 }
 
-function dropAudioToProjectInput(paths: string[], position: { toLogical(scaleFactor: number): { x: number; y: number } }): void {
+function dropAudioToProjectInput(paths: string[], position: { x: number; y: number }): void {
   if (paths.length !== 1) {
     error = t("workflowCopy.onlyOneAudioFileCanBeDropped");
     render();
     return;
   }
-  const logicalPosition = position.toLogical(window.devicePixelRatio);
-  const target = document.elementFromPoint(logicalPosition.x, logicalPosition.y)?.closest<HTMLElement>("[data-pipeline-drop-target]")?.dataset.pipelineDropTarget;
+  const target = document.elementFromPoint(position.x, position.y)?.closest<HTMLElement>("[data-pipeline-drop-target]")?.dataset.pipelineDropTarget;
   if (target === "instrumental") setAudioToProjectInstrumentalPath(paths[0]);
   else setAudioToProjectVocalPath(paths[0]);
 }
@@ -4713,10 +4711,10 @@ function svpRoutePlanFromPayload(payload: unknown): SvpRoutePlan | undefined {
 }
 
 async function listenForSvpRouteRequests(): Promise<void> {
-  if (!isTauri()) return;
-  await Promise.all([listen<unknown>("svp-route-request", (event) => {
+  if (!hasDesktopBridge()) return;
+  await Promise.all([listenDesktop<unknown>("svp-route-request", (payload) => {
     routeRequestGeneration += 1;
-    const plan = svpRoutePlanFromPayload(event.payload);
+    const plan = svpRoutePlanFromPayload(payload);
     if (!plan) {
       error = t("accountNotice.invalidRouteRequest");
       render();
@@ -4726,10 +4724,10 @@ async function listenForSvpRouteRequests(): Promise<void> {
     notice = "";
     error = "";
     render();
-  }), listen<unknown>("svp-route-error", (event) => {
+  }), listenDesktop<unknown>("svp-route-error", (payload) => {
     routeRequestGeneration += 1;
     pendingSvpRoute = undefined;
-    error = formatError(event.payload);
+    error = formatError(payload);
     notice = "";
     render();
   })]);
@@ -4743,27 +4741,20 @@ async function listenForSvpRouteRequests(): Promise<void> {
 }
 
 async function listenForAudioPreparationDrops(): Promise<void> {
-  if (!isTauri()) return;
-  try {
-    const { getCurrentWebview } = await import("@tauri-apps/api/webview");
-    await getCurrentWebview().onDragDropEvent((event) => {
-      if (page !== "import" || (activeWorkflow !== "audio-preparation" && activeWorkflow !== "audio-to-project")) return;
-      if (event.payload.type !== "drop") return;
-      if (activeWorkflow === "audio-preparation") {
-        if (event.payload.paths.length !== 1) {
-          audioUiError = t("workflowCopy.onlyOneAudioFileCanBeDropped");
-          render();
-          return;
-        }
-        selectAudioPreparationInput(event.payload.paths[0]);
+  if (!hasDesktopBridge()) return;
+  await listenForDesktopFileDrops((drop) => {
+    if (page !== "import" || (activeWorkflow !== "audio-preparation" && activeWorkflow !== "audio-to-project")) return;
+    if (activeWorkflow === "audio-preparation") {
+      if (drop.paths.length !== 1) {
+        audioUiError = t("workflowCopy.onlyOneAudioFileCanBeDropped");
+        render();
         return;
       }
-      dropAudioToProjectInput(event.payload.paths, event.payload.position);
-    });
-  } catch {
-    // The file picker remains available on hosts that do not expose Tauri v2
-    // drag-drop events (including the browser preview).
-  }
+      selectAudioPreparationInput(drop.paths[0]);
+      return;
+    }
+    dropAudioToProjectInput(drop.paths, drop.position);
+  });
 }
 
 void (async () => {

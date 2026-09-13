@@ -29,7 +29,7 @@ function harness(api) {
   const functions = ["renderSvpRouteDialog", "renderSvpRouteCandidate", "accountProbeSessionLabel", "svpRoutePlanFromPayload", "listenForSvpRouteRequests"].map(functionSource).join("\n");
   const instance = execute(`(() => {
     let pendingSvpRoute, error = "", notice = "", routeRequestGeneration = 0;
-    const isTauri = () => true;
+    const hasDesktopBridge = () => true;
     const render = () => {};
     const formatError = (reason) => reason?.message ?? String(reason);
     const icon = () => "";
@@ -41,8 +41,8 @@ function harness(api) {
       html: (plan) => { pendingSvpRoute = plan; return renderSvpRouteDialog(); },
       state: () => ({ pendingSvpRoute, error, notice }),
     };
-  })()`, { api, listen: async (name, listener) => { listeners.set(name, listener); return () => listeners.delete(name); } });
-  return { ...instance, emit: (name, payload) => listeners.get(name)({ payload }) };
+  })()`, { api, listenDesktop: async (name, listener) => { listeners.set(name, listener); return () => listeners.delete(name); } });
+  return { ...instance, emit: (name, payload) => listeners.get(name)(payload) };
 }
 function route(projectPath = "C:\\Projects\\song.svp") {
   return {
