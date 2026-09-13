@@ -1642,6 +1642,7 @@ function renderPage(): string {
     case "components": return renderComponents();
     case "bridge": return renderBridge();
     case "connections": return renderMcp();
+    case "plugins": return "";
     case "settings": return renderSettings();
     case "about": return renderAboutPage({ app: app!, update: toolboxUpdate, download: toolboxUpdateDownload, busy, locale: locale(), translate: t, escapeHtml, icon });
   }

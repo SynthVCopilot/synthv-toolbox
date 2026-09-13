@@ -27,6 +27,7 @@ import type {
   ChatMessage,
   ChineseRhymeLookup,
   ComponentDownload,
+  InstalledPlugin,
   CoverTaskRequest,
   CreativeHistoryEntry,
   ConversationSnapshot,
@@ -1461,6 +1462,10 @@ export const api = {
   retryComponentInstall: (taskId: string) => call<ComponentDownload[]>("retry_component_install", { taskId }),
   openDownloadedComponent: (id: string) => call<OperationResult>("open_downloaded_component", { id }),
   removeLocalComponent: (id: string) => call<OperationResult>("remove_local_component", { id }),
+  listInstalledPlugins: () => call<InstalledPlugin[]>("list_installed_plugins"),
+  installAgentPlugin: (sourcePath: string) => call<InstalledPlugin>("install_agent_plugin", { sourcePath }),
+  setAgentPluginEnabled: (pluginId: string, enabled: boolean) => call<InstalledPlugin>("set_agent_plugin_enabled", { pluginId, enabled }),
+  uninstallAgentPlugin: (pluginId: string) => call<void>("uninstall_agent_plugin", { pluginId }),
   listWorkflowRecipes: () => call<WorkflowRecipe[]>("list_workflow_recipes"),
   listCreativeHistory: (limit = 50) => call<CreativeHistoryEntry[]>("list_creative_history", { limit }),
   listProjectCheckpoints: (limit = 50) => call<ProjectCheckpoint[]>("list_project_checkpoints", { limit }),
@@ -1561,6 +1566,12 @@ export const api = {
   pickDirectory: async (): Promise<string | undefined> => {
     if (preview) return undefined;
     const selected = await open({ multiple: false, directory: true });
+    if (Array.isArray(selected)) return selected[0];
+    return typeof selected === "string" ? selected : undefined;
+  },
+  pickPluginArchive: async (): Promise<string | undefined> => {
+    if (preview) return undefined;
+    const selected = await open({ multiple: false, directory: false, filters: [{ name: "Plugin archive", extensions: ["zip"] }] });
     if (Array.isArray(selected)) return selected[0];
     return typeof selected === "string" ? selected : undefined;
   },

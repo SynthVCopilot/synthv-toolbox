@@ -3,7 +3,7 @@ import AppShell from "./AppShell.vue";
 import { i18n } from "../i18n";
 import type { PluginPageId, RegisteredPluginPage } from "./pluginRegistry";
 
-export type HostShellPage = "home" | "accounts" | "import" | "convert" | "analysis" | "quality" | "lyrics" | "history" | "copilot" | "ai" | "components" | "bridge" | "connections" | "settings" | "about";
+export type HostShellPage = "home" | "accounts" | "import" | "convert" | "analysis" | "quality" | "lyrics" | "history" | "copilot" | "ai" | "components" | "bridge" | "connections" | "plugins" | "settings" | "about";
 export type ShellPage = HostShellPage | PluginPageId;
 
 export interface ShellState {
