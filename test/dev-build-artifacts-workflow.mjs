@@ -9,6 +9,9 @@ const release = read(".github/workflows/desktop.yml");
 const development = read(".github/workflows/ffmpeg-verify.yml");
 const prepare = read(".github/workflows/prepare-desktop.yml");
 const packageJson = JSON.parse(read("src/PiDesktop.Tauri/package.json"));
+const agentRuntimePackageJson = JSON.parse(read("packages/agent-runtime/package.json"));
+const verifyJob = development.slice(development.indexOf("  verify:"), development.indexOf("  publish-nightly:"));
+const nightlyJob = development.slice(development.indexOf("  publish-nightly:"));
 
 for (const workflow of [release, development]) {
   assert.match(workflow, /actions\/setup-node@v6/);
@@ -37,6 +40,9 @@ assert.match(development, /--config\.publish\.channel=nightly/);
 assert.match(development, /--config\.publish\.releaseType=prerelease/);
 assert.match(development, /--publish always/);
 assert.match(development, /actions\/upload-artifact@v4/);
+assert.match(nightlyJob, /permissions:\s+contents: write/);
+assert.match(nightlyJob, /GH_TOKEN: \$\{\{ github\.token \}\}/);
+assert.doesNotMatch(verifyJob, /contents: write|--publish always|GH_TOKEN/);
 assert.match(prepare, /^name: Prepare Electron Desktop Build/m);
 assert.match(prepare, /src\/PiDesktop\.Tauri\/components\/synthv-agent-bridge/);
 assert.match(prepare, /npm run build:electron/);
@@ -46,8 +52,10 @@ assert.doesNotMatch(prepare, /cargo|tauri|src-tauri|rust-toolchain|setup-python/
 assert.match(release, /npm exec --prefix src\/PiDesktop\.Tauri -- electron-builder --config electron-builder\.yml/);
 assert.equal(packageJson.scripts.tauri, undefined);
 assert.equal(packageJson.scripts["prepare:bundled-node"], undefined);
-assert.equal(packageJson.scripts["build:electron"], "npm run build:renderer && npm run build:host");
+assert.equal(packageJson.scripts["build:electron"], "node scripts/ensure-agent-runtime.mjs && npm run build:renderer && npm run build:host");
 assert.match(packageJson.scripts["build:host"], /electron\/tsconfig\.json/);
+assert.match(packageJson.scripts["build:host"], /scripts\/ensure-agent-runtime\.mjs/);
 assert.match(packageJson.scripts["test:contracts"], /electron-http-mcp-server\.mjs/);
+assert.equal(agentRuntimePackageJson.scripts.prepare, undefined);
 
 console.log("Electron Builder workflow contracts passed.");
