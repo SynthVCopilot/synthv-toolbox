@@ -79,6 +79,13 @@ pub struct Sv2SessionReplacementPreview {
     pub destination: Sv2SessionInspection,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Sv2OfflineCacheClearResult {
+    pub removed_products: usize,
+    pub backup_path: String,
+}
+
 impl SessionText {
     fn parse(plaintext: Zeroizing<Vec<u8>>) -> Result<Self, String> {
         let text = String::from_utf8(plaintext.to_vec())
@@ -183,6 +190,26 @@ impl SessionText {
     fn header(&self, index: usize) -> &str {
         self.plaintext.split('\n').nth(index).unwrap_or("")
     }
+
+    fn without_offline_cached_products(&self) -> Result<(String, usize), String> {
+        let lines = self.plaintext.split('\n').collect::<Vec<_>>();
+        let product_start = match lines.get(5) {
+            Some(line) if line.starts_with("K1=") => 5,
+            Some(_) => 6,
+            None => 5,
+        };
+        if lines
+            .iter()
+            .skip(product_start)
+            .any(|line| ProductRow::parse(line).is_none())
+        {
+            return Err("session 包含无法安全清除的离线缓存行。".to_string());
+        }
+        Ok((
+            lines[..product_start].join("\n"),
+            lines.len().saturating_sub(product_start),
+        ))
+    }
 }
 
 impl ProductRow {
@@ -285,9 +312,56 @@ pub fn preview_replacement(
     })
 }
 
+pub fn clear_offline_cached_products(
+    session_path: impl AsRef<Path>,
+) -> Result<Sv2OfflineCacheClearResult, String> {
+    let key = read_machine_key().map_err(|_| "无法读取本机 session 密钥。".to_string())?;
+    clear_offline_cached_products_with_key(session_path.as_ref(), &*key)
+}
+
+fn clear_offline_cached_products_with_key(
+    session_path: &Path,
+    key: &[u8; 8],
+) -> Result<Sv2OfflineCacheClearResult, String> {
+    let original = read_ciphertext(session_path)?;
+    let session = decode_bytes_with_key(original.clone(), key)?;
+    let (plaintext, removed_products) = session.without_offline_cached_products()?;
+    if removed_products == 0 {
+        return Ok(Sv2OfflineCacheClearResult {
+            removed_products: 0,
+            backup_path: String::new(),
+        });
+    }
+    validate_session_plaintext_for_offline_tool(plaintext.as_bytes())
+        .map_err(|_| "清除后的 session 格式无效。".to_string())?;
+    let replacement = encrypt_session(plaintext.as_bytes(), key)
+        .map_err(|_| "无法加密清除后的 session。".to_string())?;
+    let original_hash = hash(&original);
+    let replacement_hash = hash(&replacement);
+    let backup = create_verified_backup(session_path, &original, &original_hash)?;
+    replace_with_recovery(
+        session_path,
+        &replacement,
+        &original,
+        &replacement_hash,
+        &original_hash,
+    )?;
+    Ok(Sv2OfflineCacheClearResult {
+        removed_products,
+        backup_path: backup.to_string_lossy().into_owned(),
+    })
+}
+
 fn decode_bytes(ciphertext: Zeroizing<Vec<u8>>) -> Result<SessionText, String> {
     let key = read_machine_key().map_err(|_| "native machine key is unavailable".to_string())?;
-    let plaintext = decrypt_session(ciphertext, &key)
+    decode_bytes_with_key(ciphertext, &*key)
+}
+
+fn decode_bytes_with_key(
+    ciphertext: Zeroizing<Vec<u8>>,
+    key: &[u8; 8],
+) -> Result<SessionText, String> {
+    let plaintext = decrypt_session(ciphertext, key)
         .map_err(|_| "unable to decrypt session for this machine".to_string())?;
     SessionText::parse(plaintext)
 }
