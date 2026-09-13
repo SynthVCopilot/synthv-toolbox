@@ -130,7 +130,7 @@ fn inspect_with_transport<T: OfflineTransport>(
     #[cfg(not(windows))]
     {
         let _ = (data_root, source_in_use, transport);
-        return Err("当前系统不支持 SV2 原生离线授权。".to_string());
+        Err("当前系统不支持 SV2 原生离线授权。".to_string())
     }
     #[cfg(windows)]
     {
@@ -163,7 +163,7 @@ fn set_with_transport<T: OfflineTransport>(
     #[cfg(not(windows))]
     {
         let _ = (data_root, backup_parent, enabled, source_in_use, transport);
-        return Err("当前系统不支持 SV2 原生离线授权。".to_string());
+        Err("当前系统不支持 SV2 原生离线授权。".to_string())
     }
     #[cfg(windows)]
     {

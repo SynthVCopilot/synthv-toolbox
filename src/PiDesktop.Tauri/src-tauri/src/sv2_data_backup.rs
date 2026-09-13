@@ -393,12 +393,12 @@ fn directory_stamp(metadata: &fs::Metadata) -> EntryStamp {
     }
 }
 
-fn file_stamp(file: &File, metadata: &fs::Metadata) -> Result<EntryStamp, String> {
+fn file_stamp(_file: &File, metadata: &fs::Metadata) -> Result<EntryStamp, String> {
     Ok(EntryStamp {
         bytes: metadata.len(),
         modified: metadata.modified().ok(),
         #[cfg(windows)]
-        identity: file_identity(file)?,
+        identity: file_identity(_file)?,
     })
 }
 
