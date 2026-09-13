@@ -100,6 +100,29 @@ pub async fn discover_agent_plugins(state: State<'_, AppState>) -> Result<Vec<Va
 }
 
 #[tauri::command]
+pub fn list_installed_plugins() -> Result<Vec<crate::plugin_manager::InstalledPlugin>, String> {
+    crate::plugin_manager::list(&crate::plugin_manager::plugins_root())
+}
+
+#[tauri::command]
+pub fn install_agent_plugin(source_path: String) -> Result<crate::plugin_manager::InstalledPlugin, String> {
+    crate::plugin_manager::install(Path::new(&source_path), &crate::plugin_manager::plugins_root())
+}
+
+#[tauri::command]
+pub fn set_agent_plugin_enabled(
+    plugin_id: String,
+    enabled: bool,
+) -> Result<crate::plugin_manager::InstalledPlugin, String> {
+    crate::plugin_manager::set_enabled(&crate::plugin_manager::plugins_root(), &plugin_id, enabled)
+}
+
+#[tauri::command]
+pub fn uninstall_agent_plugin(plugin_id: String) -> Result<(), String> {
+    crate::plugin_manager::uninstall(&crate::plugin_manager::plugins_root(), &plugin_id)
+}
+
+#[tauri::command]
 pub async fn invoke_agent_plugin(
     plugin_id: String,
     method: String,

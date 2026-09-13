@@ -399,6 +399,36 @@ export interface ComponentDownload {
   updatedAt: string;
 }
 
+export interface InstalledPluginPage {
+  id: string;
+  title: string;
+  entry: string;
+  icon?: string;
+}
+
+export interface InstalledPluginAction {
+  id: string;
+  location: "home.toolbar" | "project.toolbar" | "project.context" | "conversation.toolbar";
+  title: string;
+  icon?: string;
+  whenCapability?: string;
+}
+
+export interface InstalledPlugin {
+  manifest: {
+    schemaVersion: 1;
+    id: string;
+    name: string;
+    version: string;
+    hostApi: { min: string; max: string };
+    backend?: { entry: string };
+    pages: InstalledPluginPage[];
+    actions: InstalledPluginAction[];
+    permissions: string[];
+  };
+  enabled: boolean;
+}
+
 export interface BootstrapState {
   onboardingCompleted: boolean;
   mode: AppMode;

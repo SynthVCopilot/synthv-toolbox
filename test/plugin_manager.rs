@@ -1,0 +1,44 @@
+use std::fs;
+use std::path::PathBuf;
+
+use synthv_toolbox_lib::plugin_manager;
+use uuid::Uuid;
+
+fn temporary_root() -> PathBuf {
+    std::env::temp_dir().join(format!("synthv-plugin-test-{}", Uuid::new_v4()))
+}
+
+fn write_plugin(root: &std::path::Path, id: &str) {
+    fs::create_dir_all(root.join("ui")).unwrap();
+    fs::write(root.join("ui/index.html"), "<main>plugin</main>").unwrap();
+    fs::write(root.join("backend.js"), "export default {};\n").unwrap();
+    fs::write(root.join("manifest.json"), format!(r#"{{"schemaVersion":1,"id":"{id}","name":"Example","version":"1.0.0","hostApi":{{"min":"1.0","max":"1.0"}},"backend":{{"entry":"backend.js"}},"pages":[{{"id":"workbench","title":"Workbench","entry":"ui/index.html"}}],"actions":[{{"id":"run","location":"project.toolbar","title":"Run"}}],"permissions":["host.read"]}}"#)).unwrap();
+}
+
+#[test]
+fn installs_lists_and_disables_a_directory_plugin() {
+    let temporary = temporary_root();
+    let source = temporary.join("source");
+    let installed = temporary.join("plugins");
+    write_plugin(&source, "com.example.plugin");
+
+    let plugin = plugin_manager::install(&source, &installed).unwrap();
+    assert!(plugin.enabled);
+    assert_eq!(plugin.manifest.id, "com.example.plugin");
+    assert_eq!(plugin_manager::list(&installed).unwrap().len(), 1);
+    assert!(!plugin_manager::set_enabled(&installed, "com.example.plugin", false).unwrap().enabled);
+    assert!(!plugin_manager::list(&installed).unwrap()[0].enabled);
+    plugin_manager::uninstall(&installed, "com.example.plugin").unwrap();
+    assert!(plugin_manager::list(&installed).unwrap().is_empty());
+    let _ = fs::remove_dir_all(temporary);
+}
+
+#[test]
+fn rejects_entry_traversal_before_installing() {
+    let temporary = temporary_root();
+    let source = temporary.join("source");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(source.join("manifest.json"), r#"{"schemaVersion":1,"id":"com.example.bad","name":"Bad","version":"1.0.0","hostApi":{"min":"1.0","max":"1.0"},"pages":[{"id":"page","title":"Bad","entry":"../outside.html"}],"permissions":[]}"#).unwrap();
+    assert!(plugin_manager::install(&source, &temporary.join("plugins")).is_err());
+    let _ = fs::remove_dir_all(temporary);
+}
