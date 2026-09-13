@@ -184,6 +184,8 @@ pub fn run() {
                 let settings = http_settings.read().await;
                 http_context.mcp_enabled = settings.http_api_enabled;
                 http_context.agent_enabled = settings.http_agent_enabled;
+                http_context.http_mcp_internal_enabled = settings.http_mcp_internal_enabled;
+                http_context.http_mcp_advanced_enabled = settings.http_mcp_advanced_enabled;
                 http_context.port = settings.http_api_port;
                 let _ = http_api.start_if_enabled(http_context).await;
             });

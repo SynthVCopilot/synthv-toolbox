@@ -327,6 +327,24 @@ async fn register_host_capabilities(state: &AppState) {
             )
             .map_err(|error| rpc_error("permission_denied", error))?;
             drop(feature_settings);
+            if matches!(
+                invocation.permission.as_str(),
+                "host.internal" | "host.advanced"
+            ) {
+                return invoke_privileged_host_capability(
+                    &invocation.permission,
+                    &invocation.capability,
+                    &invocation.operation,
+                    invocation.params,
+                    mcp,
+                    bridge_dir,
+                    profiles,
+                    settings,
+                    agent_runtime,
+                )
+                .await
+                .map_err(|error| rpc_error("host_capability_error", error));
+            }
             match invocation.capability.as_str() {
                 "synthv.engine" => {
                     let writes = crate::synthv_unified::is_mutation(&invocation.operation)
@@ -591,6 +609,133 @@ fn require_permission(actual: &str, required: &str) -> Result<(), RpcError> {
             "permission_denied",
             format!("该操作需要 {required} 权限。"),
         ))
+    }
+}
+
+pub(crate) async fn invoke_privileged_host_capability(
+    permission: &str,
+    capability: &str,
+    operation: &str,
+    params: Value,
+    mcp: Arc<crate::mcp::McpManager>,
+    bridge_dir: PathBuf,
+    profiles: Arc<crate::sv2_profiles::Sv2ProfileService>,
+    settings: Arc<tokio::sync::RwLock<crate::config::ToolboxSettings>>,
+    agent_runtime: Arc<crate::agent_runtime::AgentRuntime>,
+) -> Result<Value, String> {
+    let denied = || Err("该特权工具不能调用指定宿主能力。".to_string());
+    match (permission, capability, operation) {
+        ("host.internal", "synthv.accounts", "activate") => serde_json::to_value(
+            profiles
+                .activate_slot(required_slot_id(&params).map_err(|error| error.message)?)
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string()),
+        ("host.internal", "synthv.accounts", "force-activate") => serde_json::to_value(
+            profiles
+                .force_activate_slot(required_slot_id(&params).map_err(|error| error.message)?)
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string()),
+        ("host.internal", "synthv.accounts", "recover-switch") => serde_json::to_value(
+            profiles
+                .recover_slot_switch()
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string()),
+        ("host.internal", "synthv.accounts", "clear-local-session") => serde_json::to_value(
+            profiles
+                .clear_local_session(required_slot_id(&params).map_err(|error| error.message)?)
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string()),
+        ("host.internal", "synthv.accounts", "clear-offline-license-cache") => {
+            serde_json::to_value(
+                profiles
+                    .clear_offline_license_cache(
+                        required_slot_id(&params).map_err(|error| error.message)?,
+                    )
+                    .map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())
+        }
+        ("host.internal", "synthv.accounts", "force-launch") => serde_json::to_value(
+            profiles
+                .force_launch_slot(
+                    required_slot_id(&params).map_err(|error| error.message)?,
+                    optional_string_param(&params, "projectPath").map_err(|error| error.message)?,
+                )
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string()),
+        ("host.internal", "synthv.diagnostics", "cached-state") => {
+            serde_json::to_value(profiles.cached_state().map_err(|error| error.to_string())?)
+                .map_err(|error| error.to_string())
+        }
+        ("host.internal", "synthv.diagnostics", "account-usage") => serde_json::to_value(
+            profiles
+                .account_usage_snapshot()
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string()),
+        ("host.internal", "synthv.diagnostics", "account-usage-for-slot") => serde_json::to_value(
+            profiles
+                .account_usage_snapshot_for_slot(
+                    required_slot_id(&params).map_err(|error| error.message)?,
+                )
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string()),
+        ("host.internal", "synthv.diagnostics", "voice-catalog") => serde_json::to_value(
+            profiles
+                .voice_catalog()
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string()),
+        ("host.internal", "synthv.paths", "slot-folder") => Ok(json!({
+            "path": profiles.slot_folder_path(required_slot_id(&params).map_err(|error| error.message)?)
+                .map_err(|error| error.to_string())?
+        })),
+        ("host.internal", "synthv.paths", "sandbox-folder") => Ok(json!({
+            "path": profiles.sandbox_folder_path(required_slot_id(&params).map_err(|error| error.message)?)
+                .map_err(|error| error.to_string())?
+        })),
+        ("host.internal", "runtime.internal", "status") => Ok(json!({
+            "running": agent_runtime.is_running().await,
+            "protocolVersion": PROTOCOL_VERSION,
+        })),
+        ("host.advanced", "synthv.sandbox", "prepare") => serde_json::to_value(
+            profiles
+                .prepare_concurrent_slot(required_slot_id(&params).map_err(|error| error.message)?)
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string()),
+        ("host.advanced", "synthv.sandbox", "remove") => serde_json::to_value(
+            profiles
+                .remove_concurrent_slot(required_slot_id(&params).map_err(|error| error.message)?)
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string()),
+        ("host.advanced", "synthv.authorization", "set-enabled") => {
+            let credential_id = params
+                .get("credentialId")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "授权信息操作需要 credentialId。".to_string())?;
+            let enabled = params
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| "授权信息操作需要 enabled。".to_string())?;
+            set_credential_enabled(&settings, credential_id, enabled).await
+        }
+        ("host.advanced", "host.network", "request") => unrestricted_network_request(&params).await,
+        ("host.advanced", "host.filesystem", operation) => {
+            unrestricted_filesystem_request(operation, &params)
+        }
+        _ => {
+            let _ = (mcp, bridge_dir);
+            denied()
+        }
     }
 }
 

@@ -472,6 +472,8 @@ pub async fn get_http_api_status(state: State<'_, AppState>) -> Result<HttpApiSt
         .status_async(
             settings.http_api_enabled,
             settings.http_agent_enabled,
+            settings.http_mcp_internal_enabled,
+            settings.http_mcp_advanced_enabled,
             settings.http_api_port,
         )
         .await)
@@ -481,6 +483,8 @@ pub async fn get_http_api_status(state: State<'_, AppState>) -> Result<HttpApiSt
 pub async fn configure_http_api(
     enabled: bool,
     agent_enabled: bool,
+    internal_functions_enabled: bool,
+    advanced_functions_enabled: bool,
     port: u16,
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -490,6 +494,8 @@ pub async fn configure_http_api(
         let mut settings = state.settings.write().await;
         settings.http_api_enabled = enabled;
         settings.http_agent_enabled = agent_enabled;
+        settings.http_mcp_internal_enabled = internal_functions_enabled;
+        settings.http_mcp_advanced_enabled = advanced_functions_enabled;
         settings.http_api_port = port;
         save_settings(&settings)?;
     }
@@ -497,6 +503,8 @@ pub async fn configure_http_api(
         let mut context = crate::http_api::HttpApiContext::from_state(&state, app);
         context.mcp_enabled = enabled;
         context.agent_enabled = agent_enabled;
+        context.http_mcp_internal_enabled = internal_functions_enabled;
+        context.http_mcp_advanced_enabled = advanced_functions_enabled;
         context.port = port;
         context
     };
@@ -507,7 +515,13 @@ pub async fn configure_http_api(
     }
     Ok(state
         .http_api
-        .status_async(enabled, agent_enabled, port)
+        .status_async(
+            enabled,
+            agent_enabled,
+            internal_functions_enabled,
+            advanced_functions_enabled,
+            port,
+        )
         .await)
 }
 
@@ -3831,6 +3845,8 @@ async fn build_bootstrap(state: &State<'_, AppState>) -> Result<BootstrapState, 
             .status_async(
                 settings.http_api_enabled,
                 settings.http_agent_enabled,
+                settings.http_mcp_internal_enabled,
+                settings.http_mcp_advanced_enabled,
                 settings.http_api_port,
             )
             .await,

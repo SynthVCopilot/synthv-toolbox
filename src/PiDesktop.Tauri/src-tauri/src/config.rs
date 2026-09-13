@@ -118,6 +118,10 @@ pub struct ToolboxSettings {
     #[serde(default)]
     pub plugin_advanced_functions_enabled: bool,
     #[serde(default)]
+    pub http_mcp_internal_enabled: bool,
+    #[serde(default)]
+    pub http_mcp_advanced_enabled: bool,
+    #[serde(default)]
     pub original_svp_prog_id: Option<String>,
     #[serde(default)]
     pub ai_provider: AiProviderId,
@@ -251,6 +255,8 @@ impl Default for ToolboxSettings {
             smart_svp_always_ask: false,
             plugin_internal_functions_enabled: false,
             plugin_advanced_functions_enabled: false,
+            http_mcp_internal_enabled: false,
+            http_mcp_advanced_enabled: false,
             original_svp_prog_id: None,
             ai_provider: AiProviderId::Anthropic,
             anthropic_model: default_anthropic_model(),
