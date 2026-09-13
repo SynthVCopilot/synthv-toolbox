@@ -1756,18 +1756,22 @@ function renderAccounts(): string {
     const isolatedLabel = concurrentRunning ? t("accountUi.openAnotherInstance") : slot.concurrent.ready ? t("accountUi.launchIsolated") : t("accountUi.prepareIsolation");
     const concurrentEnabled = windowsExtensions && Boolean(app?.sv2ConcurrentEnabled);
     const isolatedDisabled = !concurrentProviderAvailable || !concurrentEnabled;
+    const isolationStateLoading = windowsExtensions && !slot.concurrent.dataPath;
     const isolatedTitle = concurrentRunning
       ? t("accountUi.anIsolatedInstanceIsAlreadyRunningMoreInstancesOf")
       : !concurrentEnabled
         ? t("accountUi.isolationIsTurnedOffInGlobalSettings")
         : providerDetail;
     const localVoiceFact = `<span class="voice-inventory unknown" title="${t("accountUi.macosVDoesNotReadOrDecryptSignIn")}">${icon("shield", 13)} ${t("accountUi.accountAuthorizationsNotRead")}</span>`;
-    const windowsLaunchActions = concurrentEnabled && slot.concurrent.ready
-      ? `<button class="primary" data-profile-concurrent-launch="${slot.id}" ${isolatedDisabled ? `disabled title="${escapeHtml(isolatedTitle)}"` : ""}>${icon("boxes", 16)} ${isolatedLabel}</button><button class="secondary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? t("accountUi.launchNormally") : t("accountUi.switchAndLaunch")}</button>`
-      : `<button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? t("accountUi.launchNormally") : t("accountUi.switchAndLaunch")}</button><button class="secondary" data-profile-concurrent-prepare="${slot.id}" ${isolatedDisabled ? `disabled title="${escapeHtml(isolatedTitle)}"` : ""}>${icon("download", 16)} ${isolatedLabel}</button>`;
+    const normalLaunchAction = `<button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? t("accountUi.launchNormally") : t("accountUi.switchAndLaunch")}</button>`;
+    const isolationAction = isolationStateLoading
+      ? `<span class="isolation-read-status" role="status">${icon("sync", 16)} ${t("accountUi.readingIsolationState")}</span>`
+      : concurrentEnabled && slot.concurrent.ready
+        ? `<button class="secondary" data-profile-concurrent-launch="${slot.id}" ${isolatedDisabled ? `disabled title="${escapeHtml(isolatedTitle)}"` : ""}>${icon("boxes", 16)} ${isolatedLabel}</button>`
+        : `<button class="secondary" data-profile-concurrent-prepare="${slot.id}" ${isolatedDisabled ? `disabled title="${escapeHtml(isolatedTitle)}"` : ""}>${icon("download", 16)} ${isolatedLabel}</button>`;
     const launchActions = windowsExtensions
-      ? windowsLaunchActions
-      : `<button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? t("accountUi.launchNormally") : t("accountUi.switchAndLaunch")}</button>`;
+      ? `${normalLaunchAction}${isolationAction}`
+      : normalLaunchAction;
     return `<article class="account-launch-card ${slot.isActive ? "active" : ""}" style="--profile-color:${color}">
       <div class="account-card-main"><span class="profile-avatar compact">${escapeHtml(initial)}</span><div class="account-card-identity"><div class="profile-title-line"><h2>${escapeHtml(accountTitle)}</h2>${accountUseDot(useState)}${slot.isActive ? `<span class="profile-active-badge">${t("accounts.default")}</span>` : ""}</div>${accountEmail}${note}</div><div class="account-card-actions">${windowsExtensions ? `<button class="icon-plain" data-profile-refresh-slot="${slot.id}" title="${t("accounts.refresh")}" aria-label="${t("accounts.refresh")}">${icon("refresh", 18)}</button>` : ""}<button class="icon-plain" data-manage-slot="${slot.id}" title="${t("accounts.configure")}" aria-label="${t("accounts.configure")}">${icon("settings", 18)}</button><button class="icon-plain danger" data-delete-profile="${slot.id}" title="${t("accounts.delete")}" aria-label="${t("accounts.delete")}">${icon("trash", 18)}</button><button class="icon-plain" data-profile-activate="${slot.id}" title="${t("accounts.switchDefault")}" aria-label="${t("accounts.switchDefault")}" ${slot.isActive ? "disabled" : ""}>${icon("check", 18)}</button></div></div>
       <div class="account-card-facts">${windowsExtensions ? `${accountProbeBadge(slot)}${officialAuthorizationBadge(slot)}` : localVoiceFact}<span>${icon("sync", 13)} ${escapeHtml(lastUsed)}</span>${concurrentRunning ? `<span class="running">${icon("plug", 13)} ${t("accountUi.isolatedProcessCount", { count: slot.concurrent.runningPids.length })}</span>` : ""}</div>

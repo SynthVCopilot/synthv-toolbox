@@ -381,6 +381,7 @@ button.full { width: 100%; }
 .account-card-facts .voice-inventory.evidence, .account-card-facts .voice-inventory.unknown { color: var(--warning); }
 .account-launch-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .account-launch-actions button { min-width: 0; }
+.isolation-read-status { display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: var(--surface-subtle); font-size: 11px; }
 .empty-account-card { min-height: 150px; display: grid; place-items: center; align-content: center; gap: 7px; padding: 20px; border: 1px dashed var(--line-strong); border-radius: 8px; color: var(--muted); background: var(--surface-subtle); cursor: pointer; }
 .empty-account-card strong { color: inherit; font-size: 13px; }
 .empty-account-card span { font-size: 11px; }
