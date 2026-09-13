@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -48,11 +48,13 @@ pub async fn start_agent_runtime(state: State<'_, AppState>) -> Result<RuntimeHe
 
     register_host_capabilities(&state).await;
     let entrypoint = runtime_entrypoint(&state.resource_dir)?;
-    let node = crate::synthv::find_node()
-        .ok_or_else(|| "未找到可运行 Agent Runtime 的 Node.js。".to_string())?;
+    let node = crate::bundled_node::node_binary_from_resource_dir(&state.resource_dir);
+    if !node.is_file() {
+        return Err("当前应用包未包含受控 Node.js 运行时。".to_string());
+    }
     let current_dir = entrypoint.parent().map(Path::to_path_buf);
     let command = RuntimeCommand {
-        program: PathBuf::from(node),
+        program: node,
         args: vec![entrypoint.to_string_lossy().into_owned()],
         current_dir,
     };

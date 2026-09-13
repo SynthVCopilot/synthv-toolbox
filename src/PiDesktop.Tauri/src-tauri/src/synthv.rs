@@ -519,35 +519,9 @@ fn run_bridge_script(bridge_dir: &Path, script: &str, scripts_path: &str) -> Ope
 }
 
 pub fn find_node() -> Option<String> {
-    let mut candidates = Vec::new();
-    if let Ok(configured) = std::env::var("SYNTHV_TOOLBOX_NODE") {
-        candidates.push(configured);
-    }
-    #[cfg(target_os = "macos")]
-    candidates.extend([
-        "/opt/homebrew/bin/node".to_string(),
-        "/usr/local/bin/node".to_string(),
-        "/usr/bin/node".to_string(),
-    ]);
-    candidates.push("node".to_string());
-    candidates.into_iter().find(|candidate| {
-        quiet_command(candidate)
-            .arg("--version")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .output()
-            .is_ok_and(|output| {
-                output.status.success()
-                    && node_version_supported(String::from_utf8_lossy(&output.stdout).trim())
-            })
-    })
-}
-
-fn node_version_supported(value: &str) -> bool {
-    let mut parts = value.trim_start_matches('v').split('.');
-    let major = parts.next().and_then(|part| part.parse::<u32>().ok());
-    let minor = parts.next().and_then(|part| part.parse::<u32>().ok());
-    matches!((major, minor), (Some(major), Some(minor)) if major > 22 || (major == 22 && minor >= 19))
+    crate::bundled_node::node_binary()
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned())
 }
 
 fn operation_from_output(output: Output, success: &str, failure: &str) -> OperationResult {
@@ -614,19 +588,10 @@ pub fn quiet_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
 
 #[cfg(test)]
 mod tests {
-    use super::node_version_supported;
     #[cfg(windows)]
     use super::normalized_path_string;
     #[cfg(windows)]
     use std::path::Path;
-
-    #[test]
-    fn node_version_floor_matches_the_bundled_bridge() {
-        assert!(!node_version_supported("v20.10.0"));
-        assert!(!node_version_supported("v22.18.9"));
-        assert!(node_version_supported("v22.19.0"));
-        assert!(node_version_supported("v24.0.0"));
-    }
 
     #[cfg(windows)]
     #[test]

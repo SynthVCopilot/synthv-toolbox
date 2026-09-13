@@ -59,6 +59,11 @@ jobs:
       - name: Install platform dependencies
         working-directory: src/PiDesktop.Tauri
         run: npm ci --no-audit --no-fund
+      - name: Prepare bundled Node runtime
+        working-directory: src/PiDesktop.Tauri
+        env:
+          SYNTHV_TOOLBOX_NODE_TARGET: ${{ matrix.target }}
+        run: npm run prepare:bundled-node
       - name: Build desktop bundle from prepared frontend
         working-directory: src/PiDesktop.Tauri
         run: npm run tauri build -- --config ../../.github/tauri-ci.conf.json --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}

@@ -9,3 +9,4 @@
 | 002 | [Feature]_runtime_protocol_compatibility | 对齐共享协议并处理运行时向宿主发起的能力调用 | 建立可验证的双向运行时边界 | ✅ 已完成 |
 | 003 | [Architecture]_Pi_Runtime与扩展架构重构 | 接通 Rust 宿主、Pi 运行时、model-auth、插件后端与 GUI 贡献 | 将频繁变化的 AI 和扩展层移出 Rust 编译边界 | ✅ 已完成 |
 | 004 | [Architecture]_Pi_Runtime完整独立实现 | 内置 Node、全面切换模型请求链路并补齐插件安装管理 | 消除系统运行时和旧 Agent 链路依赖 | 🔄 进行中 |
+| 005 | [Feature]_bundled_node | 下载、验证、打包并解析应用自带 Node | 消除运行时对系统 Node 的依赖 | ✅ 已完成 |
