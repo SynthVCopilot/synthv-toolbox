@@ -9,11 +9,11 @@ fn temporary_root() -> PathBuf {
     std::env::temp_dir().join(format!("synthv-plugin-test-{}", Uuid::new_v4()))
 }
 
-fn write_plugin(root: &std::path::Path, id: &str) {
+fn write_plugin(root: &std::path::Path, id: &str, permissions: &str) {
     fs::create_dir_all(root.join("ui")).unwrap();
     fs::write(root.join("ui/index.html"), "<main>plugin</main>").unwrap();
     fs::write(root.join("backend.js"), "export default {};\n").unwrap();
-    fs::write(root.join("manifest.json"), format!(r#"{{"schemaVersion":1,"id":"{id}","name":"Example","version":"1.0.0","hostApi":{{"min":"1.0","max":"1.0"}},"backend":{{"entry":"backend.js"}},"pages":[{{"id":"workbench","title":"Workbench","entry":"ui/index.html"}}],"actions":[{{"id":"run","location":"project.toolbar","title":"Run"}}],"permissions":["host.read"]}}"#)).unwrap();
+    fs::write(root.join("manifest.json"), format!(r#"{{"schemaVersion":1,"id":"{id}","name":"Example","version":"1.0.0","hostApi":{{"min":"1.0","max":"1.0"}},"backend":{{"entry":"backend.js"}},"pages":[{{"id":"workbench","title":"Workbench","entry":"ui/index.html"}}],"actions":[{{"id":"run","location":"project.toolbar","title":"Run"}}],"permissions":{permissions}}}"#)).unwrap();
 }
 
 #[test]
@@ -21,7 +21,7 @@ fn installs_lists_and_disables_a_directory_plugin() {
     let temporary = temporary_root();
     let source = temporary.join("source");
     let installed = temporary.join("plugins");
-    write_plugin(&source, "com.example.plugin");
+    write_plugin(&source, "com.example.plugin", r#"{"host.read":"required"}"#);
 
     let plugin = plugin_manager::install(&source, &installed).unwrap();
     assert!(plugin.enabled);
@@ -30,7 +30,7 @@ fn installs_lists_and_disables_a_directory_plugin() {
     assert_eq!(plugin.manifest.id, "com.example.plugin");
     assert_eq!(plugin_manager::list(&installed).unwrap().len(), 1);
     assert!(
-        !plugin_manager::set_enabled(&installed, "com.example.plugin", false)
+        !plugin_manager::set_enabled(&installed, "com.example.plugin", false, false, false)
             .unwrap()
             .enabled
     );
@@ -56,13 +56,11 @@ fn requires_global_and_plugin_specific_consent_for_privileged_permissions() {
     let temporary = temporary_root();
     let source = temporary.join("source");
     let installed = temporary.join("plugins");
-    write_plugin(&source, "com.example.plugin");
-    let manifest = fs::read_to_string(source.join("manifest.json")).unwrap();
-    fs::write(
-        source.join("manifest.json"),
-        manifest.replace("[\"host.read\"]", "[\"host.internal\",\"host.advanced\"]"),
-    )
-    .unwrap();
+    write_plugin(
+        &source,
+        "com.example.plugin",
+        r#"{"host.internal":"optional","host.advanced":"optional"}"#,
+    );
     plugin_manager::install(&source, &installed).unwrap();
 
     assert!(plugin_manager::authorize_capability(
@@ -100,7 +98,7 @@ fn requires_global_and_plugin_specific_consent_for_privileged_permissions() {
         true,
     )
     .is_ok());
-    plugin_manager::set_enabled(&installed, "com.example.plugin", false).unwrap();
+    plugin_manager::set_enabled(&installed, "com.example.plugin", false, true, true).unwrap();
     assert!(plugin_manager::authorize_capability(
         &installed,
         "com.example.plugin",
@@ -113,11 +111,77 @@ fn requires_global_and_plugin_specific_consent_for_privileged_permissions() {
 }
 
 #[test]
+fn required_privileged_permissions_keep_a_plugin_disabled_until_every_grant_exists() {
+    let temporary = temporary_root();
+    let source = temporary.join("source");
+    let installed = temporary.join("plugins");
+    write_plugin(
+        &source,
+        "com.example.required",
+        r#"{"host.internal":"required","host.advanced":"required"}"#,
+    );
+
+    let plugin = plugin_manager::install(&source, &installed).unwrap();
+    assert!(!plugin.enabled);
+    assert!(plugin_manager::runnable_plugin_ids(&installed, true, true)
+        .unwrap()
+        .is_empty());
+    assert!(
+        plugin_manager::set_enabled(&installed, "com.example.required", true, true, true).is_err()
+    );
+
+    plugin_manager::set_internal_functions_enabled(&installed, "com.example.required", true)
+        .unwrap();
+    assert!(
+        plugin_manager::set_enabled(&installed, "com.example.required", true, true, true).is_err()
+    );
+    plugin_manager::set_advanced_functions_enabled(&installed, "com.example.required", true)
+        .unwrap();
+    assert!(
+        plugin_manager::set_enabled(&installed, "com.example.required", true, false, true).is_err()
+    );
+    assert!(
+        plugin_manager::set_enabled(&installed, "com.example.required", true, true, true)
+            .unwrap()
+            .enabled
+    );
+    assert_eq!(
+        plugin_manager::runnable_plugin_ids(&installed, true, true).unwrap(),
+        ["com.example.required"]
+    );
+
+    plugin_manager::disable_plugins_requiring_permission(&installed, "host.internal").unwrap();
+    assert!(!plugin_manager::list(&installed).unwrap()[0].enabled);
+    assert!(plugin_manager::runnable_plugin_ids(&installed, true, true)
+        .unwrap()
+        .is_empty());
+    let _ = fs::remove_dir_all(temporary);
+}
+
+#[test]
+fn rejects_legacy_permission_arrays_and_none_grants() {
+    let temporary = temporary_root();
+    let source = temporary.join("source");
+    let installed = temporary.join("plugins");
+    write_plugin(&source, "com.example.none", r#"{"host.internal":"none"}"#);
+    plugin_manager::install(&source, &installed).unwrap();
+    assert!(
+        plugin_manager::set_internal_functions_enabled(&installed, "com.example.none", true)
+            .is_err()
+    );
+
+    let legacy = temporary.join("legacy");
+    write_plugin(&legacy, "com.example.legacy", r#"["host.read"]"#);
+    assert!(plugin_manager::install(&legacy, &installed).is_err());
+    let _ = fs::remove_dir_all(temporary);
+}
+
+#[test]
 fn rejects_entry_traversal_before_installing() {
     let temporary = temporary_root();
     let source = temporary.join("source");
     fs::create_dir_all(&source).unwrap();
-    fs::write(source.join("manifest.json"), r#"{"schemaVersion":1,"id":"com.example.bad","name":"Bad","version":"1.0.0","hostApi":{"min":"1.0","max":"1.0"},"pages":[{"id":"page","title":"Bad","entry":"../outside.html"}],"permissions":[]}"#).unwrap();
+    fs::write(source.join("manifest.json"), r#"{"schemaVersion":1,"id":"com.example.bad","name":"Bad","version":"1.0.0","hostApi":{"min":"1.0","max":"1.0"},"pages":[{"id":"page","title":"Bad","entry":"../outside.html"}],"permissions":{}}"#).unwrap();
     assert!(plugin_manager::install(&source, &temporary.join("plugins")).is_err());
     let _ = fs::remove_dir_all(temporary);
 }
@@ -127,7 +191,7 @@ fn rejects_unknown_permissions() {
     let temporary = temporary_root();
     let source = temporary.join("source");
     fs::create_dir_all(&source).unwrap();
-    fs::write(source.join("manifest.json"), r#"{"schemaVersion":1,"id":"com.example.bad","name":"Bad","version":"1.0.0","hostApi":{"min":"1.0","max":"1.0"},"permissions":["host.everything"]}"#).unwrap();
+    fs::write(source.join("manifest.json"), r#"{"schemaVersion":1,"id":"com.example.bad","name":"Bad","version":"1.0.0","hostApi":{"min":"1.0","max":"1.0"},"permissions":{"host.everything":"optional"}}"#).unwrap();
     assert!(plugin_manager::install(&source, &temporary.join("plugins")).is_err());
     let _ = fs::remove_dir_all(temporary);
 }
