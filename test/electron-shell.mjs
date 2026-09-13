@@ -6,6 +6,8 @@ const packageJson = JSON.parse(readFileSync(new URL("../src/PiDesktop.Tauri/pack
 const electronMain = readFileSync(new URL("../src/PiDesktop.Tauri/electron/main.ts", import.meta.url), "utf8");
 const preload = readFileSync(new URL("../src/PiDesktop.Tauri/electron/preload.ts", import.meta.url), "utf8");
 const bridge = readFileSync(new URL("../src/PiDesktop.Tauri/electron/bridge.ts", import.meta.url), "utf8");
+const updater = readFileSync(new URL("../src/PiDesktop.Tauri/electron/updater.ts", import.meta.url), "utf8");
+const runtimeHost = readFileSync(new URL("../src/PiDesktop.Tauri/services/runtime-host.ts", import.meta.url), "utf8");
 const api = readFileSync(new URL("../src/PiDesktop.Tauri/src/api.ts", import.meta.url), "utf8");
 const rendererMain = readFileSync(new URL("../src/PiDesktop.Tauri/src/main.ts", import.meta.url), "utf8");
 
@@ -41,4 +43,17 @@ test("Electron build and launch scripts compile the shell", () => {
   assert.equal(typeof packageJson.scripts["electron:dev"], "string");
   assert.equal(typeof packageJson.scripts["electron:start"], "string");
   assert.equal(typeof packageJson.devDependencies.electron, "string");
+  assert.equal(typeof packageJson.dependencies["electron-updater"], "string");
+  assert.equal(typeof packageJson.devDependencies["electron-builder"], "string");
+  assert.equal(packageJson.dependencies["@tauri-apps/api"], undefined);
+  assert.equal(packageJson.build.asar, true);
+});
+
+test("Electron host routes updater, runtime, plugin, and MCP commands through registered services", () => {
+  for (const command of ["updater.check", "updater.restart", "updater.state", "runtime.load", "runtime.configure", "plugins.discover", "mcp.list"]) {
+    assert.match(electronMain, new RegExp(command.replace(".", "\\.")));
+  }
+  assert.match(electronMain, /webContents\.send\("toolbox:event"/);
+  assert.match(updater, /autoUpdater/);
+  assert.match(runtimeHost, /createRuntimeHost/);
 });

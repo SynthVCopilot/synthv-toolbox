@@ -2,10 +2,48 @@ import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenDialogOptions } from "./bridge.js";
+import { createUpdaterService } from "./updater.js";
+import { createRuntimeHost, type HostArguments } from "../services/runtime-host.js";
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
-const developmentUrl = process.env.ELECTRON_RENDERER_URL;
+const developmentUrl = process.env.ELECTRON_RENDERER_URL ?? process.argv.find((argument) => argument.startsWith("--dev-server-url="))?.slice("--dev-server-url=".length);
 let mainWindow: BrowserWindow | undefined;
+const updater = createUpdaterService();
+const runtimeHost = createRuntimeHost();
+
+type HostHandler = (args: HostArguments) => Promise<unknown>;
+
+class HostHandlerRegistry {
+  private readonly handlers = new Map<string, HostHandler>();
+
+  register(command: string, handler: HostHandler): void {
+    if (this.handlers.has(command)) throw new Error(`Desktop handler already registered: ${command}`);
+    this.handlers.set(command, handler);
+  }
+
+  async invoke(command: string, args: HostArguments): Promise<unknown> {
+    const handler = this.handlers.get(command);
+    if (!handler) throw new Error(`No Electron handler is registered for ${command}.`);
+    return handler(args);
+  }
+}
+
+const handlers = new HostHandlerRegistry();
+handlers.register("updater.check", async () => updater.check());
+handlers.register("updater.restart", async () => updater.restart());
+handlers.register("updater.state", async () => updater.state());
+handlers.register("runtime.load", async (args) => runtimeHost.load(args));
+handlers.register("runtime.configure", async (args) => runtimeHost.configure(args));
+for (const command of [
+  "plugins.discover", "plugins.install", "plugins.set-enabled", "plugins.uninstall", "plugins.invoke",
+  "mcp.list", "mcp.save", "mcp.delete", "mcp.test",
+]) {
+  handlers.register(command, async (args) => runtimeHost.invoke(command, args));
+}
+
+updater.onState((state) => {
+  mainWindow?.webContents.send("toolbox:event", { event: "updater.state", payload: state });
+});
 
 function focusMainWindow(): void {
   if (!mainWindow) return;
@@ -27,10 +65,13 @@ function validateOpenDialogOptions(value: unknown): OpenDialogOptions {
   };
 }
 
-ipcMain.handle("toolbox:invoke", (_event, payload: unknown) => {
-  const command = payload && typeof payload === "object" ? (payload as { command?: unknown }).command : undefined;
+ipcMain.handle("toolbox:invoke", async (_event, payload: unknown) => {
+  const envelope = payload && typeof payload === "object" ? payload as { command?: unknown; args?: unknown } : undefined;
+  const command = envelope?.command;
   if (typeof command !== "string" || !command) throw new Error("Invalid desktop command.");
-  throw new Error(`No Electron handler is registered for ${command}.`);
+  const args = envelope?.args;
+  if (args !== undefined && (!args || typeof args !== "object" || Array.isArray(args))) throw new Error("Desktop command arguments must be an object.");
+  return handlers.invoke(command, (args ?? {}) as HostArguments);
 });
 
 ipcMain.handle("toolbox:open-dialog", async (event, rawOptions: unknown) => {
