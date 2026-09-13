@@ -1038,6 +1038,36 @@ impl Sv2ProfileService {
         build_state(paths, &manifest, false, String::new())
     }
 
+    pub fn remove_concurrent_slot(&self, slot_id: String) -> Result<Sv2ProfilesState, String> {
+        validate_slot_id(&slot_id)?;
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| "SV2 槽位状态锁已损坏。".to_string())?;
+        let paths = self.paths.as_ref().map_err(Clone::clone)?;
+        let _file_lock = acquire_switch_lock(paths)?;
+        recover_if_needed(paths)?;
+        let manifest = load_manifest(paths)?;
+        let slot = manifest
+            .slots
+            .iter()
+            .find(|slot| slot.id == slot_id)
+            .ok_or_else(|| "找不到该 SV2 槽位。".to_string())?;
+        let provider = detect_concurrent_provider();
+        let concurrent = concurrent_slot_view(
+            &paths.vault,
+            &slot_id,
+            provider.as_ref().ok(),
+            slot.concurrent_content
+                .resolve(manifest.concurrent_defaults),
+        );
+        if !concurrent.running_pids.is_empty() {
+            return Err("请先关闭该账号的隔离 SV2 实例，再移除沙箱。".to_string());
+        }
+        remove_concurrent_slot_data(&paths.vault, &slot_id)?;
+        build_state(paths, &manifest, false, String::new())
+    }
+
     pub fn launch_concurrent_slot(
         &self,
         slot_id: String,

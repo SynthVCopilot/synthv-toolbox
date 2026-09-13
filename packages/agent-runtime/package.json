@@ -1,0 +1,31 @@
+{
+  "name": "@synthv-toolbox/agent-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "bin": {
+    "synthv-agent-runtime": "./dist/worker.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@model-auth/core": "https://github.com/lsy-404/platform-kit/releases/download/v0.5.4/model-auth-core-0.5.4.tgz",
+    "@synthv-toolbox/runtime-protocol": "file:../runtime-protocol"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.2",
+    "typescript": "7.0.2"
+  }
+}

@@ -20,8 +20,14 @@ const context = {
   tuningProfiles: [],
   httpApiStatus: undefined,
   page: "bridge",
+  pluginRegistry: {
+    recordsList: () => [],
+    unregister() {},
+    register() {},
+  },
   api: {
     bootstrap: async () => ({ bridgeConnected: true }),
+    discoverAgentPlugins: async () => [],
     listLyricProjects: async () => [],
     listSynthvProcesses: async () => [],
     synthvShortcutProfile: async () => ({ bridgeStart: "F13" }),

@@ -14,9 +14,11 @@ const source = read("src/PiDesktop.Tauri/src/about.ts");
 const styles = read("src/PiDesktop.Tauri/src/styles.css");
 const messages = read("src/PiDesktop.Tauri/src/i18nAbout.ts");
 const shell = read("src/PiDesktop.Tauri/src/vue/shell.ts");
+const pluginRegistry = read("src/PiDesktop.Tauri/src/vue/pluginRegistry.ts");
 const viewport = read("src/PiDesktop.Tauri/src/vue/components/PageViewport.vue");
 
-assert.match(main, /type Page = .*"about"/);
+assert.match(main, /type Page = HostPageId \| PluginPageId/);
+assert.match(pluginRegistry, /export type HostPageId = .*"about"/);
 assert.match(main, /navItem\("about", t\("nav\.about"\), "info"\)/);
 assert.match(main, /case "about": return renderAboutPage/);
 assert.match(shell, /\| "about"/);

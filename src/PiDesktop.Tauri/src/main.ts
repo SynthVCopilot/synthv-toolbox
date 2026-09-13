@@ -2,6 +2,7 @@ import "./i18nSystem";
 import "./i18nAbout";
 import "./i18nCopilot";
 import "./i18nWorkflows";
+import "./i18nPlugins";
 import "./styles.css";
 import "./i18nCommon";
 import "./i18nLyrics";
@@ -17,6 +18,17 @@ import { icon } from "./icons";
 import { renderAboutPage } from "./about";
 import { guiFeatureCatalog, toolGroups, type FeatureCatalogItem, type ToolGroup } from "./featureCatalog";
 import { mountShell, type ShellController } from "./vue/shell";
+import {
+  dispatchPluginAction,
+  dispatchPluginFrameResponse,
+  isPluginPageId,
+  pluginRegistry,
+  type HostPageId,
+  type PluginActionInvocation,
+  type PluginFrameRequest,
+  type PluginPageId,
+} from "./vue/pluginRegistry";
+import type { IconName } from "./icons";
 import { formatPercentage } from "./percentage";
 import { locale, setLocale, t } from "./i18n";
 import "./i18nHome";
@@ -61,6 +73,7 @@ import type {
   MediaTaskSnapshot,
   McpServerConfig,
   HttpApiStatus,
+  InstalledPlugin,
   OperationResult,
   ProjectCheckpoint,
   ProjectBackupState,
@@ -94,7 +107,7 @@ registerModelConnectionPanelElement();
 const root = document.querySelector<HTMLDivElement>("#app")!;
 if (!root) throw new Error("Missing #app root");
 
-type Page = "home" | "accounts" | "import" | "convert" | "analysis" | "quality" | "lyrics" | "history" | "copilot" | "ai" | "components" | "bridge" | "connections" | "settings" | "about";
+type Page = HostPageId | PluginPageId;
 type AccountManagerSection = "profile" | "global" | "add";
 
 interface PendingAccountIndicatorConsent {
@@ -127,6 +140,7 @@ let error = "";
 let conversations: ConversationSummary[] = [];
 let conversation: ConversationSnapshot | undefined;
 let fileApprovals: AgentFileApproval[] = [];
+let installedPlugins: InstalledPlugin[] = [];
 let profiles: Sv2ProfilesState | undefined;
 let activeWorkflow: Feature["id"] | undefined;
 let workflowResult: WorkflowResult | undefined;
@@ -264,6 +278,35 @@ let sv2VoiceCatalog: Sv2CachedVoice[] | undefined;
 let sv2VoiceCatalogLoading = false;
 let shellController: ShellController | undefined;
 let lastWiredMarkup = "";
+
+pluginRegistry.subscribe(() => render());
+window.addEventListener("plugin-ui:action", (event) => {
+  const action = (event as CustomEvent<PluginActionInvocation>).detail;
+  void api.invokeAgentPlugin(action.pluginId, `action.${action.actionId}`, {
+    targetPage: action.targetPage,
+  }).catch((reason) => {
+    error = formatError(reason);
+    render();
+  });
+});
+window.addEventListener("plugin-ui:request", (event) => {
+  const request = (event as CustomEvent<PluginFrameRequest>).detail;
+  void api.invokeAgentPlugin(request.pluginId, request.method, request.params)
+    .then((result) => dispatchPluginFrameResponse({
+      pluginId: request.pluginId,
+      pageId: request.pageId,
+      id: request.id,
+      ok: true,
+      result,
+    }))
+    .catch((reason) => dispatchPluginFrameResponse({
+      pluginId: request.pluginId,
+      pageId: request.pageId,
+      id: request.id,
+      ok: false,
+      error: { code: "plugin_request_failed", message: formatError(reason) },
+    }));
+});
 
 
 // Keep navigation available while a cancellable FFmpeg job runs.
@@ -442,6 +485,10 @@ restoreLyricWorkspace();
 if (!lyricSavedSnapshot) lyricSavedSnapshot = lyricWorkspaceSnapshot();
 
 function pageMeta(target: Page): { title: string; subtitle: string } {
+  if (isPluginPageId(target)) {
+    const pluginPage = pluginRegistry.page(target);
+    if (pluginPage) return { title: pluginPage.title, subtitle: "" };
+  }
   return { title: t(`pages.${target}.0`), subtitle: t(`pages.${target}.1`) };
 }
 
@@ -748,7 +795,8 @@ async function run(task: () => Promise<void>): Promise<void> {
 
 async function refresh(): Promise<void> {
   app = await api.bootstrap();
-  [lyricProjects, synthvProcesses, synthvShortcutProfile, bridgeSession, mediaTasks, tuningProfiles, httpApiStatus] = await Promise.all([
+  const [plugins, nextLyricProjects, nextProcesses, nextShortcutProfile, nextBridgeSession, nextMediaTasks, nextTuningProfiles, nextHttpApiStatus] = await Promise.all([
+    api.discoverAgentPlugins().catch(() => []),
     api.listLyricProjects(),
     api.listSynthvProcesses(),
     api.synthvShortcutProfile(),
@@ -757,7 +805,26 @@ async function refresh(): Promise<void> {
     api.listTuningProfiles(),
     api.getHttpApiStatus(),
   ]);
+  for (const record of pluginRegistry.recordsList()) pluginRegistry.unregister(record.manifest.id);
+  for (const manifest of plugins) pluginRegistry.register(manifest, "active");
+  lyricProjects = nextLyricProjects;
+  synthvProcesses = nextProcesses;
+  synthvShortcutProfile = nextShortcutProfile;
+  bridgeSession = nextBridgeSession;
+  mediaTasks = nextMediaTasks;
+  tuningProfiles = nextTuningProfiles;
+  httpApiStatus = nextHttpApiStatus;
   if (page === "settings") await refreshAutostartStatus();
+}
+
+async function reloadPluginState(): Promise<void> {
+  const [installed, manifests] = await Promise.all([
+    api.listInstalledPlugins(),
+    api.discoverAgentPlugins().catch(() => []),
+  ]);
+  installedPlugins = installed;
+  for (const record of pluginRegistry.recordsList()) pluginRegistry.unregister(record.manifest.id);
+  for (const manifest of manifests) pluginRegistry.register(manifest, "active");
 }
 
 async function refreshAccountUsage(slotId?: string, pageGeneration = accountPageGeneration): Promise<void> {
@@ -927,7 +994,7 @@ function scheduleMediaTaskPoll(): void {
   }, 700);
 }
 
-function navItem(target: Page, label: string, glyph: Parameters<typeof icon>[0]): string {
+function navItem(target: Page, label: string, glyph: IconName): string {
   return `<button class="nav-item ${page === target ? "active" : ""}" data-page="${target}" title="${label}" aria-label="${label}" ${page === target ? 'aria-current="page"' : ""}>
     ${icon(glyph, 19)}<span>${label}</span>
   </button>`;
@@ -948,10 +1015,12 @@ function renderSidebar(): string {
       ${navItem("history", t("nav.history"), "history")}
       ${app.mode === "ai" ? navItem("copilot", t("nav.copilot"), "bot") : ""}
       ${app.mode === "ai" ? navItem("ai", t("nav.ai"), "sparkles") : ""}
+      ${pluginRegistry.pages().length ? `<span class="nav-label">Plugins</span>${pluginRegistry.pages().map((pluginPage) => navItem(pluginPage.pageId, escapeHtml(pluginPage.title), pluginPage.icon ?? "plug")).join("")}` : ""}
       <span class="nav-label">${t("nav.system")}</span>
       ${navItem("components", t("nav.components"), "boxes")}
       ${navItem("bridge", t("nav.bridge"), "bridge")}
       ${navItem("connections", t("nav.connections"), "server")}
+      ${navItem("plugins", t("nav.plugins"), "plug")}
     </nav>
     <div class="sidebar-footer">
       <span class="version">v${escapeHtml(app.appVersion)} · ${escapeHtml(app.platform)}</span>
@@ -983,6 +1052,7 @@ function render(): void {
   if (app.mode !== "ai" && (page === "copilot" || page === "ai")) page = "home";
   const meta = pageMeta(page);
   const pageHtml = renderPage();
+  const pluginPage = isPluginPageId(page) ? pluginRegistry.page(page) : undefined;
   const noticeHtml = notice ? `<div class="toast success">${icon("check", 18)}<pre>${escapeHtml(notice)}</pre></div>` : "";
   const errorHtml = error ? `<div class="toast error"><pre>${escapeHtml(error)}</pre></div>` : "";
   const nextToastSignature = `${notice}\u0000${error}`;
@@ -1009,6 +1079,8 @@ function render(): void {
     bridgeConnected: app.bridgeConnected,
     busy,
     pageHtml,
+    pageActionsHtml: renderPluginActions(page),
+    pluginPage,
     noticeHtml,
     errorHtml,
     overlayHtml,
@@ -1569,6 +1641,7 @@ function renderOnboarding(): void {
 }
 
 function renderPage(): string {
+  if (isPluginPageId(page)) return "";
   switch (page) {
     case "home": return renderHome();
     case "accounts": return renderAccounts();
@@ -1583,9 +1656,60 @@ function renderPage(): string {
     case "components": return renderComponents();
     case "bridge": return renderBridge();
     case "connections": return renderMcp();
+    case "plugins": return renderPlugins();
     case "settings": return renderSettings();
     case "about": return renderAboutPage({ app: app!, update: toolboxUpdate, download: toolboxUpdateDownload, busy, locale: locale(), translate: t, escapeHtml, icon });
   }
+}
+
+function renderPlugins(): string {
+  const internalFunctionsAvailable = Boolean(app?.pluginInternalFunctionsEnabled);
+  const advancedFunctionsAvailable = Boolean(app?.pluginAdvancedFunctionsEnabled);
+  const cards = installedPlugins.map(({ manifest, enabled, internalFunctionsEnabled, advancedFunctionsEnabled }) => {
+    const requestsInternalFunctions = manifest.permissions.includes("host.internal");
+    const requestsAdvancedFunctions = manifest.permissions.includes("host.advanced");
+    const canGrantInternalFunctions = internalFunctionsAvailable && requestsInternalFunctions;
+    const canGrantAdvancedFunctions = advancedFunctionsAvailable && requestsAdvancedFunctions;
+    const contributions = [
+      manifest.backend ? t("plugins.backend") : "",
+      manifest.pages.length ? t("plugins.pageCount", { count: manifest.pages.length }) : "",
+      manifest.actions.length ? t("plugins.actionCount", { count: manifest.actions.length }) : "",
+    ].filter(Boolean).join(" · ");
+    const permissions = manifest.permissions.length
+      ? manifest.permissions.map((permission) => `<code>${escapeHtml(permission)}</code>`).join("")
+      : `<span class="plugin-manager-muted">${t("plugins.noPermissions")}</span>`;
+    return `<article class="plugin-manager-card">
+      <div class="plugin-manager-card-heading">
+        <div><h3>${escapeHtml(manifest.name)}</h3><p>${escapeHtml(manifest.id)} · v${escapeHtml(manifest.version)}</p></div>
+        <span class="plugin-manager-state ${enabled ? "enabled" : ""}">${enabled ? t("plugins.enabled") : t("plugins.disabled")}</span>
+      </div>
+      <p class="plugin-manager-contributions">${escapeHtml(contributions || t("plugins.noContributions"))}</p>
+      <div class="plugin-manager-permissions" aria-label="${t("plugins.permissions")}">${permissions}</div>
+      <div class="plugin-manager-privileges">
+        <label class="fluent-switch"><input type="checkbox" data-plugin-internal-functions="${escapeHtml(manifest.id)}" ${internalFunctionsEnabled ? "checked" : ""} ${canGrantInternalFunctions ? "" : "disabled"} /><span></span><span><strong>${t("plugins.internalFunctions")}</strong><small>${!requestsInternalFunctions ? t("plugins.permissionNotRequested") : internalFunctionsAvailable ? t("plugins.internalFunctionsDescription") : t("plugins.globalPermissionRequired")}</small></span></label>
+        <label class="fluent-switch"><input type="checkbox" data-plugin-advanced-functions="${escapeHtml(manifest.id)}" ${advancedFunctionsEnabled ? "checked" : ""} ${canGrantAdvancedFunctions ? "" : "disabled"} /><span></span><span><strong>${t("plugins.advancedFunctions")}</strong><small>${!requestsAdvancedFunctions ? t("plugins.permissionNotRequested") : advancedFunctionsAvailable ? t("plugins.advancedFunctionsDescription") : t("plugins.globalPermissionRequired")}</small></span></label>
+      </div>
+      <div class="plugin-manager-actions">
+        <button class="secondary compact" data-toggle-plugin="${escapeHtml(manifest.id)}" data-plugin-enabled="${enabled}">${icon(enabled ? "check" : "play", 16)} ${enabled ? t("plugins.disable") : t("plugins.enable")}</button>
+        <button class="secondary compact danger" data-uninstall-plugin="${escapeHtml(manifest.id)}">${icon("trash", 16)} ${t("plugins.uninstall")}</button>
+      </div>
+    </article>`;
+  }).join("");
+  return `<section class="panel plugin-manager">
+    <div class="section-heading plugin-manager-heading">
+      <div><h2>${t("plugins.title")}</h2><p>${t("plugins.description")}</p></div>
+      <div class="plugin-manager-toolbar">
+        <button class="secondary" data-install-plugin-directory>${icon("folder", 16)} ${t("plugins.installDirectory")}</button>
+        <button class="primary" data-install-plugin-archive>${icon("plus", 16)} ${t("plugins.installArchive")}</button>
+      </div>
+    </div>
+    ${cards ? `<div class="plugin-manager-grid">${cards}</div>` : `<div class="plugin-manager-empty">${icon("plug", 28)}<h3>${t("plugins.empty")}</h3><p>${t("plugins.emptyDescription")}</p></div>`}
+  </section>`;
+}
+
+function renderPluginActions(target: Page): string {
+  if (isPluginPageId(target)) return "";
+  return pluginRegistry.actionsFor(target).map((action) => `<button class="secondary compact" data-plugin-action="${escapeHtml(action.id)}" data-plugin-id="${escapeHtml(action.pluginId)}" data-plugin-target-page="${escapeHtml(action.targetPage)}">${action.icon ? icon(action.icon, 16) : ""}<span>${escapeHtml(action.title)}</span></button>`).join("");
 }
 
 function renderAccounts(): string {
@@ -2782,6 +2906,7 @@ function renderSettings(): string {
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.autostart")}</h2><p>${t("settings.autostartDescription")}</p>${app.autostartError ? `<p class="error-text">${escapeHtml(app.autostartError)}</p>` : ""}</div><label class="fluent-switch large"><input id="autostart-enabled" type="checkbox" ${app.autostartEnabled === true ? "checked" : ""} ${busy || app.autostartEnabled == null ? "disabled" : ""} aria-label="${t("settings.autostart")}" /><span></span>${app.autostartEnabled == null ? t("settings.unknown") : app.autostartEnabled ? t("settings.enabled") : t("settings.disabled")}</label></div></section>
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.mode")}</h2><p>${t("settings.modeDescription")}</p></div></div><div class="mode-setting"><button class="setting-choice ${app.mode === "toolbox" ? "active" : ""}" data-set-mode="toolbox"><span class="mode-icon slate">${icon("toolbox", 23)}</span><span><strong>${t("settings.toolbox")}</strong><small>${t("settings.toolboxDescription")}</small></span>${app.mode === "toolbox" ? icon("check", 20) : ""}</button><button class="setting-choice ${app.mode === "ai" ? "active" : ""}" data-set-mode="ai"><span class="mode-icon purple">${icon("sparkles", 23)}</span><span><strong>${t("settings.ai")}</strong><small>${t("settings.aiDescription")}</small></span>${app.mode === "ai" ? icon("check", 20) : ""}</button></div></section>
     ${showSvpRouting ? `<section class="panel smart-route-settings"><div class="section-heading"><div><h2>${t("settings.smartRoute")}</h2><p>${t("settings.smartRouteDescription")}</p></div><label class="fluent-switch large"><input id="svp-routing-enabled" type="checkbox" ${app.smartSvpLaunchEnabled ? "checked" : ""} ${association.supported ? "" : "disabled"} aria-label="${t("settings.smartRoute")}" /><span></span>${app.smartSvpLaunchEnabled ? t("settings.enabled") : t("settings.disabled")}</label></div><label class="fluent-switch large"><input id="svp-routing-always-ask" type="checkbox" ${app.smartSvpAlwaysAsk ? "checked" : ""} ${app.smartSvpLaunchEnabled && association.supported && !busy ? "" : "disabled"} aria-label="${t("settings.alwaysAsk")}" /><span></span>${t("settings.alwaysAsk")}</label><div class="smart-route-state ${association.isDefault ? "ready" : "pending"}"><span class="feature-icon ${association.isDefault ? "emerald" : "blue"}">${icon("file", 20)}</span><div><strong>${escapeHtml(associationLabel)}</strong><p>${escapeHtml(association.detail)}</p></div><button class="secondary compact" data-open-svp-default-apps ${association.supported ? "" : "disabled"}>${t("settings.openDefaults")}</button></div></section>` : ""}
+    <section class="panel plugin-privilege-settings"><div class="section-heading"><div><h2>${t("settings.pluginPrivileges")}</h2><p>${t("settings.pluginPrivilegesDescription")}</p></div></div><label class="fluent-switch"><input id="plugin-internal-functions-enabled" type="checkbox" ${app.pluginInternalFunctionsEnabled ? "checked" : ""} /><span></span><span><strong>${t("settings.pluginInternalFunctions")}</strong><small>${t("settings.pluginInternalFunctionsDescription")}</small></span></label><label class="fluent-switch"><input id="plugin-advanced-functions-enabled" type="checkbox" ${app.pluginAdvancedFunctionsEnabled ? "checked" : ""} /><span></span><span><strong>${t("settings.pluginAdvancedFunctions")}</strong><small>${t("settings.pluginAdvancedFunctionsDescription")}</small></span></label></section>
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.dataPlatform")}</h2><p>${t("settings.dataPlatformDescription")}</p></div></div><dl class="detail-list"><div><dt>${t("settings.platform")}</dt><dd>${escapeHtml(app.platform)}</dd></div><div><dt>${t("settings.config")}</dt><dd><code>${escapeHtml(app.configPath)}</code></dd></div><div><dt>${t("settings.appVersion")}</dt><dd>${escapeHtml(app.appVersion)}</dd></div></dl></section></div>`;
 }
 
@@ -3195,6 +3320,40 @@ function wireForms(): void {
     const enabled = (event.currentTarget as HTMLInputElement).checked;
     void run(() => changeAutostart(enabled));
   });
+  document.querySelector<HTMLInputElement>("#plugin-internal-functions-enabled")?.addEventListener("change", (event) => {
+    const enabled = (event.currentTarget as HTMLInputElement).checked;
+    void run(async () => {
+      app = await api.setPluginInternalFunctionsEnabled(enabled);
+      notice = enabled ? t("settings.enabled") : t("settings.disabled");
+    });
+  });
+  document.querySelector<HTMLInputElement>("#plugin-advanced-functions-enabled")?.addEventListener("change", (event) => {
+    const enabled = (event.currentTarget as HTMLInputElement).checked;
+    void run(async () => {
+      app = await api.setPluginAdvancedFunctionsEnabled(enabled);
+      notice = enabled ? t("settings.enabled") : t("settings.disabled");
+    });
+  });
+  document.querySelectorAll<HTMLInputElement>("[data-plugin-internal-functions]").forEach((input) => input.addEventListener("change", () => {
+    const pluginId = input.dataset.pluginInternalFunctions;
+    if (!pluginId) return;
+    const enabled = input.checked;
+    void run(async () => {
+      const updated = await api.setAgentPluginInternalFunctionsEnabled(pluginId, enabled);
+      await reloadPluginState();
+      notice = t(enabled ? "plugins.internalFunctionsEnabledNotice" : "plugins.internalFunctionsDisabledNotice", { name: updated.manifest.name });
+    });
+  }));
+  document.querySelectorAll<HTMLInputElement>("[data-plugin-advanced-functions]").forEach((input) => input.addEventListener("change", () => {
+    const pluginId = input.dataset.pluginAdvancedFunctions;
+    if (!pluginId) return;
+    const enabled = input.checked;
+    void run(async () => {
+      const updated = await api.setAgentPluginAdvancedFunctionsEnabled(pluginId, enabled);
+      await reloadPluginState();
+      notice = t(enabled ? "plugins.advancedFunctionsEnabledNotice" : "plugins.advancedFunctionsDisabledNotice", { name: updated.manifest.name });
+    });
+  }));
   document.querySelector<HTMLFormElement>("#http-api-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const form = event.currentTarget as HTMLFormElement;
@@ -3417,6 +3576,39 @@ document.addEventListener("keydown", (event) => {
 document.addEventListener("click", (event) => {
   const target = (event.target as HTMLElement).closest<HTMLElement>("button, [data-page], [data-onboarding], [data-audio-drop-zone]");
   if (!target || target.hasAttribute("disabled")) return;
+  if (target.hasAttribute("data-install-plugin-archive") || target.hasAttribute("data-install-plugin-directory")) {
+    void run(async () => {
+      const sourcePath = target.hasAttribute("data-install-plugin-archive")
+        ? await api.pickPluginArchive()
+        : await api.pickDirectory();
+      if (!sourcePath) return;
+      const installed = await api.installAgentPlugin(sourcePath);
+      await reloadPluginState();
+      notice = t("plugins.installed", { name: installed.manifest.name });
+    });
+    return;
+  }
+  if (target.dataset.togglePlugin) {
+    const pluginId = target.dataset.togglePlugin;
+    const enabled = target.dataset.pluginEnabled !== "true";
+    void run(async () => {
+      const updated = await api.setAgentPluginEnabled(pluginId, enabled);
+      await reloadPluginState();
+      notice = t(enabled ? "plugins.enabledNotice" : "plugins.disabledNotice", { name: updated.manifest.name });
+    });
+    return;
+  }
+  if (target.dataset.uninstallPlugin) {
+    const pluginId = target.dataset.uninstallPlugin;
+    const plugin = installedPlugins.find((item) => item.manifest.id === pluginId);
+    if (!window.confirm(t("plugins.uninstallConfirm", { name: plugin?.manifest.name ?? pluginId }))) return;
+    void run(async () => {
+      await api.uninstallAgentPlugin(pluginId);
+      await reloadPluginState();
+      notice = t("plugins.uninstalled", { name: plugin?.manifest.name ?? pluginId });
+    });
+    return;
+  }
   if (target.hasAttribute("data-open-ai-provider-picker")) {
     aiModelPickerOpen = true;
     aiModelPickerGeneration += 1;
@@ -3448,6 +3640,14 @@ document.addEventListener("click", (event) => {
   }
   if (target.hasAttribute("data-refresh-ai-usage")) {
     void refreshAiUsage(true);
+    return;
+  }
+  if (target.dataset.pluginAction && target.dataset.pluginId && target.dataset.pluginTargetPage) {
+    dispatchPluginAction({
+      pluginId: target.dataset.pluginId,
+      actionId: target.dataset.pluginAction,
+      targetPage: target.dataset.pluginTargetPage as HostPageId,
+    });
     return;
   }
   if (page === "lyrics" && document.querySelector(".lyric-workbench-grid")) syncLyricDraftFromDom();
@@ -4008,10 +4208,12 @@ document.addEventListener("click", (event) => {
   }
   const targetPage = target.dataset.page as Page | undefined;
   if (targetPage) {
+    if (isPluginPageId(targetPage) && !pluginRegistry.page(targetPage)) return;
     const leavingHistory = page === "history" && targetPage !== "history";
     const enteringAccounts = targetPage === "accounts" && page !== "accounts";
     const leavingAccounts = page === "accounts" && targetPage !== "accounts";
     const enteringComponents = targetPage === "components" && page !== "components";
+    const enteringPlugins = targetPage === "plugins" && page !== "plugins";
     const enteringToolCategory = toolGroups.some((group) => group.id === targetPage);
     const activeFeatureId = activeWorkflow;
     const activeGroup = activeFeatureId ? toolGroups.find((group) => group.featureIds.includes(activeFeatureId)) : undefined;
@@ -4043,6 +4245,7 @@ document.addEventListener("click", (event) => {
     error = "";
     if (page === "copilot") void run(async () => { [conversations, fileApprovals] = await Promise.all([api.listConversations(), api.agentFileApprovals()]); });
     else if (page === "history") scheduleHistoryRefresh();
+    else if (enteringPlugins) void run(reloadPluginState);
     else if (enteringAccounts && (app?.platform === "windows" || app?.platform === "macos" || app?.platform === "preview")) {
       render();
       loadCachedAccountPage(accountPageGeneration);
