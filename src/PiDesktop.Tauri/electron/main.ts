@@ -3,14 +3,14 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenDialogOptions } from "./bridge.js";
 import { createUpdaterService } from "./updater.js";
-import { createRuntimeHost, type HostArguments } from "../services/runtime-host.js";
+import { ElectronRuntimeHost } from "./services/runtime-host.js";
+import { ElectronCommandRegistry } from "./services/command-registry.js";
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
 const developmentUrl = process.env.ELECTRON_RENDERER_URL ?? process.argv.find((argument) => argument.startsWith("--dev-server-url="))?.slice("--dev-server-url=".length);
 let mainWindow: BrowserWindow | undefined;
 const updater = createUpdaterService();
-const runtimeHost = createRuntimeHost();
-
+type HostArguments = Record<string, unknown>;
 type HostHandler = (args: HostArguments) => Promise<unknown>;
 
 class HostHandlerRegistry {
@@ -32,14 +32,7 @@ const handlers = new HostHandlerRegistry();
 handlers.register("updater.check", async () => updater.check());
 handlers.register("updater.restart", async () => updater.restart());
 handlers.register("updater.state", async () => updater.state());
-handlers.register("runtime.load", async (args) => runtimeHost.load(args));
-handlers.register("runtime.configure", async (args) => runtimeHost.configure(args));
-for (const command of [
-  "plugins.discover", "plugins.install", "plugins.set-enabled", "plugins.uninstall", "plugins.invoke",
-  "mcp.list", "mcp.save", "mcp.delete", "mcp.test",
-]) {
-  handlers.register(command, async (args) => runtimeHost.invoke(command, args));
-}
+let commandRegistry: ElectronCommandRegistry | undefined;
 
 updater.onState((state) => {
   mainWindow?.webContents.send("toolbox:event", { event: "updater.state", payload: state });
@@ -71,7 +64,14 @@ ipcMain.handle("toolbox:invoke", async (_event, payload: unknown) => {
   if (typeof command !== "string" || !command) throw new Error("Invalid desktop command.");
   const args = envelope?.args;
   if (args !== undefined && (!args || typeof args !== "object" || Array.isArray(args))) throw new Error("Desktop command arguments must be an object.");
-  return handlers.invoke(command, (args ?? {}) as HostArguments);
+  const parameters = (args ?? {}) as HostArguments;
+  try {
+    return await handlers.invoke(command, parameters);
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.startsWith("No Electron handler is registered")) throw error;
+    if (!commandRegistry) throw new Error("Electron services are not ready.");
+    return commandRegistry.invoke(command, parameters);
+  }
 });
 
 ipcMain.handle("toolbox:open-dialog", async (event, rawOptions: unknown) => {
@@ -110,11 +110,25 @@ async function createMainWindow(): Promise<void> {
   else await mainWindow.loadFile(resolve(currentDirectory, "../../dist/index.html"));
 }
 
+async function initializeServices(): Promise<void> {
+  const runtimeHost = new ElectronRuntimeHost(join(app.getPath("userData"), "runtime"), {
+    invoke: async () => { throw new Error("The requested native capability has not been migrated to Node."); },
+    resolveModel: async () => { throw new Error("No model credential is configured."); },
+  });
+  await runtimeHost.load();
+  commandRegistry = new ElectronCommandRegistry(runtimeHost, (event, payload) => {
+    mainWindow?.webContents.send("toolbox:event", { event, payload });
+  });
+}
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on("second-instance", focusMainWindow);
-  app.whenReady().then(createMainWindow).catch((reason: unknown) => {
+  app.whenReady().then(async () => {
+    await initializeServices();
+    await createMainWindow();
+  }).catch((reason: unknown) => {
     console.error("Unable to create Electron window", reason);
     app.quit();
   });

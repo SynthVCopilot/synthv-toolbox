@@ -3,11 +3,11 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "outDir": "../dist",
-    "rootDir": "..",
+    "outDir": "../dist/electron",
+    "rootDir": ".",
     "strict": true,
     "skipLibCheck": true,
     "types": ["node", "electron"]
   },
-  "include": ["*.ts", "../services/runtime-host.ts"]
+  "include": ["**/*.ts"]
 }

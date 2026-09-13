@@ -1,13 +1,13 @@
 import { cp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { AgentRuntimeWorker, type PiSessionFactory } from "../../../../packages/agent-runtime/src/index.js";
+import { AgentRuntimeWorker, type PiSessionFactory } from "@synthv-toolbox/agent-runtime";
 import {
   pluginPermissionLevel,
   validatePluginManifest,
   type JsonValue,
   type PluginManifest,
   type PluginPermission,
-} from "../../../../packages/runtime-protocol/src/index.js";
+} from "@synthv-toolbox/runtime-protocol";
 
 export interface RuntimeHostSettings {
   pluginInternalFunctionsEnabled: boolean;

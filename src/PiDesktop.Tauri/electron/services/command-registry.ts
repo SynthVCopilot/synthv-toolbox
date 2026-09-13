@@ -1,4 +1,4 @@
-import type { JsonValue } from "../../../../packages/runtime-protocol/src/index.js";
+import type { JsonValue } from "@synthv-toolbox/runtime-protocol";
 import type { ElectronRuntimeHost } from "./runtime-host.js";
 
 export type EventSink = (event: string, payload: JsonValue) => void;
@@ -33,13 +33,13 @@ export class ElectronCommandRegistry {
   }
 
   private registerCore(): void {
-    this.handlers.set("bootstrap", async () => ({ settings: await this.host.load(), plugins: await this.host.contributions() }));
-    this.handlers.set("list_installed_plugins", async () => this.host.contributions());
-    this.handlers.set("install_agent_plugin", async p => this.host.installPlugin(stringParam(p, "sourcePath")));
+    this.handlers.set("bootstrap", async () => ({ settings: await this.host.load(), plugins: await this.host.contributions() }) as unknown as JsonValue);
+    this.handlers.set("list_installed_plugins", async () => this.host.contributions() as unknown as JsonValue);
+    this.handlers.set("install_agent_plugin", async p => this.host.installPlugin(stringParam(p, "sourcePath")) as unknown as JsonValue);
     this.handlers.set("uninstall_agent_plugin", async p => { await this.host.uninstallPlugin(stringParam(p, "pluginId")); return null; });
-    this.handlers.set("set_agent_plugin_enabled", async p => this.host.setPluginEnabled(stringParam(p, "pluginId"), boolParam(p, "enabled")));
-    this.handlers.set("set_agent_plugin_internal_functions_enabled", async p => this.host.setPluginGrant(stringParam(p, "pluginId"), "internal", boolParam(p, "enabled")));
-    this.handlers.set("set_agent_plugin_advanced_functions_enabled", async p => this.host.setPluginGrant(stringParam(p, "pluginId"), "advanced", boolParam(p, "enabled")));
+    this.handlers.set("set_agent_plugin_enabled", async p => this.host.setPluginEnabled(stringParam(p, "pluginId"), boolParam(p, "enabled")) as unknown as JsonValue);
+    this.handlers.set("set_agent_plugin_internal_functions_enabled", async p => this.host.setPluginGrant(stringParam(p, "pluginId"), "internal", boolParam(p, "enabled")) as unknown as JsonValue);
+    this.handlers.set("set_agent_plugin_advanced_functions_enabled", async p => this.host.setPluginGrant(stringParam(p, "pluginId"), "advanced", boolParam(p, "enabled")) as unknown as JsonValue);
     this.handlers.set("agent_session_initialize", async p => this.host.initializeAgentSession(stringParam(p, "sessionId"), optionalStringParam(p, "cwd"), optionalStringParam(p, "systemPrompt")));
     this.handlers.set("agent_session_send", async p => this.host.sendAgentMessage(stringParam(p, "sessionId"), stringParam(p, "input")));
     this.handlers.set("agent_session_close", async p => this.host.closeAgentSession(stringParam(p, "sessionId")));
