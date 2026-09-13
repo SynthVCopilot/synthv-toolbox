@@ -10,6 +10,7 @@ mod audio_prep;
 #[path = "../../../../test/bridge_session_flow.rs"]
 mod bridge_session_flow_tests;
 mod bridge_workflows;
+pub mod bundled_node;
 mod commands;
 mod components;
 mod config;
