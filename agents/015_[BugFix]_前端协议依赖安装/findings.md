@@ -6,3 +6,4 @@
 - 协议包的导出只指向未提交的 `dist`，因此前端构建前必须显式生成该目录。
 - 同一上游改动还删除了 CI 调用的 Agent Runtime、内置 Node 和 Tauri 启动脚本。
 - 原生认证清单已指向 0.6.1，但 lockfile 仍记录 0.5.4，导致 macOS Clippy 无法解析依赖。
+- Windows 专用的无窗口命令导入未受条件编译保护，macOS Clippy 将其视为未使用。

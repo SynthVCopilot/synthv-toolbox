@@ -27,7 +27,9 @@ use crate::sv2_session_guard::{
 };
 use crate::sv2_sync::{self, Sv2SyncCategory, Sv2SyncCategoryId, Sv2SyncManifest, Sv2SyncResult};
 use crate::svp_launch_router::{build_route_plan, SvpLaunchMode, SvpRoutePlan};
-use crate::synthv::{find_sv2_executable, quiet_command, succeeded, OperationResult};
+#[cfg(target_os = "windows")]
+use crate::synthv::quiet_command;
+use crate::synthv::{find_sv2_executable, succeeded, OperationResult};
 
 const SCHEMA_VERSION: u32 = 1;
 const MARKER_FILE: &str = ".synthv-toolbox-slot.json";
