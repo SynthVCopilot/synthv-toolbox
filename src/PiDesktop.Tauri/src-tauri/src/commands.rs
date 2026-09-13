@@ -1361,12 +1361,43 @@ pub async fn sv2_inspect_offline_license(
 pub async fn sv2_set_offline_license(
     slot_id: String,
     enabled: bool,
+    on_event: tauri::ipc::Channel<String>,
     state: State<'_, AppState>,
 ) -> Result<crate::sv2_account_probe::Sv2OfflineLicenseOperation, String> {
     let profiles = state.sv2_profiles.clone();
-    tauri::async_runtime::spawn_blocking(move || profiles.set_offline_license(slot_id, enabled))
+    tauri::async_runtime::spawn_blocking(move || {
+        profiles.set_offline_license(slot_id, enabled, |step| {
+            let _ = on_event.send(step.as_str().to_string());
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn read_sv2_session_document(
+    slot_id: String,
+    state: State<'_, AppState>,
+) -> Result<crate::sv2_session_kit::Sv2SessionDocument, String> {
+    let profiles = state.sv2_profiles.clone();
+    tauri::async_runtime::spawn_blocking(move || profiles.read_session_document(slot_id))
         .await
         .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn write_sv2_session_document(
+    slot_id: String,
+    expected_sha256: String,
+    plaintext: String,
+    state: State<'_, AppState>,
+) -> Result<crate::sv2_session_kit::Sv2SessionWriteResult, String> {
+    let profiles = state.sv2_profiles.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        profiles.write_session_document(slot_id, expected_sha256, plaintext)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]

@@ -464,9 +464,12 @@ impl Sv2ProfileService {
         &self,
         slot_id: String,
         enabled: bool,
+        progress: impl FnMut(crate::sv2_account_probe::Sv2OfflineLicenseStep),
     ) -> Result<crate::sv2_account_probe::Sv2OfflineLicenseOperation, String> {
         self.with_offline_license_slot(&slot_id, |root, backup, in_use| {
-            crate::sv2_account_probe::set_offline_license(root, backup, enabled, in_use)
+            crate::sv2_account_probe::set_offline_license_with_progress(
+                root, backup, enabled, in_use, progress,
+            )
         })
     }
 
@@ -569,6 +572,24 @@ impl Sv2ProfileService {
             return Err("目标槽位没有可恢复的 session 文件。".to_string());
         }
         Ok(session)
+    }
+
+    pub fn read_session_document(
+        &self,
+        slot_id: String,
+    ) -> Result<crate::sv2_session_kit::Sv2SessionDocument, String> {
+        let session = self.managed_session_path(&slot_id)?;
+        crate::sv2_session_kit::read_full_session(session)
+    }
+
+    pub fn write_session_document(
+        &self,
+        slot_id: String,
+        expected_sha256: String,
+        plaintext: String,
+    ) -> Result<crate::sv2_session_kit::Sv2SessionWriteResult, String> {
+        let session = self.managed_session_path(&slot_id)?;
+        crate::sv2_session_kit::write_full_session(session, &expected_sha256, plaintext)
     }
 
     fn build_account_usage_snapshot(

@@ -20,7 +20,7 @@ impl OfflineTransport for MockTransport {
 #[test]
 fn offline_cache_format_uses_only_the_verified_permanent_layout() {
     let line = "K1=license;K2=product;K3=Synthesizer V Studio 2 Pro;K4=Dreamtonics;K5=editor;K6=2.2.1;K7=2;K8=0;K9=0";
-    let parsed = parse_offline_cached_product(&line).unwrap();
+    let parsed = parse_offline_cached_product(line).unwrap();
     assert_eq!(parsed.database_id, "license");
     assert_eq!(parsed.attributes.len(), 3);
     assert_eq!(parsed.attributes[0].key, "K7");
@@ -136,16 +136,28 @@ mod write_flow {
             posts: Cell::new(0),
             fail: false,
         };
-        let on = set_with_transport(
+        let mut progress = Vec::new();
+        let on = set_with_transport_and_progress(
             &root.join("data"),
             &root.join("backups"),
             true,
             false,
             &server,
+            |step| progress.push(step),
         )
         .unwrap();
+        assert_eq!(
+            progress,
+            [
+                Sv2OfflineLicenseStep::Preflight,
+                Sv2OfflineLicenseStep::Backup,
+                Sv2OfflineLicenseStep::Remote,
+                Sv2OfflineLicenseStep::Local,
+                Sv2OfflineLicenseStep::Read,
+            ]
+        );
         assert!(on.status.enabled);
-        assert_eq!(on.access_changed, false);
+        assert!(!on.access_changed);
         let (enabled, _) = read_credentials(&root.join("data")).unwrap();
         assert!(enabled.has_full_cache());
         assert_eq!(enabled.access_token(), before.access_token());
@@ -325,8 +337,14 @@ fn live_offline_license_diagnostic() {
             );
         }
         "activate" | "deactivate" => {
-            let result =
-                set_offline_license(&data_root, &backup_root, action == "activate", false).unwrap();
+            let result = set_offline_license_with_progress(
+                &data_root,
+                &backup_root,
+                action == "activate",
+                false,
+                |_| {},
+            )
+            .unwrap();
             eprintln!(
                 "offline status enabled={} access_changed={} refresh_changed={} backup={}",
                 result.status.enabled,

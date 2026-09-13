@@ -72,8 +72,8 @@ use xxhash_rust::xxh32::xxh32;
 mod sv2_offline_license;
 #[allow(unused_imports)]
 pub use sv2_offline_license::{
-    inspect_offline_license, set_offline_license, Sv2OfflineLicenseOperation,
-    Sv2OfflineLicenseStatus,
+    inspect_offline_license, set_offline_license_with_progress, Sv2OfflineLicenseOperation,
+    Sv2OfflineLicenseStatus, Sv2OfflineLicenseStep,
 };
 
 const MAX_SESSION_BYTES: usize = 1024 * 1024;

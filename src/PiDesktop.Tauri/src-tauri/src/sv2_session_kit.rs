@@ -86,7 +86,7 @@ pub struct Sv2OfflineCacheClearResult {
     pub backup_path: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sv2SessionDocument {
     pub path: String,
@@ -95,7 +95,7 @@ pub struct Sv2SessionDocument {
     pub plaintext: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sv2SessionWriteResult {
     pub path: String,

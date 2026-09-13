@@ -1851,26 +1851,22 @@ function loadSv2VoiceCatalog(force = false): void {
     });
 }
 
-function sessionField(plaintext: string, names: string[]): string {
-  for (const name of names) {
-    const match = plaintext.match(new RegExp(`(?:^|[\\r\\n,{}])\\s*["']?${name}["']?\\s*[:=]\\s*["']?([^"'\\r\\n,}]+)`, "i"));
-    if (match?.[1]) return match[1].trim();
-  }
-  return "";
-}
-
 function renderSessionDocument(slot: Sv2ProfileSlot): string {
   const document = sv2SessionDocuments.get(slot.id);
   if (!document) return `<div class="session-detail-empty"><button class="secondary" data-read-sv2-session="${escapeHtml(slot.id)}">${icon("shield", 14)} ${t("accountUi.showSessionDetails")}</button></div>`;
+  const lines = document.plaintext.split("\n");
+  const productStart = lines[5]?.startsWith("K1=") ? 5 : 6;
   const fields: Array<[string, string]> = [
-    ["access", sessionField(document.plaintext, ["access", "access_token", "accessToken", "token"])],
-    ["refresh", sessionField(document.plaintext, ["refresh", "refresh_token", "refreshToken"])],
-    [t("accountUi.accessExpiry"), sessionField(document.plaintext, ["access_expiry", "accessExpiresAt", "accessExpireAt", "expires_at", "expiresAt"])],
-    [t("accountUi.sessionWrittenAt"), sessionField(document.plaintext, ["written_at", "writtenAt", "updated_at", "updatedAt"])],
-    [t("accountUi.device"), sessionField(document.plaintext, ["device", "device_id", "deviceId", "device_identifier"])],
-    [t("accountUi.user"), sessionField(document.plaintext, ["user", "user_id", "userId", "user_identifier"])],
+    ["access", lines[0] ?? ""],
+    ["refresh", lines[1] ?? ""],
+    [t("accountUi.accessExpiry"), lines[2] ?? ""],
+    [t("accountUi.sessionWrittenAt"), lines[3] ?? ""],
+    [t("accountUi.device"), lines[4] ?? ""],
+    [t("accountUi.user"), productStart === 6 ? (lines[5] ?? "") : ""],
   ];
-  return `<details class="session-document-details" open><summary>${t("accountUi.sessionDetails")}</summary><dl class="profile-storage-list compact session-credential-list">${fields.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd><code>${escapeHtml(value || t("accountUi.notAvailable"))}</code></dd></div>`).join("")}<div><dt>SHA-256</dt><dd><code>${escapeHtml(document.encryptedSha256)}</code></dd></div><div><dt>${t("accountUi.sessionPath")}</dt><dd><code>${escapeHtml(document.path)}</code></dd></div></dl><form class="session-editor" data-write-sv2-session="${escapeHtml(slot.id)}"><label>${t("accountUi.editFullSession")}<textarea name="plaintext" spellcheck="false">${escapeHtml(document.plaintext)}</textarea></label><button class="secondary" type="submit">${icon("check", 14)} ${t("accountUi.saveSession")}</button></form><details class="session-raw-details"><summary>${t("accountUi.rawSessionData")}</summary><pre>${escapeHtml(document.plaintext)}</pre></details><button class="secondary" data-read-sv2-session="${escapeHtml(slot.id)}">${icon("refresh", 14)} ${t("accountUi.refreshSessionDetails")}</button></details>`;
+  const products = lines.slice(productStart).filter(Boolean);
+  const productFields = products.length ? `<dl class="profile-storage-list compact session-product-list">${products.map((value, index) => `<div><dt>${t("accountUi.sessionProductRow")} ${index + 1}</dt><dd><code>${escapeHtml(value)}</code></dd></div>`).join("")}</dl>` : "";
+  return `<details class="session-document-details" open><summary>${t("accountUi.sessionDetails")}</summary><dl class="profile-storage-list compact session-credential-list">${fields.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd><code>${escapeHtml(value || t("accountUi.notAvailable"))}</code></dd></div>`).join("")}<div><dt>SHA-256</dt><dd><code>${escapeHtml(document.encryptedSha256)}</code></dd></div><div><dt>${t("accountUi.sessionPath")}</dt><dd><code>${escapeHtml(document.path)}</code></dd></div></dl>${productFields}<form class="session-editor" data-write-sv2-session="${escapeHtml(slot.id)}"><label>${t("accountUi.editFullSession")}<textarea name="plaintext" spellcheck="false">${escapeHtml(document.plaintext)}</textarea></label><button class="secondary" type="submit">${icon("check", 14)} ${t("accountUi.saveSession")}</button></form><details class="session-raw-details"><summary>${t("accountUi.rawSessionData")}</summary><pre>${escapeHtml(document.plaintext)}</pre></details><button class="secondary" data-read-sv2-session="${escapeHtml(slot.id)}">${icon("refresh", 14)} ${t("accountUi.refreshSessionDetails")}</button></details>`;
 }
 
 function renderOfflineLicenseSteps(): string {
@@ -1931,7 +1927,7 @@ function renderAccountManager(): string {
       : `<div class="empty-inline">${t("accountUi.offlineLicenseNoCachedProducts")}</div>`;
     const remoteSummary = remoteOffline ? `<small>${escapeHtml(t("accountUi.offlineRemoteStatus", { state: t(remoteOffline.enabled ? "accountUi.offlineRemoteEnabled" : "accountUi.offlineRemoteDisabled"), device: remoteOffline.deviceName ?? t("accountUi.offlineCurrentDevice"), checkedAt: new Date(remoteOffline.checkedAtUtc).toLocaleString(locale()) }))}</small>${remoteOffline.currentDevice ? "" : `<small>${t("accountUi.offlineOtherDevice")}</small>`}` : `<small>${t("accountUi.offlineCheckFirst")}</small>`;
     const canSetOffline = !!remoteOffline && remoteOffline.currentDevice && (remoteOffline.enabled || remoteOffline.eligible) && !busy;
-    const sessionDocumentHtml = typeof renderSessionDocument === "function" ? renderSessionDocument(managedSlot) : "";
+    const sessionDocumentHtml = renderSessionDocument(managedSlot);
     const offlineLicensePanel = managedSlot ? `<section class="authorization-panel offline-license-panel"><div class="authorization-heading"><div><strong>${t("accountUi.offlineLicense")}</strong><small>${escapeHtml(offlineCacheLabel)} · ${escapeHtml(offlineEligibilityLabel)}</small>${remoteSummary}</div><span class="inventory-status ${remoteOffline?.enabled ? "verified" : "unknown"}">${remoteOffline ? t(remoteOffline.enabled ? "accountUi.offlineRemoteEnabled" : "accountUi.offlineRemoteDisabled") : offlineCacheLabel}</span></div><p>${t("accountUi.offlineLicenseDirectGuard")}</p>${offlineProductList}<div class="manager-action-row"><button class="secondary" data-offline-license-check="${managedSlot.id}" ${busy ? "disabled" : ""}>${icon("refresh", 15)} ${t("accountUi.offlineCheck")}</button><button class="secondary" data-offline-license-set="${managedSlot.id}" data-offline-license-enabled="${!remoteOffline?.enabled}" ${canSetOffline ? "" : "disabled"}>${remoteOffline?.enabled ? t("accountUi.disableOfflineLicense") : t("accountUi.enableOfflineLicense")}</button><button class="secondary" data-offline-session-restore="${managedSlot.id}" ${busy ? "disabled" : ""}>${icon("shield", 15)} ${t("accountUi.restoreOfflineSession")}</button></div></section><section class="authorization-panel session-document-panel"><div class="authorization-heading"><div><strong>${t("accountUi.sessionDetails")}</strong><small>${t("accountUi.sessionDetailsDescription")}</small></div></div>${sessionDocumentHtml}</section>` : "";
     body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(officialIdentity.name ?? (managedSlot.sessionCached ? t("accountUi.accountInformationNeedsRefresh") : t("accountUi.signedOut")))}</h3><p>${escapeHtml(officialIdentity.email ?? t("accountUi.accountInformationNeedsRefresh"))}</p><p>${accountUseDot(managedUseState)} ${escapeHtml(managedUseState.label)}</p></div>${managedSlot.isActive ? `<span class="profile-active-badge">${t("accountUi.currentDefault")}</span>` : ""}</div>
       <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>${t("accountUi.note")}<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" placeholder="${t("accountUi.eGProductionAccount")}" /></label><button class="secondary">${t("accountUi.saveNote")}</button></form>
@@ -4496,19 +4492,6 @@ document.addEventListener("click", (event) => {
     });
     return;
   }
-  if (target.dataset.writeSv2Session) {
-    const slotId = target.dataset.writeSv2Session;
-    const document = sv2SessionDocuments.get(slotId);
-    const form = target as HTMLFormElement;
-    const plaintext = String(new FormData(form).get("plaintext") ?? "");
-    if (!document) return;
-    void run(async () => {
-      const result = await api.writeSv2SessionDocument(slotId, document.encryptedSha256, plaintext);
-      sv2SessionDocuments.set(slotId, await api.readSv2SessionDocument(slotId));
-      notice = `${t("accountUi.sessionSaved")} ${result.backupPath} · ${result.encryptedSha256}`;
-    });
-    return;
-  }
   if (target.hasAttribute("data-close-offline-license-progress")) {
     pendingOfflineLicenseSteps = undefined;
     render();
@@ -4584,18 +4567,15 @@ document.addEventListener("click", (event) => {
     render();
     void run(async () => {
       try {
-        for (let index = 0; index < stepKeys.length - 1; index += 1) {
-          const step = pendingOfflineLicenseSteps?.steps[index];
-          if (step) step.state = "active";
+        const operation = await api.sv2SetOfflineLicense(slotId, enabled, (reported) => {
+          const key = `${reported.slice(0, 1).toUpperCase()}${reported.slice(1)}`;
+          const activeIndex = stepKeys.indexOf(key);
+          if (activeIndex < 0 || pendingOfflineLicenseSteps?.slotId !== slotId) return;
+          pendingOfflineLicenseSteps.steps.forEach((step, index) => {
+            step.state = index < activeIndex ? "done" : index === activeIndex ? "active" : "pending";
+          });
           render();
-          await new Promise<void>((resolve) => window.setTimeout(resolve, 120));
-          if (step) step.state = "done";
-        }
-        const remoteStep = pendingOfflineLicenseSteps?.steps[2];
-        if (remoteStep) remoteStep.state = "active";
-        render();
-        const operation = await api.sv2SetOfflineLicense(slotId, enabled);
-        if (remoteStep) remoteStep.state = "done";
+        });
         pendingOfflineLicenseSteps?.steps.forEach((step) => { if (step.state === "pending" || step.state === "active") step.state = "done"; });
         offlineLicenseStatuses.set(slotId, operation.status);
         notice = `${operation.detail} ${t("accountUi.offlineOperationResult", { backupPath: operation.backupPath, accessChanged: t(operation.accessChanged ? "accountUi.offlineChanged" : "accountUi.offlineUnchanged"), refreshChanged: t(operation.refreshChanged ? "accountUi.offlineChanged" : "accountUi.offlineUnchanged") })}`;

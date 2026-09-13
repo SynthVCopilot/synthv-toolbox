@@ -313,14 +313,16 @@ fn full_write_rejects_stale_hash_without_backup_or_change() {
     .unwrap();
     fs::write(&destination, &original).unwrap();
 
-    let error = write_full_session_with_key(
+    let error = match write_full_session_with_key(
         &destination,
         "stale",
         synthetic_plaintext("K1=db;K2=product;K3=New;K4=Vendor;K5=Category;K6=2.0;K7=3"),
         &key,
         || Ok(false),
-    )
-    .unwrap_err();
+    ) {
+        Ok(_) => panic!("stale hash should be rejected"),
+        Err(error) => error,
+    };
 
     assert!(error.contains("destination hash guard"));
     assert_eq!(fs::read(&destination).unwrap(), original.as_slice());

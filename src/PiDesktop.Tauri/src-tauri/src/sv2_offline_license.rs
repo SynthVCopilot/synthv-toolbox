@@ -29,6 +29,27 @@ pub struct Sv2OfflineLicenseOperation {
     pub detail: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sv2OfflineLicenseStep {
+    Preflight,
+    Backup,
+    Remote,
+    Local,
+    Read,
+}
+
+impl Sv2OfflineLicenseStep {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Preflight => "preflight",
+            Self::Backup => "backup",
+            Self::Remote => "remote",
+            Self::Local => "local",
+            Self::Read => "read",
+        }
+    }
+}
+
 #[derive(Clone)]
 struct OfflineProduct {
     license_id: String,
@@ -107,18 +128,23 @@ pub fn inspect_offline_license(
     inspect_with_transport(data_root, source_in_use, &UreqOfflineTransport)
 }
 
-pub fn set_offline_license(
+pub fn set_offline_license_with_progress<F>(
     data_root: &Path,
     backup_parent: &Path,
     enabled: bool,
     source_in_use: bool,
-) -> Result<Sv2OfflineLicenseOperation, String> {
-    set_with_transport(
+    progress: F,
+) -> Result<Sv2OfflineLicenseOperation, String>
+where
+    F: FnMut(Sv2OfflineLicenseStep),
+{
+    set_with_transport_and_progress(
         data_root,
         backup_parent,
         enabled,
         source_in_use,
         &UreqOfflineTransport,
+        progress,
     )
 }
 
@@ -153,6 +179,7 @@ fn inspect_with_transport<T: OfflineTransport>(
     }
 }
 
+#[cfg(test)]
 fn set_with_transport<T: OfflineTransport>(
     data_root: &Path,
     backup_parent: &Path,
@@ -160,6 +187,29 @@ fn set_with_transport<T: OfflineTransport>(
     source_in_use: bool,
     transport: &T,
 ) -> Result<Sv2OfflineLicenseOperation, String> {
+    set_with_transport_and_progress(
+        data_root,
+        backup_parent,
+        enabled,
+        source_in_use,
+        transport,
+        |_| {},
+    )
+}
+
+fn set_with_transport_and_progress<T, F>(
+    data_root: &Path,
+    backup_parent: &Path,
+    enabled: bool,
+    source_in_use: bool,
+    transport: &T,
+    mut progress: F,
+) -> Result<Sv2OfflineLicenseOperation, String>
+where
+    T: OfflineTransport,
+    F: FnMut(Sv2OfflineLicenseStep),
+{
+    progress(Sv2OfflineLicenseStep::Preflight);
     #[cfg(not(windows))]
     {
         let _ = (data_root, backup_parent, enabled, source_in_use, transport);
@@ -193,6 +243,7 @@ fn set_with_transport<T: OfflineTransport>(
         if !device.current_device {
             return Err("授权服务未确认当前本地设备；未改动本地缓存。".to_string());
         }
+        progress(Sv2OfflineLicenseStep::Backup);
         let backup = crate::sv2_data_backup::create_verified_sv2_data_backup(
             data_root,
             backup_parent,
@@ -222,6 +273,7 @@ fn set_with_transport<T: OfflineTransport>(
             ));
         }
         ensure_sv2_not_running()?;
+        progress(Sv2OfflineLicenseStep::Remote);
         let endpoint = if enabled {
             ACTIVATE_URL
         } else {
@@ -248,6 +300,7 @@ fn set_with_transport<T: OfflineTransport>(
                 backup.backup_root.display()
             ));
         }
+        progress(Sv2OfflineLicenseStep::Local);
         ensure_sv2_not_running().map_err(|error| {
             format!(
                 "{error} 远端状态可能已改变；可从完整备份恢复：{}",
@@ -262,6 +315,7 @@ fn set_with_transport<T: OfflineTransport>(
             )
             },
         )?;
+        progress(Sv2OfflineLicenseStep::Read);
         let (after, _) = read_credentials(data_root)?;
         let access_changed = after.access_token() != credentials.access_token();
         let refresh_changed = after.refresh_token() != credentials.refresh_token();

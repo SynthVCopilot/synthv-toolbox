@@ -554,7 +554,8 @@ button.full { width: 100%; }
 .session-document-details > summary, .session-raw-details > summary { cursor: pointer; font-size: 11px; font-weight: 600; }
 .session-credential-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 12px; }
 .session-credential-list > div { min-width: 0; }
-.session-credential-list code { overflow-wrap: anywhere; word-break: break-word; }
+.session-credential-list code, .session-product-list code { overflow: visible; text-overflow: clip; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.session-product-list > div { grid-template-columns: 86px minmax(0, 1fr); }
 .session-raw-details pre { max-height: 240px; overflow: auto; margin: 7px 0 0; padding: 9px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); background: var(--surface-subtle); font: 10px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .offline-license-progress-dialog { width: min(460px, calc(100% - 32px)); padding: 22px; }
 .offline-license-progress-dialog h2 { margin: 4px 0 7px; font-size: 19px; }

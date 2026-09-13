@@ -1,4 +1,4 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import packageJson from "../package.json";
 import type { PluginManifest } from "@synthv-toolbox/runtime-protocol";
@@ -99,6 +99,17 @@ let previewBridgeConnected = true;
 let previewBridgeRequestedProcessId: number | null = null;
 const previewBridgeTargets = new Set<string>();
 let previewSynthvPid = 4203;
+let previewOfflineLicenseEnabled = false;
+let previewSessionSha256 = "0".repeat(64);
+let previewSessionPlaintext = [
+  "preview.access.token",
+  "preview.refresh.token",
+  "2030-01-01T01:00:00Z",
+  "2030-01-01T00:00:00Z",
+  "preview-device",
+  "preview-user",
+  "K1=preview-license;K2=preview-product;K3=Synthesizer V Studio 2 Pro;K4=Dreamtonics;K5=editor;K6=2.3;K7=2;K8=0;K9=0",
+].join("\n");
 let previewSynthvProcesses: SynthVProcess[] = [
   { processId: 4201, processIdentity: "preview-4201", productName: "SVStudio2 Pro", version: "2.3.0", name: "Synthesizer V Studio 2 Pro", command: "/Applications/Synthesizer V Studio 2 Pro.app/Contents/MacOS/synthv-studio", windowTitle: "Project A.svp - Synthesizer V Studio 2 Pro", isSv2: true, sandboxed: false },
   { processId: 4202, processIdentity: "preview-4202", productName: "SVStudio2 Pro", version: "2.3.0", name: "Synthesizer V Studio 2 Pro", command: "C:\\Sandbox\\Synthesizer V Studio 2 Pro.exe", windowTitle: "Project B.svp - Synthesizer V Studio 2 Pro", isSv2: true, sandboxed: true },
@@ -967,6 +978,49 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     }
     return previewProfiles as T;
   }
+  if (command === "sv2_inspect_offline_license") return {
+    enabled: previewOfflineLicenseEnabled,
+    eligible: true,
+    localCacheStatus: previewOfflineLicenseEnabled ? "active" : "inactive",
+    currentDevice: true,
+    deviceName: "Preview device",
+    cachedProducts: previewOfflineLicenseEnabled ? [{
+      databaseId: "preview-license",
+      productId: "preview-product",
+      name: "Synthesizer V Studio 2 Pro",
+      vendor: "Dreamtonics",
+      category: "editor",
+      version: "2.3",
+      attributes: [{ key: "K7", value: "2" }, { key: "K8", value: "0" }, { key: "K9", value: "0" }],
+    }] : [],
+    checkedAtUtc: new Date().toISOString(),
+  } as T;
+  if (command === "sv2_set_offline_license") {
+    previewOfflineLicenseEnabled = Boolean(args?.enabled);
+    return {
+      status: await call<import("./types").Sv2OfflineLicenseStatus>("sv2_inspect_offline_license", args),
+      backupPath: "C:\\Preview\\sv2-data-backup",
+      accessChanged: false,
+      refreshChanged: false,
+      detail: previewOfflineLicenseEnabled ? "已启用预览离线授权。" : "已停用预览离线授权。",
+    } as T;
+  }
+  if (command === "read_sv2_session_document") return {
+    path: `C:\\Preview\\${String(args?.slotId ?? "slot")}\\license\\session`,
+    encryptedSha256: previewSessionSha256,
+    encryptedBytes: previewSessionPlaintext.length,
+    plaintext: previewSessionPlaintext,
+  } as T;
+  if (command === "write_sv2_session_document") {
+    previewSessionPlaintext = String(args?.plaintext ?? previewSessionPlaintext);
+    previewSessionSha256 = "1".repeat(64);
+    return {
+      path: `C:\\Preview\\${String(args?.slotId ?? "slot")}\\license\\session`,
+      backupPath: "C:\\Preview\\session.session-kit-backup.bin",
+      encryptedSha256: previewSessionSha256,
+      encryptedBytes: previewSessionPlaintext.length,
+    } as T;
+  }
   if (command === "accept_sv2_concurrent_disclaimer") {
     previewConcurrentDisclaimerAccepted = true;
     return previewState() as T;
@@ -1397,7 +1451,18 @@ export const api = {
   sv2VoiceCatalog: () => call<import("./types").Sv2CachedVoice[]>("sv2_voice_catalog"),
   sv2AccountPrecheck: () => call<Sv2AccountPrecheck>("sv2_account_precheck"),
   sv2InspectOfflineLicense: (slotId: string) => call<import("./types").Sv2OfflineLicenseStatus>("sv2_inspect_offline_license", { slotId }),
-  sv2SetOfflineLicense: (slotId: string, enabled: boolean) => call<import("./types").Sv2OfflineLicenseOperation>("sv2_set_offline_license", { slotId, enabled }),
+  sv2SetOfflineLicense: async (slotId: string, enabled: boolean, onProgress?: (step: string) => void) => {
+    if (preview) {
+      for (const step of ["preflight", "backup", "remote", "local", "read"]) {
+        onProgress?.(step);
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 120));
+      }
+      return call<import("./types").Sv2OfflineLicenseOperation>("sv2_set_offline_license", { slotId, enabled });
+    }
+    const onEvent = new Channel<string>();
+    onEvent.onmessage = (step) => onProgress?.(step);
+    return call<import("./types").Sv2OfflineLicenseOperation>("sv2_set_offline_license", { slotId, enabled, onEvent });
+  },
   previewSv2OfflineSessionReplacement: (slotId: string, sourcePath: string) =>
     call<Sv2SessionReplacementPreview>("preview_sv2_offline_session_replacement", { slotId, sourcePath }),
   scheduleSv2OfflineSessionReplacement: (slotId: string, sourcePath: string, sourceSha256: string, destinationSha256: string) =>
