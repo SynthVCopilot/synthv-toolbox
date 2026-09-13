@@ -569,6 +569,7 @@ button.full { width: 100%; }
 .offline-license-progress-dialog p { margin: 0 0 14px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .offline-license-steps { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .offline-license-steps li { display: grid; grid-template-columns: 22px minmax(0,1fr); align-items: start; gap: 9px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-subtle); }
+.offline-license-steps li > span:last-child { min-width: 0; }
 .offline-license-steps .step-marker { width: 18px; height: 18px; flex: 0 0 18px; display: grid; place-items: center; border-radius: 50%; color: var(--muted); background: var(--surface); font-size: 12px; }
 .offline-license-steps li.step-active { border-color: var(--primary); }
 .offline-license-steps li.step-active .step-marker { color: var(--primary); }
