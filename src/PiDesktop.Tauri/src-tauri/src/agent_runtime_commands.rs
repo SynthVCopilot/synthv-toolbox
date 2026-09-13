@@ -266,6 +266,7 @@ fn host_hello() -> HostHello {
                 ],
             ),
             capability("synthv.paths", ["slot-folder", "sandbox-folder"]),
+            capability("synthv.session", ["read", "write"]),
             capability("runtime.internal", ["status"]),
             capability("synthv.sandbox", ["prepare", "remove"]),
             capability("synthv.authorization", ["set-enabled"]),
@@ -485,6 +486,46 @@ async fn register_host_capabilities(state: &AppState) {
                         .map_err(|error| rpc_error("path_error", error))?;
                     Ok(json!({ "path": path }))
                 }
+                "synthv.session" => {
+                    require_permission(&invocation.permission, "host.internal")?;
+                    let path = required_string_param(&invocation.params, "path")?;
+                    let operation = invocation.operation.clone();
+                    let expected_sha256 =
+                        optional_string_param(&invocation.params, "expectedSha256")?;
+                    let plaintext = optional_string_param(&invocation.params, "plaintext")?;
+                    tauri::async_runtime::spawn_blocking(move || match operation.as_str() {
+                        "read" => serde_json::to_value(
+                            crate::sv2_session_kit::read_full_session(path)
+                                .map_err(|error| rpc_error("session_error", error))?,
+                        )
+                        .map_err(|error| rpc_error("serialization_error", error.to_string())),
+                        "write" => serde_json::to_value(
+                            crate::sv2_session_kit::write_full_session(
+                                path,
+                                &expected_sha256.ok_or_else(|| {
+                                    rpc_error(
+                                        "invalid_capability_request",
+                                        "session 写入需要 expectedSha256。",
+                                    )
+                                })?,
+                                plaintext.ok_or_else(|| {
+                                    rpc_error(
+                                        "invalid_capability_request",
+                                        "session 写入需要 plaintext。",
+                                    )
+                                })?,
+                            )
+                            .map_err(|error| rpc_error("session_error", error))?,
+                        )
+                        .map_err(|error| rpc_error("serialization_error", error.to_string())),
+                        _ => Err(rpc_error(
+                            "unsupported_operation",
+                            "不支持的 session 能力操作。",
+                        )),
+                    })
+                    .await
+                    .map_err(|error| rpc_error("session_error", error.to_string()))?
+                }
                 "runtime.internal" if invocation.operation == "status" => {
                     require_permission(&invocation.permission, "host.internal")?;
                     Ok(json!({
@@ -601,6 +642,20 @@ fn required_slot_id(params: &Value) -> Result<String, RpcError> {
         .filter(|slot_id| !slot_id.is_empty())
         .map(str::to_string)
         .ok_or_else(|| rpc_error("invalid_capability_request", "该操作需要有效的 slotId。"))
+}
+
+fn required_string_param(params: &Value, key: &str) -> Result<String, RpcError> {
+    params
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            rpc_error(
+                "invalid_capability_request",
+                format!("该操作需要有效的 {key}。"),
+            )
+        })
 }
 
 fn optional_string_param(params: &Value, key: &str) -> Result<Option<String>, RpcError> {

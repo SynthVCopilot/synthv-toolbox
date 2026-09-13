@@ -86,6 +86,24 @@ pub struct Sv2OfflineCacheClearResult {
     pub backup_path: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Sv2SessionDocument {
+    pub path: String,
+    pub encrypted_sha256: String,
+    pub encrypted_bytes: usize,
+    pub plaintext: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Sv2SessionWriteResult {
+    pub path: String,
+    pub encrypted_sha256: String,
+    pub encrypted_bytes: usize,
+    pub backup_path: String,
+}
+
 impl SessionText {
     fn parse(plaintext: Zeroizing<Vec<u8>>) -> Result<Self, String> {
         let text = String::from_utf8(plaintext.to_vec())
@@ -294,6 +312,83 @@ fn inspect_path(path: &Path) -> Result<Sv2SessionInspection, String> {
         plaintext_lines: session.plaintext.lines().count(),
         credentials: session.redacted_credential_metadata(),
         cached_products: session.cached_products(),
+    })
+}
+
+pub fn read_full_session(session_path: impl AsRef<Path>) -> Result<Sv2SessionDocument, String> {
+    let key = read_machine_key().map_err(|_| "native machine key is unavailable".to_string())?;
+    read_full_session_with_key(session_path.as_ref(), &key)
+}
+
+fn read_full_session_with_key(
+    session_path: &Path,
+    key: &[u8; 8],
+) -> Result<Sv2SessionDocument, String> {
+    let encrypted = read_ciphertext(session_path)?;
+    let encrypted_sha256 = hash(&encrypted);
+    let encrypted_bytes = encrypted.len();
+    let session = decode_bytes_with_key(encrypted, key)?;
+    Ok(Sv2SessionDocument {
+        path: session_path.to_string_lossy().into_owned(),
+        encrypted_sha256,
+        encrypted_bytes,
+        plaintext: session.plaintext.to_string(),
+    })
+}
+
+pub fn write_full_session(
+    session_path: impl AsRef<Path>,
+    expected_sha256: &str,
+    plaintext: String,
+) -> Result<Sv2SessionWriteResult, String> {
+    let key = read_machine_key().map_err(|_| "native machine key is unavailable".to_string())?;
+    write_full_session_with_key(
+        session_path.as_ref(),
+        expected_sha256,
+        Zeroizing::new(plaintext.into_bytes()),
+        &key,
+        || process_conflict(Some(std::process::id())),
+    )
+}
+
+fn write_full_session_with_key<F>(
+    session_path: &Path,
+    expected_sha256: &str,
+    plaintext: Zeroizing<Vec<u8>>,
+    key: &[u8; 8],
+    process_conflict_check: F,
+) -> Result<Sv2SessionWriteResult, String>
+where
+    F: FnOnce() -> Result<bool, String>,
+{
+    let original = read_ciphertext(session_path)?;
+    verify_hash(&original, expected_sha256, "destination")?;
+    decode_bytes_with_key(original.clone(), key)?;
+    let session = SessionText::parse(plaintext)?;
+    let replacement = encrypt_session(session.plaintext.as_bytes(), key)
+        .map_err(|_| "cannot encrypt session plaintext".to_string())?;
+    if process_conflict_check()? {
+        return Err("SV2 or another Toolbox instance appears to be running".to_string());
+    }
+
+    let original_hash = hash(&original);
+    let replacement_hash = hash(&replacement);
+    let backup = create_verified_backup(session_path, &original, &original_hash)?;
+    if hash(&read_ciphertext(session_path)?) != original_hash {
+        return Err("destination changed before write; refusing replace".to_string());
+    }
+    replace_with_recovery(
+        session_path,
+        &replacement,
+        &original,
+        &replacement_hash,
+        &original_hash,
+    )?;
+    Ok(Sv2SessionWriteResult {
+        path: session_path.to_string_lossy().into_owned(),
+        encrypted_sha256: replacement_hash,
+        encrypted_bytes: replacement.len(),
+        backup_path: backup.to_string_lossy().into_owned(),
     })
 }
 

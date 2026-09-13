@@ -245,6 +245,90 @@ fn inspection_metadata_keeps_product_fields_and_redacts_credentials() {
 }
 
 #[test]
+fn full_read_returns_exact_session_plaintext() {
+    let root = temp_root();
+    let destination = root.join("session");
+    let key = [11u8; 8];
+    let plaintext = synthetic_plaintext(
+        "K1=db;K2=product;K3=Name;K4=Vendor;K5=Category;K6=1.0;K7=2;K8=0;K9=custom",
+    );
+    let encrypted = encrypt_session(&plaintext, &key).unwrap();
+    fs::write(&destination, &encrypted).unwrap();
+
+    let document = read_full_session_with_key(&destination, &key).unwrap();
+
+    assert_eq!(document.plaintext.as_bytes(), plaintext.as_slice());
+    assert_eq!(document.encrypted_sha256, hash(&encrypted));
+    assert_eq!(document.encrypted_bytes, encrypted.len());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn full_write_backs_up_and_replaces_complete_session() {
+    let root = temp_root();
+    let destination = root.join("session");
+    let key = [13u8; 8];
+    let original_plaintext = synthetic_plaintext(
+        "K1=db;K2=product;K3=Old;K4=Vendor;K5=Category;K6=1.0;K7=2;K8=0;K9=old",
+    );
+    let replacement_plaintext = synthetic_plaintext(
+        "K1=db;K2=product;K3=New;K4=Vendor;K5=Category;K6=2.0;K7=3;K8=1;K9=new",
+    );
+    let original = encrypt_session(&original_plaintext, &key).unwrap();
+    let original_hash = hash(&original);
+    fs::write(&destination, &original).unwrap();
+
+    let result = write_full_session_with_key(
+        &destination,
+        &original_hash,
+        replacement_plaintext.clone(),
+        &key,
+        || Ok(false),
+    )
+    .unwrap();
+    let written = read_full_session_with_key(&destination, &key).unwrap();
+
+    assert_eq!(
+        written.plaintext.as_bytes(),
+        replacement_plaintext.as_slice()
+    );
+    assert_eq!(result.encrypted_sha256, written.encrypted_sha256);
+    assert_eq!(
+        result.encrypted_bytes,
+        fs::read(&destination).unwrap().len()
+    );
+    assert_eq!(fs::read(&result.backup_path).unwrap(), original.as_slice());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn full_write_rejects_stale_hash_without_backup_or_change() {
+    let root = temp_root();
+    let destination = root.join("session");
+    let key = [17u8; 8];
+    let original = encrypt_session(
+        &synthetic_plaintext("K1=db;K2=product;K3=Old;K4=Vendor;K5=Category;K6=1.0;K7=2"),
+        &key,
+    )
+    .unwrap();
+    fs::write(&destination, &original).unwrap();
+
+    let error = write_full_session_with_key(
+        &destination,
+        "stale",
+        synthetic_plaintext("K1=db;K2=product;K3=New;K4=Vendor;K5=Category;K6=2.0;K7=3"),
+        &key,
+        || Ok(false),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("destination hash guard"));
+    assert_eq!(fs::read(&destination).unwrap(), original.as_slice());
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn source_hash_guard_refusal_preserves_destination() {
     let root = temp_root();
     let destination = root.join("session");

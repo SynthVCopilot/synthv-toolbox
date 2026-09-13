@@ -11,6 +11,10 @@ export type {
   PluginPermission,
   PluginPermissionLevel,
   PluginPermissions,
+  Sv2SessionDocument,
+  Sv2SessionReadParams,
+  Sv2SessionWriteParams,
+  Sv2SessionWriteResult,
   VersionRange,
 } from "@synthv-toolbox/runtime-protocol";
 

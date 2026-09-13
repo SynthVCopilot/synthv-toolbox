@@ -11,7 +11,7 @@ const manager = readFileSync(join(root, "src", "PiDesktop.Tauri", "src-tauri", "
 test("the native host reauthorizes every plugin capability invocation", () => {
   assert.match(host, /plugin_id: String/);
   assert.match(host, /plugin_manager::authorize_capability/);
-  assert.match(manager, /if !state\.enabled/);
+  assert.match(manager, /if !plugin_enabled\(&manifest, &state\)/);
   assert.match(manager, /插件未声明该宿主权限/);
   assert.match(manager, /internal_functions_enabled/);
   assert.match(manager, /advanced_functions_enabled/);
@@ -55,4 +55,13 @@ test("internal diagnostics, paths, and runtime status are explicit capabilities"
   assert.match(host, /"runtime\.internal"/);
   assert.match(host, /require_permission\(&invocation\.permission, "host\.internal"\)/);
   assert.match(host, /fn required_slot_id/);
+});
+
+test("full session access is an explicit internal capability", () => {
+  assert.match(host, /capability\("synthv\.session", \["read", "write"\]\)/);
+  assert.match(host, /"synthv\.session"[\s\S]*require_permission\(&invocation\.permission, "host\.internal"\)/);
+  assert.match(host, /read_full_session/);
+  assert.match(host, /write_full_session/);
+  assert.match(host, /"expectedSha256"/);
+  assert.match(host, /"plaintext"/);
 });

@@ -35,6 +35,30 @@ export interface HostHello {
   capabilities: CapabilityDescriptor[];
 }
 
+export type Sv2SessionReadParams = {
+  path: string;
+};
+
+export type Sv2SessionDocument = {
+  path: string;
+  encryptedSha256: string;
+  encryptedBytes: number;
+  plaintext: string;
+};
+
+export type Sv2SessionWriteParams = {
+  path: string;
+  expectedSha256: string;
+  plaintext: string;
+};
+
+export type Sv2SessionWriteResult = {
+  path: string;
+  encryptedSha256: string;
+  encryptedBytes: number;
+  backupPath: string;
+};
+
 export interface RpcRequest {
   kind: "request";
   id: string;
