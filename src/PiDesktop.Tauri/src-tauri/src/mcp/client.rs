@@ -65,6 +65,12 @@ impl McpStdioClient {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.as_std_mut()
+                .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+        }
         if let Some(dir) = &spec.working_dir {
             cmd.current_dir(dir);
         }
