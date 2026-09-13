@@ -7,5 +7,5 @@
   "backend": { "entry": "backend/index.js" },
   "pages": [{ "id": "workbench", "title": "Tune Workbench", "entry": "ui/index.html", "icon": "waveform" }],
   "actions": [{ "id": "run", "location": "project.toolbar", "title": "Auto tune", "icon": "sparkles" }],
-  "permissions": ["agent.tools", "project.read", "project.write"]
+  "permissions": { "agent.tools": "optional", "project.read": "required", "project.write": "required" }
 }

@@ -14,6 +14,7 @@ import {
   type JsonValue,
   type PluginManifest,
   type PluginPermission,
+  pluginPermissionLevel,
   type RpcRequest,
   type RpcResponseFailure,
   type RpcResponseSuccess,
@@ -76,7 +77,7 @@ export interface ModuleLoader {
 }
 
 export interface PluginDiscovery {
-  discover(root: string): Promise<PluginManifest[]>;
+  discover(root: string, enabledPluginIds: readonly string[]): Promise<PluginManifest[]>;
   invoke(pluginId: string, method: string, params: JsonValue): Promise<PluginInvocationResult>;
   extensionPaths(): readonly string[];
 }
@@ -305,10 +306,11 @@ export class AgentRuntimeWorker {
 
   private async discoverPlugins(request: RpcRequest): Promise<RpcResponseSuccess | RpcResponseFailure> {
     if (!this.pluginDiscovery) return this.failure(request, "plugins.unsupported", "Plugin discovery is unavailable in this runtime.");
-    if (!isRecord(request.params) || typeof request.params.root !== "string" || request.params.root.length === 0) {
-      return this.failure(request, "plugins.invalid-root", "runtime.plugins.discover requires a plugin root path.");
+    if (!isRecord(request.params) || typeof request.params.root !== "string" || request.params.root.length === 0
+      || !Array.isArray(request.params.enabledPluginIds) || !request.params.enabledPluginIds.every((id) => typeof id === "string" && id.length > 0)) {
+      return this.failure(request, "plugins.invalid-root", "runtime.plugins.discover requires a plugin root path and enabled plugin ids.");
     }
-    const plugins = await this.pluginDiscovery.discover(request.params.root);
+    const plugins = await this.pluginDiscovery.discover(request.params.root, request.params.enabledPluginIds as string[]);
     return this.success(request, { plugins: plugins as unknown as JsonValue });
   }
 
@@ -348,8 +350,9 @@ export async function loadPluginBackends(
     const context: PluginBackendContext = {
       plugin: manifest,
       invokeHost: async (permission, capability, operation, params) => {
-        if (!manifest.permissions.includes(permission)) throw new Error(`Plugin ${manifest.id} has not declared ${permission}.`);
-        return host.request("host.capability.invoke", { pluginId: manifest.id, permission, capability, operation, params });
+        const permissionLevel = pluginPermissionLevel(manifest, permission);
+        if (permissionLevel === "none") throw new Error(`Plugin ${manifest.id} has not declared ${permission}.`);
+        return host.request("host.capability.invoke", { pluginId: manifest.id, permission, permissionLevel, capability, operation, params });
       },
     };
     await module.activate?.(context);

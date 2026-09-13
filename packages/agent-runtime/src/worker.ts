@@ -58,7 +58,7 @@ class FilePluginDiscovery implements PluginDiscovery {
 
   constructor(private readonly host: HostCapabilityTransport) {}
 
-  async discover(root: string): Promise<PluginManifest[]> {
+  async discover(root: string, enabledPluginIds: readonly string[]): Promise<PluginManifest[]> {
     await this.dispose();
     const manifests: unknown[] = [];
     for (const entry of await readdir(root, { withFileTypes: true })) {
@@ -71,9 +71,10 @@ class FilePluginDiscovery implements PluginDiscovery {
         // A malformed or absent manifest is not a plugin candidate.
       }
     }
+    const enabled = new Set(enabledPluginIds);
     const accepted = manifests
       .map(validatePluginManifest)
-      .filter((manifest): manifest is PluginManifest => manifest !== undefined && isHostApiCompatible(manifest));
+      .filter((manifest): manifest is PluginManifest => manifest !== undefined && enabled.has(manifest.id) && isHostApiCompatible(manifest));
     this.loaded = await loadPluginBackends(pathToFileURL(root).href, accepted, this.host);
     return accepted;
   }

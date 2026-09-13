@@ -86,6 +86,10 @@ export type PluginPermission =
   | "project.read"
   | "project.write";
 
+export type PluginPermissionLevel = "none" | "optional" | "required";
+
+export type PluginPermissions = Partial<Record<PluginPermission, PluginPermissionLevel>>;
+
 export type PluginActionLocation =
   | "home.toolbar"
   | "project.toolbar"
@@ -120,7 +124,7 @@ export interface PluginManifest {
   backend?: PluginBackend;
   pages?: PluginPageContribution[];
   actions?: PluginActionContribution[];
-  permissions: PluginPermission[];
+  permissions: PluginPermissions;
 }
 
 const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
@@ -223,10 +227,9 @@ export function validatePluginManifest(value: unknown): PluginManifest | undefin
     || typeof value.version !== "string"
     || !semverPattern.test(value.version)
     || !isVersionRange(value.hostApi)
-    || !Array.isArray(value.permissions)) return undefined;
+    || (value.permissions !== undefined && !isPluginPermissions(value.permissions))) return undefined;
 
-  const permissions = value.permissions.filter(isPluginPermission);
-  if (permissions.length !== value.permissions.length || new Set(permissions).size !== permissions.length) return undefined;
+  const permissions = value.permissions === undefined ? {} : value.permissions;
 
   const backend = validatePluginBackend(value.backend);
   if (value.backend !== undefined && !backend) return undefined;
@@ -246,6 +249,10 @@ export function validatePluginManifest(value: unknown): PluginManifest | undefin
     ...(actions ? { actions } : {}),
     permissions,
   };
+}
+
+export function pluginPermissionLevel(manifest: PluginManifest, permission: PluginPermission): PluginPermissionLevel {
+  return manifest.permissions[permission] ?? "none";
 }
 
 function validatePluginBackend(value: unknown): PluginBackend | undefined {
@@ -295,6 +302,15 @@ function isRpcError(value: unknown): value is RpcError {
 
 function isPluginPermission(value: unknown): value is PluginPermission {
   return typeof value === "string" && permittedPermissions.has(value as PluginPermission);
+}
+
+function isPluginPermissions(value: unknown): value is PluginPermissions {
+  if (!isRecord(value)) return false;
+  return Object.entries(value).every(([permission, level]) => isPluginPermission(permission) && isPluginPermissionLevel(level));
+}
+
+function isPluginPermissionLevel(value: unknown): value is PluginPermissionLevel {
+  return value === "none" || value === "optional" || value === "required";
 }
 
 function isPluginActionLocation(value: unknown): value is PluginActionLocation {
