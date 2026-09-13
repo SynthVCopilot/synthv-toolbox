@@ -39,8 +39,13 @@ try {
 
   write("src/PiDesktop.Tauri/package.json", JSON.stringify({ version: "1.2.3" }));
   write("src/PiDesktop.Tauri/package-lock.json", JSON.stringify({ version: "1.2.3", packages: { "": { version: "1.2.3" } } }));
-  execFileSync(process.execPath, [join(root, ".github", "scripts", "set-dev-version.mjs"), "AbC1234f", fixture, "--next-patch"]);
-  assert.deepEqual(versions(), ["1.2.4-dev.abc1234", "1.2.4-dev.abc1234", "1.2.4-dev.abc1234"]);
+  execFileSync(process.execPath, [join(root, ".github", "scripts", "set-dev-version.mjs"), "AbC1234f", fixture, "--next-patch", "--sequence", "42"]);
+  assert.deepEqual(versions(), ["1.2.4-dev.42.abc1234", "1.2.4-dev.42.abc1234", "1.2.4-dev.42.abc1234"]);
+
+  assert.throws(
+    () => execFileSync(process.execPath, [join(root, ".github", "scripts", "set-dev-version.mjs"), "AbC1234f", fixture, "--sequence", "invalid"], { stdio: "pipe" }),
+    /positive integer/,
+  );
 
   execFileSync(process.execPath, [join(root, ".github", "scripts", "set-version.mjs"), "v2.0.0", fixture]);
   assert.deepEqual(versions(), ["2.0.0", "2.0.0", "2.0.0"]);

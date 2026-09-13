@@ -7,7 +7,14 @@ if (!/^[0-9a-f]{7,40}$/i.test(commit)) {
 }
 
 const nextPatch = options.includes("--next-patch");
-const repositoryOption = options.find((option) => option !== "--next-patch");
+const sequenceIndex = options.indexOf("--sequence");
+const sequence = sequenceIndex === -1 ? undefined : options[sequenceIndex + 1];
+if (sequenceIndex !== -1 && !/^[1-9]\d*$/.test(sequence ?? "")) {
+  throw new Error(`Development build sequence must be a positive integer: ${sequence ?? ""}`);
+}
+const optionValues = new Set(["--next-patch", "--sequence"]);
+if (sequenceIndex !== -1) optionValues.add(sequence);
+const repositoryOption = options.find((option) => !optionValues.has(option));
 const repository = path.resolve(repositoryOption ?? path.join(import.meta.dirname, "../.."));
 const desktop = path.join(repository, "src/PiDesktop.Tauri");
 const hash = commit.slice(0, 7).toLowerCase();
@@ -31,7 +38,7 @@ if (versions.some((current) => current !== packageJson.version)) {
   throw new Error("Desktop manifests must use the same base version before a development build");
 }
 
-const baseVersion = packageJson.version.replace(/-dev\.[0-9a-f]+$/i, "");
+const baseVersion = packageJson.version.replace(/-dev(?:\.\d+)?\.[0-9a-f]+$/i, "");
 const baseVersionMatch = /^(\d+)\.(\d+)\.(\d+)$/.exec(baseVersion);
 if (!baseVersionMatch) {
   throw new Error(`Desktop manifests must use a stable semantic version: ${packageJson.version}`);
@@ -40,7 +47,7 @@ const developmentBaseVersion = nextPatch
   ? `${baseVersionMatch[1]}.${baseVersionMatch[2]}.${Number(baseVersionMatch[3]) + 1}`
   : baseVersion;
 
-const suffix = `-dev.${hash}`;
+const suffix = `-dev.${sequence ? `${sequence}.` : ""}${hash}`;
 let version;
 if (!nextPatch && packageJson.version.includes("-dev.")) {
   if (!packageJson.version.endsWith(suffix)) {

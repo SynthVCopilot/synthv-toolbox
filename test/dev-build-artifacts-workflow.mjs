@@ -18,8 +18,9 @@ for (const workflow of [release, development]) {
   assert.match(workflow, /npm ci --no-audit --no-fund/);
   assert.match(workflow, /npm run build/);
   assert.match(workflow, /npm exec --prefix src\/PiDesktop\.Tauri -- electron-builder --config electron-builder\.yml/);
-  assert.doesNotMatch(workflow, /cargo |tauri |tauri-action|gh release|download-artifact|nightly-release/);
+  assert.doesNotMatch(workflow, /cargo |tauri |tauri-action|download-artifact|nightly-release/);
 }
+assert.doesNotMatch(release, /gh release/);
 
 assert.match(release, /tags: \["v\*"\]/);
 assert.match(release, /GH_TOKEN: \$\{\{ github\.token \}\}/);
@@ -45,6 +46,10 @@ assert.match(verifyJob, /name: Load compiled Electron main modules[\s\S]*npm run
 assert.match(nightlyJob, /permissions:\s+contents: write/);
 assert.match(nightlyJob, /needs: verify/);
 assert.match(nightlyJob, /GH_TOKEN: \$\{\{ github\.token \}\}/);
+assert.match(nightlyJob, /name: Set nightly version[\s\S]*set-dev-version\.mjs "\$\{\{ github\.sha \}\}" --next-patch --sequence "\$\{\{ github\.run_number \}\}"/);
+assert.match(nightlyJob, /name: Validate published nightly assets/);
+assert.match(nightlyJob, /Nightly package was not published/);
+assert.match(nightlyJob, /Nightly update metadata was not published/);
 assert.doesNotMatch(verifyJob, /contents: write|--publish always|GH_TOKEN/);
 assert.match(prepare, /^name: Prepare Electron Desktop Build/m);
 assert.match(prepare, /src\/PiDesktop\.Tauri\/components\/synthv-agent-bridge/);

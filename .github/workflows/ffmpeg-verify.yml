@@ -63,8 +63,12 @@ jobs:
         include:
           - os: windows-latest
             target: --win
+            asset_suffix: -setup.exe
+            update_metadata: nightly.yml
           - os: macos-14
             target: --mac
+            asset_suffix: .dmg
+            update_metadata: nightly-mac.yml
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -76,6 +80,9 @@ jobs:
       - name: Install desktop dependencies
         working-directory: src/PiDesktop.Tauri
         run: npm ci --no-audit --no-fund
+      - name: Set nightly version
+        id: nightly-version
+        run: node .github/scripts/set-dev-version.mjs "${{ github.sha }}" --next-patch --sequence "${{ github.run_number }}"
       - name: Build desktop assets
         working-directory: src/PiDesktop.Tauri
         run: npm run build:electron
@@ -83,3 +90,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: npm exec --prefix src/PiDesktop.Tauri -- electron-builder --config electron-builder.yml ${{ matrix.target }} --config.publish.channel=nightly --config.publish.releaseType=prerelease --publish always
+      - name: Validate published nightly assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NIGHTLY_VERSION: ${{ steps.nightly-version.outputs.version }}
+          ASSET_SUFFIX: ${{ matrix.asset_suffix }}
+          UPDATE_METADATA: ${{ matrix.update_metadata }}
+        run: |
+          $assets = @(gh release view "v$env:NIGHTLY_VERSION" --json assets --jq '.assets[].name')
+          if ($LASTEXITCODE -ne 0) { throw "Nightly release was not created." }
+          $packageAsset = "Synthesizer-V-Toolbox-$env:NIGHTLY_VERSION$env:ASSET_SUFFIX"
+          if ($assets -notcontains $packageAsset) { throw "Nightly package was not published: $packageAsset" }
+          if ($assets -notcontains $env:UPDATE_METADATA) { throw "Nightly update metadata was not published: $env:UPDATE_METADATA" }
