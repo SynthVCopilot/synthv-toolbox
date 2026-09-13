@@ -112,7 +112,7 @@ pub fn create_verified_sv2_data_backup(
 fn canonical_data_root(source_root: &Path) -> Result<PathBuf, String> {
     let metadata = fs::symlink_metadata(source_root)
         .map_err(|error| format!("cannot inspect SV2 data root: {error}"))?;
-    if !metadata.is_dir() {
+    if !is_reparse_point(&metadata) && !metadata.is_dir() {
         return Err("SV2 data root is not a directory".to_string());
     }
     let canonical = fs::canonicalize(source_root)
@@ -290,7 +290,9 @@ fn read_stable_file(
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(windows)]
-    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    options
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .share_mode(0);
     let mut file = options
         .open(path)
         .map_err(|error| format!("cannot open SV2 data file: {error}"))?;

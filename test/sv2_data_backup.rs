@@ -29,7 +29,9 @@ fn copies_every_regular_file_and_writes_a_verified_manifest() {
 
     let backup = create_verified_sv2_data_backup(&source, &backups, false).unwrap();
 
-    assert!(backup.backup_root.starts_with(&backups));
+    assert!(backup
+        .backup_root
+        .starts_with(fs::canonicalize(&backups).unwrap()));
     assert_eq!(backup.file_count, 3);
     assert_eq!(
         backup.session_path,
