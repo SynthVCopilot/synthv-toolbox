@@ -6,6 +6,7 @@ import { run as runTauri } from "@tauri-apps/cli";
 import { cleanupResourceStage, createResourceStage } from "./stage-agent-runtime.mjs";
 
 const desktopRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+process.chdir(desktopRoot);
 const args = process.argv.slice(2);
 const [subcommand, ...arguments_] = args;
 

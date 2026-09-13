@@ -1,6 +1,7 @@
 import { cp, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -8,8 +9,17 @@ const runtimeRoot = resolve(desktopRoot, "../../packages/agent-runtime");
 const temporaryRoot = resolve(tmpdir());
 const entries = ["dist", "node_modules", "package.json"];
 
+export function resourceStageParent(platform, desktopPath, temporaryPath) {
+  const desktop = resolve(desktopPath);
+  const temporary = resolve(temporaryPath);
+  if (platform !== "win32" || parse(desktop).root.toLowerCase() === parse(temporary).root.toLowerCase()) return temporary;
+  return parse(desktop).root;
+}
+
+const stageParent = resourceStageParent(process.platform, desktopRoot, temporaryRoot);
+
 function isOwnedStage(path) {
-  const relativeStage = relative(temporaryRoot, resolve(path));
+  const relativeStage = relative(stageParent, resolve(path));
   return relativeStage && !relativeStage.startsWith("..") && !isAbsolute(relativeStage)
     && /^svtb-runtime-[a-zA-Z0-9]+$/.test(relativeStage);
 }
@@ -20,7 +30,7 @@ async function assertExists(path) {
 
 export async function createResourceStage() {
   for (const entry of entries) await assertExists(join(runtimeRoot, entry));
-  const stageRoot = await mkdtemp(join(temporaryRoot, "svtb-runtime-"));
+  const stageRoot = await mkdtemp(join(stageParent, "svtb-runtime-"));
   try {
     for (const entry of entries) await cp(join(runtimeRoot, entry), join(stageRoot, entry), { recursive: true, dereference: true });
     const resources = {};

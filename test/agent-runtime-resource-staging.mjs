@@ -4,10 +4,12 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { cleanupResourceStage, createResourceStage } from "../src/PiDesktop.Tauri/scripts/stage-agent-runtime.mjs";
+import { cleanupResourceStage, createResourceStage, resourceStageParent } from "../src/PiDesktop.Tauri/scripts/stage-agent-runtime.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const desktop = join(root, "src", "PiDesktop.Tauri");
+assert.equal(resourceStageParent("win32", "D:/workspace/src/PiDesktop.Tauri", "C:/Temp"), resolve("D:/"));
+assert.equal(resourceStageParent("win32", "D:/workspace/src/PiDesktop.Tauri", "D:/Temp"), resolve("D:/Temp"));
 const config = JSON.parse(readFileSync(join(desktop, "src-tauri", "tauri.conf.json"), "utf8"));
 const source = "../../../packages/agent-runtime/node_modules";
 assert.equal(config.bundle.resources[source], "agent-runtime/node_modules");
@@ -21,6 +23,7 @@ assert.match(tauriRunner, /\.\.\.arguments_, "--config", resourceStage\.configPa
 assert.match(tauriRunner, /finally/);
 assert.match(tauriRunner, /import \{ run as runTauri \} from "@tauri-apps\/cli"/);
 assert.match(tauriRunner, /arguments_\.some/);
+assert.match(tauriRunner, /process\.chdir\(desktopRoot\)/);
 const plan = await createResourceStage();
 try {
   assert.ok(existsSync(join(plan.runtimeRoot, "node_modules")));
@@ -73,8 +76,10 @@ try {
   await cleanupResourceStage(plan.stageRoot);
 }
 assert.ok(!existsSync(plan.stageRoot));
-const help = execFileSync(process.execPath, [join(desktop, "scripts", "run-tauri.mjs"), "build", "--help"], { cwd: desktop, encoding: "utf8" });
-assert.match(help, /Usage:.*build/);
-assert.match(help, /--config/);
+if (existsSync(join(desktop, "node_modules", "@tauri-apps", "cli"))) {
+  const help = execFileSync(process.execPath, [join(desktop, "scripts", "run-tauri.mjs"), "build", "--help"], { cwd: desktop, encoding: "utf8" });
+  assert.match(help, /Usage:.*build/);
+  assert.match(help, /--config/);
+}
 
 console.log("Agent Runtime resource staging contracts passed.");
