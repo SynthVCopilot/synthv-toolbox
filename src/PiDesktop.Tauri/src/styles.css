@@ -410,13 +410,13 @@ button.full { width: 100%; }
 .isolation-defaults-form > div strong, .isolation-defaults-form > div small { display: block; }
 .isolation-defaults-form > div strong { font-size: 11px; font-weight: 600; }
 .isolation-defaults-form > div small { margin-top: 3px; color: var(--subtle); font-size: 9px; line-height: 1.4; }
-.fluent-switch { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 10px; white-space: nowrap; cursor: pointer; }
-.fluent-switch input { position: absolute; opacity: 0; pointer-events: none; }
-.fluent-switch span { position: relative; width: 30px; height: 16px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--control); transition: background 120ms ease,border-color 120ms ease; }
-.fluent-switch span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); transition: transform 120ms ease,background 120ms ease; }
-.fluent-switch input:checked + span { border-color: var(--primary); background: var(--primary); }
-.fluent-switch input:checked + span::after { background: #fff; transform: translateX(14px); }
-.fluent-switch input:focus-visible + span { outline: 2px solid color-mix(in srgb,var(--primary) 45%,transparent); outline-offset: 2px; }
+.toolbox-switch { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 10px; white-space: nowrap; cursor: pointer; }
+.toolbox-switch input { position: absolute; opacity: 0; pointer-events: none; }
+.toolbox-switch span { position: relative; width: 30px; height: 16px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--control); transition: background 120ms ease,border-color 120ms ease; }
+.toolbox-switch span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); transition: transform 120ms ease,background 120ms ease; }
+.toolbox-switch input:checked + span { border-color: var(--primary); background: var(--primary); }
+.toolbox-switch input:checked + span::after { background: #fff; transform: translateX(14px); }
+.toolbox-switch input:focus-visible + span { outline: 2px solid color-mix(in srgb,var(--primary) 45%,transparent); outline-offset: 2px; }
 .profile-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(350px,1fr)); gap: 12px; }
 .profile-grid > .empty-inline { grid-column: 1 / -1; border: 1px dashed var(--line-strong); border-radius: 8px; background: var(--surface); }
 .profile-card {
@@ -863,10 +863,11 @@ button.full { width: 100%; }
 .about-updates { min-width: 0; padding-left: 28px; border-left: 1px solid var(--line); }
 .about-update-controls { display: grid; grid-template-columns: minmax(170px,1fr) auto; align-items: end; gap: 13px; }
 .about-update-controls .field { margin: 0; }
-.fluent-select { display: block; width: 100%; height: 34px; margin-top: 6px; padding: 0 30px 0 10px; border: 1px solid var(--line-strong); border-bottom-color: rgba(0,0,0,.32); border-radius: 4px; color: inherit; background-color: var(--control); font: inherit; box-shadow: inset 0 1px 0 rgba(255,255,255,.35); transition: border-color 100ms ease, background-color 100ms ease; }
-.fluent-select:hover:not(:disabled) { background-color: var(--control-hover); }
-.fluent-select:focus-visible { outline: 2px solid color-mix(in srgb,var(--primary) 72%,transparent); outline-offset: 1px; border-color: var(--primary); }
-.fluent-select:disabled { opacity: .58; cursor: not-allowed; }
+.toolbox-select { display: block; width: 100%; height: 34px; margin-top: 6px; padding: 0 30px 0 10px; border: 1px solid var(--line-strong); border-bottom-color: rgba(0,0,0,.32); border-radius: 4px; color: inherit; background-color: var(--control); font: inherit; box-shadow: inset 0 1px 0 rgba(255,255,255,.35); transition: border-color 100ms ease, background-color 100ms ease; }
+.toolbox-select:hover:not(:disabled) { background-color: var(--control-hover); }
+.toolbox-select:focus-visible { outline: 2px solid color-mix(in srgb,var(--primary) 72%,transparent); outline-offset: 1px; border-color: var(--primary); }
+.toolbox-select:disabled { opacity: .58; cursor: not-allowed; }
+.kit-fluent-select-host { width: min(260px, 100%); }
 .about-update-controls .field small { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; }
 .about-check-action { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-subtle); }
 .about-check-action small, .about-check-action strong { display: block; }
@@ -1163,10 +1164,10 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .ai-legacy-warning strong, .ai-legacy-warning small { display: block; }
 .ai-legacy-warning strong { font-size: 11px; }
 .ai-legacy-warning small { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.5; }
-.fluent-switch.large { gap: 8px; font-size: 11px; }
-.fluent-switch.large span { width: 38px; height: 20px; }
-.fluent-switch.large span::after { width: 14px; height: 14px; }
-.fluent-switch.large input:checked + span::after { transform: translateX(18px); }
+.toolbox-switch.large { gap: 8px; font-size: 11px; }
+.toolbox-switch.large span { width: 38px; height: 20px; }
+.toolbox-switch.large span::after { width: 14px; height: 14px; }
+.toolbox-switch.large input:checked + span::after { transform: translateX(18px); }
 .http-api-settings { max-width: 860px; }
 .http-api-form { display: grid; gap: 16px; margin-top: 14px; }
 .http-api-access-group { display: grid; gap: 11px; padding: 13px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-subtle); }
@@ -1174,7 +1175,7 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .http-api-group-heading h3 { color: var(--text); font-size: 12px; font-weight: 600; }
 .http-api-group-heading p { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .http-api-endpoint-grid, .http-api-privilege-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
-.http-api-endpoint-grid .fluent-switch { min-height: 36px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--control); }
+.http-api-endpoint-grid .toolbox-switch { min-height: 36px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--control); }
 .http-api-privilege { align-self: stretch; min-height: 54px !important; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; white-space: normal; }
 .http-api-privilege > span:last-child { width: auto; height: auto; border: 0; border-radius: 0; background: transparent; }
 .http-api-privilege > span:last-child::after { content: none; }
@@ -1579,11 +1580,11 @@ button.path-picker-button { display: inline-flex; flex: 0 0 34px; align-items: c
 .plugin-permission-level.required, .plugin-manager-required-grant { color: var(--warning); }
 .plugin-manager-required-grant { margin: 0; font-size: 12px; line-height: 1.45; }
 .plugin-manager-privileges, .plugin-privilege-settings { display: grid; gap: 12px; }
-.plugin-manager-privileges .fluent-switch, .plugin-privilege-settings .fluent-switch { align-items: flex-start; }
-.plugin-manager-privileges .fluent-switch > span:last-child, .plugin-privilege-settings .fluent-switch > span:last-child { width: auto; height: auto; border: 0; border-radius: 0; background: transparent; }
-.plugin-manager-privileges .fluent-switch > span:last-child::after, .plugin-privilege-settings .fluent-switch > span:last-child::after { content: none; }
-.plugin-manager-privileges .fluent-switch strong, .plugin-privilege-settings .fluent-switch strong { display: block; color: var(--text); font-size: 12px; }
-.plugin-manager-privileges .fluent-switch small, .plugin-privilege-settings .fluent-switch small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.plugin-manager-privileges .toolbox-switch, .plugin-privilege-settings .toolbox-switch { align-items: flex-start; }
+.plugin-manager-privileges .toolbox-switch > span:last-child, .plugin-privilege-settings .toolbox-switch > span:last-child { width: auto; height: auto; border: 0; border-radius: 0; background: transparent; }
+.plugin-manager-privileges .toolbox-switch > span:last-child::after, .plugin-privilege-settings .toolbox-switch > span:last-child::after { content: none; }
+.plugin-manager-privileges .toolbox-switch strong, .plugin-privilege-settings .toolbox-switch strong { display: block; color: var(--text); font-size: 12px; }
+.plugin-manager-privileges .toolbox-switch small, .plugin-privilege-settings .toolbox-switch small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .plugin-manager-muted { color: var(--subtle); font-size: 12px; }
 .plugin-manager-actions { margin-top: auto; }
 .plugin-manager-empty { display: grid; justify-items: center; gap: 6px; padding: 42px 20px; color: var(--muted); text-align: center; border: 1px dashed var(--line-strong); border-radius: 8px; }
@@ -1621,7 +1622,7 @@ button.path-picker-button { display: inline-flex; flex: 0 0 34px; align-items: c
   .sidebar { background: rgba(32,32,32,.86); }
   .nav-item:active { background: rgba(255,255,255,.035); }
   button.primary { border-bottom-color: rgba(0,0,0,.48); color: #000; }
-  button.secondary, .fluent-select, .profile-rename input, .profile-create-form input, .isolation-content-form select, .workflow-form input, .workflow-form select, .workflow-form textarea, .form-stack input, .form-stack textarea, .composer textarea, .rhyme-search input, .rhyme-search select, .lyric-mode-banner select, .lyric-structure input, .lyric-structure select, .lyric-structure textarea, .lyric-candidate-form input, .lyric-candidate-form select, .lyric-candidate-form textarea { border-bottom-color: rgba(255,255,255,.18); }
+  button.secondary, .toolbox-select, .profile-rename input, .profile-create-form input, .isolation-content-form select, .workflow-form input, .workflow-form select, .workflow-form textarea, .form-stack input, .form-stack textarea, .composer textarea, .rhyme-search input, .rhyme-search select, .lyric-mode-banner select, .lyric-structure input, .lyric-structure select, .lyric-structure textarea, .lyric-candidate-form input, .lyric-candidate-form select, .lyric-candidate-form textarea { border-bottom-color: rgba(255,255,255,.18); }
   .hero-panel { background: radial-gradient(circle at 86% 18%, rgba(96,205,255,.13), transparent 31%), linear-gradient(135deg, rgba(47,47,47,.94), rgba(39,39,39,.76)); }
   .hero-orb div { border-color: rgba(255,255,255,.12); }
   .hero-panel button.primary { color: #000; background: var(--primary); }

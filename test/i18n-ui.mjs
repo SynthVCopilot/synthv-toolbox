@@ -12,7 +12,9 @@ assert.match(i18n, /document\.documentElement\.lang = next/);
 assert.match(i18n, /"zh-CN"[\s\S]*connections:[\s\S]*localService/);
 assert.match(i18n, /en:[\s\S]*connections:[\s\S]*localService/);
 assert.match(shell, /\.use\(i18n\)\.mount\(element\)/);
-assert.match(main, /id="language-select"[\s\S]*value="zh-CN"[\s\S]*value="en"/);
-assert.match(main, /setLocale\(\(event\.currentTarget as HTMLSelectElement\)\.value === "en" \? "en" : "zh-CN"\)[\s\S]*render\(\)/);
+assert.match(main, /mountFluentSelect\("language-select-host", "language-select", t\("settings\.language"\), locale\(\), \[/);
+assert.match(main, /value: "zh-CN", label: t\("settings\.chinese"\)/);
+assert.match(main, /value: "en", label: t\("settings\.english"\)/);
+assert.match(main, /setLocale\(value === "en" \? "en" : "zh-CN"\)[\s\S]*render\(\)/);
 
 console.log("I18n UI contracts passed.");

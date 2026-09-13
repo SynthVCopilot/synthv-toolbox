@@ -27,7 +27,7 @@ assert.match(main, /http-api-access-group[\s\S]*connections\.privilegedAccess[\s
 assert.doesNotMatch(main.slice(main.indexOf("function renderSettings"), main.indexOf("function wireForms")), /id="http-api-form"/);
 assert.match(styles, /\.http-api-settings/);
 assert.match(styles, /\.connections-layout/);
-assert.match(styles, /\.fluent-switch\.large/);
+assert.match(styles, /\.toolbox-switch\.large/);
 assert.match(styles, /\.http-api-endpoint-grid, \.http-api-privilege-grid \{ display: grid; grid-template-columns: repeat\(2, minmax\(0,1fr\)\);/);
 assert.match(styles, /@media \(max-width: 720px\) \{ \.http-api-endpoint-grid, \.http-api-privilege-grid \{ grid-template-columns: 1fr;/);
 assert.match(styles, /\.http-api-privilege\.danger/);
