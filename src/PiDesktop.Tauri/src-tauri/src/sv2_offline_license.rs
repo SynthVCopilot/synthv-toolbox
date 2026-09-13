@@ -254,7 +254,7 @@ fn set_with_transport<T: OfflineTransport>(
                 backup.backup_root.display()
             )
         })?;
-        persist_refreshed_session(data_root, &fingerprint, &rewritten, &*machine_key).map_err(
+        persist_refreshed_session(data_root, &fingerprint, &rewritten, &machine_key).map_err(
             |_| {
                 format!(
                 "授权服务已成功，但本地缓存写入未确认；远程状态可能已改变。可从完整备份恢复：{}",
@@ -474,8 +474,7 @@ fn current_device<T: OfflineTransport>(
             name: None,
         });
     }
-    // Before first activation the endpoint legitimately returns no offline records.
-    // The encrypted local session still establishes the current device identity.
+    // The encrypted session identifies the current device when no offline record exists.
     if matching.is_empty() {
         return Ok(RemoteDeviceState {
             enabled: false,
