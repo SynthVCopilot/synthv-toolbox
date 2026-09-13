@@ -2,6 +2,7 @@ pub mod agent;
 pub mod agent_files;
 pub mod agent_runtime;
 mod agent_runtime_commands;
+pub use agent_runtime_commands::{unrestricted_filesystem_request, unrestricted_network_request};
 mod ai_usage;
 mod api_keys;
 mod audio_capture;

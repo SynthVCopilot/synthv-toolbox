@@ -474,6 +474,57 @@ fn account_remark_can_be_cleared_without_changing_the_slot() {
 }
 
 #[test]
+fn internal_clear_local_session_removes_only_the_managed_session_file() {
+    let (root, paths) = fixture();
+    let manifest = import_fixture(&paths, "A");
+    let slot_id = manifest.active_slot_id.clone().unwrap();
+    let session = slot_data_root(&paths, &manifest, &slot_id).join("license/session");
+    let service = Sv2ProfileService {
+        paths: Ok(paths),
+        gate: Mutex::new(()),
+    };
+
+    let result = service.clear_local_session(slot_id).unwrap();
+
+    assert!(!session.exists());
+    assert!(result.summary.contains("本地 session"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn internal_force_activate_reuses_the_transactional_slot_switch() {
+    let (root, paths) = fixture();
+    let mut manifest = import_fixture(&paths, "A");
+    let target = add_parked(&paths, &mut manifest, "B");
+    let service = Sv2ProfileService {
+        paths: Ok(paths),
+        gate: Mutex::new(()),
+    };
+
+    let state = service.force_activate_slot(target.clone()).unwrap();
+
+    assert_eq!(state.active_slot_id.as_deref(), Some(target.as_str()));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn internal_slot_folder_path_returns_only_the_validated_managed_folder() {
+    let (root, paths) = fixture();
+    let manifest = import_fixture(&paths, "A");
+    let slot_id = manifest.active_slot_id.clone().unwrap();
+    let expected = slot_data_root(&paths, &manifest, &slot_id);
+    let service = Sv2ProfileService {
+        paths: Ok(paths),
+        gate: Mutex::new(()),
+    };
+
+    let path = service.slot_folder_path(slot_id).unwrap();
+
+    assert_eq!(PathBuf::from(path), expected);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn verified_in_use_account_remains_usable_when_remote_use_is_unknown() {
     let (root, paths) = fixture();
     let manifest = import_fixture(&paths, "A");
