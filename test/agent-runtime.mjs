@@ -139,7 +139,7 @@ test("Pi session factory injects discovered default extension paths into the res
   assert.equal(typeof created.prompt, "function");
   assert.deepEqual(loaderOptions.additionalExtensionPaths, ["C:/plugins/com.example/backend/index.js"]);
   assert.equal(createOptions.resourceLoader instanceof Object, true);
-  assert.equal(createOptions.noTools, "all");
+  assert.equal(createOptions.noTools, "builtin");
   assert.deepEqual(createOptions.model, { id: "model-1" });
   assert.equal(createOptions.modelRuntime instanceof Object, true);
 });

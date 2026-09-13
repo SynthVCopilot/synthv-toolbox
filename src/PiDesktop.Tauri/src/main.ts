@@ -2,6 +2,7 @@ import "./i18nSystem";
 import "./i18nAbout";
 import "./i18nCopilot";
 import "./i18nWorkflows";
+import "./i18nPlugins";
 import "./styles.css";
 import "./i18nCommon";
 import "./i18nLyrics";
@@ -72,6 +73,7 @@ import type {
   MediaTaskSnapshot,
   McpServerConfig,
   HttpApiStatus,
+  InstalledPlugin,
   OperationResult,
   ProjectCheckpoint,
   ProjectBackupState,
@@ -138,6 +140,7 @@ let error = "";
 let conversations: ConversationSummary[] = [];
 let conversation: ConversationSnapshot | undefined;
 let fileApprovals: AgentFileApproval[] = [];
+let installedPlugins: InstalledPlugin[] = [];
 let profiles: Sv2ProfilesState | undefined;
 let activeWorkflow: Feature["id"] | undefined;
 let workflowResult: WorkflowResult | undefined;
@@ -814,6 +817,16 @@ async function refresh(): Promise<void> {
   if (page === "settings") await refreshAutostartStatus();
 }
 
+async function reloadPluginState(): Promise<void> {
+  const [installed, manifests] = await Promise.all([
+    api.listInstalledPlugins(),
+    api.discoverAgentPlugins().catch(() => []),
+  ]);
+  installedPlugins = installed;
+  for (const record of pluginRegistry.recordsList()) pluginRegistry.unregister(record.manifest.id);
+  for (const manifest of manifests) pluginRegistry.register(manifest, "active");
+}
+
 async function refreshAccountUsage(slotId?: string, pageGeneration = accountPageGeneration): Promise<void> {
   if (!app?.sv2AccountIndicatorEnabled) return;
   if (page !== "accounts" || pageGeneration !== accountPageGeneration) return;
@@ -1007,6 +1020,7 @@ function renderSidebar(): string {
       ${navItem("components", t("nav.components"), "boxes")}
       ${navItem("bridge", t("nav.bridge"), "bridge")}
       ${navItem("connections", t("nav.connections"), "server")}
+      ${navItem("plugins", t("nav.plugins"), "plug")}
     </nav>
     <div class="sidebar-footer">
       <span class="version">v${escapeHtml(app.appVersion)} · ${escapeHtml(app.platform)}</span>
@@ -1642,10 +1656,45 @@ function renderPage(): string {
     case "components": return renderComponents();
     case "bridge": return renderBridge();
     case "connections": return renderMcp();
-    case "plugins": return "";
+    case "plugins": return renderPlugins();
     case "settings": return renderSettings();
     case "about": return renderAboutPage({ app: app!, update: toolboxUpdate, download: toolboxUpdateDownload, busy, locale: locale(), translate: t, escapeHtml, icon });
   }
+}
+
+function renderPlugins(): string {
+  const cards = installedPlugins.map(({ manifest, enabled }) => {
+    const contributions = [
+      manifest.backend ? t("plugins.backend") : "",
+      manifest.pages.length ? t("plugins.pageCount", { count: manifest.pages.length }) : "",
+      manifest.actions.length ? t("plugins.actionCount", { count: manifest.actions.length }) : "",
+    ].filter(Boolean).join(" · ");
+    const permissions = manifest.permissions.length
+      ? manifest.permissions.map((permission) => `<code>${escapeHtml(permission)}</code>`).join("")
+      : `<span class="plugin-manager-muted">${t("plugins.noPermissions")}</span>`;
+    return `<article class="plugin-manager-card">
+      <div class="plugin-manager-card-heading">
+        <div><h3>${escapeHtml(manifest.name)}</h3><p>${escapeHtml(manifest.id)} · v${escapeHtml(manifest.version)}</p></div>
+        <span class="plugin-manager-state ${enabled ? "enabled" : ""}">${enabled ? t("plugins.enabled") : t("plugins.disabled")}</span>
+      </div>
+      <p class="plugin-manager-contributions">${escapeHtml(contributions || t("plugins.noContributions"))}</p>
+      <div class="plugin-manager-permissions" aria-label="${t("plugins.permissions")}">${permissions}</div>
+      <div class="plugin-manager-actions">
+        <button class="secondary compact" data-toggle-plugin="${escapeHtml(manifest.id)}" data-plugin-enabled="${enabled}">${icon(enabled ? "check" : "play", 16)} ${enabled ? t("plugins.disable") : t("plugins.enable")}</button>
+        <button class="secondary compact danger" data-uninstall-plugin="${escapeHtml(manifest.id)}">${icon("trash", 16)} ${t("plugins.uninstall")}</button>
+      </div>
+    </article>`;
+  }).join("");
+  return `<section class="panel plugin-manager">
+    <div class="section-heading plugin-manager-heading">
+      <div><h2>${t("plugins.title")}</h2><p>${t("plugins.description")}</p></div>
+      <div class="plugin-manager-toolbar">
+        <button class="secondary" data-install-plugin-directory>${icon("folder", 16)} ${t("plugins.installDirectory")}</button>
+        <button class="primary" data-install-plugin-archive>${icon("plus", 16)} ${t("plugins.installArchive")}</button>
+      </div>
+    </div>
+    ${cards ? `<div class="plugin-manager-grid">${cards}</div>` : `<div class="plugin-manager-empty">${icon("plug", 28)}<h3>${t("plugins.empty")}</h3><p>${t("plugins.emptyDescription")}</p></div>`}
+  </section>`;
 }
 
 function renderPluginActions(target: Page): string {
@@ -3482,6 +3531,39 @@ document.addEventListener("keydown", (event) => {
 document.addEventListener("click", (event) => {
   const target = (event.target as HTMLElement).closest<HTMLElement>("button, [data-page], [data-onboarding], [data-audio-drop-zone]");
   if (!target || target.hasAttribute("disabled")) return;
+  if (target.hasAttribute("data-install-plugin-archive") || target.hasAttribute("data-install-plugin-directory")) {
+    void run(async () => {
+      const sourcePath = target.hasAttribute("data-install-plugin-archive")
+        ? await api.pickPluginArchive()
+        : await api.pickDirectory();
+      if (!sourcePath) return;
+      const installed = await api.installAgentPlugin(sourcePath);
+      await reloadPluginState();
+      notice = t("plugins.installed", { name: installed.manifest.name });
+    });
+    return;
+  }
+  if (target.dataset.togglePlugin) {
+    const pluginId = target.dataset.togglePlugin;
+    const enabled = target.dataset.pluginEnabled !== "true";
+    void run(async () => {
+      const updated = await api.setAgentPluginEnabled(pluginId, enabled);
+      await reloadPluginState();
+      notice = t(enabled ? "plugins.enabledNotice" : "plugins.disabledNotice", { name: updated.manifest.name });
+    });
+    return;
+  }
+  if (target.dataset.uninstallPlugin) {
+    const pluginId = target.dataset.uninstallPlugin;
+    const plugin = installedPlugins.find((item) => item.manifest.id === pluginId);
+    if (!window.confirm(t("plugins.uninstallConfirm", { name: plugin?.manifest.name ?? pluginId }))) return;
+    void run(async () => {
+      await api.uninstallAgentPlugin(pluginId);
+      await reloadPluginState();
+      notice = t("plugins.uninstalled", { name: plugin?.manifest.name ?? pluginId });
+    });
+    return;
+  }
   if (target.hasAttribute("data-open-ai-provider-picker")) {
     aiModelPickerOpen = true;
     aiModelPickerGeneration += 1;
@@ -4086,6 +4168,7 @@ document.addEventListener("click", (event) => {
     const enteringAccounts = targetPage === "accounts" && page !== "accounts";
     const leavingAccounts = page === "accounts" && targetPage !== "accounts";
     const enteringComponents = targetPage === "components" && page !== "components";
+    const enteringPlugins = targetPage === "plugins" && page !== "plugins";
     const enteringToolCategory = toolGroups.some((group) => group.id === targetPage);
     const activeFeatureId = activeWorkflow;
     const activeGroup = activeFeatureId ? toolGroups.find((group) => group.featureIds.includes(activeFeatureId)) : undefined;
@@ -4117,6 +4200,7 @@ document.addEventListener("click", (event) => {
     error = "";
     if (page === "copilot") void run(async () => { [conversations, fileApprovals] = await Promise.all([api.listConversations(), api.agentFileApprovals()]); });
     else if (page === "history") scheduleHistoryRefresh();
+    else if (enteringPlugins) void run(reloadPluginState);
     else if (enteringAccounts && (app?.platform === "windows" || app?.platform === "macos" || app?.platform === "preview")) {
       render();
       loadCachedAccountPage(accountPageGeneration);

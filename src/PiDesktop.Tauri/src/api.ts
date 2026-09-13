@@ -544,6 +544,10 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   }
   if (command === "discover_agent_plugins") return [] as T;
   if (command === "invoke_agent_plugin") return { preview: true } as T;
+  if (command === "list_installed_plugins") return [] as T;
+  if (command === "install_agent_plugin" || command === "set_agent_plugin_enabled" || command === "uninstall_agent_plugin") {
+    throw new Error("浏览器预览不修改本机插件。请在桌面应用中管理插件。");
+  }
   if (command === "set_sv2_account_indicator") {
     const enabled = Boolean(args?.enabled);
     if (enabled && !previewSv2AccountIndicatorEnabled && !Boolean(args?.acknowledged)) {

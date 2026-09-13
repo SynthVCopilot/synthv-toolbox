@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -115,8 +115,13 @@ pub fn list_installed_plugins() -> Result<Vec<crate::plugin_manager::InstalledPl
 }
 
 #[tauri::command]
-pub fn install_agent_plugin(source_path: String) -> Result<crate::plugin_manager::InstalledPlugin, String> {
-    crate::plugin_manager::install(Path::new(&source_path), &crate::plugin_manager::plugins_root())
+pub fn install_agent_plugin(
+    source_path: String,
+) -> Result<crate::plugin_manager::InstalledPlugin, String> {
+    crate::plugin_manager::install(
+        Path::new(&source_path),
+        &crate::plugin_manager::plugins_root(),
+    )
 }
 
 #[tauri::command]
