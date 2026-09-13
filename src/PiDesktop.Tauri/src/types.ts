@@ -264,6 +264,20 @@ export interface Sv2SessionReplacementPreview {
   destination: Sv2SessionInspection;
 }
 
+export interface Sv2SessionDocument {
+  path: string;
+  encryptedSha256: string;
+  encryptedBytes: number;
+  plaintext: string;
+}
+
+export interface Sv2SessionDocumentWriteResult {
+  path: string;
+  backupPath: string;
+  encryptedSha256: string;
+  encryptedBytes: number;
+}
+
 export interface Sv2AuthorizedVoiceProduct {
   id: string;
   name: string;

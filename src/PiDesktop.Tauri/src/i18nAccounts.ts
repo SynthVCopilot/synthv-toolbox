@@ -503,6 +503,27 @@ addMessages("zh-CN", { accountUi: {
   "restoreOfflineSessionConfirm": "退出 Toolbox 并恢复",
   "vendor": "供应商",
   "category": "类别"
+  ,"sessionDetails": "Session 授权明细"
+  ,"sessionDetailsDescription": "按需读取完整 session，包含当前授权字段和原始内容。"
+  ,"showSessionDetails": "显示完整授权明细"
+  ,"refreshSessionDetails": "重新读取 session"
+  ,"rawSessionData": "原始 session 数据"
+  ,"sessionPath": "session 路径"
+  ,"accessExpiry": "access 到期时间"
+  ,"sessionWrittenAt": "写入时间"
+  ,"device": "设备字段"
+  ,"user": "用户字段"
+  ,"notAvailable": "未找到"
+  ,"sessionDetailsLoaded": "已读取完整 session 授权明细。"
+  ,"editFullSession": "编辑完整明文"
+  ,"saveSession": "保存 session"
+  ,"sessionSaved": "session 已保存，备份与新哈希："
+  ,"offlineProgressDescription": "操作正在执行，当前步骤会持续更新；失败会停在出错步骤。"
+  ,"offlineStepPreflight": "预检 SV2 与当前授权状态"
+  ,"offlineStepBackup": "备份 SV2 数据与授权目录"
+  ,"offlineStepRemote": "提交远程离线授权请求"
+  ,"offlineStepLocal": "写入或清理本地离线缓存"
+  ,"offlineStepRead": "重新读取并核验结果"
 } });
 
 addMessages("en", { accountUi: {
@@ -541,4 +562,25 @@ addMessages("en", { accountUi: {
   "restoreOfflineSessionConfirm": "Exit Toolbox and restore",
   "vendor": "Vendor",
   "category": "Category"
+  ,"sessionDetails": "Session authorization details"
+  ,"sessionDetailsDescription": "Read the complete session on demand, including authorization fields and raw content."
+  ,"showSessionDetails": "Show full authorization details"
+  ,"refreshSessionDetails": "Read session again"
+  ,"rawSessionData": "Raw session data"
+  ,"sessionPath": "Session path"
+  ,"accessExpiry": "Access expiry"
+  ,"sessionWrittenAt": "Written at"
+  ,"device": "Device field"
+  ,"user": "User field"
+  ,"notAvailable": "Not found"
+  ,"sessionDetailsLoaded": "Complete session authorization details loaded."
+  ,"editFullSession": "Edit complete plaintext"
+  ,"saveSession": "Save session"
+  ,"sessionSaved": "Session saved. Backup and new hash:"
+  ,"offlineProgressDescription": "The operation is running. The current step will update continuously; failures stay on the failed step."
+  ,"offlineStepPreflight": "Preflight SV2 and authorization state"
+  ,"offlineStepBackup": "Back up SV2 data and authorization"
+  ,"offlineStepRemote": "Submit remote offline authorization request"
+  ,"offlineStepLocal": "Write or clear the local offline cache"
+  ,"offlineStepRead": "Read back and verify the result"
 } });

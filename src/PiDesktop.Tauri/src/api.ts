@@ -1402,6 +1402,8 @@ export const api = {
     call<Sv2SessionReplacementPreview>("preview_sv2_offline_session_replacement", { slotId, sourcePath }),
   scheduleSv2OfflineSessionReplacement: (slotId: string, sourcePath: string, sourceSha256: string, destinationSha256: string) =>
     call<OperationResult>("schedule_sv2_offline_session_replacement", { slotId, sourcePath, sourceSha256, destinationSha256 }),
+  readSv2SessionDocument: (slotId: string) => call<import("./types").Sv2SessionDocument>("read_sv2_session_document", { slotId }),
+  writeSv2SessionDocument: (slotId: string, expectedSha256: string, plaintext: string) => call<import("./types").Sv2SessionDocumentWriteResult>("write_sv2_session_document", { slotId, expectedSha256, plaintext }),
   sv2AccountUsageSnapshot: () => call<Sv2AccountUsageSnapshot>("sv2_account_usage_snapshot"),
   sv2AccountUsageSnapshotForSlot: (slotId: string) =>
     call<Sv2AccountUsageSnapshot>("sv2_account_usage_snapshot_for_slot", { slotId }),
