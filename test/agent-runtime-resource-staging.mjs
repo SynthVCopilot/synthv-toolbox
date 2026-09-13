@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, win32 } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { cleanupResourceStage, createResourceStage, resourceStageParent } from "../src/PiDesktop.Tauri/scripts/stage-agent-runtime.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const desktop = join(root, "src", "PiDesktop.Tauri");
-assert.equal(resourceStageParent("win32", "D:/workspace/src/PiDesktop.Tauri", "C:/Temp"), resolve("D:/"));
-assert.equal(resourceStageParent("win32", "D:/workspace/src/PiDesktop.Tauri", "D:/Temp"), resolve("D:/Temp"));
+assert.equal(resourceStageParent("win32", "D:/workspace/src/PiDesktop.Tauri", "C:/Temp"), win32.resolve("D:/"));
+assert.equal(resourceStageParent("win32", "D:/workspace/src/PiDesktop.Tauri", "D:/Temp"), win32.resolve("D:/Temp"));
 const config = JSON.parse(readFileSync(join(desktop, "src-tauri", "tauri.conf.json"), "utf8"));
 const source = "../../../packages/agent-runtime/node_modules";
 assert.equal(config.bundle.resources[source], "agent-runtime/node_modules");

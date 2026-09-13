@@ -1,5 +1,5 @@
 import { cp, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve, win32 } from "node:path";
 import { tmpdir } from "node:os";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -10,10 +10,11 @@ const temporaryRoot = resolve(tmpdir());
 const entries = ["dist", "node_modules", "package.json"];
 
 export function resourceStageParent(platform, desktopPath, temporaryPath) {
-  const desktop = resolve(desktopPath);
-  const temporary = resolve(temporaryPath);
-  if (platform !== "win32" || parse(desktop).root.toLowerCase() === parse(temporary).root.toLowerCase()) return temporary;
-  return parse(desktop).root;
+  const path = platform === "win32" ? win32 : { parse, resolve };
+  const desktop = path.resolve(desktopPath);
+  const temporary = path.resolve(temporaryPath);
+  if (platform !== "win32" || path.parse(desktop).root.toLowerCase() === path.parse(temporary).root.toLowerCase()) return temporary;
+  return path.parse(desktop).root;
 }
 
 const stageParent = resourceStageParent(process.platform, desktopRoot, temporaryRoot);
