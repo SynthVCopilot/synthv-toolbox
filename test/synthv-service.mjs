@@ -9,18 +9,20 @@ const { SynthVService } = await import(servicePath.href);
 
 test("SynthV commands use argument arrays and verify a stable process identity", async () => {
   const commands = [];
-  const processJson = JSON.stringify({ ProcessId: 42, Name: "synthv-studio.exe", CommandLine: "C:\\SynthV\\synthv-studio.exe" });
+  const windowsProcess = JSON.stringify({ ProcessId: 42, Name: "synthv-studio.exe", CommandLine: "C:\\SynthV\\synthv-studio.exe" });
+  const macProcess = "42 /Applications/Synthesizer V Studio 2.app/Contents/MacOS/Synthesizer V Studio 2 --started\n";
   const runner = async (command, args) => {
     commands.push([command, args]);
-    if (command === "powershell.exe" && args.some(value => value.includes("Get-CimInstance Win32_Process"))) return { stdout: processJson, stderr: "", code: 0 };
+    if (command === "powershell.exe" && args.some(value => value.includes("Get-CimInstance Win32_Process"))) return { stdout: windowsProcess, stderr: "", code: 0 };
+    if (command === "ps") return { stdout: macProcess, stderr: "", code: 0 };
     return { stdout: "", stderr: "", code: 0 };
   };
   const root = await mkdtemp(join(tmpdir(), "synthv-service-"));
   try {
     const service = new SynthVService(root, root, runner);
-    const [process] = await service.listProcesses();
-    await service.terminateInstance(process.processId, process.processIdentity);
-    assert.deepEqual(commands.at(-1), ["taskkill.exe", ["/PID", "42", "/T", "/F"]]);
+    const [synthvProcess] = await service.listProcesses();
+    await service.terminateInstance(synthvProcess.processId, synthvProcess.processIdentity);
+    assert.deepEqual(commands.at(-1), process.platform === "win32" ? ["taskkill.exe", ["/PID", "42", "/T", "/F"]] : ["kill", ["-TERM", "42"]]);
     await assert.rejects(() => service.terminateInstance(42, "changed"), /identity changed/);
     assert.equal(commands.some(([command, args]) => command === "taskkill.exe" && args.includes("changed")), false);
   } finally { await rm(root, { recursive: true, force: true }); }
