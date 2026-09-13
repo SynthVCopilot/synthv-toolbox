@@ -52,6 +52,175 @@ fn body_status_must_confirm_the_http_success() {
     assert!(parse_toggle_response(200, body, Some("current")).is_err());
 }
 
+#[cfg(windows)]
+mod write_flow {
+    use super::*;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use std::cell::Cell;
+    use std::fs;
+    use std::path::PathBuf;
+    use uuid::Uuid;
+
+    struct Server {
+        enabled: Cell<bool>,
+        posts: Cell<u32>,
+        fail: bool,
+    }
+    impl OfflineTransport for Server {
+        fn get(&self, url: &str, _: &str) -> Result<(u16, Zeroizing<Vec<u8>>), String> {
+            let text = if url == LICENSES_URL {
+                r#"{"status":200,"data":[{"id":"license","status":"active","license_type":"permanent","valid_to":null,"product":{"id":"product","name":"Synthesizer V Studio 2 Pro","vendor":"Dreamtonics","type":"Synthesizer V Editor","version":{"version_name":"2"}}}]}"#.to_owned()
+            } else if self.enabled.get() {
+                r#"{"status":200,"data":{"offline_license_devices":[{"id":"device","device_name":"test","offline_license_enabled":true}]}}"#.to_owned()
+            } else {
+                r#"{"status":200,"data":{"offline_license_devices":[]}}"#.to_owned()
+            };
+            Ok((200, Zeroizing::new(text.into_bytes())))
+        }
+        fn post(&self, url: &str, _: &str) -> Result<(u16, Zeroizing<Vec<u8>>), String> {
+            self.posts.set(self.posts.get() + 1);
+            if self.fail {
+                return Err("synthetic timeout".to_string());
+            }
+            let enabled = url == ACTIVATE_URL;
+            self.enabled.set(enabled);
+            Ok((200, Zeroizing::new(format!(r#"{{"status":200,"data":{{"id":"device","native_product":"Synthesizer V Studio 2 Pro","offline_license_enabled":{enabled}}}}}"#).into_bytes())))
+        }
+    }
+    fn root() -> PathBuf {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join(".tmp")
+            .join("offline-license")
+            .join(Uuid::new_v4().to_string());
+        fs::create_dir_all(path.join("data/license")).unwrap();
+        fs::create_dir_all(path.join("backups")).unwrap();
+        path
+    }
+    fn jwt(exp: i64, sub: &str) -> String {
+        let head = URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256","typ":"JWT"}"#);
+        let body = URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&serde_json::json!({"exp":exp,"iat":exp-60,"sub":sub})).unwrap(),
+        );
+        format!("{head}.{body}.c3ludGhldGljLXNpZw")
+    }
+    fn fixture(root: &std::path::Path, expired: bool) -> Vec<u8> {
+        let now = Utc::now().timestamp();
+        let exp = if expired { now - 10 } else { now + 3600 };
+        let access = jwt(exp, "user");
+        let refresh = jwt(now + 7200, "user");
+        let plain = format!(
+            "{access}\n{refresh}\n{}\n{}\ndevice",
+            DateTime::<Utc>::from_timestamp(exp, 0)
+                .unwrap()
+                .to_rfc3339(),
+            Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        );
+        let key = read_machine_key().unwrap();
+        let encrypted = encrypt_session(plain.as_bytes(), &key).unwrap();
+        fs::write(root.join("data/license/session"), &*encrypted).unwrap();
+        encrypted.to_vec()
+    }
+    #[test]
+    fn enable_then_disable_preserves_tokens_and_creates_verified_backups() {
+        let root = root();
+        let initial = fixture(&root, false);
+        let server = Server {
+            enabled: Cell::new(false),
+            posts: Cell::new(0),
+            fail: false,
+        };
+        let on = set_with_transport(
+            &root.join("data"),
+            &root.join("backups"),
+            true,
+            false,
+            &server,
+        )
+        .unwrap();
+        assert!(on.status.enabled);
+        assert_eq!(on.access_changed, false);
+        let (enabled, _) = read_credentials(&root.join("data")).unwrap();
+        assert!(enabled.has_full_cache());
+        assert_eq!(enabled.buffer.lines().count(), 7);
+        let off = set_with_transport(
+            &root.join("data"),
+            &root.join("backups"),
+            false,
+            false,
+            &server,
+        )
+        .unwrap();
+        assert!(!off.status.enabled);
+        let now = fs::read(root.join("data/license/session")).unwrap();
+        assert_ne!(now, initial);
+        let (disabled, _) = read_credentials(&root.join("data")).unwrap();
+        assert!(!disabled.has_full_cache());
+        assert_eq!(disabled.buffer.lines().count(), 5);
+        assert!(fs::read_dir(root.join("backups"))
+            .unwrap()
+            .all(|entry| entry
+                .unwrap()
+                .path()
+                .join("sv2-data-backup-manifest.json")
+                .is_file()));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn post_failure_keeps_session_and_retains_backup() {
+        let root = root();
+        let initial = fixture(&root, false);
+        let server = Server {
+            enabled: Cell::new(false),
+            posts: Cell::new(0),
+            fail: true,
+        };
+        let error = set_with_transport(
+            &root.join("data"),
+            &root.join("backups"),
+            true,
+            false,
+            &server,
+        )
+        .unwrap_err();
+        assert_eq!(
+            fs::read(root.join("data/license/session")).unwrap(),
+            initial
+        );
+        assert!(error.contains("备份"));
+        assert_eq!(server.posts.get(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn expired_and_in_use_never_post() {
+        let root = root();
+        fixture(&root, true);
+        let server = Server {
+            enabled: Cell::new(false),
+            posts: Cell::new(0),
+            fail: false,
+        };
+        assert!(set_with_transport(
+            &root.join("data"),
+            &root.join("backups"),
+            true,
+            false,
+            &server
+        )
+        .is_err());
+        assert!(set_with_transport(
+            &root.join("data"),
+            &root.join("backups"),
+            true,
+            true,
+            &server
+        )
+        .is_err());
+        assert_eq!(server.posts.get(), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
 #[test]
 #[ignore = "requires explicit SV2_OFFLINE_LIVE_ACTION plus data and backup roots"]
 fn live_offline_license_diagnostic() {
