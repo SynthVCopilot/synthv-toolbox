@@ -30,4 +30,6 @@
 | 023 | [BugFix]_updater_startup_esm_interop | 修复已安装 Electron 应用加载 electron-updater 时的 ESM/CJS 互操作 | 防止主进程启动阶段崩溃 | ✅ 已完成 |
 | 024 | [BugFix]_synthv_process_contract_cross_platform | 修复 SynthV 进程合同测试仅模拟 Windows 输出的问题 | 让 Windows 与 macOS Action 验证相同的跨平台行为 | ✅ 已完成 |
 | 025 | [BugFix]_electron_nightly_version | 为 Electron nightly 生成唯一递增的预发行版本 | 确保 Action 真正上传自动更新资产而非静默跳过旧版本 | ✅ 已完成 |
+| 026 | [BugFix]_electron_renderer_startup | 修复打包后渲染器资源使用绝对路径 | 让 Electron 从本地文件正确加载完整界面 | ✅ 已完成 |
+| 027 | [BugFix]_electron_menu_removal | 移除 Electron 默认应用菜单 | 不显示 File、Edit 等桌面菜单 | ✅ 已完成 |
 | 018 | [BugFix]_离线授权界面与备份 | 缩小离线切换备份范围，自动读取离线状态并修正进度与凭据控件布局 | 降低切换卡顿并让账户授权信息直接可读可操作 | ✅ 已完成 |
