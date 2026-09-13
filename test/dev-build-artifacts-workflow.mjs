@@ -19,11 +19,21 @@ for (const workflow of [release, development]) {
 assert.match(release, /tags: \["v\*"\]/);
 assert.match(release, /GH_TOKEN: \$\{\{ github\.token \}\}/);
 assert.match(release, /--publish always/);
+assert.match(release, /name: Validate code-signing environment/);
+assert.match(release, /CSC_LINK: \$\{\{ secrets\.CSC_LINK \}\}/);
+assert.match(release, /CSC_KEY_PASSWORD: \$\{\{ secrets\.CSC_KEY_PASSWORD \}\}/);
+assert.match(release, /CSC_NAME: \$\{\{ secrets\.CSC_NAME \}\}/);
+assert.match(release, /Missing code-signing environment/);
 assert.match(release, /target: --win/);
 assert.match(release, /target: --mac/);
 assert.match(development, /pull_request:/);
 assert.match(development, /branches: \[main\]/);
 assert.match(development, /--publish never/);
+assert.match(development, /name: Publish nightly update metadata/);
+assert.match(development, /github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'/);
+assert.match(development, /--config\.publish\.channel=nightly/);
+assert.match(development, /--config\.publish\.releaseType=prerelease/);
+assert.match(development, /--publish always/);
 assert.match(development, /actions\/upload-artifact@v4/);
 
 console.log("Electron Builder workflow contracts passed.");

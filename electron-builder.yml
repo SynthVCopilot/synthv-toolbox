@@ -6,20 +6,26 @@ directories:
 files:
   - dist/**/*
   - package.json
+  - from: electron/dist/main.js
+    to: electron/main.js
+  - from: electron/dist/preload.js
+    to: electron/preload.js
+  - from: electron/dist/updater.js
+    to: electron/updater.js
+  - from: packages/agent-runtime/dist
+    to: agent-runtime/dist
+  - from: packages/agent-runtime/node_modules
+    to: agent-runtime/node_modules
+  - from: packages/agent-runtime/package.json
+    to: agent-runtime/package.json
+  - from: packages/runtime-protocol/dist
+    to: runtime-protocol
 asar: true
 asarUnpack:
   - "**/*.node"
 extraResources:
   - from: LICENSE
     to: LICENSE
-  - from: packages/agent-runtime/dist
-    to: agent-runtime
-  - from: packages/agent-runtime/node_modules
-    to: agent-runtime/node_modules
-  - from: packages/agent-runtime/package.json
-    to: agent-runtime/package.json
-  - from: src/PiDesktop.Tauri/resources/node
-    to: node
   - from: src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/dist
     to: components/synthv-agent-bridge/dist
   - from: src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/scripts
@@ -53,6 +59,7 @@ dmg:
   artifactName: "${productName}-${version}.${ext}"
 publish:
   provider: github
+  channel: latest
   owner: SynthVCopilot
   repo: synthv-toolbox
   releaseType: release
