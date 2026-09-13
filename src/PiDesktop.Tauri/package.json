@@ -6,6 +6,7 @@
   "scripts": {
     "build:bridge": "node scripts/ensure-bridge.mjs",
     "build:runtime": "node scripts/ensure-agent-runtime.mjs",
+    "prepare:bundled-node": "node scripts/prepare-bundled-node.mjs",
     "predev": "npm run build:bridge && npm run build:runtime",
     "prebuild": "npm run build:bridge && npm run build:runtime",
     "dev": "vite --host 127.0.0.1 --port 1420",
