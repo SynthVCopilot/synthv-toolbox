@@ -23,3 +23,4 @@
 | 016 | [Feature]_MCP服务器特权开关 | 为本地 MCP 服务增加内部函数与高级功能独立开关并按授权发布能力 | 让 MCP 客户端也能在明确授权后调用宿主底层能力 | ✅ 已完成 |
 | 017 | [Feature]_Session内部读写 | 为插件提供完整 session 明文读取与受保护写入能力 | 让获得内部函数授权的插件安全处理完整授权文档 | ✅ 已完成 |
 | 018 | [Architecture]_Electron完全迁移 | 以 Electron/Node 替代 Tauri/Rust Shell 并加入应用内自动更新 | 统一扩展运行时、减少编译与资源打包复杂度 | 进行中 |
+| 019 | [Feature]_SynthV系统服务 | 迁移 SynthV 系统层基础能力 | 使 Electron Main 能承担系统和槽位调用 | ✅ 已完成 |
