@@ -1,6 +1,14 @@
 import { addMessages } from "./i18n";
 
 addMessages("zh-CN", {
+  settings: {
+    pluginPrivileges: "插件特权",
+    pluginPrivilegesDescription: "全局开关只允许为已安装插件逐一授予对应能力；关闭后，宿主会拒绝所有同类插件调用。",
+    pluginInternalFunctions: "允许插件使用内部函数",
+    pluginInternalFunctionsDescription: "内部函数是尚未完整包装为公开 API 的单项能力。它可能切换激活模式、解除云端授权或解除本机离线授权绑定。",
+    pluginAdvancedFunctions: "允许插件使用高级功能",
+    pluginAdvancedFunctionsDescription: "高级功能可能添加或删除隔离环境、修改授权信息、访问网络或产生其他高影响操作。开启后仍需逐个插件授权。",
+  },
   nav: { plugins: "插件" },
   pages: { plugins: ["插件", "安装和管理扩展、功能页与界面操作"] },
   plugins: {
@@ -26,10 +34,27 @@ addMessages("zh-CN", {
     noContributions: "此插件仅声明元数据。",
     permissions: "权限",
     noPermissions: "无需宿主权限",
+    internalFunctions: "内部函数使用",
+    internalFunctionsDescription: "允许此插件调用尚未形成完整公开 API 的单项内部功能。它可能影响激活模式、云端授权或本机离线授权绑定。",
+    advancedFunctions: "高级功能使用",
+    advancedFunctionsDescription: "允许此插件请求高影响能力，例如创建或删除隔离环境、修改授权信息或访问网络。",
+    globalPermissionRequired: "请先在设置中开启此类插件功能。",
+    internalFunctionsEnabledNotice: "已允许“{name}”使用内部函数。",
+    internalFunctionsDisabledNotice: "已禁止“{name}”使用内部函数。",
+    advancedFunctionsEnabledNotice: "已允许“{name}”使用高级功能。",
+    advancedFunctionsDisabledNotice: "已禁止“{name}”使用高级功能。",
   },
 });
 
 addMessages("en", {
+  settings: {
+    pluginPrivileges: "Plugin privileges",
+    pluginPrivilegesDescription: "Global switches only allow granting the corresponding capability to individual installed plugins. When disabled, the host rejects every plugin call in that class.",
+    pluginInternalFunctions: "Allow plugins to use internal functions",
+    pluginInternalFunctionsDescription: "Internal functions are individual capabilities not yet fully wrapped as public APIs. They can switch activation modes or remove cloud and local offline authorization bindings.",
+    pluginAdvancedFunctions: "Allow plugins to use advanced functions",
+    pluginAdvancedFunctionsDescription: "Advanced functions can add or remove isolated environments, change authorization information, access the network, or perform other high-impact operations. Each plugin still needs its own grant.",
+  },
   nav: { plugins: "Plugins" },
   pages: { plugins: ["Plugins", "Install and manage extensions, pages, and interface actions"] },
   plugins: {
@@ -55,5 +80,14 @@ addMessages("en", {
     noContributions: "This plugin only declares metadata.",
     permissions: "Permissions",
     noPermissions: "No host permissions",
+    internalFunctions: "Internal functions",
+    internalFunctionsDescription: "Allow this plugin to call individual internal functions that do not yet have a complete public API. They can affect activation modes, cloud authorization, or local offline authorization bindings.",
+    advancedFunctions: "Advanced functions",
+    advancedFunctionsDescription: "Allow this plugin to request high-impact capabilities, including creating or removing isolated environments, changing authorization information, or network access.",
+    globalPermissionRequired: "Enable this class of plugin capability in Settings first.",
+    internalFunctionsEnabledNotice: "Allowed “{name}” to use internal functions.",
+    internalFunctionsDisabledNotice: "Blocked “{name}” from using internal functions.",
+    advancedFunctionsEnabledNotice: "Allowed “{name}” to use advanced functions.",
+    advancedFunctionsDisabledNotice: "Blocked “{name}” from using advanced functions.",
   },
 });

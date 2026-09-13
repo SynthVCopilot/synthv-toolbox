@@ -114,6 +114,10 @@ pub struct ToolboxSettings {
     #[serde(default)]
     pub smart_svp_always_ask: bool,
     #[serde(default)]
+    pub plugin_internal_functions_enabled: bool,
+    #[serde(default)]
+    pub plugin_advanced_functions_enabled: bool,
+    #[serde(default)]
     pub original_svp_prog_id: Option<String>,
     #[serde(default)]
     pub ai_provider: AiProviderId,
@@ -245,6 +249,8 @@ impl Default for ToolboxSettings {
             sv2_account_indicator_enabled: false,
             smart_svp_launch_enabled: false,
             smart_svp_always_ask: false,
+            plugin_internal_functions_enabled: false,
+            plugin_advanced_functions_enabled: false,
             original_svp_prog_id: None,
             ai_provider: AiProviderId::Anthropic,
             anthropic_model: default_anthropic_model(),

@@ -133,6 +133,50 @@ pub fn set_agent_plugin_enabled(
 }
 
 #[tauri::command]
+pub async fn set_agent_plugin_internal_functions_enabled(
+    plugin_id: String,
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<crate::plugin_manager::InstalledPlugin, String> {
+    if enabled
+        && !state
+            .settings
+            .read()
+            .await
+            .plugin_internal_functions_enabled
+    {
+        return Err("请先在设置中启用插件内部函数使用。".to_string());
+    }
+    crate::plugin_manager::set_internal_functions_enabled(
+        &crate::plugin_manager::plugins_root(),
+        &plugin_id,
+        enabled,
+    )
+}
+
+#[tauri::command]
+pub async fn set_agent_plugin_advanced_functions_enabled(
+    plugin_id: String,
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<crate::plugin_manager::InstalledPlugin, String> {
+    if enabled
+        && !state
+            .settings
+            .read()
+            .await
+            .plugin_advanced_functions_enabled
+    {
+        return Err("请先在设置中启用插件高级功能使用。".to_string());
+    }
+    crate::plugin_manager::set_advanced_functions_enabled(
+        &crate::plugin_manager::plugins_root(),
+        &plugin_id,
+        enabled,
+    )
+}
+
+#[tauri::command]
 pub fn uninstall_agent_plugin(plugin_id: String) -> Result<(), String> {
     crate::plugin_manager::uninstall(&crate::plugin_manager::plugins_root(), &plugin_id)
 }

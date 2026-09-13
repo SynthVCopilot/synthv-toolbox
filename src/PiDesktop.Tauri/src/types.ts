@@ -427,6 +427,8 @@ export interface InstalledPlugin {
     permissions: string[];
   };
   enabled: boolean;
+  internalFunctionsEnabled: boolean;
+  advancedFunctionsEnabled: boolean;
 }
 
 export interface BootstrapState {
@@ -451,6 +453,8 @@ export interface BootstrapState {
   sv2AccountIndicatorEnabled: boolean;
   smartSvpLaunchEnabled: boolean;
   smartSvpAlwaysAsk: boolean;
+  pluginInternalFunctionsEnabled: boolean;
+  pluginAdvancedFunctionsEnabled: boolean;
   autostartEnabled?: boolean | null;
   autostartError?: string | null;
   svpAssociation: SvpAssociationState;
