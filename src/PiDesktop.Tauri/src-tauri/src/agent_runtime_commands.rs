@@ -97,11 +97,18 @@ pub async fn discover_agent_plugins(state: State<'_, AppState>) -> Result<Vec<Va
     }
     let root = crate::agent::data_root().join("plugins");
     std::fs::create_dir_all(&root).map_err(|error| format!("无法创建插件目录：{error}"))?;
+    let settings = state.settings.read().await;
+    let enabled_plugin_ids = crate::plugin_manager::runnable_plugin_ids(
+        &root,
+        settings.plugin_internal_functions_enabled,
+        settings.plugin_advanced_functions_enabled,
+    )?;
+    drop(settings);
     let result = state
         .agent_runtime
         .request(
             "runtime.plugins.discover",
-            json!({ "root": root.to_string_lossy() }),
+            json!({ "root": root.to_string_lossy(), "enabledPluginIds": enabled_plugin_ids }),
         )
         .await
         .map_err(|error| error.to_string())?;
@@ -128,11 +135,19 @@ pub fn install_agent_plugin(
 }
 
 #[tauri::command]
-pub fn set_agent_plugin_enabled(
+pub async fn set_agent_plugin_enabled(
     plugin_id: String,
     enabled: bool,
+    state: State<'_, AppState>,
 ) -> Result<crate::plugin_manager::InstalledPlugin, String> {
-    crate::plugin_manager::set_enabled(&crate::plugin_manager::plugins_root(), &plugin_id, enabled)
+    let settings = state.settings.read().await;
+    crate::plugin_manager::set_enabled(
+        &crate::plugin_manager::plugins_root(),
+        &plugin_id,
+        enabled,
+        settings.plugin_internal_functions_enabled,
+        settings.plugin_advanced_functions_enabled,
+    )
 }
 
 #[tauri::command]
