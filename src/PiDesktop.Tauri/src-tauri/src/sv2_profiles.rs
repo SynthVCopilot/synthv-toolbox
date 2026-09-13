@@ -486,12 +486,33 @@ impl Sv2ProfileService {
         if !manifest.slots.iter().any(|slot| slot.id == slot_id) {
             return Err("找不到该 SV2 槽位。".to_string());
         }
-        let provider = detect_concurrent_provider()?;
-        if !slot_running_pids(&provider, &paths.vault, slot_id)?.is_empty() {
-            return Err("该账号槽位正在被并发 SV2 实例使用。".to_string());
+        let has_isolated_data = manifest.slots.iter().any(|slot| {
+            paths
+                .vault
+                .join("instances")
+                .join(
+                    slot.id
+                        .replace('-', "")
+                        .chars()
+                        .take(16)
+                        .collect::<String>(),
+                )
+                .exists()
+        });
+        if has_isolated_data {
+            let provider = detect_concurrent_provider()?;
+            for slot in &manifest.slots {
+                if !slot_running_pids(&provider, &paths.vault, &slot.id)?.is_empty() {
+                    return Err("请先关闭所有并发 SV2 实例，再操作离线授权。".to_string());
+                }
+            }
         }
         let root = slot_data_root(paths, &manifest, slot_id);
-        let backup = paths.vault.join("offline-license-backups").join(slot_id);
+        reject_reparse_point(&root)?;
+        let backup_root = paths.vault.join("offline-license-backups");
+        reject_reparse_point(&backup_root)?;
+        let backup = backup_root.join(slot_id);
+        reject_reparse_point(&backup)?;
         fs::create_dir_all(&backup)
             .map_err(|error| format!("无法创建离线授权备份目录：{error}"))?;
         operation(&root, &backup, false)

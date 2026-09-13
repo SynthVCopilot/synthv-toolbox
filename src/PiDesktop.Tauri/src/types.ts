@@ -221,6 +221,7 @@ export interface Sv2OfflineLicenseStatus {
   currentDevice: boolean;
   deviceName?: string | null;
   checkedAtUtc: string;
+  cachedProducts: Sv2OfflineCachedProduct[];
 }
 
 export interface Sv2OfflineLicenseOperation {

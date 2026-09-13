@@ -23,7 +23,7 @@ assert.match(sessionKit, /pub fn preview_replacement/);
 assert.match(sessionKit, /pub fn validate_replacement_request/);
 assert.match(sessionKit, /fn create_verified_backup/);
 assert.match(sessionKit, /fn replace_with_recovery/);
-assert.match(sessionKit, /fn process_conflict\(exempt_pid: Option<u32>\)/);
+assert.match(sessionKit, /fn process_conflict\(_?exempt_pid: Option<u32>\)/);
 assert.match(sessionKit, /fn wait_for_process_exit/);
 assert.match(sessionKit, /pub fn run_handoff/);
 assert.doesNotMatch(sessionKit, /pub\s+\w+\s+access_token\s*:\s*String/);

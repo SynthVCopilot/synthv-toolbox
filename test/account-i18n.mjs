@@ -13,9 +13,11 @@ assert.equal(functions.length, names.size);
 for (const fn of functions) assert.doesNotMatch(source.slice(fn.start, fn.end), /[\u4e00-\u9fff]/u, `${fn.id.name} contains untranslated UI text`);
 const context = vm.createContext({ createI18n, document: { documentElement: {} }, localStorage: { getItem: () => null, setItem() {} }, icon: () => '<svg></svg>', escapeHtml: value => String(value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]), cachedAccountProfiles: null, renderSv2InstanceList: () => '', resultMetric: (name, value) => `${name}: ${value}`, findVoiceMetadata: () => undefined, sv2VoiceCatalog: [], busy: false });
 const evaluate = value => vm.runInContext(value, context);
+context.offlineLicenseStatuses = new Map();
 const stripModule = value => stripTypeScriptTypes(value.replace(/^import .*;\r?\n/gm, '').replace(/^export /gm, ''), { mode: 'transform' });
 evaluate(stripModule(read('i18n.ts')));
 evaluate(stripModule(read('i18nAccounts.ts')));
+evaluate(stripModule(read('i18nPlugins.ts')));
 evaluate(stripModule(read('accountStatus.ts')));
 evaluate(stripTypeScriptTypes(functions.map(fn => source.slice(fn.start, fn.end)).join('\n'), { mode: 'transform' }));
 const zhKeys = evaluate('Object.keys(i18n.global.getLocaleMessage("zh-CN").accountUi).sort().join("|")');
@@ -58,6 +60,17 @@ for (const lang of ['en', 'zh-CN', 'en']) {
   }
 }
 assert.match(evaluate('renderBlockedSwitchDialog()'), /&lt;img/);
+context.accountManagerSection = 'profile';
+context.offlineLicenseStatuses.set('slot', { enabled: true, eligible: true, currentDevice: false, localCacheStatus: 'inactive', deviceName: hostile, checkedAtUtc: '2026-09-13T00:00:00Z', cachedProducts: [] });
+const offlineOtherDevice = evaluate('renderAccountManager()');
+assert.match(offlineOtherDevice, /Server offline authorization is enabled/);
+assert.match(offlineOtherDevice, /Local offline cache is inactive/);
+assert.match(offlineOtherDevice, /data-offline-license-enabled="false" disabled/);
+assert.doesNotMatch(offlineOtherDevice, /<img src=x|accountUi\./);
+context.offlineLicenseStatuses.get('slot').currentDevice = true;
+context.busy = true;
+assert.match(evaluate('renderAccountManager()'), /data-offline-license-enabled="false" disabled/);
+context.busy = false;
 assert.match(evaluate('renderSvpRouteDialog()'), /原始诊断/);
 assert.match(evaluate('renderSvpRouteDialog()'), /matches all required voices/);
 context.app.platform = 'macos';

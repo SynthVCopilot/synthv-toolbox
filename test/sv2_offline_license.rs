@@ -88,8 +88,13 @@ mod write_flow {
         }
     }
     fn root() -> PathBuf {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
+        let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let repository = crate_root
+            .ancestors()
+            .find(|path| path.join("test").is_dir() && path.join(".github").is_dir())
+            .unwrap();
+        let path = repository
+            .join("test")
             .join(".tmp")
             .join("offline-license")
             .join(Uuid::new_v4().to_string());
@@ -125,6 +130,7 @@ mod write_flow {
     fn enable_then_disable_preserves_tokens_and_creates_verified_backups() {
         let root = root();
         let initial = fixture(&root, false);
+        let (before, _) = read_credentials(&root.join("data")).unwrap();
         let server = Server {
             enabled: Cell::new(false),
             posts: Cell::new(0),
@@ -142,6 +148,9 @@ mod write_flow {
         assert_eq!(on.access_changed, false);
         let (enabled, _) = read_credentials(&root.join("data")).unwrap();
         assert!(enabled.has_full_cache());
+        assert_eq!(enabled.access_token(), before.access_token());
+        assert_eq!(enabled.refresh_token(), before.refresh_token());
+        assert_eq!(enabled.device_id(), before.device_id());
         assert_eq!(enabled.buffer.lines().count(), 7);
         let off = set_with_transport(
             &root.join("data"),
@@ -156,6 +165,9 @@ mod write_flow {
         assert_ne!(now, initial);
         let (disabled, _) = read_credentials(&root.join("data")).unwrap();
         assert!(!disabled.has_full_cache());
+        assert_eq!(disabled.access_token(), before.access_token());
+        assert_eq!(disabled.refresh_token(), before.refresh_token());
+        assert_eq!(disabled.device_id(), before.device_id());
         assert_eq!(disabled.buffer.lines().count(), 5);
         assert!(fs::read_dir(root.join("backups"))
             .unwrap()
@@ -217,6 +229,42 @@ mod write_flow {
         )
         .is_err());
         assert_eq!(server.posts.get(), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+    struct InvalidFieldServer;
+    impl OfflineTransport for InvalidFieldServer {
+        fn get(&self, url: &str, access: &str) -> Result<(u16, Zeroizing<Vec<u8>>), String> {
+            let (status, body) = Server {
+                enabled: Cell::new(false),
+                posts: Cell::new(0),
+                fail: false,
+            }
+            .get(url, access)?;
+            let mut value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            value["data"][0]["product"]["vendor"] = serde_json::json!("vendor;K7=9");
+            Ok((status, Zeroizing::new(serde_json::to_vec(&value).unwrap())))
+        }
+        fn post(&self, _: &str, _: &str) -> Result<(u16, Zeroizing<Vec<u8>>), String> {
+            panic!("invalid cache fields must be rejected before POST")
+        }
+    }
+    #[test]
+    fn delimiter_in_remote_fields_is_rejected_before_any_write() {
+        let root = root();
+        let initial = fixture(&root, false);
+        assert!(set_with_transport(
+            &root.join("data"),
+            &root.join("backups"),
+            true,
+            false,
+            &InvalidFieldServer
+        )
+        .is_err());
+        assert_eq!(
+            fs::read(root.join("data/license/session")).unwrap(),
+            initial
+        );
+        assert_eq!(fs::read_dir(root.join("backups")).unwrap().count(), 0);
         fs::remove_dir_all(root).unwrap();
     }
     struct CasServer {

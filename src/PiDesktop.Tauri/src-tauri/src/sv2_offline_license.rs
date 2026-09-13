@@ -138,6 +138,11 @@ fn inspect_with_transport<T: OfflineTransport>(
             return Err("SV2 数据正在使用；请退出 SV2 后再检查离线授权。".to_string());
         }
         let (credentials, _) = read_credentials(data_root)?;
+        if credentials.access_expires_at <= Utc::now() {
+            return Err(
+                "登录凭据已到期；请先在 Toolbox 中刷新该账号，再检查离线授权。".to_string(),
+            );
+        }
         let products = licensed_products(transport, credentials.access_token())?;
         let device = current_device(
             transport,
@@ -168,7 +173,9 @@ fn set_with_transport<T: OfflineTransport>(
         ensure_sv2_not_running()?;
         let (credentials, fingerprint) = read_credentials(data_root)?;
         if credentials.access_expires_at <= Utc::now() {
-            return Err("access token 已到期；请先在 SV2 中刷新账号状态，工具箱不会自行使用 refresh token。".to_string());
+            return Err(
+                "登录凭据已到期；请先在 Toolbox 中刷新该账号，再切换离线授权。".to_string(),
+            );
         }
         let user_id = jwt_subject(credentials.access_token())
             .ok_or_else(|| "本地 access token 缺少账号主体；未改动本地缓存。".to_string())?;
