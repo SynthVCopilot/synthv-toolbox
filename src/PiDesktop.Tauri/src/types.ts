@@ -432,6 +432,8 @@ export interface InstalledPluginAction {
   whenCapability?: string;
 }
 
+export type PluginPermissionLevel = "none" | "optional" | "required";
+
 export interface InstalledPlugin {
   manifest: {
     schemaVersion: 1;
@@ -442,7 +444,7 @@ export interface InstalledPlugin {
     backend?: { entry: string };
     pages: InstalledPluginPage[];
     actions: InstalledPluginAction[];
-    permissions: string[];
+    permissions: Record<string, PluginPermissionLevel>;
   };
   enabled: boolean;
   internalFunctionsEnabled: boolean;
