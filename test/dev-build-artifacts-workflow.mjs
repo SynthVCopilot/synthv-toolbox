@@ -40,6 +40,7 @@ assert.match(development, /--config\.publish\.channel=nightly/);
 assert.match(development, /--config\.publish\.releaseType=prerelease/);
 assert.match(development, /--publish always/);
 assert.match(development, /actions\/upload-artifact@v4/);
+assert.ok(verifyJob.indexOf("name: Build desktop assets") < verifyJob.indexOf("name: Run desktop contract tests"));
 assert.match(verifyJob, /name: Load compiled Electron main modules[\s\S]*npm run test:electron-main/);
 assert.match(nightlyJob, /permissions:\s+contents: write/);
 assert.match(nightlyJob, /needs: verify/);

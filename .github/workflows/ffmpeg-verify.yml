@@ -35,12 +35,12 @@ jobs:
       - name: Install desktop dependencies
         working-directory: src/PiDesktop.Tauri
         run: npm ci --no-audit --no-fund
-      - name: Run desktop contract tests
-        working-directory: src/PiDesktop.Tauri
-        run: npm run test:contracts
       - name: Build desktop assets
         working-directory: src/PiDesktop.Tauri
         run: npm run build:electron
+      - name: Run desktop contract tests
+        working-directory: src/PiDesktop.Tauri
+        run: npm run test:contracts
       - name: Load compiled Electron main modules
         working-directory: src/PiDesktop.Tauri
         run: npm run test:electron-main
