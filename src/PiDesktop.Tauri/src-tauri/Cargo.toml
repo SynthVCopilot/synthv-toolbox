@@ -43,6 +43,14 @@ path = "../../../test/plugin_assets.rs"
 name = "plugin-manager"
 path = "../../../test/plugin_manager.rs"
 
+[[test]]
+name = "plugin-network"
+path = "../../../test/plugin_network.rs"
+
+[[test]]
+name = "plugin-filesystem"
+path = "../../../test/plugin_filesystem.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 cc = "1"

@@ -17,13 +17,19 @@ test("the native host reauthorizes every plugin capability invocation", () => {
   assert.match(manager, /advanced_functions_enabled/);
 });
 
-test("privileged host capabilities have explicit boundaries", () => {
+test("privileged host capabilities require authorization and expose unrestricted network requests", () => {
   assert.match(host, /"activate" => "host\.internal"/);
   assert.match(host, /"synthv\.sandbox"/);
   assert.match(host, /"synthv\.authorization"/);
   assert.match(host, /"host\.network"/);
-  assert.match(host, /url\.scheme\(\) != "https"/);
-  assert.match(host, /is_public_address/);
-  assert.match(host, /NETWORK_RESPONSE_LIMIT/);
-  assert.match(host, /redirect\(reqwest::redirect::Policy::none\(\)\)/);
+  assert.match(host, /"host\.filesystem"/);
+  assert.match(host, /unrestricted_network_request/);
+  assert.match(host, /client\.request\(method, url\)/);
+  assert.match(host, /bodyBase64/);
+  assert.match(host, /"bodyBase64"/);
+  assert.match(host, /attempt\.follow\(\)/);
+  assert.doesNotMatch(host, /NETWORK_RESPONSE_LIMIT|is_public_address|resolve_to_addrs/);
+  assert.match(host, /unrestricted_filesystem_request/);
+  assert.match(host, /"create-directory"/);
+  assert.match(host, /"bodyBase64"/);
 });
