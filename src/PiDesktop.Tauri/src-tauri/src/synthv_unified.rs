@@ -669,7 +669,7 @@ fn install_legacy_bridge(bridge_dir: &Path, scripts: &Path, node: &str) -> Resul
     {
         return Ok(false);
     }
-    let output = std::process::Command::new(node)
+    let output = crate::synthv::quiet_command(node)
         .arg(bridge_dir.join("scripts/install-sv1-legacy-bridge.mjs"))
         .arg("--target")
         .arg(scripts)

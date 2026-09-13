@@ -294,6 +294,13 @@ impl AgentRuntime {
             inner.writer = None;
         }
         let mut process = Command::new(command.program);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            process
+                .as_std_mut()
+                .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+        }
         process
             .args(command.args)
             .stdin(std::process::Stdio::piped())
