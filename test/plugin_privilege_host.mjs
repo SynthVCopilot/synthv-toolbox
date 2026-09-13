@@ -18,7 +18,7 @@ test("the native host reauthorizes every plugin capability invocation", () => {
 });
 
 test("privileged host capabilities require authorization and expose unrestricted network requests", () => {
-  assert.match(host, /"activate" => "host\.internal"/);
+  assert.match(host, /"activate"[\s\S]*=> "host\.internal"/);
   assert.match(host, /"synthv\.sandbox"/);
   assert.match(host, /"synthv\.authorization"/);
   assert.match(host, /"host\.network"/);
@@ -32,4 +32,27 @@ test("privileged host capabilities require authorization and expose unrestricted
   assert.match(host, /unrestricted_filesystem_request/);
   assert.match(host, /"create-directory"/);
   assert.match(host, /"bodyBase64"/);
+});
+
+test("internal account operations stay explicit and require host.internal", () => {
+  assert.match(host, /"force-activate"/);
+  assert.match(host, /"recover-switch"/);
+  assert.match(host, /"clear-local-session"/);
+  assert.match(host, /"clear-offline-license-cache"/);
+  assert.match(host, /"force-launch"/);
+  assert.match(host, /"clear-local-session"[\s\S]*"clear-offline-license-cache"[\s\S]*=> "host\.internal"/);
+  assert.doesNotMatch(host, /functionName|reflect|invokeInternal/);
+});
+
+test("internal diagnostics, paths, and runtime status are explicit capabilities", () => {
+  assert.match(host, /"synthv\.diagnostics"/);
+  assert.match(host, /"cached-state"/);
+  assert.match(host, /"account-usage-for-slot"/);
+  assert.match(host, /"voice-catalog"/);
+  assert.match(host, /"synthv\.paths"/);
+  assert.match(host, /"slot-folder"/);
+  assert.match(host, /"sandbox-folder"/);
+  assert.match(host, /"runtime\.internal"/);
+  assert.match(host, /require_permission\(&invocation\.permission, "host\.internal"\)/);
+  assert.match(host, /fn required_slot_id/);
 });

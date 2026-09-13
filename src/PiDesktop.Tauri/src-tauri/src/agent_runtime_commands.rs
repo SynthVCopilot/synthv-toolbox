@@ -229,8 +229,29 @@ fn host_hello() -> HostHello {
             capability("synthv.instances", ["list"]),
             capability(
                 "synthv.accounts",
-                ["state", "precheck", "activate", "launch"],
+                [
+                    "state",
+                    "precheck",
+                    "activate",
+                    "force-activate",
+                    "recover-switch",
+                    "clear-local-session",
+                    "clear-offline-license-cache",
+                    "launch",
+                    "force-launch",
+                ],
             ),
+            capability(
+                "synthv.diagnostics",
+                [
+                    "cached-state",
+                    "account-usage",
+                    "account-usage-for-slot",
+                    "voice-catalog",
+                ],
+            ),
+            capability("synthv.paths", ["slot-folder", "sandbox-folder"]),
+            capability("runtime.internal", ["status"]),
             capability("synthv.sandbox", ["prepare", "remove"]),
             capability("synthv.authorization", ["set-enabled"]),
             capability("host.network", ["request"]),
@@ -265,11 +286,13 @@ async fn register_host_capabilities(state: &AppState) {
     let bridge_dir = state.bridge_dir.clone();
     let profiles = state.sv2_profiles.clone();
     let settings = state.settings.clone();
+    let agent_runtime = state.agent_runtime.clone();
     let handler: CapabilityHandler = Arc::new(move |params| {
         let mcp = mcp.clone();
         let bridge_dir = bridge_dir.clone();
         let profiles = profiles.clone();
         let settings = settings.clone();
+        let agent_runtime = agent_runtime.clone();
         Box::pin(async move {
             let invocation = serde_json::from_value::<CapabilityInvocation>(params)
                 .map_err(|error| rpc_error("invalid_capability_request", error.to_string()))?;
@@ -319,7 +342,12 @@ async fn register_host_capabilities(state: &AppState) {
                 }
                 "synthv.accounts" => {
                     let required_permission = match invocation.operation.as_str() {
-                        "activate" => "host.internal",
+                        "activate"
+                        | "force-activate"
+                        | "recover-switch"
+                        | "clear-local-session"
+                        | "clear-offline-license-cache"
+                        | "force-launch" => "host.internal",
                         "launch" => "host.execute",
                         "state" | "precheck" => "host.read",
                         _ => {
@@ -330,12 +358,6 @@ async fn register_host_capabilities(state: &AppState) {
                         }
                     };
                     require_permission(&invocation.permission, required_permission)?;
-                    let slot_id = invocation
-                        .params
-                        .get("slotId")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string();
                     let value = match invocation.operation.as_str() {
                         "state" => serde_json::to_value(
                             profiles
@@ -347,14 +369,45 @@ async fn register_host_capabilities(state: &AppState) {
                                 .account_precheck()
                                 .map_err(|error| rpc_error("account_precheck_error", error))?,
                         ),
-                        "activate" if !slot_id.is_empty() => serde_json::to_value(
+                        "activate" => serde_json::to_value(
                             profiles
-                                .activate_slot(slot_id)
+                                .activate_slot(required_slot_id(&invocation.params)?)
                                 .map_err(|error| rpc_error("account_activate_error", error))?,
                         ),
-                        "launch" if !slot_id.is_empty() => serde_json::to_value(
+                        "force-activate" => serde_json::to_value(
                             profiles
-                                .launch_slot(slot_id, None)
+                                .force_activate_slot(required_slot_id(&invocation.params)?)
+                                .map_err(|error| rpc_error("account_activate_error", error))?,
+                        ),
+                        "recover-switch" => serde_json::to_value(
+                            profiles
+                                .recover_slot_switch()
+                                .map_err(|error| rpc_error("account_recovery_error", error))?,
+                        ),
+                        "clear-local-session" => serde_json::to_value(
+                            profiles
+                                .clear_local_session(required_slot_id(&invocation.params)?)
+                                .map_err(|error| rpc_error("account_session_error", error))?,
+                        ),
+                        "clear-offline-license-cache" => serde_json::to_value(
+                            profiles
+                                .clear_offline_license_cache(required_slot_id(&invocation.params)?)
+                                .map_err(|error| rpc_error("account_license_error", error))?,
+                        ),
+                        "launch" => serde_json::to_value(
+                            profiles
+                                .launch_slot(
+                                    required_slot_id(&invocation.params)?,
+                                    optional_string_param(&invocation.params, "projectPath")?,
+                                )
+                                .map_err(|error| rpc_error("account_launch_error", error))?,
+                        ),
+                        "force-launch" => serde_json::to_value(
+                            profiles
+                                .force_launch_slot(
+                                    required_slot_id(&invocation.params)?,
+                                    optional_string_param(&invocation.params, "projectPath")?,
+                                )
                                 .map_err(|error| rpc_error("account_launch_error", error))?,
                         ),
                         _ => {
@@ -365,6 +418,65 @@ async fn register_host_capabilities(state: &AppState) {
                         }
                     };
                     value.map_err(|error| rpc_error("serialization_error", error.to_string()))
+                }
+                "synthv.diagnostics" => {
+                    require_permission(&invocation.permission, "host.internal")?;
+                    let profiles = profiles.clone();
+                    let params = invocation.params.clone();
+                    let operation = invocation.operation.clone();
+                    tauri::async_runtime::spawn_blocking(move || match operation.as_str() {
+                        "cached-state" => serde_json::to_value(
+                            profiles
+                                .cached_state()
+                                .map_err(|error| rpc_error("diagnostics_error", error))?,
+                        )
+                        .map_err(|error| rpc_error("serialization_error", error.to_string())),
+                        "account-usage" => serde_json::to_value(
+                            profiles
+                                .account_usage_snapshot()
+                                .map_err(|error| rpc_error("diagnostics_error", error))?,
+                        )
+                        .map_err(|error| rpc_error("serialization_error", error.to_string())),
+                        "account-usage-for-slot" => serde_json::to_value(
+                            profiles
+                                .account_usage_snapshot_for_slot(required_slot_id(&params)?)
+                                .map_err(|error| rpc_error("diagnostics_error", error))?,
+                        )
+                        .map_err(|error| rpc_error("serialization_error", error.to_string())),
+                        "voice-catalog" => serde_json::to_value(
+                            profiles
+                                .voice_catalog()
+                                .map_err(|error| rpc_error("diagnostics_error", error))?,
+                        )
+                        .map_err(|error| rpc_error("serialization_error", error.to_string())),
+                        _ => Err(rpc_error("unsupported_operation", "不支持的诊断能力操作。")),
+                    })
+                    .await
+                    .map_err(|error| rpc_error("diagnostics_error", error.to_string()))?
+                    .map_err(|error| error)
+                }
+                "synthv.paths" => {
+                    require_permission(&invocation.permission, "host.internal")?;
+                    let slot_id = required_slot_id(&invocation.params)?;
+                    let profiles = profiles.clone();
+                    let operation = invocation.operation.clone();
+                    let path =
+                        tauri::async_runtime::spawn_blocking(move || match operation.as_str() {
+                            "slot-folder" => profiles.slot_folder_path(slot_id),
+                            "sandbox-folder" => profiles.sandbox_folder_path(slot_id),
+                            _ => Err("不支持的路径能力操作。".to_string()),
+                        })
+                        .await
+                        .map_err(|error| rpc_error("path_error", error.to_string()))?
+                        .map_err(|error| rpc_error("path_error", error))?;
+                    Ok(json!({ "path": path }))
+                }
+                "runtime.internal" if invocation.operation == "status" => {
+                    require_permission(&invocation.permission, "host.internal")?;
+                    Ok(json!({
+                        "running": agent_runtime.is_running().await,
+                        "protocolVersion": PROTOCOL_VERSION,
+                    }))
                 }
                 "synthv.sandbox"
                     if matches!(invocation.operation.as_str(), "prepare" | "remove") =>
@@ -465,6 +577,26 @@ fn require_permission(actual: &str, required: &str) -> Result<(), RpcError> {
             "permission_denied",
             format!("该操作需要 {required} 权限。"),
         ))
+    }
+}
+
+fn required_slot_id(params: &Value) -> Result<String, RpcError> {
+    params
+        .get("slotId")
+        .and_then(Value::as_str)
+        .filter(|slot_id| !slot_id.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| rpc_error("invalid_capability_request", "该操作需要有效的 slotId。"))
+}
+
+fn optional_string_param(params: &Value, key: &str) -> Result<Option<String>, RpcError> {
+    match params.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) if !value.trim().is_empty() => Ok(Some(value.clone())),
+        Some(_) => Err(rpc_error(
+            "invalid_capability_request",
+            format!("{key} 必须是非空字符串。"),
+        )),
     }
 }
 

@@ -52,6 +52,54 @@ fn empty_credential_placeholder_is_preserved() {
 }
 
 #[test]
+fn clearing_offline_cache_preserves_session_headers() {
+    let parsed = SessionText::parse(synthetic_plaintext(
+        "K1=db;K2=product;K3=Name;K4=Vendor;K5=Category;K6=1.0;K7=2",
+    ))
+    .unwrap();
+    let (cleared, removed) = parsed.without_offline_cached_products().unwrap();
+    assert_eq!(removed, 1);
+    assert!(cleared.ends_with("user-synthetic"));
+    assert!(!cleared.contains("K1=db"));
+    assert_eq!(cleared.lines().next(), Some(parsed.header(0)));
+    assert_eq!(cleared.lines().nth(1), Some(parsed.header(1)));
+}
+
+#[test]
+fn clearing_offline_cache_rewrites_encrypted_session_with_verified_backup() {
+    let root = temp_root();
+    let destination = root.join("session");
+    let key = b"test-key";
+    let original = encrypt_session(
+        &synthetic_plaintext("K1=db;K2=product;K3=Name;K4=Vendor;K5=Category;K6=1.0;K7=2"),
+        key,
+    )
+    .unwrap();
+    fs::write(&destination, &original).unwrap();
+
+    let result = clear_offline_cached_products_with_key(&destination, key).unwrap();
+    let rewritten = decode_bytes_with_key(read_ciphertext(&destination).unwrap(), key).unwrap();
+
+    assert_eq!(result.removed_products, 1);
+    assert_eq!(rewritten.products.len(), 0);
+    assert_eq!(
+        rewritten.header(0),
+        "eyJhbGciOiJIUzI1NiJ9.eyJpYXQiOjE4OTM0NTYwMDAsImV4cCI6MTg5MzQ1OTYwMH0.signature"
+    );
+    assert_eq!(
+        hash(&fs::read(&result.backup_path).unwrap()),
+        hash(&original)
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn clearing_offline_cache_rejects_unknown_rows() {
+    let parsed = SessionText::parse(synthetic_plaintext("unsupported-cache-row")).unwrap();
+    assert!(parsed.without_offline_cached_products().is_err());
+}
+
+#[test]
 fn source_and_destination_hash_guards_are_independent() {
     assert!(verify_hash(b"candidate", "wrong", "source")
         .unwrap_err()

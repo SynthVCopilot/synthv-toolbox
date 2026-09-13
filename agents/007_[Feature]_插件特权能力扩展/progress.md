@@ -5,3 +5,4 @@
 - 2026-09-12：`host.network/request` 改为通用 HTTP 请求，支持方法、请求头、文本或 Base64 请求正文；响应同时返回文本和 Base64 正文，不限制私网、DNS、重定向或响应大小。
 - 2026-09-12：注册 `host.filesystem` 并实现 read、write、list、metadata、create-directory、copy、move、remove；所有路径均由插件指定，沿用 `host.advanced` 三层授权。
 - 2026-09-12：Rust 实测通过本地 HTTP、POST、重定向、Base64 正文和临时目录文件操作；Node 契约测试通过。
+- 2026-09-12：完成 host hello 和 Rust capability 处理，加入账号、诊断、路径和运行时的固定内部操作；离线授权缓存清理有加密重写与备份测试，槽位路径和强制切换有服务测试。
