@@ -20,6 +20,11 @@ test("Electron shell enables the secure window boundary and single instance lock
   assert.match(electronMain, /loadFile\(resolve\(currentDirectory, "\.\.\/\.\.\/dist\/index\.html"\)\)/);
 });
 
+test("Electron shell removes the default application menu", () => {
+  assert.match(electronMain, /\bMenu\b/);
+  assert.match(electronMain, /app\.whenReady\(\)\.then\(async \(\) => \{\s*Menu\.setApplicationMenu\(null\);/);
+});
+
 test("preload exposes only the typed desktop bridge", () => {
   assert.match(preload, /contextBridge\.exposeInMainWorld\("toolboxDesktop", bridge\)/);
   assert.match(preload, /ipcRenderer\.invoke\("toolbox:invoke"/);

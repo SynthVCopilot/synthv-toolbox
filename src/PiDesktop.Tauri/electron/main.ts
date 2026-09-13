@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } from "electron";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenDialogOptions } from "./bridge.js";
@@ -182,6 +182,7 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on("second-instance", focusMainWindow);
   app.whenReady().then(async () => {
+    Menu.setApplicationMenu(null);
     await initializeServices();
     await createMainWindow();
   }).catch((reason: unknown) => {
