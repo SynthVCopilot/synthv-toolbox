@@ -66,6 +66,10 @@ function isLoginLaunch(): boolean {
   return process.argv.includes("--toolbox-autostart") || app.getLoginItemSettings().wasOpenedAtLogin;
 }
 
+function desktopIconPath(): string {
+  return join(currentDirectory, "assets", process.platform === "darwin" ? "icon.icns" : "icon.ico");
+}
+
 function autostartController() {
   return {
     async set(enabled: boolean): Promise<boolean> {
@@ -97,7 +101,7 @@ async function showMainWindow(): Promise<void> {
 
 function createTray(): void {
   if (tray) return;
-  const image = nativeImage.createFromPath(join(currentDirectory, "../assets/synthv-toolbox-logo.png"));
+  const image = nativeImage.createFromPath(desktopIconPath());
   tray = new Tray(image);
   tray.setToolTip("Synthesizer V Toolbox");
   tray.setContextMenu(Menu.buildFromTemplate([
@@ -161,6 +165,7 @@ async function createMainWindow(startHidden: boolean): Promise<void> {
     minWidth: 960,
     minHeight: 640,
     show: false,
+    icon: desktopIconPath(),
     webPreferences: {
       contextIsolation: true,
       sandbox: true,
