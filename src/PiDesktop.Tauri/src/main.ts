@@ -1039,7 +1039,7 @@ function navItem(target: Page, label: string, glyph: IconName): string {
 function renderSidebar(): string {
   if (!app) return "";
   return `<div class="brand" data-page="home" title="${t("onboardingDetails.home")}">
-      <div class="brand-mark small"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div>
+      <div class="brand-mark small"><img class="brand-logo" src="./assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div>
       <div><strong>Synthesizer V Toolbox</strong><span>Creative utility suite</span></div>
     </div>
     <nav class="nav" aria-label="${t("onboardingDetails.navigation")}">
@@ -1070,7 +1070,7 @@ function render(): void {
   if (!app) return;
   if (app.settingsLoadError) {
     root.innerHTML = `<main class="fatal settings-recovery" role="alert">
-      <div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div>
+      <div class="brand-mark"><img class="brand-logo" src="./assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div>
       <span class="eyebrow">${t("system.recovery")}</span>
       <h1>${t("system.recoveryTitle")}</h1>
       <p>${t("system.recoveryDescription")}</p>
@@ -1649,7 +1649,7 @@ function renderOnboarding(): void {
   root.innerHTML = `<main class="onboarding">
     <div class="onboarding-glow one"></div><div class="onboarding-glow two"></div>
     <section class="onboarding-card">
-      <div class="onboarding-brand"><div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div><span>Synthesizer V Toolbox</span></div>
+      <div class="onboarding-brand"><div class="brand-mark"><img class="brand-logo" src="./assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div><span>Synthesizer V Toolbox</span></div>
       <div class="eyebrow">${t("onboarding.eyebrow")}</div>
       <h1>${t("onboarding.title")}</h1>
       <p class="lead">${t("onboarding.lead")}</p>
@@ -1987,7 +1987,7 @@ function renderHome(): string {
         <p>${app.mode === "ai" ? t("home.aiDescription") : t("home.localDescription")}</p>
         <div class="hero-actions"><button class="primary" data-page="${app.mode === "ai" ? "copilot" : "import"}">${icon(app.mode === "ai" ? "bot" : "pipeline", 18)} ${app.mode === "ai" ? t("home.openCopilot") : t("home.openImport")}</button><button class="secondary" data-page="bridge">${t("home.checkBridge")}</button></div>
       </div>
-      <div class="hero-orb"><div><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div><span>${app.mode === "ai" ? "COPILOT READY" : "LOCAL FIRST"}</span></div>
+      <div class="hero-orb"><div><img class="brand-logo" src="./assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div><span>${app.mode === "ai" ? "COPILOT READY" : "LOCAL FIRST"}</span></div>
     </div>
     <div class="stats-grid">
       <article class="stat-card"><span>${t("home.mode")}</span><strong>${app.mode === "ai" ? t("home.ai") : t("home.toolbox")}</strong><small>${app.mode === "ai" ? aiConnectionSummary() : t("home.runtimeOff")}</small></article>
@@ -4789,6 +4789,6 @@ void (async () => {
     render();
     refreshAiCatalogLive();
   } catch (reason) {
-    root.innerHTML = `<div class="fatal"><div class="brand-mark"><img class="brand-logo" src="/assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div><h1>${t("system.startupFailed")}</h1><pre>${escapeHtml(formatError(reason))}</pre><p>${t("system.startupHelp")}</p></div>`;
+    root.innerHTML = `<div class="fatal"><div class="brand-mark"><img class="brand-logo" src="./assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div><h1>${t("system.startupFailed")}</h1><pre>${escapeHtml(formatError(reason))}</pre><p>${t("system.startupHelp")}</p></div>`;
   }
 })();

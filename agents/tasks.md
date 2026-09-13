@@ -32,4 +32,4 @@
 | 025 | [BugFix]_electron_nightly_version | 为 Electron nightly 生成唯一递增的预发行版本 | 确保 Action 真正上传自动更新资产而非静默跳过旧版本 | ✅ 已完成 |
 | 026 | [BugFix]_electron_renderer_startup | 修复打包后渲染器资源使用绝对路径 | 让 Electron 从本地文件正确加载完整界面 | ✅ 已完成 |
 | 027 | [BugFix]_electron_menu_removal | 移除 Electron 默认应用菜单 | 不显示 File、Edit 等桌面菜单 | ✅ 已完成 |
-| 018 | [BugFix]_离线授权界面与备份 | 缩小离线切换备份范围，自动读取离线状态并修正进度与凭据控件布局 | 降低切换卡顿并让账户授权信息直接可读可操作 | ✅ 已完成 |
+| 028 | [BugFix]_Electron图标资源路径 | 修复 Electron 安装版中的 SVG Logo 资源路径 | 让文件协议下的渲染资源正常加载 | ✅ 已完成 |
