@@ -34,8 +34,8 @@ const AGENT_ENDPOINT_PATH: &str = "/agent/chat";
 pub struct HttpApiStatus {
     pub enabled: bool,
     pub agent_enabled: bool,
-    pub http_mcp_internal_enabled: bool,
-    pub http_mcp_advanced_enabled: bool,
+    pub internal_functions_enabled: bool,
+    pub advanced_functions_enabled: bool,
     pub running: bool,
     pub port: u16,
     pub endpoint: Option<String>,
@@ -74,8 +74,8 @@ impl HttpApiManager {
         HttpApiStatus {
             enabled,
             agent_enabled,
-            http_mcp_internal_enabled,
-            http_mcp_advanced_enabled,
+            internal_functions_enabled: http_mcp_internal_enabled,
+            advanced_functions_enabled: http_mcp_advanced_enabled,
             running: state.running,
             port,
             endpoint: enabled.then(|| mcp_endpoint(port)),
@@ -490,8 +490,6 @@ async fn execute_privileged_tool(
         capability,
         operation,
         params,
-        context.mcp.clone(),
-        context.bridge_dir.clone(),
         context.sv2_profiles.clone(),
         context.settings.clone(),
         context.agent_runtime.clone(),
@@ -503,16 +501,8 @@ async fn execute_privileged_tool(
 mod tests {
     use super::*;
 
-    #[test]
-    fn validates_zero_port() {
-        assert!(validate_port(0).is_err());
-        assert!(validate_port(17_831).is_ok());
-        assert!(validate_port(u16::MAX).is_ok());
-    }
-
-    #[tokio::test]
-    async fn initialize_and_ping_use_json_rpc_envelopes() {
-        let context = HttpApiContext {
+    fn test_context() -> HttpApiContext {
+        HttpApiContext {
             mcp_enabled: true,
             agent_enabled: false,
             http_mcp_internal_enabled: false,
@@ -535,7 +525,19 @@ mod tests {
             file_approvals: Arc::new(crate::agent_files::FileApprovalManager::default()),
             sv2_profiles: Arc::new(crate::sv2_profiles::Sv2ProfileService::new()),
             agent_runtime: Arc::new(crate::agent_runtime::AgentRuntime::new()),
-        };
+        }
+    }
+
+    #[test]
+    fn validates_zero_port() {
+        assert!(validate_port(0).is_err());
+        assert!(validate_port(17_831).is_ok());
+        assert!(validate_port(u16::MAX).is_ok());
+    }
+
+    #[tokio::test]
+    async fn initialize_and_ping_use_json_rpc_envelopes() {
+        let context = test_context();
         let response = handle_rpc(
             &context,
             json!({"jsonrpc":"2.0","id":1,"method":"initialize"}),
@@ -564,32 +566,60 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn privileged_tools_are_hidden_until_their_domain_is_enabled() {
+        let mut context = test_context();
+        let response = handle_rpc(
+            &context,
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/list"}),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let tools = response["result"]["tools"].as_array().unwrap();
+        assert!(!tools.iter().any(|tool| tool["name"] == "toolbox_internal"));
+        assert!(!tools.iter().any(|tool| tool["name"] == "toolbox_advanced"));
+
+        context.http_mcp_internal_enabled = true;
+        let response = handle_rpc(
+            &context,
+            json!({"jsonrpc":"2.0","id":4,"method":"tools/list"}),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let tools = response["result"]["tools"].as_array().unwrap();
+        assert!(tools.iter().any(|tool| tool["name"] == "toolbox_internal"));
+        assert!(!tools.iter().any(|tool| tool["name"] == "toolbox_advanced"));
+    }
+
+    #[tokio::test]
+    async fn direct_privileged_calls_are_rejected_while_disabled() {
+        let context = test_context();
+        let error = handle_rpc(
+            &context,
+            json!({
+                "jsonrpc":"2.0",
+                "id":5,
+                "method":"tools/call",
+                "params":{
+                    "name":"toolbox_advanced",
+                    "arguments":{
+                        "capability":"host.network",
+                        "operation":"request",
+                        "params":{}
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.1, -32601);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn tool_calls_run_outside_the_async_request_thread() {
-        let context = HttpApiContext {
-            mcp_enabled: true,
-            agent_enabled: false,
-            http_mcp_internal_enabled: false,
-            http_mcp_advanced_enabled: false,
-            port: 17_831,
-            app: None,
-            mcp: Arc::new(crate::mcp::McpManager::default()),
-            settings: Arc::new(tokio::sync::RwLock::new(
-                crate::config::ToolboxSettings::default(),
-            )),
-            bridge_dir: std::path::PathBuf::new(),
-            resource_dir: std::path::PathBuf::new(),
-            components_dir: std::path::PathBuf::new(),
-            downloads: Arc::new(crate::downloads::ComponentDownloadManager::persistent()),
-            media_tasks: crate::media_tasks::MediaTaskManager::persistent(
-                std::path::PathBuf::new(),
-                std::path::PathBuf::new(),
-                Arc::new(crate::mcp::McpManager::default()),
-            ),
-            file_approvals: Arc::new(crate::agent_files::FileApprovalManager::default()),
-            sv2_profiles: Arc::new(crate::sv2_profiles::Sv2ProfileService::new()),
-            agent_runtime: Arc::new(crate::agent_runtime::AgentRuntime::new()),
-        };
+        let context = test_context();
         let response = handle_rpc(
             &context,
             json!({
