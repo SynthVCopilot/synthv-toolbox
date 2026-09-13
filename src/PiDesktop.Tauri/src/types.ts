@@ -214,6 +214,23 @@ export interface Sv2OfflineLicense {
   cachedProducts: Sv2OfflineCachedProduct[];
 }
 
+export interface Sv2OfflineLicenseStatus {
+  enabled: boolean;
+  eligible: boolean;
+  localCacheStatus: Sv2OfflineLicenseCacheStatus;
+  currentDevice: boolean;
+  deviceName?: string | null;
+  checkedAtUtc: string;
+}
+
+export interface Sv2OfflineLicenseOperation {
+  status: Sv2OfflineLicenseStatus;
+  backupPath: string;
+  accessChanged: boolean;
+  refreshChanged: boolean;
+  detail: string;
+}
+
 export interface Sv2SessionCredentialMetadata {
   accessTokenLength: number;
   refreshTokenLength: number;

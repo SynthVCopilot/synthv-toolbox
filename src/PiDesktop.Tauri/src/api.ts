@@ -1396,6 +1396,8 @@ export const api = {
   sv2CachedProfileState: () => call<Sv2ProfilesState>("sv2_cached_profile_state"),
   sv2VoiceCatalog: () => call<import("./types").Sv2CachedVoice[]>("sv2_voice_catalog"),
   sv2AccountPrecheck: () => call<Sv2AccountPrecheck>("sv2_account_precheck"),
+  sv2InspectOfflineLicense: (slotId: string) => call<import("./types").Sv2OfflineLicenseStatus>("sv2_inspect_offline_license", { slotId }),
+  sv2SetOfflineLicense: (slotId: string, enabled: boolean) => call<import("./types").Sv2OfflineLicenseOperation>("sv2_set_offline_license", { slotId, enabled }),
   previewSv2OfflineSessionReplacement: (slotId: string, sourcePath: string) =>
     call<Sv2SessionReplacementPreview>("preview_sv2_offline_session_replacement", { slotId, sourcePath }),
   scheduleSv2OfflineSessionReplacement: (slotId: string, sourcePath: string, sourceSha256: string, destinationSha256: string) =>
