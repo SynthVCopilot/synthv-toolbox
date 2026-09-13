@@ -3,6 +3,7 @@ productName: Synthesizer V Toolbox
 directories:
   app: src/PiDesktop.Tauri
   output: release
+  buildResources: src/PiDesktop.Tauri/electron/assets
 files:
   - dist/**/*
   - package.json
@@ -27,6 +28,7 @@ extraResources:
   - from: src/PiDesktop.Tauri/components/vocal-separation
     to: components/vocal-separation
 win:
+  icon: src/PiDesktop.Tauri/electron/assets/icon.ico
   target:
     - nsis
   artifactName: "${productName}-${version}-setup.${ext}"
@@ -35,6 +37,7 @@ nsis:
   perMachine: false
   allowToChangeInstallationDirectory: false
 mac:
+  icon: src/PiDesktop.Tauri/electron/assets/icon.icns
   target:
     - dmg
   category: public.app-category.music
@@ -42,6 +45,7 @@ mac:
   gatekeeperAssess: false
   identity: "${env.CSC_NAME}"
 dmg:
+  license: src/PiDesktop.Tauri/electron/assets/TERMS-OF-USE.rtf
   artifactName: "${productName}-${version}.${ext}"
 publish:
   provider: github

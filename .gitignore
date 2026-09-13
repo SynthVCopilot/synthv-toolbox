@@ -8,15 +8,11 @@ __pycache__/
 /external/pi-agent/
 agents/
 
-# Tauri / web frontend
+# Electron / web frontend
 node_modules/
 dist/
-src/PiDesktop.Tauri/src-tauri/target/
-src/PiDesktop.Tauri/src-tauri/gen/
-src/PiDesktop.Tauri/src-tauri/resources/node/node
-src/PiDesktop.Tauri/src-tauri/resources/node/node.exe
-src/PiDesktop.Tauri/src-tauri/resources/node/LICENSE
-src/PiDesktop.Tauri/src-tauri/resources/node/manifest.json
+src/PiDesktop.Tauri/electron/dist/
+release/
 release-assets/
 test/.tmp/
 /.platform-kit-private/

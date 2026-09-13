@@ -8,6 +8,7 @@ const read = (filename) => readFileSync(join(root, filename), "utf8").replace(/\
 const release = read(".github/workflows/desktop.yml");
 const development = read(".github/workflows/ffmpeg-verify.yml");
 const prepare = read(".github/workflows/prepare-desktop.yml");
+const packageJson = JSON.parse(read("src/PiDesktop.Tauri/package.json"));
 
 for (const workflow of [release, development]) {
   assert.match(workflow, /actions\/setup-node@v6/);
@@ -42,5 +43,9 @@ assert.match(prepare, /npm run build:electron/);
 assert.match(prepare, /test\/electron-ai-service\.mjs/);
 assert.match(prepare, /test\/electron-http-mcp-server\.mjs/);
 assert.doesNotMatch(prepare, /cargo|tauri|src-tauri|rust-toolchain|setup-python/);
+assert.equal(packageJson.scripts.tauri, undefined);
+assert.equal(packageJson.scripts["prepare:bundled-node"], undefined);
+assert.equal(packageJson.scripts["build:electron"], "npm run build");
+assert.match(packageJson.scripts["test:contracts"], /electron-http-mcp-server\.mjs/);
 
 console.log("Electron Builder workflow contracts passed.");

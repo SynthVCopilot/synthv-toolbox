@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -30,6 +30,14 @@ assert.match(builder, /^publish:[\s\S]*^  provider: github$/m);
 assert.match(builder, /^  channel: latest$/m);
 const extraResources = builder.slice(builder.indexOf("extraResources:"), builder.indexOf("win:"));
 assert.doesNotMatch(extraResources, /packages\/agent-runtime|resources\/node/);
+assert.match(builder, /buildResources: src\/PiDesktop\.Tauri\/electron\/assets/);
+assert.match(builder, /icon: src\/PiDesktop\.Tauri\/electron\/assets\/icon\.ico/);
+assert.match(builder, /icon: src\/PiDesktop\.Tauri\/electron\/assets\/icon\.icns/);
+assert.match(builder, /license: src\/PiDesktop\.Tauri\/electron\/assets\/TERMS-OF-USE\.rtf/);
 assert.match(builder, /from: src\/PiDesktop\.Tauri\/components\/synthv-agent-bridge\/dist/);
+assert.doesNotMatch(builder, /src-tauri|resources\/node/);
+for (const asset of ["icon.ico", "icon.icns", "TERMS-OF-USE.txt", "TERMS-OF-USE.rtf"]) {
+  assert.equal(existsSync(join(root, "src/PiDesktop.Tauri/electron/assets", asset)), true, `${asset} must be packaged from Electron assets`);
+}
 
 console.log("Electron updater and packaging contracts passed.");
