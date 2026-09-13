@@ -15,6 +15,7 @@ pub struct Sv2OfflineLicenseStatus {
     pub local_cache_status: Sv2OfflineLicenseCacheStatus,
     pub current_device: bool,
     pub device_name: Option<String>,
+    pub cached_products: Vec<Sv2OfflineCachedProduct>,
     pub checked_at_utc: String,
 }
 
@@ -38,6 +39,12 @@ struct OfflineProduct {
     version: String,
 }
 
+struct RemoteDeviceState {
+    enabled: bool,
+    current_device: bool,
+    name: Option<String>,
+}
+
 trait OfflineTransport {
     fn get(&self, url: &str, access: &str) -> Result<(u16, Zeroizing<Vec<u8>>), String>;
     fn post(&self, url: &str, access: &str) -> Result<(u16, Zeroizing<Vec<u8>>), String>;
@@ -59,6 +66,7 @@ fn request_ureq(post: bool, url: &str, access: &str) -> Result<(u16, Zeroizing<V
     let mut authorization = Zeroizing::new(format!("Bearer {access}"));
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(15))
+        .redirects(0)
         .build();
     let result = if post {
         agent
@@ -67,7 +75,11 @@ fn request_ureq(post: bool, url: &str, access: &str) -> Result<(u16, Zeroizing<V
             .set("Content-Type", "application/json")
             .send_string("{}")
     } else {
-        agent.get(url).set("Authorization", &authorization).call()
+        agent
+            .get(url)
+            .set("Accept", "application/json")
+            .set("Authorization", &authorization)
+            .call()
     };
     authorization.zeroize();
     let (status, response) = match result {
@@ -153,6 +165,7 @@ fn set_with_transport<T: OfflineTransport>(
         if source_in_use {
             return Err("SV2 数据正在使用；请退出 SV2 后再切换离线授权。".to_string());
         }
+        ensure_sv2_not_running()?;
         let (credentials, fingerprint) = read_credentials(data_root)?;
         if credentials.access_expires_at <= Utc::now() {
             return Err("access token 已到期；请先在 SV2 中刷新账号状态，工具箱不会自行使用 refresh token。".to_string());
@@ -170,7 +183,7 @@ fn set_with_transport<T: OfflineTransport>(
             credentials.access_token(),
             credentials.device_id(),
         )?;
-        if device.is_none() {
+        if !device.current_device {
             return Err("授权服务未确认当前本地设备；未改动本地缓存。".to_string());
         }
         let backup = crate::sv2_data_backup::create_verified_sv2_data_backup(
@@ -184,48 +197,81 @@ fn set_with_transport<T: OfflineTransport>(
                 backup.backup_root.display()
             ));
         }
+        let rewritten = rewrite_cache(
+            &credentials,
+            &user_id,
+            if enabled { &products } else { &[] },
+        )?;
+        let machine_key = read_machine_key()
+            .map_err(|_| "无法读取本机 SV2 加密密钥；本地未改动。".to_string())?;
+        if inspect_session_fingerprint(data_root)
+            .map_err(|_| "无法复核本地 session；未联系授权服务。".to_string())?
+            .as_ref()
+            != Some(&fingerprint)
+        {
+            return Err(format!(
+                "本地 session 在远程切换前发生变化；未联系授权服务。完整备份位于 {}。",
+                backup.backup_root.display()
+            ));
+        }
+        ensure_sv2_not_running()?;
         let endpoint = if enabled {
             ACTIVATE_URL
         } else {
             DEACTIVATE_URL
         };
-        let (status, body) = transport.post(endpoint, credentials.access_token())?;
-        let remote_enabled = parse_toggle_response(status, &body, credentials.device_id())?;
+        let (status, body) = transport
+            .post(endpoint, credentials.access_token())
+            .map_err(|error| {
+                format!(
+                    "远程离线授权请求未确认；远端状态可能已改变。{error} 可从完整备份恢复：{}",
+                    backup.backup_root.display()
+                )
+            })?;
+        let remote_enabled = parse_toggle_response(status, &body, credentials.device_id())
+            .map_err(|error| {
+                format!(
+                    "远程离线授权响应无效；远端状态可能已改变。{error} 可从完整备份恢复：{}",
+                    backup.backup_root.display()
+                )
+            })?;
         if remote_enabled != enabled {
             return Err(format!(
                 "授权服务返回的离线状态不明确；本地未改动。完整备份位于 {}。",
                 backup.backup_root.display()
             ));
         }
-        let rewritten = rewrite_cache(
-            &credentials,
-            &user_id,
-            if enabled { &products } else { &[] },
-        )?;
-        persist_refreshed_session(
-            data_root,
-            &fingerprint,
-            &rewritten,
-            &*read_machine_key()
-                .map_err(|_| "无法读取本机 SV2 加密密钥；本地未改动。".to_string())?,
-        )
-        .map_err(|_| {
-            format!(
+        persist_refreshed_session(data_root, &fingerprint, &rewritten, &*machine_key).map_err(
+            |_| {
+                format!(
                 "授权服务已成功，但本地缓存写入未确认；远程状态可能已改变。可从完整备份恢复：{}",
                 backup.backup_root.display()
             )
-        })?;
+            },
+        )?;
+        let (after, _) = read_credentials(data_root)?;
+        let access_changed = after.access_token() != credentials.access_token();
+        let refresh_changed = after.refresh_token() != credentials.refresh_token();
         let checked = inspect_with_transport(data_root, false, transport).map_err(|error| {
             format!(
                 "本地缓存已写入，但重新确认远程状态失败：{error}；完整备份位于 {}。",
                 backup.backup_root.display()
             )
         })?;
+        if checked.enabled != enabled
+            || (enabled && checked.local_cache_status != Sv2OfflineLicenseCacheStatus::Active)
+            || (!enabled && checked.local_cache_status == Sv2OfflineLicenseCacheStatus::Active)
+        {
+            return Err(format!(
+                "本地写入后状态与远程状态不一致；远端状态可能已改变。可从完整备份恢复：{}",
+                backup.backup_root.display()
+            ));
+        }
         Ok(Sv2OfflineLicenseOperation {
             status: checked,
             backup_path: backup.backup_root.to_string_lossy().into_owned(),
-            access_changed: false,
-            refresh_changed: false,
+            access_changed,
+            refresh_changed,
             detail: if enabled {
                 "已启用 SV2 原生离线授权缓存。".to_string()
             } else {
@@ -251,15 +297,16 @@ fn read_credentials(data_root: &Path) -> Result<(SessionCredentials, SessionCach
 fn status_from(
     credentials: &SessionCredentials,
     eligible: bool,
-    device: Option<String>,
+    device: RemoteDeviceState,
 ) -> Sv2OfflineLicenseStatus {
     let local = credentials.offline_license_view();
     Sv2OfflineLicenseStatus {
-        enabled: local.cache_status == Sv2OfflineLicenseCacheStatus::Active,
+        enabled: device.enabled,
         eligible,
         local_cache_status: local.cache_status,
-        current_device: device.is_some(),
-        device_name: device.filter(|name| !name.is_empty()),
+        current_device: device.current_device,
+        device_name: device.name,
+        cached_products: local.cached_products,
         checked_at_utc: Utc::now().to_rfc3339(),
     }
 }
@@ -283,6 +330,9 @@ fn licensed_products<T: OfflineTransport>(
     }
     let value: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|_| "授权服务返回了无效数据；未改动本地缓存。".to_string())?;
+    if value.get("status").and_then(serde_json::Value::as_i64) != Some(200) {
+        return Err("授权服务未确认授权查询；未改动本地缓存。".to_string());
+    }
     let entries = value
         .get("data")
         .and_then(serde_json::Value::as_array)
@@ -345,7 +395,9 @@ fn licensed_products<T: OfflineTransport>(
         };
         if [license_id, product_id, name, vendor, kind, version]
             .iter()
-            .any(|v| v.is_empty() || v.len() > 512 || v.chars().any(char::is_control))
+            .any(|v| {
+                v.is_empty() || v.len() > 512 || v.contains(';') || v.chars().any(char::is_control)
+            })
         {
             return Err("永久授权包含不安全的产品缓存字段；未改动本地缓存。".to_string());
         }
@@ -358,13 +410,12 @@ fn licensed_products<T: OfflineTransport>(
             version: version.to_string(),
         });
     }
-    if !products
-        .iter()
-        .any(|product| product.name.eq_ignore_ascii_case(OFFLINE_PRODUCT))
-    {
+    if !products.iter().any(|product| {
+        product.name.eq_ignore_ascii_case(OFFLINE_PRODUCT)
+            && product.kind.eq_ignore_ascii_case("Synthesizer V Editor")
+    }) {
         return Ok(Vec::new());
     }
-    products.sort_by(|left, right| left.license_id.cmp(&right.license_id));
     Ok(products)
 }
 
@@ -372,7 +423,7 @@ fn current_device<T: OfflineTransport>(
     transport: &T,
     access: &str,
     expected: Option<&str>,
-) -> Result<Option<String>, String> {
+) -> Result<RemoteDeviceState, String> {
     let expected =
         expected.ok_or_else(|| "本地 session 没有设备标识；未改动本地缓存。".to_string())?;
     let (status, body) = transport.get(DEVICES_URL, access)?;
@@ -381,6 +432,9 @@ fn current_device<T: OfflineTransport>(
     }
     let value: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|_| "授权服务返回了无效设备数据；未改动本地缓存。".to_string())?;
+    if value.get("status").and_then(serde_json::Value::as_i64) != Some(200) {
+        return Err("授权服务未确认设备查询；未改动本地缓存。".to_string());
+    }
     let devices = value
         .pointer("/data/offline_license_devices")
         .and_then(serde_json::Value::as_array)
@@ -396,22 +450,43 @@ fn current_device<T: OfflineTransport>(
             == Some(true)
             && device.get("id").and_then(serde_json::Value::as_str) != Some(expected)
     }) {
-        return Ok(None);
+        return Ok(RemoteDeviceState {
+            enabled: true,
+            current_device: false,
+            name: None,
+        });
     }
     // Before first activation the endpoint legitimately returns no offline records.
     // The encrypted local session still establishes the current device identity.
     if matching.is_empty() {
-        return Ok(Some(String::new()));
+        return Ok(RemoteDeviceState {
+            enabled: false,
+            current_device: true,
+            name: None,
+        });
     }
     if matching.len() != 1 {
-        return Ok(None);
+        return Ok(RemoteDeviceState {
+            enabled: false,
+            current_device: false,
+            name: None,
+        });
     }
-    Ok(matching[0]
-        .get("device_name")
-        .and_then(serde_json::Value::as_str)
-        .filter(|name| !name.is_empty() && name.len() <= 160 && !name.chars().any(char::is_control))
-        .map(str::to_owned)
-        .or_else(|| Some(String::new())))
+    let enabled = matching[0]
+        .get("offline_license_enabled")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| "授权服务返回了无效设备状态；未改动本地缓存。".to_string())?;
+    Ok(RemoteDeviceState {
+        enabled,
+        current_device: true,
+        name: matching[0]
+            .get("device_name")
+            .and_then(serde_json::Value::as_str)
+            .filter(|name| {
+                !name.is_empty() && name.len() <= 160 && !name.chars().any(char::is_control)
+            })
+            .map(str::to_owned),
+    })
 }
 
 pub(crate) fn parse_toggle_response(
@@ -427,6 +502,11 @@ pub(crate) fn parse_toggle_response(
     let data = value
         .get("data")
         .ok_or_else(|| "授权服务返回了不完整切换结果；本地未改动。".to_string())?;
+    if expected_device.is_none_or(str::is_empty)
+        || value.get("status").and_then(serde_json::Value::as_i64) != Some(200)
+    {
+        return Err("授权服务未确认离线授权切换；本地未改动。".to_string());
+    }
     if data.get("id").and_then(serde_json::Value::as_str) != expected_device
         || data
             .get("native_product")
@@ -475,3 +555,24 @@ fn rewrite_cache(
     parse_session_plaintext(Zeroizing::new(std::mem::take(&mut *plaintext).into_bytes()))
         .map_err(|_| "生成的本地离线缓存未通过格式校验。".to_string())
 }
+
+#[cfg(all(windows, not(test)))]
+fn ensure_sv2_not_running() -> Result<(), String> {
+    if crate::synthv_control::list_processes()
+        .map_err(|_| "无法确认 SV2 进程状态。".to_string())?
+        .is_empty()
+    {
+        Ok(())
+    } else {
+        Err("SV2 正在运行；请退出后再切换离线授权。".to_string())
+    }
+}
+
+#[cfg(all(windows, test))]
+fn ensure_sv2_not_running() -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "../../../../test/sv2_offline_license.rs"]
+mod tests;

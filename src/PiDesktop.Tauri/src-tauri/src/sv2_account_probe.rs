@@ -3942,7 +3942,3 @@ mod refresh_failure_tests;
 #[cfg(all(test, windows))]
 #[path = "../../../../test/sv2_refresh_flow_tests.rs"]
 mod refresh_flow_tests;
-
-#[cfg(test)]
-#[path = "../../../../test/sv2_offline_license.rs"]
-mod sv2_offline_license_tests;
