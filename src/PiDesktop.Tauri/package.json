@@ -19,7 +19,7 @@
     "test:audio-preparation-ui": "node ../../test/audio-preparation-ui.mjs",
     "test:autostart": "node ../../test/autostart.mjs",
     "preview": "vite preview",
-    "tauri": "tauri",
+    "tauri": "node scripts/run-tauri.mjs",
     "test:bridge-lyrics": "node ../../test/bridge-instance-ui.mjs && node ../../test/bridge-preview-session.mjs && node ../../test/lyric-bridge-ui-behavior.mjs"
   },
   "dependencies": {
