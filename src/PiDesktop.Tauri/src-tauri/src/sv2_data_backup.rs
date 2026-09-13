@@ -2,6 +2,8 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+#[cfg(windows)]
+use crate::synthv::quiet_command;
 use chrono::Utc;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -420,7 +422,6 @@ fn new_output_file(path: &Path) -> Result<File, String> {
 fn restrict_output_permissions(path: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
-        use std::process::Command;
         let sid = crate::sv2_account_probe::current_user_sid()
             .map_err(|_| "cannot determine current user for backup permissions".to_string())?;
         let grant = if path.is_dir() {
@@ -428,7 +429,7 @@ fn restrict_output_permissions(path: &Path) -> Result<(), String> {
         } else {
             format!("*{sid}:(R,W)")
         };
-        let output = Command::new("icacls")
+        let output = quiet_command("icacls")
             .arg(path)
             .arg("/inheritance:r")
             .arg("/grant:r")

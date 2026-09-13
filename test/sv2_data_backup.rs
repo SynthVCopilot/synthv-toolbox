@@ -119,3 +119,12 @@ fn accepts_a_canonical_root_junction_but_rejects_nested_junctions() {
     junction::delete(source_alias).unwrap();
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn windows_backup_helpers_use_the_hidden_process_factory() {
+    let backup = include_str!("../src/PiDesktop.Tauri/src-tauri/src/sv2_data_backup.rs");
+    let session = include_str!("../src/PiDesktop.Tauri/src-tauri/src/sv2_session_kit.rs");
+    assert!(backup.contains("quiet_command(\"icacls\")"));
+    assert!(session.contains("quiet_command(\"icacls\")"));
+    assert!(session.contains("quiet_command(\"tasklist\")"));
+}

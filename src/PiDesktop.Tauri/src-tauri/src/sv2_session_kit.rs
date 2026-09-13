@@ -4,8 +4,6 @@ use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-#[cfg(windows)]
-use std::process::Command;
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -14,6 +12,8 @@ use zeroize::Zeroizing;
 use crate::sv2_account_probe::{
     decrypt_session, encrypt_session, read_machine_key, validate_session_plaintext_for_offline_tool,
 };
+#[cfg(windows)]
+use crate::synthv::quiet_command;
 
 const MAX_SESSION_BYTES: usize = 1024 * 1024;
 
@@ -394,7 +394,7 @@ fn restrict_permissions(path: &Path) -> Result<(), String> {
         let sid = crate::sv2_account_probe::current_user_sid()
             .map_err(|_| "cannot determine process user SID for output ACL".to_string())?;
         let grant = format!("*{sid}:(R,W)");
-        let output = Command::new("icacls")
+        let output = quiet_command("icacls")
             .arg(path)
             .arg("/inheritance:r")
             .arg("/grant:r")
@@ -446,7 +446,7 @@ fn write_new_restricted(path: &Path, bytes: &[u8]) -> Result<(), String> {
 fn process_conflict(_exempt_pid: Option<u32>) -> Result<bool, String> {
     #[cfg(windows)]
     {
-        let output = Command::new("tasklist")
+        let output = quiet_command("tasklist")
             .args(["/FO", "CSV", "/NH"])
             .output()
             .map_err(|error| format!("cannot inspect running processes: {error}"))?;
@@ -597,7 +597,7 @@ fn wait_for_process_exit(pid: u32) -> Result<(), String> {
     #[cfg(windows)]
     {
         for _ in 0..150 {
-            let output = Command::new("tasklist")
+            let output = quiet_command("tasklist")
                 .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
                 .output()
                 .map_err(|error| format!("cannot inspect Toolbox handoff process: {error}"))?;

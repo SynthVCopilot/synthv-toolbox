@@ -27,7 +27,7 @@ use crate::sv2_session_guard::{
 };
 use crate::sv2_sync::{self, Sv2SyncCategory, Sv2SyncCategoryId, Sv2SyncManifest, Sv2SyncResult};
 use crate::svp_launch_router::{build_route_plan, SvpLaunchMode, SvpRoutePlan};
-use crate::synthv::{find_sv2_executable, succeeded, OperationResult};
+use crate::synthv::{find_sv2_executable, quiet_command, succeeded, OperationResult};
 
 const SCHEMA_VERSION: u32 = 1;
 const MARKER_FILE: &str = ".synthv-toolbox-slot.json";
@@ -2149,7 +2149,7 @@ fn terminate_blockers(paths: &SlotPaths) -> Result<(), String> {
             ));
         }
         for (_, pid) in processes {
-            Command::new("taskkill.exe")
+            quiet_command("taskkill.exe")
                 .arg("/PID")
                 .arg(pid.to_string())
                 .args(["/T", "/F"])
