@@ -316,7 +316,7 @@ pub fn clear_offline_cached_products(
     session_path: impl AsRef<Path>,
 ) -> Result<Sv2OfflineCacheClearResult, String> {
     let key = read_machine_key().map_err(|_| "无法读取本机 session 密钥。".to_string())?;
-    clear_offline_cached_products_with_key(session_path.as_ref(), &*key)
+    clear_offline_cached_products_with_key(session_path.as_ref(), &key)
 }
 
 fn clear_offline_cached_products_with_key(
@@ -354,7 +354,7 @@ fn clear_offline_cached_products_with_key(
 
 fn decode_bytes(ciphertext: Zeroizing<Vec<u8>>) -> Result<SessionText, String> {
     let key = read_machine_key().map_err(|_| "native machine key is unavailable".to_string())?;
-    decode_bytes_with_key(ciphertext, &*key)
+    decode_bytes_with_key(ciphertext, &key)
 }
 
 fn decode_bytes_with_key(

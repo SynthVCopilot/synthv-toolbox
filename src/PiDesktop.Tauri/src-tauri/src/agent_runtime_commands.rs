@@ -453,7 +453,6 @@ async fn register_host_capabilities(state: &AppState) {
                     })
                     .await
                     .map_err(|error| rpc_error("diagnostics_error", error.to_string()))?
-                    .map_err(|error| error)
                 }
                 "synthv.paths" => {
                     require_permission(&invocation.permission, "host.internal")?;
