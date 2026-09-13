@@ -486,7 +486,8 @@ impl Sv2ProfileService {
         if !manifest.slots.iter().any(|slot| slot.id == slot_id) {
             return Err("找不到该 SV2 槽位。".to_string());
         }
-        if !slot_running_pids(paths, &manifest, slot_id)?.is_empty() {
+        let provider = detect_concurrent_provider()?;
+        if !slot_running_pids(&provider, &paths.vault, slot_id)?.is_empty() {
             return Err("该账号槽位正在被并发 SV2 实例使用。".to_string());
         }
         let root = slot_data_root(paths, &manifest, slot_id);
