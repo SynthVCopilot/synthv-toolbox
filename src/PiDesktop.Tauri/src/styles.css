@@ -1527,6 +1527,9 @@ button.path-picker-button { display: inline-flex; flex: 0 0 34px; align-items: c
 .plugin-manager-state.enabled { color: var(--success); background: rgba(15,157,88,.1); }
 .plugin-manager-permissions { display: flex; flex-wrap: wrap; gap: 6px; min-height: 24px; }
 .plugin-manager-permissions code { padding: 3px 7px; border-radius: 4px; background: var(--control); color: var(--muted); font-size: 11px; }
+.plugin-permission-level { margin-left: 4px; color: var(--subtle); }
+.plugin-permission-level.required, .plugin-manager-required-grant { color: var(--warning); }
+.plugin-manager-required-grant { margin: 0; font-size: 12px; line-height: 1.45; }
 .plugin-manager-privileges, .plugin-privilege-settings { display: grid; gap: 12px; }
 .plugin-manager-privileges .fluent-switch, .plugin-privilege-settings .fluent-switch { align-items: flex-start; }
 .plugin-manager-privileges .fluent-switch > span:last-child, .plugin-privilege-settings .fluent-switch > span:last-child { width: auto; height: auto; border: 0; border-radius: 0; background: transparent; }
