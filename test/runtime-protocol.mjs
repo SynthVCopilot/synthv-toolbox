@@ -52,13 +52,16 @@ test("accepts a GUI-capable plugin manifest only when its contributions are safe
     backend: { entry: "backend/index.js" },
     pages: [{ id: "workbench", title: "Tune Workbench", entry: "ui/index.html" }],
     actions: [{ id: "run", location: "project.toolbar", title: "Auto tune", whenCapability: "project.edit" }],
-    permissions: ["agent.tools", "project.read", "project.write"],
+    permissions: { "agent.tools": "optional", "project.read": "required", "project.write": "required" },
   };
   const validated = protocol.validatePluginManifest(manifest);
   assert.deepEqual(validated, manifest);
   assert.equal(protocol.isHostApiCompatible(validated), true);
   assert.equal(protocol.validatePluginManifest({ ...manifest, pages: [{ ...manifest.pages[0], entry: "../ui/index.html" }] }), undefined);
-  assert.equal(protocol.validatePluginManifest({ ...manifest, permissions: ["host.root"] }), undefined);
+  assert.equal(protocol.validatePluginManifest({ ...manifest, permissions: { "host.root": "required" } }), undefined);
+  assert.equal(protocol.validatePluginManifest({ ...manifest, permissions: ["project.read"] }), undefined);
+  assert.equal(protocol.pluginPermissionLevel(validated, "project.read"), "required");
+  assert.equal(protocol.pluginPermissionLevel(validated, "host.execute"), "none");
 });
 
 test("recognizes explicit privileged plugin permissions", () => {
@@ -68,8 +71,23 @@ test("recognizes explicit privileged plugin permissions", () => {
     name: "Privileged plugin",
     version: "1.0.0",
     hostApi: { min: "1.0", max: "1.0" },
-    permissions: ["host.internal", "host.advanced"],
+    permissions: { "host.internal": "required", "host.advanced": "optional" },
   };
   assert.deepEqual(protocol.validatePluginManifest(manifest), manifest);
-  assert.equal(protocol.validatePluginManifest({ ...manifest, permissions: ["host.internal", "host.internal"] }), undefined);
+  assert.equal(protocol.validatePluginManifest({ ...manifest, permissions: { "host.internal": "elevated" } }), undefined);
+});
+
+test("normalizes omitted permissions to none and preserves explicit none", () => {
+  const manifest = {
+    schemaVersion: 1,
+    id: "com.example.no-permissions",
+    name: "No permissions",
+    version: "1.0.0",
+    hostApi: { min: "1.0", max: "1.0" },
+  };
+  const validated = protocol.validatePluginManifest(manifest);
+  assert.deepEqual(validated.permissions, {});
+  assert.equal(protocol.pluginPermissionLevel(validated, "project.read"), "none");
+  const explicit = protocol.validatePluginManifest({ ...manifest, permissions: { "project.read": "none" } });
+  assert.equal(protocol.pluginPermissionLevel(explicit, "project.read"), "none");
 });
