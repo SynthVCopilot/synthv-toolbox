@@ -26,5 +26,6 @@
 | 019 | [Feature]_SynthV系统服务 | 迁移 SynthV 系统层基础能力 | 使 Electron Main 能承担系统和槽位调用 | ✅ 已完成 |
 | 020 | [Feature]_SynthV命令映射 | 注册 SynthV Node 服务命令 | 保持前端 API 参数和 Electron 服务解耦 | ✅ 已完成 |
 | 021 | [Feature]_SynthV命令补齐 | 补充系统命令映射和可用实现 | 使前端调用获得明确的执行或不可用结果 | ✅ 已完成 |
-| 022 | [BugFix]_action_ci_agent_runtime_install | 修复 Electron 工作流干净安装时本地 Agent Runtime 的 prepare 生命周期失败 | 让 GitHub Actions 能在无预装依赖的环境可靠构建 | 🔄 进行中 |
+| 022 | [BugFix]_action_ci_agent_runtime_install | 修复 Electron 工作流干净安装时本地 Agent Runtime 的 prepare 生命周期失败 | 让 GitHub Actions 能在无预装依赖的环境可靠构建 | ✅ 已完成 |
+| 023 | [BugFix]_updater_startup_esm_interop | 修复已安装 Electron 应用加载 electron-updater 时的 ESM/CJS 互操作 | 防止主进程启动阶段崩溃 | ✅ 已完成 |
 | 018 | [BugFix]_离线授权界面与备份 | 缩小离线切换备份范围，自动读取离线状态并修正进度与凭据控件布局 | 降低切换卡顿并让账户授权信息直接可读可操作 | ✅ 已完成 |
