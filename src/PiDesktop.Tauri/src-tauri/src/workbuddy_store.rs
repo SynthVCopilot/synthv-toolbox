@@ -52,26 +52,6 @@ fn restore_from(id: &str, backup: &Backup) -> Result<(), String> {
     }
 }
 
-pub fn load(id: &str) -> Result<WorkBuddyCredential, String> {
-    let access_bytes = optional_secret(ACCESS_SERVICE, id)?
-        .filter(|bytes| !bytes.is_empty())
-        .ok_or_else(|| "本地加密存储中没有此 WorkBuddy access token。".to_string())?;
-    let routing_bytes = optional_secret(ROUTING_SERVICE, id)?
-        .filter(|bytes| !bytes.is_empty())
-        .ok_or_else(|| "本地加密存储中没有此 WorkBuddy refresh token。".to_string())?;
-    let access = String::from_utf8_lossy(&access_bytes).into_owned();
-    let mut stored: StoredCredential = serde_json::from_slice(&routing_bytes)
-        .map_err(|_| "WorkBuddy 凭据格式无效。".to_string())?;
-    Ok(WorkBuddyCredential {
-        access,
-        refresh: std::mem::take(&mut stored.refresh),
-        expires_at: stored.expires_at,
-        domain: std::mem::take(&mut stored.domain),
-        user_id: std::mem::take(&mut stored.user_id),
-        enterprise_id: std::mem::take(&mut stored.enterprise_id),
-    })
-}
-
 pub fn replace(id: &str, credential: &WorkBuddyCredential) -> Result<Backup, String> {
     if credential.access.trim().is_empty() || credential.refresh.trim().is_empty() {
         return Err("WorkBuddy 凭据缺少可续期 token。".to_string());

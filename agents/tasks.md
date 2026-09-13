@@ -12,3 +12,5 @@
 | 005 | [Feature]_bundled_node | 下载、验证、打包并解析应用自带 Node | 消除运行时对系统 Node 的依赖 | ✅ 已完成 |
 | 006 | [Security]_插件特权双层授权 | 增加内部函数与高级功能的全局及插件级开关，并在宿主侧强制鉴权 | 允许明确授权低层内部调用和高影响扩展能力 | 🔄 进行中 |
 | 007 | [Feature]_独立离线授权 | 直接调用离线授权协议并受保护写入 session | 完整备份后在 Toolbox 中查看和切换当前设备离线授权 | 🔄 进行中 |
+| 008 | [BugFix]_dev_runtime_path | 修复 Linux CI 中 Agent Runtime 合同测试的仓库根路径转换 | 让开发构建在准备阶段可靠找到已安装的运行时依赖 | ✅ 已完成 |
+| 009 | [BugFix]_workbuddy_store_load | 删除运行时独立后无调用的 WorkBuddy 凭据读取函数 | 消除发布门禁的 dead_code 错误 | ✅ 已完成 |
