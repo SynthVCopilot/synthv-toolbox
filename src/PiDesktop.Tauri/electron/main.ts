@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, shell, Tray } from "electron";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenDialogOptions } from "./bridge.js";
@@ -20,6 +20,8 @@ import { authorizeWorkBuddy } from "@model-auth/providers/workbuddy";
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
 const developmentUrl = process.env.ELECTRON_RENDERER_URL ?? process.argv.find((argument) => argument.startsWith("--dev-server-url="))?.slice("--dev-server-url=".length);
 let mainWindow: BrowserWindow | undefined;
+let tray: Tray | undefined;
+let quitting = false;
 const updater = createUpdaterService();
 let updateChannel: "stable" | "nightly" = "stable";
 type HostArguments = Record<string, unknown>;
@@ -60,10 +62,50 @@ updater.onState((state) => {
   mainWindow?.webContents.send("toolbox:event", { event: "updater.state", payload: state });
 });
 
-function focusMainWindow(): void {
+function isLoginLaunch(): boolean {
+  return process.argv.includes("--toolbox-autostart") || app.getLoginItemSettings().wasOpenedAtLogin;
+}
+
+function autostartController() {
+  return {
+    async set(enabled: boolean): Promise<boolean> {
+      app.setLoginItemSettings({ openAtLogin: enabled, openAsHidden: enabled, args: enabled ? ["--toolbox-autostart"] : [] });
+      const actual = app.getLoginItemSettings().openAtLogin;
+      if (actual !== enabled) throw new Error("The operating system did not apply the launch-at-login setting.");
+      return actual;
+    },
+    async get(): Promise<{ enabled: boolean; error: string | null }> {
+      try {
+        return { enabled: app.getLoginItemSettings().openAtLogin, error: null };
+      } catch (reason) {
+        return { enabled: false, error: reason instanceof Error ? reason.message : String(reason) };
+      }
+    },
+  };
+}
+
+async function showMainWindow(): Promise<void> {
+  if (!mainWindow) {
+    await createMainWindow(false);
+    return;
+  }
   if (!mainWindow) return;
   if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
   mainWindow.focus();
+}
+
+function createTray(): void {
+  if (tray) return;
+  const image = nativeImage.createFromPath(join(currentDirectory, "../assets/synthv-toolbox-logo.png"));
+  tray = new Tray(image);
+  tray.setToolTip("Synthesizer V Toolbox");
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: "打开 Toolbox", click: () => void showMainWindow() },
+    { type: "separator" },
+    { label: "退出", click: () => { quitting = true; app.quit(); } },
+  ]));
+  tray.on("click", () => void showMainWindow());
 }
 
 function validateOpenDialogOptions(value: unknown): OpenDialogOptions {
@@ -112,7 +154,7 @@ ipcMain.handle("toolbox:open-dialog", async (event, rawOptions: unknown) => {
   return options.multiple ? result.filePaths : result.filePaths[0];
 });
 
-async function createMainWindow(): Promise<void> {
+async function createMainWindow(startHidden: boolean): Promise<void> {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
@@ -126,7 +168,12 @@ async function createMainWindow(): Promise<void> {
       preload: join(currentDirectory, "preload.js"),
     },
   });
-  mainWindow.once("ready-to-show", () => mainWindow?.show());
+  mainWindow.once("ready-to-show", () => { if (!startHidden) mainWindow?.show(); });
+  mainWindow.on("close", (event) => {
+    if (quitting) return;
+    event.preventDefault();
+    mainWindow?.hide();
+  });
   mainWindow.on("closed", () => { mainWindow = undefined; });
   if (developmentUrl) await mainWindow.loadURL(developmentUrl);
   else await mainWindow.loadFile(resolve(currentDirectory, "../../dist/index.html"));
@@ -135,7 +182,7 @@ async function createMainWindow(): Promise<void> {
 async function initializeServices(): Promise<void> {
   const userData = app.getPath("userData");
   const bridgeDirectory = app.isPackaged ? join(process.resourcesPath, "components", "synthv-agent-bridge") : resolve(currentDirectory, "../../components/synthv-agent-bridge");
-  const synthv = new SynthVService(join(userData, "synthv"), bridgeDirectory);
+  const synthv = new SynthVService(join(userData, "synthv"), bridgeDirectory, undefined, autostartController());
   const componentsRoot = app.isPackaged ? join(process.resourcesPath, "components") : resolve(currentDirectory, "../../components");
   const creative = createCreativeService(join(userData, "creative"), createComponentExecutor(componentsRoot));
   let ai: AiService;
@@ -180,20 +227,18 @@ async function authorizeProvider(provider: AiProviderId, signal: AbortSignal) { 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on("second-instance", focusMainWindow);
+  app.on("second-instance", () => void showMainWindow());
   app.whenReady().then(async () => {
     Menu.setApplicationMenu(null);
     await initializeServices();
-    await createMainWindow();
+    createTray();
+    await createMainWindow(isLoginLaunch());
   }).catch((reason: unknown) => {
     console.error("Unable to create Electron window", reason);
     app.quit();
   });
   app.on("activate", () => {
-    if (mainWindow) focusMainWindow();
-    else void createMainWindow();
+    void showMainWindow();
   });
-  app.on("window-all-closed", () => {
-    if (process.platform !== "darwin") app.quit();
-  });
+  app.on("before-quit", () => { quitting = true; });
 }

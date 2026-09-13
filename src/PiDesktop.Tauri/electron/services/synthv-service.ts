@@ -12,12 +12,16 @@ export type ProcessInfo = { processId: number; processIdentity: string; name: st
 type Runner = (command: string, args: string[]) => Promise<{ stdout: string; stderr: string; code: number }>;
 type Slot = { id: string; displayName: string; createdAtUtc: string; lastActivatedAtUtc: string | null };
 type ProfileStore = { activeSlotId: string | null; slots: Slot[] };
+export type AutostartController = {
+  set(enabled: boolean): Promise<boolean>;
+  get(): Promise<{ enabled: boolean; error: string | null }>;
+};
 
 export class SynthVService {
   private pendingRoute: Record<string, unknown> | null = null;
   private readonly syncPreviews = new Map<string, { targetSlotId: string; categories: string[] }>();
   private bridgeClient?: { getStatus(): Promise<{ connected: boolean; status?: { sessionToken?: string }; reason?: string }>; paths: { stopFile: string } };
-  constructor(private readonly root: string, private readonly bridgeDirectory: string, private readonly runner: Runner = runCommand) {}
+  constructor(private readonly root: string, private readonly bridgeDirectory: string, private readonly runner: Runner = runCommand, private readonly autostart?: AutostartController) {}
 
   async scanInstallations(): Promise<Array<Record<string, unknown>>> {
     const candidates = platform() === "win32" ? windowsCandidates() : macCandidates();
@@ -138,8 +142,8 @@ export class SynthVService {
   async connectBridge(): Promise<OperationResult> { await this.ensureBridgeClient(); const status = await this.bridgeClient!.getStatus(); return { succeeded: true, summary: "Bridge transport is ready.", detail: status.connected ? "SynthV Bridge is connected." : status.reason ?? "Waiting for SynthV Bridge." }; }
   async bridgeStatus(): Promise<Record<string, unknown>> { await this.ensureBridgeClient(); const status = await this.bridgeClient!.getStatus(); return { connected: status.connected, sessionToken: status.status?.sessionToken ?? null, requestedProcessId: null, instanceOwnership: "unverified", detail: status.connected ? "SynthV Bridge is connected." : status.reason ?? "SynthV Bridge is unavailable." }; }
   async stopBridge(): Promise<OperationResult> { await this.ensureBridgeClient(); await writeFile(this.bridgeClient!.paths.stopFile, `${Date.now()}\n`, "utf8"); this.bridgeClient = undefined; return ok("Bridge stop requested."); }
-  async setAutostart(enabled: boolean): Promise<boolean> { if (typeof enabled !== "boolean") throw new Error("enabled must be a boolean."); await mkdir(this.root, { recursive: true }); await writeFile(join(this.root, "autostart.json"), JSON.stringify({ enabled }), "utf8"); return enabled; }
-  async getAutostart(): Promise<{ enabled: boolean; error: null }> { try { return { enabled: Boolean(JSON.parse(await readFile(join(this.root, "autostart.json"), "utf8")).enabled), error: null }; } catch { return { enabled: false, error: null }; } }
+  async setAutostart(enabled: boolean): Promise<boolean> { if (typeof enabled !== "boolean") throw new Error("enabled must be a boolean."); if (this.autostart) return this.autostart.set(enabled); await mkdir(this.root, { recursive: true }); await writeFile(join(this.root, "autostart.json"), JSON.stringify({ enabled }), "utf8"); return enabled; }
+  async getAutostart(): Promise<{ enabled: boolean; error: string | null }> { if (this.autostart) return this.autostart.get(); try { return { enabled: Boolean(JSON.parse(await readFile(join(this.root, "autostart.json"), "utf8")).enabled), error: null }; } catch { return { enabled: false, error: null }; } }
   async reveal(path: string): Promise<void> { const absolute = resolve(path); if (platform() === "win32") await this.run("explorer.exe", ["/select,", absolute]); else await this.run("open", ["-R", absolute]); }
 
   private async installBridgeTarget(target: { scriptsPath: string; bridgeProfile: string }): Promise<OperationResult> { this.assertBridgeTarget(target); const script = target.bridgeProfile === "sv1" ? "install-sv1-legacy-bridge.mjs" : "install-synthv-bridge.mjs"; const result = await this.run(process.execPath, [join(this.bridgeDirectory, "scripts", script), target.scriptsPath]); return result.code === 0 ? ok("Bridge installed.") : fail("Bridge installation failed.", result.stderr); }
