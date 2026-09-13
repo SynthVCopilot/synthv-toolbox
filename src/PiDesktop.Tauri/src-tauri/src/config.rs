@@ -155,6 +155,10 @@ pub struct ToolboxSettings {
     pub http_api_enabled: bool,
     #[serde(default)]
     pub http_agent_enabled: bool,
+    #[serde(default)]
+    pub plugin_internal_functions_enabled: bool,
+    #[serde(default)]
+    pub plugin_advanced_functions_enabled: bool,
     #[serde(default = "default_http_api_port")]
     pub http_api_port: u16,
 }
@@ -270,6 +274,8 @@ impl Default for ToolboxSettings {
             traecode_load_strategy: AiLoadStrategy::RoundRobin,
             http_api_enabled: false,
             http_agent_enabled: false,
+            plugin_internal_functions_enabled: false,
+            plugin_advanced_functions_enabled: false,
             http_api_port: DEFAULT_HTTP_API_PORT,
         }
     }

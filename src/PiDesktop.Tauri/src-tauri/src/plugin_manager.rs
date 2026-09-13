@@ -13,8 +13,10 @@ const STATE_FILE: &str = ".toolbox-plugin-state.json";
 const MAX_ARCHIVE_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_ARCHIVE_TOTAL_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 2_048;
-const PERMISSIONS: [&str; 5] = [
+const PERMISSIONS: [&str; 7] = [
     "agent.tools",
+    "host.advanced",
+    "host.internal",
     "host.read",
     "host.execute",
     "project.read",
@@ -79,7 +81,7 @@ pub struct InstalledPlugin {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PluginState {
-    #[serde(default = "default_true")]
+    #[serde(default = "default_enabled")]
     enabled: bool,
     #[serde(default)]
     internal_functions_enabled: bool,
@@ -95,6 +97,10 @@ impl Default for PluginState {
             advanced_functions_enabled: false,
         }
     }
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 pub fn plugins_root() -> PathBuf {
@@ -146,7 +152,9 @@ pub fn install(source: &Path, root: &Path) -> Result<InstalledPlugin, String> {
         let manifest = read_manifest(&staging)?;
         let target = root.join(&manifest.id);
         replace_directory(&staging, &target)?;
-        Ok(installed_plugin(manifest, PluginState::default()))
+        let state = PluginState::default();
+        write_state(&target, &state)?;
+        Ok(installed_plugin(manifest, state))
     })();
     if staging.exists() {
         let _ = fs::remove_dir_all(&staging);
@@ -187,6 +195,43 @@ pub fn set_advanced_functions_enabled(
     state.advanced_functions_enabled = enabled;
     write_state(&path, &state)?;
     Ok(installed_plugin(manifest, state))
+}
+
+pub fn authorize_capability(
+    root: &Path,
+    plugin_id: &str,
+    permission: &str,
+    internal_functions_globally_enabled: bool,
+    advanced_functions_globally_enabled: bool,
+) -> Result<(), String> {
+    let path = plugin_path(root, plugin_id)?;
+    let manifest = read_manifest(&path)?;
+    let state = read_state(&path)?;
+    if !state.enabled {
+        return Err("插件已停用。".to_string());
+    }
+    if !manifest
+        .permissions
+        .iter()
+        .any(|declared| declared == permission)
+    {
+        return Err("插件未声明该宿主权限。".to_string());
+    }
+    match permission {
+        "host.internal" if !internal_functions_globally_enabled => {
+            Err("设置中尚未启用插件内部函数。".to_string())
+        }
+        "host.internal" if !state.internal_functions_enabled => {
+            Err("尚未为此插件启用内部函数。".to_string())
+        }
+        "host.advanced" if !advanced_functions_globally_enabled => {
+            Err("设置中尚未启用插件高级功能。".to_string())
+        }
+        "host.advanced" if !state.advanced_functions_enabled => {
+            Err("尚未为此插件启用高级功能。".to_string())
+        }
+        _ => Ok(()),
+    }
 }
 
 pub fn uninstall(root: &Path, plugin_id: &str) -> Result<(), String> {
@@ -354,10 +399,6 @@ fn write_state(root: &Path, state: &PluginState) -> Result<(), String> {
     )
     .map_err(io_error)?;
     fs::rename(temporary, target).map_err(io_error)
-}
-
-fn default_true() -> bool {
-    true
 }
 
 fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {

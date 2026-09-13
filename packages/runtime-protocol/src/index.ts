@@ -79,6 +79,8 @@ export const RUNTIME_HELLO_METHOD = "runtime.hello";
 
 export type PluginPermission =
   | "agent.tools"
+  | "host.advanced"
+  | "host.internal"
   | "host.read"
   | "host.execute"
   | "project.read"
@@ -133,6 +135,8 @@ const permittedActions = new Set<PluginActionLocation>([
 ]);
 const permittedPermissions = new Set<PluginPermission>([
   "agent.tools",
+  "host.advanced",
+  "host.internal",
   "host.read",
   "host.execute",
   "project.read",

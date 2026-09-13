@@ -1,9 +1,13 @@
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::State;
+use url::Url;
 
 use crate::agent_runtime::{
     CapabilityDescriptor, CapabilityHandler, HostHello, RpcError, RuntimeCommand, RuntimeHello,
@@ -12,6 +16,7 @@ use crate::agent_runtime::{
 use crate::state::AppState;
 
 const HOST_ID: &str = "synthv-toolbox.native-host";
+const NETWORK_RESPONSE_LIMIT: usize = 1_048_576;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,6 +28,7 @@ pub struct AgentRuntimeStatus {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CapabilityInvocation {
+    plugin_id: String,
     permission: String,
     capability: String,
     operation: String,
@@ -138,13 +144,7 @@ pub async fn set_agent_plugin_internal_functions_enabled(
     enabled: bool,
     state: State<'_, AppState>,
 ) -> Result<crate::plugin_manager::InstalledPlugin, String> {
-    if enabled
-        && !state
-            .settings
-            .read()
-            .await
-            .plugin_internal_functions_enabled
-    {
+    if enabled && !state.settings.read().await.plugin_internal_functions_enabled {
         return Err("请先在设置中启用插件内部函数使用。".to_string());
     }
     crate::plugin_manager::set_internal_functions_enabled(
@@ -160,13 +160,7 @@ pub async fn set_agent_plugin_advanced_functions_enabled(
     enabled: bool,
     state: State<'_, AppState>,
 ) -> Result<crate::plugin_manager::InstalledPlugin, String> {
-    if enabled
-        && !state
-            .settings
-            .read()
-            .await
-            .plugin_advanced_functions_enabled
-    {
+    if enabled && !state.settings.read().await.plugin_advanced_functions_enabled {
         return Err("请先在设置中启用插件高级功能使用。".to_string());
     }
     crate::plugin_manager::set_advanced_functions_enabled(
@@ -228,6 +222,9 @@ fn host_hello() -> HostHello {
                 "synthv.accounts",
                 ["state", "precheck", "activate", "launch"],
             ),
+            capability("synthv.sandbox", ["prepare", "remove"]),
+            capability("synthv.authorization", ["set-enabled"]),
+            capability("host.network", ["request"]),
             capability("host.model", ["resolve"]),
         ],
     }
@@ -245,13 +242,31 @@ async fn register_host_capabilities(state: &AppState) {
     let mcp = state.mcp.clone();
     let bridge_dir = state.bridge_dir.clone();
     let profiles = state.sv2_profiles.clone();
+    let settings = state.settings.clone();
     let handler: CapabilityHandler = Arc::new(move |params| {
         let mcp = mcp.clone();
         let bridge_dir = bridge_dir.clone();
         let profiles = profiles.clone();
+        let settings = settings.clone();
         Box::pin(async move {
             let invocation = serde_json::from_value::<CapabilityInvocation>(params)
                 .map_err(|error| rpc_error("invalid_capability_request", error.to_string()))?;
+            if invocation.plugin_id.is_empty() {
+                return Err(rpc_error(
+                    "invalid_capability_request",
+                    "宿主能力调用缺少插件标识。",
+                ));
+            }
+            let feature_settings = settings.read().await;
+            crate::plugin_manager::authorize_capability(
+                &crate::plugin_manager::plugins_root(),
+                &invocation.plugin_id,
+                &invocation.permission,
+                feature_settings.plugin_internal_functions_enabled,
+                feature_settings.plugin_advanced_functions_enabled,
+            )
+            .map_err(|error| rpc_error("permission_denied", error))?;
+            drop(feature_settings);
             match invocation.capability.as_str() {
                 "synthv.engine" => {
                     let writes = crate::synthv_unified::is_mutation(&invocation.operation)
@@ -281,15 +296,18 @@ async fn register_host_capabilities(state: &AppState) {
                     .map_err(|error| rpc_error("serialization_error", error.to_string()))
                 }
                 "synthv.accounts" => {
-                    let is_write = matches!(invocation.operation.as_str(), "activate" | "launch");
-                    require_permission(
-                        &invocation.permission,
-                        if is_write {
-                            "host.execute"
-                        } else {
-                            "host.read"
-                        },
-                    )?;
+                    let required_permission = match invocation.operation.as_str() {
+                        "activate" => "host.internal",
+                        "launch" => "host.execute",
+                        "state" | "precheck" => "host.read",
+                        _ => {
+                            return Err(rpc_error(
+                                "unsupported_operation",
+                                "不支持的账号能力操作。",
+                            ));
+                        }
+                    };
+                    require_permission(&invocation.permission, required_permission)?;
                     let slot_id = invocation
                         .params
                         .get("slotId")
@@ -325,6 +343,70 @@ async fn register_host_capabilities(state: &AppState) {
                         }
                     };
                     value.map_err(|error| rpc_error("serialization_error", error.to_string()))
+                }
+                "synthv.sandbox"
+                    if matches!(invocation.operation.as_str(), "prepare" | "remove") =>
+                {
+                    require_permission(&invocation.permission, "host.advanced")?;
+                    let slot_id = invocation
+                        .params
+                        .get("slotId")
+                        .and_then(Value::as_str)
+                        .filter(|slot_id| !slot_id.is_empty())
+                        .ok_or_else(|| {
+                            rpc_error("invalid_capability_request", "沙箱操作需要 slotId。")
+                        })?
+                        .to_string();
+                    let operation = invocation.operation.clone();
+                    tauri::async_runtime::spawn_blocking(move || match operation.as_str() {
+                        "prepare" => profiles.prepare_concurrent_slot(slot_id),
+                        "remove" => profiles.remove_concurrent_slot(slot_id),
+                        _ => unreachable!(),
+                    })
+                    .await
+                    .map_err(|error| rpc_error("sandbox_error", error.to_string()))?
+                    .map_err(|error| rpc_error("sandbox_error", error))
+                    .and_then(|value| {
+                        serde_json::to_value(value)
+                            .map_err(|error| rpc_error("serialization_error", error.to_string()))
+                    })
+                }
+                "synthv.authorization" if invocation.operation == "set-enabled" => {
+                    require_permission(&invocation.permission, "host.advanced")?;
+                    let credential_id = invocation
+                        .params
+                        .get("credentialId")
+                        .and_then(Value::as_str)
+                        .filter(|credential_id| !credential_id.is_empty())
+                        .ok_or_else(|| {
+                            rpc_error(
+                                "invalid_capability_request",
+                                "授权信息操作需要 credentialId。",
+                            )
+                        })?;
+                    let enabled = invocation
+                        .params
+                        .get("enabled")
+                        .and_then(Value::as_bool)
+                        .ok_or_else(|| {
+                            rpc_error("invalid_capability_request", "授权信息操作需要 enabled。")
+                        })?;
+                    set_credential_enabled(&settings, credential_id, enabled)
+                        .await
+                        .map_err(|error| rpc_error("authorization_error", error))
+                }
+                "host.network" if invocation.operation == "request" => {
+                    require_permission(&invocation.permission, "host.advanced")?;
+                    let url = invocation
+                        .params
+                        .get("url")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| {
+                            rpc_error("invalid_capability_request", "联网请求需要 url。")
+                        })?;
+                    restricted_network_get(url)
+                        .await
+                        .map_err(|error| rpc_error("network_error", error))
                 }
                 _ => Err(rpc_error(
                     "capability_not_available",
@@ -363,6 +445,134 @@ fn require_permission(actual: &str, required: &str) -> Result<(), RpcError> {
             "permission_denied",
             format!("该操作需要 {required} 权限。"),
         ))
+    }
+}
+
+async fn set_credential_enabled(
+    settings: &tokio::sync::RwLock<crate::config::ToolboxSettings>,
+    credential_id: &str,
+    enabled: bool,
+) -> Result<Value, String> {
+    let mut settings = settings.write().await;
+    let mut next = settings.clone();
+    let mut matches = 0usize;
+    for account in &mut next.oauth_accounts {
+        if account.id == credential_id {
+            account.enabled = enabled;
+            matches += 1;
+        }
+    }
+    for provider in [
+        crate::oauth::AiProviderId::Anthropic,
+        crate::oauth::AiProviderId::OpenaiCodex,
+    ] {
+        let mut keys = next.api_keys_for(provider).to_vec();
+        for key in &mut keys {
+            if key.id == credential_id {
+                key.enabled = enabled;
+                matches += 1;
+            }
+        }
+        next.set_api_keys_for(provider, keys);
+    }
+    if matches != 1 {
+        return Err(if matches == 0 {
+            "没有找到该凭据。".to_string()
+        } else {
+            "凭据标识不唯一，拒绝修改。".to_string()
+        });
+    }
+    crate::config::save_settings(&next)?;
+    *settings = next;
+    Ok(json!({ "credentialId": credential_id, "enabled" : enabled }))
+}
+
+async fn restricted_network_get(raw_url: &str) -> Result<Value, String> {
+    let url = Url::parse(raw_url).map_err(|_| "联网请求 URL 无效。".to_string())?;
+    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
+        return Err("联网请求只允许不含用户信息的 HTTPS URL。".to_string());
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| "联网请求 URL 缺少主机名。".to_string())?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| "联网请求端口无效。".to_string())?;
+    let addresses = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|_| "无法解析联网请求主机。".to_string())?
+        .collect::<Vec<SocketAddr>>();
+    if addresses.is_empty()
+        || addresses
+            .iter()
+            .any(|address| !is_public_address(address.ip()))
+    {
+        return Err("联网请求目标不是允许的公网地址。".to_string());
+    }
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(10))
+        .resolve_to_addrs(host, &addresses)
+        .build()
+        .map_err(|_| "无法创建联网请求客户端。".to_string())?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|_| "联网请求失败。".to_string())?;
+    if response.status().is_redirection() {
+        return Err("联网请求不允许重定向。".to_string());
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > NETWORK_RESPONSE_LIMIT as u64)
+    {
+        return Err("联网响应超过大小限制。".to_string());
+    }
+    let status = response.status().as_u16();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| "联网响应中断。".to_string())?;
+        if body.len() + chunk.len() > NETWORK_RESPONSE_LIMIT {
+            return Err("联网响应超过大小限制。".to_string());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(json!({
+        "status": status,
+        "contentType": content_type,
+        "body": String::from_utf8_lossy(&body),
+    }))
+}
+
+fn is_public_address(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
+            !address.is_private()
+                && !address.is_loopback()
+                && !address.is_link_local()
+                && !address.is_unspecified()
+                && !address.is_broadcast()
+                && !address.is_documentation()
+                && !address.is_multicast()
+                && !(address.octets()[0] == 100 && (64..=127).contains(&address.octets()[1]))
+        }
+        IpAddr::V6(address) => {
+            !address.is_loopback()
+                && !address.is_unspecified()
+                && !address.is_unique_local()
+                && !address.is_unicast_link_local()
+                && !address.is_multicast()
+                && address.octets()[..4] != [0x20, 0x01, 0x0d, 0xb8]
+        }
     }
 }
 
