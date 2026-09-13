@@ -65,7 +65,7 @@ test("worker forwards explicit host-capability calls and plugin backends receive
     version: "1.0.0",
     hostApi: { min: "1.0", max: "1.0" },
     backend: { entry: "backend/index.js" },
-    permissions: ["project.read"],
+    permissions: { "project.read": "required" },
   };
   const loaded = await runtime.loadPluginBackends(pathToFileURL(join(root, "test", ".tmp", "virtual-plugin-root")).href, [manifest], host, async () => ({
     default: () => {},
@@ -82,6 +82,7 @@ test("worker forwards explicit host-capability calls and plugin backends receive
   assert.equal(activated, true);
   assert.equal(loaded.length, 1);
   assert.equal(calls.filter(({ method }) => method === "host.capability.invoke").length, 2);
+  assert.equal(calls.find(({ params }) => params.pluginId === manifest.id).params.permissionLevel, "required");
   await assert.rejects(
     () => pluginContext.invokeHost("project.write", "project", "write", {}),
     /has not declared/,
@@ -100,6 +101,10 @@ test("worker forwards explicit host-capability calls and plugin backends receive
   };
   const pluginWorker = new runtime.AgentRuntimeWorker({ create: async () => ({ prompt: async () => {}, dispose: () => {} }) }, host, pluginDiscovery);
   await pluginWorker.handleJsonl(request("plugin-hello", "host.hello", { hostId: "host", protocol: { min: "1.0", max: "1.0" }, capabilities: [] }));
+  const discovered = JSON.parse((await pluginWorker.handleJsonl(request("plugin-discover", "runtime.plugins.discover", {
+    root: "C:/plugins", enabledPluginIds: [manifest.id],
+  })))[0]);
+  assert.deepEqual(discovered.result.plugins, [manifest]);
   const invoked = JSON.parse((await pluginWorker.handleJsonl(request("plugin-invoke", "runtime.plugin.invoke", {
     pluginId: manifest.id,
     method: "run",
@@ -187,7 +192,7 @@ test("stdio worker emits JSONL responses and discovers backend and UI-only plugi
     version: "1.0.0",
     hostApi: { min: "1.0", max: "1.0" },
     backend: { entry: "backend/index.js" },
-    permissions: ["project.read"],
+    permissions: { "project.read": "optional" },
   }));
   writeFileSync(
     join(pluginRoot, "com.example.plugin", "backend", "index.js"),
@@ -201,7 +206,6 @@ test("stdio worker emits JSONL responses and discovers backend and UI-only plugi
     version: "1.0.0",
     hostApi: { min: "1.0", max: "1.0" },
     pages: [{ id: "main", title: "Example", entry: "ui/index.html" }],
-    permissions: [],
   }));
 
   const workerPath = join(packageRoot, "dist", "worker.js");
@@ -233,13 +237,13 @@ test("stdio worker emits JSONL responses and discovers backend and UI-only plugi
   child.stderr.on("data", (chunk) => { stderrBuffer += chunk; });
 
   child.stdin.write(`${request("hello", "host.hello", { hostId: "host", protocol: { min: "1.0", max: "1.0" }, capabilities: [] })}\n`);
-  child.stdin.write(`${request("plugins", "runtime.plugins.discover", { root: pluginRoot })}\n`);
+  child.stdin.write(`${request("plugins", "runtime.plugins.discover", { root: pluginRoot, enabledPluginIds: ["com.example.plugin"] })}\n`);
   await waitFor(() => messages.some((message) => message.kind === "request" && message.method === "host.capability.invoke")
     && messages.some((message) => message.kind === "response" && message.id === "plugins"));
   assert.equal(messages.find((message) => message.kind === "response" && message.id === "hello").ok, true);
   assert.deepEqual(
     messages.find((message) => message.kind === "response" && message.id === "plugins").result.plugins.map((plugin) => plugin.id).sort(),
-    ["com.example.plugin", "com.example.ui"],
+    ["com.example.plugin"],
   );
 
   child.kill("SIGTERM");

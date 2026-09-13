@@ -9,6 +9,8 @@ export type {
   PluginManifest,
   PluginPageContribution,
   PluginPermission,
+  PluginPermissionLevel,
+  PluginPermissions,
   VersionRange,
 } from "@synthv-toolbox/runtime-protocol";
 
