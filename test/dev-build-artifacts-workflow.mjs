@@ -10,7 +10,8 @@ const development = read(".github/workflows/ffmpeg-verify.yml");
 const prepare = read(".github/workflows/prepare-desktop.yml");
 const packageJson = JSON.parse(read("src/PiDesktop.Tauri/package.json"));
 const agentRuntimePackageJson = JSON.parse(read("packages/agent-runtime/package.json"));
-const verifyJob = development.slice(development.indexOf("  verify:"), development.indexOf("  publish-nightly:"));
+const verifyJob = development.slice(development.indexOf("  verify:"), development.indexOf("  prepare-nightly-release:"));
+const nightlyReleaseJob = development.slice(development.indexOf("  prepare-nightly-release:"), development.indexOf("  publish-nightly:"));
 const nightlyJob = development.slice(development.indexOf("  publish-nightly:"));
 
 for (const workflow of [release, development]) {
@@ -18,7 +19,7 @@ for (const workflow of [release, development]) {
   assert.match(workflow, /npm ci --no-audit --no-fund/);
   assert.match(workflow, /npm run build/);
   assert.match(workflow, /npm exec --prefix src\/PiDesktop\.Tauri -- electron-builder --config electron-builder\.yml/);
-  assert.doesNotMatch(workflow, /cargo |tauri |tauri-action|download-artifact|nightly-release/);
+  assert.doesNotMatch(workflow, /cargo |tauri |tauri-action|download-artifact|nightly-release\.mjs/);
 }
 assert.doesNotMatch(release, /gh release/);
 
@@ -44,7 +45,10 @@ assert.match(development, /actions\/upload-artifact@v4/);
 assert.ok(verifyJob.indexOf("name: Build desktop assets") < verifyJob.indexOf("name: Run desktop contract tests"));
 assert.match(verifyJob, /name: Load compiled Electron main modules[\s\S]*npm run test:electron-main/);
 assert.match(nightlyJob, /permissions:\s+contents: write/);
-assert.match(nightlyJob, /needs: verify/);
+assert.match(nightlyReleaseJob, /needs: verify/);
+assert.match(nightlyReleaseJob, /name: Create nightly release[\s\S]*gh release create/);
+assert.match(nightlyReleaseJob, /--target "\$TARGET_COMMIT"/);
+assert.match(nightlyJob, /needs: prepare-nightly-release/);
 assert.match(nightlyJob, /GH_TOKEN: \$\{\{ github\.token \}\}/);
 assert.match(nightlyJob, /name: Set nightly version[\s\S]*set-dev-version\.mjs "\$\{\{ github\.sha \}\}" --next-patch --sequence "\$\{\{ github\.run_number \}\}"/);
 assert.match(nightlyJob, /name: Validate published nightly assets/);
