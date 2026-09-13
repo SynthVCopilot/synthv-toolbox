@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const source = await readFile(join(root, "electron/services/http-mcp-server.ts"), "utf8");
+const source = await readFile(join(root, "src/PiDesktop.Tauri/electron/services/http-mcp-server.ts"), "utf8");
 const executable = stripTypeScriptTypes(source, { mode: "transform" });
 const { HttpMcpServer } = await import(`data:text/javascript;base64,${Buffer.from(executable).toString("base64")}`);
 

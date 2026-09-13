@@ -30,6 +30,6 @@ assert.match(builder, /^publish:[\s\S]*^  provider: github$/m);
 assert.match(builder, /^  channel: latest$/m);
 const extraResources = builder.slice(builder.indexOf("extraResources:"), builder.indexOf("win:"));
 assert.doesNotMatch(extraResources, /packages\/agent-runtime|resources\/node/);
-assert.match(builder, /from: src\/PiDesktop\.Tauri\/src-tauri\/components\/synthv-agent-bridge\/dist/);
+assert.match(builder, /from: src\/PiDesktop\.Tauri\/components\/synthv-agent-bridge\/dist/);
 
 console.log("Electron updater and packaging contracts passed.");

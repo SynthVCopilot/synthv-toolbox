@@ -1,7 +1,7 @@
 import { CredentialRouter, createCredentialMetadata } from "@model-auth/core";
 import { dirname } from "node:path";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { AgentRuntimeWorker } from "../../../../packages/agent-runtime/src/index.js";
+import { AgentRuntimeWorker } from "@synthv-toolbox/agent-runtime";
 
 export type AiProviderId = "anthropic" | "openai-codex" | "workbuddy" | "traecode";
 export type AiLoadStrategy = "round-robin" | "weighted-round-robin" | "failover";
@@ -124,12 +124,18 @@ export const nodeMetadataFiles: MetadataFilePort = {
   },
 };
 
-export function agentRuntimePort(worker: Pick<AgentRuntimeWorker, "handle">): AgentRuntimePort {
+export function agentRuntimePort(worker: Pick<AgentRuntimeWorker, "handleJsonl">): AgentRuntimePort {
   let sequence = 0;
+  let negotiated = false;
   return {
     async request(method, params) {
-      const response = await worker.handle({ id: `electron-ai-${++sequence}`, method, params });
-      if ("error" in response && response.error) throw new Error(response.error.message);
+      if (!negotiated) {
+        await worker.handleJsonl(JSON.stringify({ kind: "request", id: "electron-ai-hello", protocolVersion: "1.0", method: "host.hello", params: { hostId: "electron-ai", protocol: { min: "1.0", max: "1.0" }, capabilities: [] } }));
+        negotiated = true;
+      }
+      const lines = await worker.handleJsonl(JSON.stringify({ kind: "request", id: `electron-ai-${++sequence}`, protocolVersion: "1.0", method, params }));
+      const response = JSON.parse(lines[0] ?? "{}") as { ok?: boolean; result?: Record<string, unknown>; error?: { message?: string } };
+      if (!response.ok) throw new Error(response.error?.message ?? "Agent Runtime request failed.");
       return response.result ?? {};
     },
   };
@@ -156,19 +162,52 @@ export class AiService {
       const settings = metadata.providers[provider];
       const credentials = metadata.credentials.filter((credential) => credential.provider === provider);
       const models = await this.options.catalog.models(provider, forceCatalog);
+      const oauth = credentials.filter((credential) => credential.kind === "oauth");
+      const apiKeys = credentials.filter((credential) => credential.kind === "api-key");
       return {
         id: provider,
+        displayName: providerDisplayName(provider),
+        description: `${providerDisplayName(provider)} model access`,
         active: metadata.activeProvider === provider,
         model: settings.model,
         oauthEnabled: settings.oauthEnabled,
         loadStrategy: settings.strategy,
         models,
+        oauthModels: models,
+        apiKeyModels: models,
         connected: credentials.some((credential) => credential.enabled),
-        credentials: credentials.map(publicCredential),
+        healthyAccounts: oauth.filter((credential) => credential.enabled).length,
+        totalAccounts: oauth.length,
+        accounts: oauth.map((credential) => ({ id: credential.id, label: credential.label, expiresAt: credential.expiresAt ?? 0, authorized: true, healthy: credential.enabled, enabled: credential.enabled, weight: credential.weight })),
+        apiKeys: apiKeys.map((credential) => ({ id: credential.id, label: credential.label, models: credential.models, healthy: credential.enabled, enabled: credential.enabled, weight: credential.weight, cooldownUntilUtc: null, createdAtUtc: credential.createdAt })),
+        authMethods: ["oauth", "api-key"],
+        available: true,
+        unavailableReason: null,
       };
     }));
     this.createCredentialRouter(metadata);
-    return { activeProvider: metadata.activeProvider, providers: providersState };
+    return { activeProvider: metadata.activeProvider, legacyConfigured: false, providers: providersState, catalogSource: "models-dev", catalogGeneratedAt: this.now().getTime(), catalogError: null };
+  }
+
+  async resolveModelSelection(): Promise<{ providerId: string; modelId: string; apiKey: string; credentialId: string }> {
+    const metadata = await this.load();
+    const providerId = metadata.activeProvider;
+    const modelId = metadata.providers[providerId].model;
+    if (!modelId) throw new Error("No model is selected.");
+    const router = this.createCredentialRouter(metadata);
+    const candidate = router.candidates({ providerId, modelId })[0];
+    if (!candidate) throw new Error(`No eligible credential is configured for ${providerId}/${modelId}.`);
+    const stored = metadata.credentials.find((credential) => credential.id === candidate.id);
+    if (!stored) throw new Error("The selected credential is unavailable.");
+    const decrypted = this.options.safeStorage.decryptString(Buffer.from(stored.sealed, "base64"));
+    let apiKey = decrypted;
+    if (stored.kind === "oauth") {
+      const credential = JSON.parse(decrypted) as { access?: unknown; accessToken?: unknown };
+      const access = credential.access ?? credential.accessToken;
+      if (typeof access !== "string" || !access) throw new Error("The OAuth credential has no access token.");
+      apiKey = access;
+    }
+    return { providerId, modelId, apiKey, credentialId: stored.id };
   }
 
   async authorize_ai_provider(provider: AiProviderId, operationId = this.id()): Promise<Record<string, unknown>> {
@@ -381,9 +420,12 @@ export class AiService {
   private createCredentialRouter(metadata: AiServiceMetadata): CredentialRouter {
     return new CredentialRouter(metadata.credentials.map((credential) => createCredentialMetadata({
       id: credential.id,
-      provider: credential.provider,
-      label: credential.label,
+      providerId: credential.provider,
+      authMethod: credential.kind,
       enabled: credential.enabled,
+      weight: credential.weight,
+      modelIds: credential.models,
+      extend: { label: credential.label },
     })));
   }
 }
@@ -422,6 +464,10 @@ function sanitizeLabel(label: string, secret: string): string {
 
 function isProvider(value: unknown): value is AiProviderId {
   return typeof value === "string" && providers.includes(value as AiProviderId);
+}
+
+function providerDisplayName(provider: AiProviderId): string {
+  return provider === "openai-codex" ? "OpenAI Codex" : provider === "workbuddy" ? "WorkBuddy" : provider === "traecode" ? "Trae" : "Anthropic";
 }
 
 function isStrategy(value: string): value is AiLoadStrategy {

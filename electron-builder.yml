@@ -12,19 +12,19 @@ asarUnpack:
 extraResources:
   - from: LICENSE
     to: LICENSE
-  - from: src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/dist
+  - from: src/PiDesktop.Tauri/components/synthv-agent-bridge/dist
     to: components/synthv-agent-bridge/dist
-  - from: src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/scripts
+  - from: src/PiDesktop.Tauri/components/synthv-agent-bridge/scripts
     to: components/synthv-agent-bridge/scripts
-  - from: src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/synthv
+  - from: src/PiDesktop.Tauri/components/synthv-agent-bridge/synthv
     to: components/synthv-agent-bridge/synthv
-  - from: src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/legacy-sv1
+  - from: src/PiDesktop.Tauri/components/synthv-agent-bridge/legacy-sv1
     to: components/synthv-agent-bridge/legacy-sv1
-  - from: src/PiDesktop.Tauri/src-tauri/components/cvrs/cvrs.py
+  - from: src/PiDesktop.Tauri/components/cvrs/cvrs.py
     to: components/cvrs/cvrs.py
-  - from: src/PiDesktop.Tauri/src-tauri/components/pi-audio
+  - from: src/PiDesktop.Tauri/components/pi-audio
     to: components/pi-audio
-  - from: src/PiDesktop.Tauri/src-tauri/components/vocal-separation
+  - from: src/PiDesktop.Tauri/components/vocal-separation
     to: components/vocal-separation
 win:
   target:

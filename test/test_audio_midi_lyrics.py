@@ -6,7 +6,7 @@ from unittest.mock import patch
 from pathlib import Path
 
 
-SCRIPT = Path(__file__).parents[1] / "src/PiDesktop.Tauri/src-tauri/components/pi-audio/pi_audio.py"
+SCRIPT = Path(__file__).parents[1] / "src/PiDesktop.Tauri/components/pi-audio/pi_audio.py"
 SPEC = importlib.util.spec_from_file_location("pi_audio", SCRIPT)
 pi_audio = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(pi_audio)

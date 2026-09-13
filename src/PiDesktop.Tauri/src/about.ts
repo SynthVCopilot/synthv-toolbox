@@ -19,7 +19,7 @@ function formatBytes(bytes: number): string {
 }
 
 function renderDownload(options: AboutPageOptions): string {
-  const { app, download, escapeHtml, icon, translate: t } = options;
+  const { download, escapeHtml, translate: t } = options;
   const state = download ?? { status: "idle", downloadedBytes: 0 } satisfies ToolboxUpdateDownload;
   const fileName = state.fileName ? escapeHtml(state.fileName) : "";
   const installerAvailable = Boolean(options.update?.installer);
@@ -32,14 +32,13 @@ function renderDownload(options: AboutPageOptions): string {
     const description = state.totalBytes
       ? t("about.downloaded", { current: formatBytes(state.downloadedBytes), total: formatBytes(state.totalBytes) })
       : t("about.downloadedUnknown", { current: formatBytes(state.downloadedBytes) });
-    return `<div class="about-download-state downloading"><div><strong>${t("about.downloading")}</strong><small>${escapeHtml(description)}</small>${fileName ? `<small>${fileName}</small>` : ""}</div>${progress}<button class="secondary compact" data-cancel-toolbox-update ${options.busy ? "disabled" : ""}>${t("about.cancelDownload")}</button></div>`;
+    return `<div class="about-download-state downloading"><div><strong>${t("about.downloading")}</strong><small>${escapeHtml(description)}</small>${fileName ? `<small>${fileName}</small>` : ""}</div>${progress}</div>`;
   }
   if (state.status === "ready") {
-    const macos = app.platform === "macos";
-    return `<div class="about-download-state ready"><div><strong>${t("about.readyToInstall")}</strong>${fileName ? `<small>${fileName}</small>` : ""}${macos ? `<small>${t("about.macInstallGuide")}</small>` : ""}</div><div class="about-download-actions"><button class="secondary compact" data-cancel-toolbox-update ${options.busy ? "disabled" : ""}>${t("about.discardDownload")}</button><button class="primary" data-install-toolbox-update ${options.busy ? "disabled" : ""}>${icon("download", 16)} ${macos ? t("about.openDiskImage") : t("about.installWindows")}</button></div></div>`;
+    return `<div class="about-download-state ready"><div><strong>${t("about.readyToInstall")}</strong>${fileName ? `<small>${fileName}</small>` : ""}</div></div>`;
   }
-  if (state.status === "failed") return `<div class="about-download-state failed"><div><strong>${t("about.downloadFailed")}</strong><small>${escapeHtml(state.error ?? "")}</small></div><button class="secondary" data-download-toolbox-update ${options.busy ? "disabled" : ""}>${icon("sync", 16)} ${t("about.retryDownload")}</button></div>`;
-  return `<div class="about-download-state"><div><strong>${t("about.available")}</strong>${fileName ? `<small>${fileName}</small>` : ""}</div><button class="primary" data-download-toolbox-update ${options.busy ? "disabled" : ""}>${icon("download", 16)} ${t("about.download")}</button></div>`;
+  if (state.status === "failed") return `<div class="about-download-state failed"><div><strong>${t("about.downloadFailed")}</strong><small>${escapeHtml(state.error ?? "")}</small></div></div>`;
+  return `<div class="about-download-state"><div><strong>${t("about.available")}</strong>${fileName ? `<small>${fileName}</small>` : ""}</div></div>`;
 }
 
 export function renderAboutPage(options: AboutPageOptions): string {

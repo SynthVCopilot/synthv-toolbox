@@ -50,10 +50,9 @@ test("Electron build and launch scripts compile the shell", () => {
 });
 
 test("Electron host routes updater, runtime, plugin, and MCP commands through registered services", () => {
-  for (const command of ["updater.check", "updater.restart", "updater.state", "runtime.load", "runtime.configure", "plugins.discover", "mcp.list"]) {
-    assert.match(electronMain, new RegExp(command.replace(".", "\\.")));
-  }
+  for (const command of ["updater.check", "updater.restart", "updater.state", "check_toolbox_update"]) assert.match(electronMain, new RegExp(command.replace(".", "\\.")));
   assert.match(electronMain, /webContents\.send\("toolbox:event"/);
   assert.match(updater, /autoUpdater/);
   assert.match(runtimeHost, /class ElectronRuntimeHost/);
+  assert.match(electronMain, /new ElectronCommandRegistry\(runtimeHost, \{ ai, creative, desktop, synthv \}/);
 });

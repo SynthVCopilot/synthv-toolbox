@@ -8,10 +8,10 @@ const read = relative => fs.readFileSync(fileURLToPath(new URL(relative, import.
 const synthv = read('../src/PiDesktop.Tauri/src-tauri/src/synthv.rs');
 const commands = read('../src/PiDesktop.Tauri/src-tauri/src/commands.rs');
 const main = read('../src/PiDesktop.Tauri/src/main.ts');
-const modernBridge = read('../src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/synthv/SynthVAgentBridge.lua');
-const stopBridge = read('../src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/synthv/StopSynthVAgentBridge.lua');
-const sidebar = read('../src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/synthv/SynthVAgentSidebar.lua');
-const legacyBridge = read('../src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/legacy-sv1/synthv/SynthVAgentBridgeSV1Legacy.lua');
+const modernBridge = read('../src/PiDesktop.Tauri/components/synthv-agent-bridge/synthv/SynthVAgentBridge.lua');
+const stopBridge = read('../src/PiDesktop.Tauri/components/synthv-agent-bridge/synthv/StopSynthVAgentBridge.lua');
+const sidebar = read('../src/PiDesktop.Tauri/components/synthv-agent-bridge/synthv/SynthVAgentSidebar.lua');
+const legacyBridge = read('../src/PiDesktop.Tauri/components/synthv-agent-bridge/legacy-sv1/synthv/SynthVAgentBridgeSV1Legacy.lua');
 
 assert.match(synthv, /synthesizer v studio flat/);
 assert.doesNotMatch(synthv, /name\.contains\("synthesizer v"\)/);

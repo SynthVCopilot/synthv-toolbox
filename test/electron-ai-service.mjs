@@ -13,7 +13,7 @@ const executable = stripTypeScriptTypes(source
     'class CredentialRouter { constructor(credentials) { this.credentials = credentials; } }\nconst createCredentialMetadata = (credential) => credential;',
   )
   .replace(
-    'import { AgentRuntimeWorker } from "../../../../packages/agent-runtime/src/index.js";',
+    'import { AgentRuntimeWorker } from "@synthv-toolbox/agent-runtime";',
     "class AgentRuntimeWorker {}",
   ), { mode: "transform" });
 const { AiService } = await import(`data:text/javascript;base64,${Buffer.from(executable).toString("base64")}`);
@@ -115,6 +115,7 @@ await assert.rejects(pending, /cancelled/);
 
 await service.remove_ai_api_key("anthropic", credentialId);
 await service.remove_ai_provider_account("anthropic", "anthropic:oauth");
-assert.equal((await service.ai_provider_state()).providers.find((provider) => provider.id === "anthropic").credentials.length, 0);
+const anthropic = (await service.ai_provider_state()).providers.find((provider) => provider.id === "anthropic");
+assert.equal(anthropic.accounts.length + anthropic.apiKeys.length, 0);
 
 console.log("Electron AI service persists encrypted credentials and drives Agent Runtime sessions.");

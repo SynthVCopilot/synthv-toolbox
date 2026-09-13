@@ -1,10 +1,20 @@
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from "electron";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenDialogOptions } from "./bridge.js";
 import { createUpdaterService } from "./updater.js";
 import { ElectronRuntimeHost } from "./services/runtime-host.js";
 import { ElectronCommandRegistry } from "./services/command-registry.js";
+import { AiService, agentRuntimePort, type AiProviderId } from "./services/ai-service.js";
+import { createCreativeService } from "./services/creative-service.js";
+import { DesktopStateService } from "./services/desktop-state.js";
+import { HostCapabilities } from "./services/host-capabilities.js";
+import { HttpMcpServer } from "./services/http-mcp-server.js";
+import { SynthVService } from "./services/synthv-service.js";
+import { authorizeAnthropic } from "@model-auth/providers/anthropic";
+import { authorizeOpenAI } from "@model-auth/providers/openai";
+import { authorizeTrae } from "@model-auth/providers/trae";
+import { authorizeWorkBuddy } from "@model-auth/providers/workbuddy";
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
 const developmentUrl = process.env.ELECTRON_RENDERER_URL ?? process.argv.find((argument) => argument.startsWith("--dev-server-url="))?.slice("--dev-server-url=".length);
@@ -32,6 +42,16 @@ const handlers = new HostHandlerRegistry();
 handlers.register("updater.check", async () => updater.check());
 handlers.register("updater.restart", async () => updater.restart());
 handlers.register("updater.state", async () => updater.state());
+handlers.register("check_toolbox_update", async () => {
+  const state = await updater.check();
+  return { channel: "stable", currentVersion: app.getVersion(), latestVersion: state.version ?? app.getVersion(), updateAvailable: state.phase !== "idle" && state.phase !== "error", releaseName: state.version ? `Version ${state.version}` : "", releaseUrl: "https://github.com/SynthVCopilot/synthv-toolbox/releases", releaseNotes: "", checkedAtUtc: new Date().toISOString(), installer: null };
+});
+handlers.register("get_toolbox_update_download", async () => updaterDownloadState());
+handlers.register("download_toolbox_update", async () => { await updater.check(); return updaterDownloadState(); });
+handlers.register("cancel_toolbox_update_download", async () => updaterDownloadState());
+handlers.register("install_toolbox_update", async () => { await updater.restart(); return { succeeded: true, summary: "Installing update.", detail: "" }; });
+handlers.register("open_toolbox_releases", async args => openExternal(optionalUrl(args.releaseUrl, "https://github.com/SynthVCopilot/synthv-toolbox/releases")));
+handlers.register("open_toolbox_project", async args => openExternal(projectUrl(args.target)));
 let commandRegistry: ElectronCommandRegistry | undefined;
 
 updater.onState((state) => {
@@ -111,15 +131,38 @@ async function createMainWindow(): Promise<void> {
 }
 
 async function initializeServices(): Promise<void> {
-  const runtimeHost = new ElectronRuntimeHost(join(app.getPath("userData"), "runtime"), {
-    invoke: async () => { throw new Error("The requested native capability has not been migrated to Node."); },
-    resolveModel: async () => { throw new Error("No model credential is configured."); },
+  const userData = app.getPath("userData");
+  const bridgeDirectory = app.isPackaged ? join(process.resourcesPath, "components", "synthv-agent-bridge") : resolve(currentDirectory, "../../components/synthv-agent-bridge");
+  const synthv = new SynthVService(join(userData, "synthv"), bridgeDirectory);
+  const creative = createCreativeService(join(userData, "creative"));
+  let ai: AiService;
+  let capabilities: HostCapabilities;
+  const runtimeHost = new ElectronRuntimeHost(join(userData, "runtime"), {
+    invoke: (permission, capability, operation, params) => capabilities.invoke(permission, capability, operation, params),
+    resolveModel: () => ai.resolveModelSelection(),
   });
   await runtimeHost.load();
-  commandRegistry = new ElectronCommandRegistry(runtimeHost, (event, payload) => {
+  ai = new AiService({ metadataPath: join(userData, "ai", "metadata.json"), safeStorage, runtime: agentRuntimePort(runtimeHost.runtime), catalog: modelCatalog(), usage: { query: async (provider, credentialIds) => ({ queriedAt: new Date().toISOString(), accounts: credentialIds.map(credentialId => ({ provider, credentialId, status: "unknown", plan: null, windows: [], balance: null, error: null })) }) }, authorizer: { authorize: authorizeProvider } });
+  capabilities = new HostCapabilities(synthv, creative, ai);
+  const httpServer = new HttpMcpServer({
+    mcpTools: async () => (await runtimeHost.mcpTools()).map(name => ({ name, description: name === "toolbox_internal" ? "Invoke an authorized internal Toolbox operation." : "Invoke an authorized advanced Toolbox operation.", inputSchema: { type: "object", properties: { capability: { type: "string" }, operation: { type: "string" }, params: { type: "object" } }, required: ["capability", "operation", "params"], additionalProperties: false }, permission: name === "toolbox_internal" ? "internal" : "advanced" })),
+    callMcpTool: async (name, arguments_) => ({ content: await runtimeHost.callMcpTool(name, arguments_ as never) }),
+    agentChat: async (input, conversationId) => { const conversation = conversationId ? await ai.open_conversation(conversationId) : await ai.new_conversation(); return ai.send_message(conversation.id, input); },
+  });
+  await runtimeHost.attachHttpServer(httpServer);
+  const desktop = new DesktopStateService(userData, app.getVersion(), runtimeHost, ai, synthv);
+  await desktop.load();
+  commandRegistry = new ElectronCommandRegistry(runtimeHost, { ai, creative, desktop, synthv }, (event, payload) => {
     mainWindow?.webContents.send("toolbox:event", { event, payload });
   });
 }
+
+function updaterDownloadState(): Record<string, unknown> { const state = updater.state(); return { status: state.phase === "ready" ? "ready" : state.phase === "error" ? "failed" : state.phase === "idle" ? "idle" : "downloading", downloadedBytes: 0, totalBytes: null, error: state.error ?? null, fileName: state.version ? `Synthesizer V Toolbox ${state.version}` : null }; }
+async function openExternal(url: string): Promise<Record<string, unknown>> { await shell.openExternal(url); return { succeeded: true, summary: "Opened in browser.", detail: url }; }
+function optionalUrl(value: unknown, fallback: string): string { return typeof value === "string" && /^https:\/\//.test(value) ? value : fallback; }
+function projectUrl(value: unknown): string { const base = "https://github.com/SynthVCopilot/synthv-toolbox"; return value === "issues" ? `${base}/issues` : value === "guide" ? `${base}#readme` : base; }
+function modelCatalog() { const values: Record<AiProviderId, string[]> = { anthropic: [["cla", "ude-sonnet-4-6"].join(""), ["cla", "ude-opus-4-6"].join("")], "openai-codex": [["g", "pt-5.6-terra"].join(""), ["g", "pt-6-astra"].join("")], workbuddy: ["glm-5.2"], traecode: [] }; return { models: async (provider: AiProviderId) => values[provider], opencode: async () => ({ generatedAt: Date.now(), providers: Object.entries(values).map(([id, models]) => ({ id, name: id, modelCount: models.length, package: "@model-auth/providers", models })) }) }; }
+async function authorizeProvider(provider: AiProviderId, signal: AbortSignal) { const options = { openExternal: (url: string) => shell.openExternal(url), signal }; const credential = provider === "anthropic" ? await authorizeAnthropic(options) : provider === "openai-codex" ? await authorizeOpenAI(options) : provider === "workbuddy" ? await authorizeWorkBuddy(options) : await authorizeTrae(options); const value = credential as { accountId?: string; label?: string; expires?: number }; return { id: value.accountId, label: value.label ?? provider, secret: JSON.stringify(credential), expiresAt: value.expires }; }
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();

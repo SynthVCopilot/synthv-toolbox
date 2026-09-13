@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-const registryPath = new URL("../src/PiDesktop.Tauri/electron/services/command-registry.ts", import.meta.url);
+const registryPath = new URL("../src/PiDesktop.Tauri/dist/electron/services/command-registry.js", import.meta.url);
 const { ElectronCommandRegistry } = await import(registryPath.href);
 
 test("the Electron command registry validates input, routes sessions, and keeps MCP settings independent", async () => {
@@ -20,7 +20,7 @@ test("the Electron command registry validates input, routes sessions, and keeps 
     async httpMcpStatus() { return { enabled: true, internalFunctionsEnabled: true }; },
   };
   const events = [];
-  const registry = new ElectronCommandRegistry(host, (event, payload) => events.push([event, payload]));
+  const registry = new ElectronCommandRegistry(host, undefined, (event, payload) => events.push([event, payload]));
 
   await registry.invoke("agent_session_initialize", { sessionId: "chat-1", cwd: "C:/work", systemPrompt: "help" });
   await registry.invoke("agent_session_send", { sessionId: "chat-1", input: "hello" });

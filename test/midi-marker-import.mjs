@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { importMidiMonophonic, SYNTHV_QUARTER_BLICKS } from "../src/PiDesktop.Tauri/src-tauri/components/synthv-agent-bridge/dist/src/score-import.js";
+import { importMidiMonophonic, SYNTHV_QUARTER_BLICKS } from "../src/PiDesktop.Tauri/components/synthv-agent-bridge/dist/src/score-import.js";
 
 function variableLength(value) {
   const bytes = [value & 0x7f];
