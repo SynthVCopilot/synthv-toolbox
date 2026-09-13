@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::sv2_account_probe::{
@@ -588,6 +589,41 @@ fn create_verified_backup(
     write_new_restricted(&backup, bytes)?;
     if hash(&fs::read(&backup).map_err(|error| error.to_string())?) != expected_hash {
         return Err("backup verification failed; destination was not changed".to_string());
+    }
+    Ok(backup)
+}
+
+pub fn create_verified_session_backup(
+    session_path: impl AsRef<Path>,
+    backup_parent: impl AsRef<Path>,
+    expected_hash: &str,
+) -> Result<PathBuf, String> {
+    let session_path = session_path.as_ref();
+    let backup_parent = backup_parent.as_ref();
+    let parent_metadata = fs::symlink_metadata(backup_parent)
+        .map_err(|error| format!("cannot inspect session backup directory: {error}"))?;
+    if !parent_metadata.is_dir() {
+        return Err("session backup destination must be a directory".to_string());
+    }
+    let canonical_parent = fs::canonicalize(backup_parent)
+        .map_err(|error| format!("cannot canonicalize session backup directory: {error}"))?;
+    let canonical_session_parent = session_path
+        .parent()
+        .and_then(|parent| fs::canonicalize(parent).ok())
+        .ok_or_else(|| "cannot canonicalize session directory".to_string())?;
+    if canonical_parent.starts_with(&canonical_session_parent) {
+        return Err("session backup destination must be outside the session directory".to_string());
+    }
+    let bytes = read_ciphertext(session_path)?;
+    verify_hash(&bytes, expected_hash, "session")?;
+    let backup = canonical_parent.join(format!(
+        "session-backup-{}-{}.bin",
+        chrono::Utc::now().format("%Y%m%dT%H%M%SZ"),
+        Uuid::new_v4()
+    ));
+    write_new_restricted(&backup, &bytes)?;
+    if hash(&fs::read(&backup).map_err(|error| error.to_string())?) != expected_hash {
+        return Err("session backup verification failed; destination was not changed".to_string());
     }
     Ok(backup)
 }

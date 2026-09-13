@@ -181,13 +181,25 @@ mod write_flow {
         assert_eq!(disabled.refresh_token(), before.refresh_token());
         assert_eq!(disabled.device_id(), before.device_id());
         assert_eq!(disabled.buffer.lines().count(), 5);
-        assert!(fs::read_dir(root.join("backups"))
+        let backups = fs::read_dir(root.join("backups"))
             .unwrap()
-            .all(|entry| entry
-                .unwrap()
-                .path()
-                .join("sv2-data-backup-manifest.json")
-                .is_file()));
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(backups.len(), 2);
+        assert!(backups.iter().all(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("session-backup-") && name.ends_with(".bin"))
+        }));
+        let backup_bytes = backups
+            .iter()
+            .map(|path| fs::read(path).unwrap())
+            .collect::<Vec<_>>();
+        assert!(backup_bytes
+            .iter()
+            .all(|bytes| !bytes.is_empty() && bytes.len().is_multiple_of(8)));
+        assert!(backup_bytes.iter().any(|bytes| bytes == &initial));
+        assert!(backup_bytes.iter().any(|bytes| bytes != &initial));
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

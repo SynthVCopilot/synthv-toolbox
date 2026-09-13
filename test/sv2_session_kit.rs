@@ -121,6 +121,25 @@ fn verified_backup_matches_original_content() {
 }
 
 #[test]
+fn session_backup_is_written_as_one_external_file() {
+    let root = temp_root();
+    let session_dir = root.join("data/license");
+    let backup_dir = root.join("backups");
+    fs::create_dir_all(&session_dir).unwrap();
+    fs::create_dir_all(&backup_dir).unwrap();
+    let session = session_dir.join("session");
+    let bytes = vec![7u8; 16];
+    fs::write(&session, &bytes).unwrap();
+
+    let backup = create_verified_session_backup(&session, &backup_dir, &hash(&bytes)).unwrap();
+
+    assert_eq!(fs::read(&backup).unwrap(), bytes);
+    assert_eq!(fs::read_dir(&backup_dir).unwrap().count(), 1);
+    assert!(create_verified_session_backup(&session, &session_dir, &hash(&bytes)).is_err());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn replacement_helper_writes_synthetic_candidate() {
     let root = temp_root();
     let destination = root.join("session");

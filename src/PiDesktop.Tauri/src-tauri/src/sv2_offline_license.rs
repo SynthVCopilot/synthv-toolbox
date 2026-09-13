@@ -244,15 +244,19 @@ where
             return Err("授权服务未确认当前本地设备；未改动本地缓存。".to_string());
         }
         progress(Sv2OfflineLicenseStep::Backup);
-        let backup = crate::sv2_data_backup::create_verified_sv2_data_backup(
-            data_root,
+        let backup = crate::sv2_session_kit::create_verified_session_backup(
+            data_root.join("license").join("session"),
             backup_parent,
-            false,
+            &hex::encode(fingerprint.content_hash),
         )?;
-        if backup.session_sha256.as_deref() != Some(&hex::encode(fingerprint.content_hash)) {
+        if inspect_session_fingerprint(data_root)
+            .map_err(|_| "无法复核本地 session；未联系授权服务。".to_string())?
+            .as_ref()
+            != Some(&fingerprint)
+        {
             return Err(format!(
-                "本地 session 在读取与备份之间发生变化；未联系授权服务。完整备份位于 {}。",
-                backup.backup_root.display()
+                "本地 session 在读取与备份之间发生变化；未联系授权服务。session 备份位于 {}。",
+                backup.display()
             ));
         }
         let rewritten = rewrite_cache(
@@ -268,8 +272,8 @@ where
             != Some(&fingerprint)
         {
             return Err(format!(
-                "本地 session 在远程切换前发生变化；未联系授权服务。完整备份位于 {}。",
-                backup.backup_root.display()
+                "本地 session 在远程切换前发生变化；未联系授权服务。session 备份位于 {}。",
+                backup.display()
             ));
         }
         ensure_sv2_not_running()?;
@@ -283,35 +287,35 @@ where
             .post(endpoint, credentials.access_token())
             .map_err(|error| {
                 format!(
-                    "远程离线授权请求未确认；远端状态可能已改变。{error} 可从完整备份恢复：{}",
-                    backup.backup_root.display()
+                    "远程离线授权请求未确认；远端状态可能已改变。{error} 可从 session 备份恢复：{}",
+                    backup.display()
                 )
             })?;
         let remote_enabled = parse_toggle_response(status, &body, credentials.device_id())
             .map_err(|error| {
                 format!(
-                    "远程离线授权响应无效；远端状态可能已改变。{error} 可从完整备份恢复：{}",
-                    backup.backup_root.display()
+                    "远程离线授权响应无效；远端状态可能已改变。{error} 可从 session 备份恢复：{}",
+                    backup.display()
                 )
             })?;
         if remote_enabled != enabled {
             return Err(format!(
-                "授权服务返回的离线状态不明确；本地未改动。完整备份位于 {}。",
-                backup.backup_root.display()
+                "授权服务返回的离线状态不明确；本地未改动。session 备份位于 {}。",
+                backup.display()
             ));
         }
         progress(Sv2OfflineLicenseStep::Local);
         ensure_sv2_not_running().map_err(|error| {
             format!(
-                "{error} 远端状态可能已改变；可从完整备份恢复：{}",
-                backup.backup_root.display()
+                "{error} 远端状态可能已改变；可从 session 备份恢复：{}",
+                backup.display()
             )
         })?;
         persist_refreshed_session(data_root, &fingerprint, &rewritten, &machine_key).map_err(
             |_| {
                 format!(
-                "授权服务已成功，但本地缓存写入未确认；远程状态可能已改变。可从完整备份恢复：{}",
-                backup.backup_root.display()
+                "授权服务已成功，但本地缓存写入未确认；远程状态可能已改变。可从 session 备份恢复：{}",
+                backup.display()
             )
             },
         )?;
@@ -321,8 +325,8 @@ where
         let refresh_changed = after.refresh_token() != credentials.refresh_token();
         let checked = inspect_with_transport(data_root, false, transport).map_err(|error| {
             format!(
-                "本地缓存已写入，但重新确认远程状态失败：{error}；完整备份位于 {}。",
-                backup.backup_root.display()
+                "本地缓存已写入，但重新确认远程状态失败：{error}；session 备份位于 {}。",
+                backup.display()
             )
         })?;
         if checked.enabled != enabled
@@ -330,13 +334,13 @@ where
             || (!enabled && checked.local_cache_status == Sv2OfflineLicenseCacheStatus::Active)
         {
             return Err(format!(
-                "本地写入后状态与远程状态不一致；远端状态可能已改变。可从完整备份恢复：{}",
-                backup.backup_root.display()
+                "本地写入后状态与远程状态不一致；远端状态可能已改变。可从 session 备份恢复：{}",
+                backup.display()
             ));
         }
         Ok(Sv2OfflineLicenseOperation {
             status: checked,
-            backup_path: display_backup_path(&backup.backup_root),
+            backup_path: display_backup_path(&backup),
             access_changed,
             refresh_changed,
             detail: if enabled {
