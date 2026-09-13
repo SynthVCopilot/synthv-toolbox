@@ -1,0 +1,22 @@
+import assert from "node:assert/strict";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { stripTypeScriptTypes } from "node:module";
+import { readFileSync } from "node:fs";
+
+const source = stripTypeScriptTypes(readFileSync(new URL("../src/PiDesktop.Tauri/electron/services/creative-service.ts", import.meta.url), "utf8"), { mode: "transform" });
+const module = await import(`data:text/javascript,${encodeURIComponent(source.replaceAll('from "node:', 'from "node:'))}`);
+const root = await mkdtemp(join(tmpdir(), "creative-service-"));
+const service = module.createCreativeService(root, async () => ({ output: "ok" }));
+const project = await service.invoke("create_lyric_project", { title: "Song", draft: "line", sections: [], rhymeTargets: {}, candidateHistory: [] });
+assert.equal((await service.invoke("load_lyric_project", { id: project.id })).title, "Song");
+await service.invoke("save_lyric_project", { id: project.id, title: "Song 2", draft: "next", sections: [], rhymeTargets: {}, candidateHistory: [] });
+assert.equal((await service.invoke("restore_lyric_project_version", { id: project.id, revision: 1 })).draft, "line");
+const profile = await service.invoke("learn_tuning_profile", { voiceName: "Voice", audioPath: "sample.wav" });
+assert.equal(profile.voiceName, "Voice");
+const sourceProject = join(root, "song.svp"); await writeFile(sourceProject, "project");
+const checkpoint = await service.invoke("create_project_checkpoint", { projectPath: sourceProject, label: "Before" });
+assert.equal((await service.invoke("restore_project_checkpoint", { id: checkpoint.id, outputName: "copy.svp" })).succeeded, true);
+assert.equal((await service.invoke("start_audio_prepare", { path: "input.wav" })).status, "completed");
+console.log("Creative service persistence contracts passed.");
