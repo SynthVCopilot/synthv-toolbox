@@ -10,4 +10,8 @@ test("Electron runtime host keeps privileged MCP tools server-assigned", () => {
   assert.match(source, /"permission" in args/);
   assert.match(source, /mcpInternalFunctionsEnabled/);
   assert.match(source, /mcpAdvancedFunctionsEnabled/);
+  assert.match(source, /pluginInternalFunctionsEnabled/);
+  assert.match(source, /pluginAdvancedFunctionsEnabled/);
+  assert.match(source, /Plugin host requests require pluginId/);
+  assert.match(source, /pluginPermissionLevel\(manifest, permission\) === "none"/);
 });

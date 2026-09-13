@@ -10,6 +10,8 @@ import {
 } from "../../../../packages/runtime-protocol/src/index.js";
 
 export interface RuntimeHostSettings {
+  pluginInternalFunctionsEnabled: boolean;
+  pluginAdvancedFunctionsEnabled: boolean;
   mcpInternalFunctionsEnabled: boolean;
   mcpAdvancedFunctionsEnabled: boolean;
 }
@@ -24,7 +26,7 @@ export interface HostCapabilityInvoker {
   invoke(permission: "host.internal" | "host.advanced", capability: string, operation: string, params: JsonValue): Promise<JsonValue>;
 }
 
-const defaultSettings = (): RuntimeHostSettings => ({ mcpInternalFunctionsEnabled: false, mcpAdvancedFunctionsEnabled: false });
+const defaultSettings = (): RuntimeHostSettings => ({ pluginInternalFunctionsEnabled: false, pluginAdvancedFunctionsEnabled: false, mcpInternalFunctionsEnabled: false, mcpAdvancedFunctionsEnabled: false });
 
 export class ElectronRuntimeHost {
   private settings = defaultSettings();
@@ -37,9 +39,10 @@ export class ElectronRuntimeHost {
   ) {
     this.runtime = new AgentRuntimeWorker(sessionFactory, {
       request: async (_method, value) => {
-        const request = value as { permission?: PluginPermission; capability?: string; operation?: string; params?: JsonValue };
+        const request = value as { pluginId?: string; permission?: PluginPermission; capability?: string; operation?: string; params?: JsonValue };
         if (request.permission !== "host.internal" && request.permission !== "host.advanced") throw new Error("Unsupported plugin host permission.");
-        await this.assertPluginPermission(request.permission);
+        if (typeof request.pluginId !== "string") throw new Error("Plugin host requests require pluginId.");
+        await this.assertPluginPermission(request.pluginId, request.permission);
         return this.hostCapabilities.invoke(request.permission, request.capability ?? "", request.operation ?? "", request.params ?? null);
       },
     });
@@ -113,9 +116,13 @@ export class ElectronRuntimeHost {
     return this.hostCapabilities.invoke(permission, args.capability, args.operation, args.params as JsonValue);
   }
 
-  private async assertPluginPermission(permission: "host.internal" | "host.advanced"): Promise<void> {
-    const enabled = permission === "host.internal" ? this.settings.mcpInternalFunctionsEnabled : this.settings.mcpAdvancedFunctionsEnabled;
-    if (!enabled) throw new Error("Privileged host capability is disabled.");
+  private async assertPluginPermission(id: string, permission: "host.internal" | "host.advanced"): Promise<void> {
+    const manifest = await this.readManifest(join(this.pluginsRoot(), id));
+    if (pluginPermissionLevel(manifest, permission) === "none") throw new Error("Plugin did not declare this permission.");
+    const globalEnabled = permission === "host.internal" ? this.settings.pluginInternalFunctionsEnabled : this.settings.pluginAdvancedFunctionsEnabled;
+    const state = await this.readPluginState(id);
+    const granted = permission === "host.internal" ? state.internalFunctionsEnabled : state.advancedFunctionsEnabled;
+    if (!globalEnabled || !granted || !state.enabled) throw new Error("Plugin privileged capability is not authorized.");
   }
 
   private requiresGrant(manifest: PluginManifest): boolean {
