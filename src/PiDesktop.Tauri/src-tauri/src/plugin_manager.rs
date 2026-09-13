@@ -72,11 +72,29 @@ pub struct PluginAction {
 pub struct InstalledPlugin {
     pub manifest: PluginManifest,
     pub enabled: bool,
+    pub internal_functions_enabled: bool,
+    pub advanced_functions_enabled: bool,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct PluginState {
+    #[serde(default = "default_true")]
     enabled: bool,
+    #[serde(default)]
+    internal_functions_enabled: bool,
+    #[serde(default)]
+    advanced_functions_enabled: bool,
+}
+
+impl Default for PluginState {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            internal_functions_enabled: false,
+            advanced_functions_enabled: false,
+        }
+    }
 }
 
 pub fn plugins_root() -> PathBuf {
@@ -99,10 +117,7 @@ pub fn list(root: &Path) -> Result<Vec<InstalledPlugin>, String> {
             Ok(manifest) => manifest,
             Err(_) => continue,
         };
-        plugins.push(InstalledPlugin {
-            enabled: read_state(&path)?,
-            manifest,
-        });
+        plugins.push(installed_plugin(manifest, read_state(&path)?));
     }
     plugins.sort_by(|left, right| left.manifest.name.cmp(&right.manifest.name));
     Ok(plugins)
@@ -131,10 +146,7 @@ pub fn install(source: &Path, root: &Path) -> Result<InstalledPlugin, String> {
         let manifest = read_manifest(&staging)?;
         let target = root.join(&manifest.id);
         replace_directory(&staging, &target)?;
-        Ok(InstalledPlugin {
-            manifest,
-            enabled: true,
-        })
+        Ok(installed_plugin(manifest, PluginState::default()))
     })();
     if staging.exists() {
         let _ = fs::remove_dir_all(&staging);
@@ -145,8 +157,36 @@ pub fn install(source: &Path, root: &Path) -> Result<InstalledPlugin, String> {
 pub fn set_enabled(root: &Path, plugin_id: &str, enabled: bool) -> Result<InstalledPlugin, String> {
     let path = plugin_path(root, plugin_id)?;
     let manifest = read_manifest(&path)?;
-    write_state(&path, enabled)?;
-    Ok(InstalledPlugin { manifest, enabled })
+    let mut state = read_state(&path)?;
+    state.enabled = enabled;
+    write_state(&path, &state)?;
+    Ok(installed_plugin(manifest, state))
+}
+
+pub fn set_internal_functions_enabled(
+    root: &Path,
+    plugin_id: &str,
+    enabled: bool,
+) -> Result<InstalledPlugin, String> {
+    let path = plugin_path(root, plugin_id)?;
+    let manifest = read_manifest(&path)?;
+    let mut state = read_state(&path)?;
+    state.internal_functions_enabled = enabled;
+    write_state(&path, &state)?;
+    Ok(installed_plugin(manifest, state))
+}
+
+pub fn set_advanced_functions_enabled(
+    root: &Path,
+    plugin_id: &str,
+    enabled: bool,
+) -> Result<InstalledPlugin, String> {
+    let path = plugin_path(root, plugin_id)?;
+    let manifest = read_manifest(&path)?;
+    let mut state = read_state(&path)?;
+    state.advanced_functions_enabled = enabled;
+    write_state(&path, &state)?;
+    Ok(installed_plugin(manifest, state))
 }
 
 pub fn uninstall(root: &Path, plugin_id: &str) -> Result<(), String> {
@@ -287,25 +327,37 @@ fn io_error(error: io::Error) -> String {
     error.to_string()
 }
 
-fn read_state(root: &Path) -> Result<bool, String> {
+fn installed_plugin(manifest: PluginManifest, state: PluginState) -> InstalledPlugin {
+    InstalledPlugin {
+        manifest,
+        enabled: state.enabled,
+        internal_functions_enabled: state.internal_functions_enabled,
+        advanced_functions_enabled: state.advanced_functions_enabled,
+    }
+}
+
+fn read_state(root: &Path) -> Result<PluginState, String> {
     let path = root.join(STATE_FILE);
     if !path.exists() {
-        return Ok(true);
+        return Ok(PluginState::default());
     }
     reject_symlink(&path)?;
     serde_json::from_slice::<PluginState>(&fs::read(path).map_err(io_error)?)
-        .map(|value| value.enabled)
         .map_err(|error| format!("插件状态无效：{error}"))
 }
-fn write_state(root: &Path, enabled: bool) -> Result<(), String> {
+fn write_state(root: &Path, state: &PluginState) -> Result<(), String> {
     let target = root.join(STATE_FILE);
     let temporary = root.join(format!("{STATE_FILE}.{}", Uuid::new_v4()));
     fs::write(
         &temporary,
-        serde_json::to_vec(&PluginState { enabled }).map_err(|error| error.to_string())?,
+        serde_json::to_vec(state).map_err(|error| error.to_string())?,
     )
     .map_err(io_error)?;
     fs::rename(temporary, target).map_err(io_error)
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {

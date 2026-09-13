@@ -25,6 +25,8 @@ fn installs_lists_and_disables_a_directory_plugin() {
 
     let plugin = plugin_manager::install(&source, &installed).unwrap();
     assert!(plugin.enabled);
+    assert!(!plugin.internal_functions_enabled);
+    assert!(!plugin.advanced_functions_enabled);
     assert_eq!(plugin.manifest.id, "com.example.plugin");
     assert_eq!(plugin_manager::list(&installed).unwrap().len(), 1);
     assert!(
@@ -33,6 +35,19 @@ fn installs_lists_and_disables_a_directory_plugin() {
             .enabled
     );
     assert!(!plugin_manager::list(&installed).unwrap()[0].enabled);
+    assert!(
+        plugin_manager::set_internal_functions_enabled(&installed, "com.example.plugin", true)
+            .unwrap()
+            .internal_functions_enabled
+    );
+    assert!(
+        plugin_manager::set_advanced_functions_enabled(&installed, "com.example.plugin", true)
+            .unwrap()
+            .advanced_functions_enabled
+    );
+    let listed = plugin_manager::list(&installed).unwrap();
+    assert!(listed[0].internal_functions_enabled);
+    assert!(listed[0].advanced_functions_enabled);
     plugin_manager::uninstall(&installed, "com.example.plugin").unwrap();
     assert!(plugin_manager::list(&installed).unwrap().is_empty());
     let _ = fs::remove_dir_all(temporary);

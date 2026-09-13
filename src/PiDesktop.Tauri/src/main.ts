@@ -1663,7 +1663,9 @@ function renderPage(): string {
 }
 
 function renderPlugins(): string {
-  const cards = installedPlugins.map(({ manifest, enabled }) => {
+  const internalFunctionsAvailable = Boolean(app?.pluginInternalFunctionsEnabled);
+  const advancedFunctionsAvailable = Boolean(app?.pluginAdvancedFunctionsEnabled);
+  const cards = installedPlugins.map(({ manifest, enabled, internalFunctionsEnabled, advancedFunctionsEnabled }) => {
     const contributions = [
       manifest.backend ? t("plugins.backend") : "",
       manifest.pages.length ? t("plugins.pageCount", { count: manifest.pages.length }) : "",
@@ -1679,6 +1681,10 @@ function renderPlugins(): string {
       </div>
       <p class="plugin-manager-contributions">${escapeHtml(contributions || t("plugins.noContributions"))}</p>
       <div class="plugin-manager-permissions" aria-label="${t("plugins.permissions")}">${permissions}</div>
+      <div class="plugin-manager-privileges">
+        <label class="fluent-switch"><input type="checkbox" data-plugin-internal-functions="${escapeHtml(manifest.id)}" ${internalFunctionsEnabled ? "checked" : ""} ${internalFunctionsAvailable ? "" : "disabled"} /><span></span><span><strong>${t("plugins.internalFunctions")}</strong><small>${internalFunctionsAvailable ? t("plugins.internalFunctionsDescription") : t("plugins.globalPermissionRequired")}</small></span></label>
+        <label class="fluent-switch"><input type="checkbox" data-plugin-advanced-functions="${escapeHtml(manifest.id)}" ${advancedFunctionsEnabled ? "checked" : ""} ${advancedFunctionsAvailable ? "" : "disabled"} /><span></span><span><strong>${t("plugins.advancedFunctions")}</strong><small>${advancedFunctionsAvailable ? t("plugins.advancedFunctionsDescription") : t("plugins.globalPermissionRequired")}</small></span></label>
+      </div>
       <div class="plugin-manager-actions">
         <button class="secondary compact" data-toggle-plugin="${escapeHtml(manifest.id)}" data-plugin-enabled="${enabled}">${icon(enabled ? "check" : "play", 16)} ${enabled ? t("plugins.disable") : t("plugins.enable")}</button>
         <button class="secondary compact danger" data-uninstall-plugin="${escapeHtml(manifest.id)}">${icon("trash", 16)} ${t("plugins.uninstall")}</button>
@@ -2896,6 +2902,7 @@ function renderSettings(): string {
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.autostart")}</h2><p>${t("settings.autostartDescription")}</p>${app.autostartError ? `<p class="error-text">${escapeHtml(app.autostartError)}</p>` : ""}</div><label class="fluent-switch large"><input id="autostart-enabled" type="checkbox" ${app.autostartEnabled === true ? "checked" : ""} ${busy || app.autostartEnabled == null ? "disabled" : ""} aria-label="${t("settings.autostart")}" /><span></span>${app.autostartEnabled == null ? t("settings.unknown") : app.autostartEnabled ? t("settings.enabled") : t("settings.disabled")}</label></div></section>
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.mode")}</h2><p>${t("settings.modeDescription")}</p></div></div><div class="mode-setting"><button class="setting-choice ${app.mode === "toolbox" ? "active" : ""}" data-set-mode="toolbox"><span class="mode-icon slate">${icon("toolbox", 23)}</span><span><strong>${t("settings.toolbox")}</strong><small>${t("settings.toolboxDescription")}</small></span>${app.mode === "toolbox" ? icon("check", 20) : ""}</button><button class="setting-choice ${app.mode === "ai" ? "active" : ""}" data-set-mode="ai"><span class="mode-icon purple">${icon("sparkles", 23)}</span><span><strong>${t("settings.ai")}</strong><small>${t("settings.aiDescription")}</small></span>${app.mode === "ai" ? icon("check", 20) : ""}</button></div></section>
     ${showSvpRouting ? `<section class="panel smart-route-settings"><div class="section-heading"><div><h2>${t("settings.smartRoute")}</h2><p>${t("settings.smartRouteDescription")}</p></div><label class="fluent-switch large"><input id="svp-routing-enabled" type="checkbox" ${app.smartSvpLaunchEnabled ? "checked" : ""} ${association.supported ? "" : "disabled"} aria-label="${t("settings.smartRoute")}" /><span></span>${app.smartSvpLaunchEnabled ? t("settings.enabled") : t("settings.disabled")}</label></div><label class="fluent-switch large"><input id="svp-routing-always-ask" type="checkbox" ${app.smartSvpAlwaysAsk ? "checked" : ""} ${app.smartSvpLaunchEnabled && association.supported && !busy ? "" : "disabled"} aria-label="${t("settings.alwaysAsk")}" /><span></span>${t("settings.alwaysAsk")}</label><div class="smart-route-state ${association.isDefault ? "ready" : "pending"}"><span class="feature-icon ${association.isDefault ? "emerald" : "blue"}">${icon("file", 20)}</span><div><strong>${escapeHtml(associationLabel)}</strong><p>${escapeHtml(association.detail)}</p></div><button class="secondary compact" data-open-svp-default-apps ${association.supported ? "" : "disabled"}>${t("settings.openDefaults")}</button></div></section>` : ""}
+    <section class="panel plugin-privilege-settings"><div class="section-heading"><div><h2>${t("settings.pluginPrivileges")}</h2><p>${t("settings.pluginPrivilegesDescription")}</p></div></div><label class="fluent-switch"><input id="plugin-internal-functions-enabled" type="checkbox" ${app.pluginInternalFunctionsEnabled ? "checked" : ""} /><span></span><span><strong>${t("settings.pluginInternalFunctions")}</strong><small>${t("settings.pluginInternalFunctionsDescription")}</small></span></label><label class="fluent-switch"><input id="plugin-advanced-functions-enabled" type="checkbox" ${app.pluginAdvancedFunctionsEnabled ? "checked" : ""} /><span></span><span><strong>${t("settings.pluginAdvancedFunctions")}</strong><small>${t("settings.pluginAdvancedFunctionsDescription")}</small></span></label></section>
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.dataPlatform")}</h2><p>${t("settings.dataPlatformDescription")}</p></div></div><dl class="detail-list"><div><dt>${t("settings.platform")}</dt><dd>${escapeHtml(app.platform)}</dd></div><div><dt>${t("settings.config")}</dt><dd><code>${escapeHtml(app.configPath)}</code></dd></div><div><dt>${t("settings.appVersion")}</dt><dd>${escapeHtml(app.appVersion)}</dd></div></dl></section></div>`;
 }
 
@@ -3309,6 +3316,40 @@ function wireForms(): void {
     const enabled = (event.currentTarget as HTMLInputElement).checked;
     void run(() => changeAutostart(enabled));
   });
+  document.querySelector<HTMLInputElement>("#plugin-internal-functions-enabled")?.addEventListener("change", (event) => {
+    const enabled = (event.currentTarget as HTMLInputElement).checked;
+    void run(async () => {
+      app = await api.setPluginInternalFunctionsEnabled(enabled);
+      notice = enabled ? t("settings.enabled") : t("settings.disabled");
+    });
+  });
+  document.querySelector<HTMLInputElement>("#plugin-advanced-functions-enabled")?.addEventListener("change", (event) => {
+    const enabled = (event.currentTarget as HTMLInputElement).checked;
+    void run(async () => {
+      app = await api.setPluginAdvancedFunctionsEnabled(enabled);
+      notice = enabled ? t("settings.enabled") : t("settings.disabled");
+    });
+  });
+  document.querySelectorAll<HTMLInputElement>("[data-plugin-internal-functions]").forEach((input) => input.addEventListener("change", () => {
+    const pluginId = input.dataset.pluginInternalFunctions;
+    if (!pluginId) return;
+    const enabled = input.checked;
+    void run(async () => {
+      const updated = await api.setAgentPluginInternalFunctionsEnabled(pluginId, enabled);
+      await reloadPluginState();
+      notice = t(enabled ? "plugins.internalFunctionsEnabledNotice" : "plugins.internalFunctionsDisabledNotice", { name: updated.manifest.name });
+    });
+  }));
+  document.querySelectorAll<HTMLInputElement>("[data-plugin-advanced-functions]").forEach((input) => input.addEventListener("change", () => {
+    const pluginId = input.dataset.pluginAdvancedFunctions;
+    if (!pluginId) return;
+    const enabled = input.checked;
+    void run(async () => {
+      const updated = await api.setAgentPluginAdvancedFunctionsEnabled(pluginId, enabled);
+      await reloadPluginState();
+      notice = t(enabled ? "plugins.advancedFunctionsEnabledNotice" : "plugins.advancedFunctionsDisabledNotice", { name: updated.manifest.name });
+    });
+  }));
   document.querySelector<HTMLFormElement>("#http-api-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const form = event.currentTarget as HTMLFormElement;

@@ -183,6 +183,8 @@ pub struct BootstrapState {
     sv2_account_indicator_enabled: bool,
     smart_svp_launch_enabled: bool,
     smart_svp_always_ask: bool,
+    plugin_internal_functions_enabled: bool,
+    plugin_advanced_functions_enabled: bool,
     autostart_enabled: Option<bool>,
     autostart_error: Option<String>,
     svp_association: SvpAssociationView,
@@ -1467,6 +1469,32 @@ pub async fn set_sv2_concurrent_enabled(
     {
         let mut settings = state.settings.write().await;
         settings.sv2_concurrent_enabled = enabled;
+        save_settings(&settings)?;
+    }
+    build_bootstrap(&state).await
+}
+
+#[tauri::command]
+pub async fn set_plugin_internal_functions_enabled(
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<BootstrapState, String> {
+    {
+        let mut settings = state.settings.write().await;
+        settings.plugin_internal_functions_enabled = enabled;
+        save_settings(&settings)?;
+    }
+    build_bootstrap(&state).await
+}
+
+#[tauri::command]
+pub async fn set_plugin_advanced_functions_enabled(
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<BootstrapState, String> {
+    {
+        let mut settings = state.settings.write().await;
+        settings.plugin_advanced_functions_enabled = enabled;
         save_settings(&settings)?;
     }
     build_bootstrap(&state).await
@@ -3758,6 +3786,8 @@ async fn build_bootstrap(state: &State<'_, AppState>) -> Result<BootstrapState, 
         sv2_account_indicator_enabled: settings.sv2_account_indicator_enabled,
         smart_svp_launch_enabled: settings.smart_svp_launch_enabled,
         smart_svp_always_ask: settings.smart_svp_always_ask,
+        plugin_internal_functions_enabled: settings.plugin_internal_functions_enabled,
+        plugin_advanced_functions_enabled: settings.plugin_advanced_functions_enabled,
         autostart_enabled: None,
         autostart_error: None,
         svp_association,
