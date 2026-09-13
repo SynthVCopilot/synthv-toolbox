@@ -1167,9 +1167,14 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .fluent-switch.large span { width: 38px; height: 20px; }
 .fluent-switch.large span::after { width: 14px; height: 14px; }
 .fluent-switch.large input:checked + span::after { transform: translateX(18px); }
-.http-api-settings { max-width: 820px; }
-.http-api-form { display: grid; grid-template-columns: repeat(2, minmax(170px,1fr)) minmax(130px,200px) auto; align-items: end; gap: 12px; margin-top: 14px; }
-.http-api-form .fluent-switch { min-height: 36px; }
+.http-api-settings { max-width: 860px; }
+.http-api-form { display: grid; gap: 16px; margin-top: 14px; }
+.http-api-access-group { display: grid; gap: 11px; padding: 13px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-subtle); }
+.http-api-group-heading h3, .http-api-group-heading p { margin: 0; }
+.http-api-group-heading h3 { color: var(--text); font-size: 12px; font-weight: 600; }
+.http-api-group-heading p { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.http-api-endpoint-grid, .http-api-privilege-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
+.http-api-endpoint-grid .fluent-switch { min-height: 36px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--control); }
 .http-api-privilege { align-self: stretch; min-height: 54px !important; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; white-space: normal; }
 .http-api-privilege > span:last-child { width: auto; height: auto; border: 0; border-radius: 0; background: transparent; }
 .http-api-privilege > span:last-child::after { content: none; }
@@ -1177,15 +1182,15 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .http-api-privilege small { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; line-height: 1.35; }
 .http-api-privilege.danger { border-color: color-mix(in srgb, var(--danger) 48%, var(--line)); background: color-mix(in srgb, var(--danger) 8%, transparent); }
 .http-api-privilege.danger strong { color: var(--danger); }
+.http-api-actions { display: flex; align-items: end; justify-content: flex-end; flex-wrap: wrap; gap: 12px; }
 .http-api-port { display: grid; gap: 5px; color: var(--muted); font-size: 11px; font-weight: 600; }
-.http-api-port input { width: 100%; padding: 8px 9px; border: 1px solid var(--line-strong); border-radius: 5px; color: inherit; background: var(--control); font-variant-numeric: tabular-nums; }
+.http-api-port input { width: 180px; max-width: 100%; padding: 8px 9px; border: 1px solid var(--line-strong); border-radius: 5px; color: inherit; background: var(--control); font-variant-numeric: tabular-nums; }
 .http-api-status { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
 .http-api-status span { display: inline-flex; gap: 5px; min-width: 0; }
 .http-api-status strong { color: inherit; font-weight: 600; }
 .http-api-status code { overflow-wrap: anywhere; color: var(--primary); }
 .http-api-status .error-text { color: var(--danger); }
-.http-api-status .http-api-privilege-note { flex-basis: 100%; color: var(--muted); line-height: 1.4; }
-@media (max-width: 720px) { .http-api-form { grid-template-columns: 1fr 1fr; } .http-api-form > button { grid-column: 1 / -1; justify-self: start; } }
+@media (max-width: 720px) { .http-api-endpoint-grid, .http-api-privilege-grid { grid-template-columns: 1fr; } .http-api-actions { align-items: stretch; flex-direction: column; } .http-api-port input, .http-api-actions > button { width: 100%; } }
 .smart-route-state { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 12px; padding: 13px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-subtle); }
 .smart-route-state.ready { border-color: color-mix(in srgb,var(--success) 24%,var(--line)); }
 .smart-route-state strong { font-size: 12px; font-weight: 600; }

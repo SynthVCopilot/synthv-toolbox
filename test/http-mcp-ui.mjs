@@ -22,10 +22,14 @@ assert.match(main, /navItem\("connections", t\("nav\.connections"\), "server"\)/
 assert.match(main, /case "connections": return renderMcp\(\)/);
 assert.match(main, /connections\.aiOnly[\s\S]*connections\.aiOnlyDescription/);
 assert.match(main, /connections\.localService[\s\S]*id="http-api-form"/);
+assert.match(main, /http-api-access-group[\s\S]*connections\.endpointAccess[\s\S]*http-api-endpoint-grid/);
+assert.match(main, /http-api-access-group[\s\S]*connections\.privilegedAccess[\s\S]*http-api-privilege-grid/);
 assert.doesNotMatch(main.slice(main.indexOf("function renderSettings"), main.indexOf("function wireForms")), /id="http-api-form"/);
 assert.match(styles, /\.http-api-settings/);
 assert.match(styles, /\.connections-layout/);
 assert.match(styles, /\.fluent-switch\.large/);
+assert.match(styles, /\.http-api-endpoint-grid, \.http-api-privilege-grid \{ display: grid; grid-template-columns: repeat\(2, minmax\(0,1fr\)\);/);
+assert.match(styles, /@media \(max-width: 720px\) \{ \.http-api-endpoint-grid, \.http-api-privilege-grid \{ grid-template-columns: 1fr;/);
 assert.match(styles, /\.http-api-privilege\.danger/);
 assert.match(i18n, /chineseConnections\.internalFunctionsDescription[\s\S]*尚未完整包装为公开 API/);
 assert.match(i18n, /chineseConnections\.advancedFunctionsDescription[\s\S]*不限制网络请求[\s\S]*插件数据目录外/);
