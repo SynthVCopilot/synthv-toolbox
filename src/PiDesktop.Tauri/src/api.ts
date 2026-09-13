@@ -89,6 +89,8 @@ let previewPluginAdvancedFunctionsEnabled = false;
 let previewHttpApiStatus: HttpApiStatus = {
   enabled: false,
   agentEnabled: false,
+  internalFunctionsEnabled: false,
+  advancedFunctionsEnabled: false,
   running: false,
   port: 17831,
   endpoint: null,
@@ -538,11 +540,15 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "configure_http_api") {
     const enabled = Boolean(args?.enabled);
     const agentEnabled = Boolean(args?.agentEnabled);
+    const internalFunctionsEnabled = Boolean(args?.internalFunctionsEnabled);
+    const advancedFunctionsEnabled = Boolean(args?.advancedFunctionsEnabled);
     const port = Number(args?.port);
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("端口必须是 1 到 65535 之间的整数。");
     previewHttpApiStatus = {
       enabled,
       agentEnabled,
+      internalFunctionsEnabled,
+      advancedFunctionsEnabled,
       running: enabled || agentEnabled,
       port,
       endpoint: enabled ? `http://127.0.0.1:${port}/mcp` : null,
@@ -1638,6 +1644,6 @@ export const api = {
   deleteMcpServer: (id: string) => call<BootstrapState>("delete_mcp_server", { id }),
   testMcpServer: (id: string) => call<OperationResult>("test_mcp_server", { id }),
   getHttpApiStatus: () => call<HttpApiStatus>("get_http_api_status"),
-  configureHttpApi: (enabled: boolean, agentEnabled: boolean, port: number) =>
-    call<HttpApiStatus>("configure_http_api", { enabled, agentEnabled, port }),
+  configureHttpApi: (enabled: boolean, agentEnabled: boolean, internalFunctionsEnabled: boolean, advancedFunctionsEnabled: boolean, port: number) =>
+    call<HttpApiStatus>("configure_http_api", { enabled, agentEnabled, internalFunctionsEnabled, advancedFunctionsEnabled, port }),
 };

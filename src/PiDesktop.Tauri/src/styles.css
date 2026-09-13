@@ -1135,8 +1135,15 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .fluent-switch.large span::after { width: 14px; height: 14px; }
 .fluent-switch.large input:checked + span::after { transform: translateX(18px); }
 .http-api-settings { max-width: 820px; }
-.http-api-form { display: grid; grid-template-columns: minmax(170px,1fr) minmax(170px,1fr) minmax(130px,200px) auto; align-items: end; gap: 12px; margin-top: 14px; }
+.http-api-form { display: grid; grid-template-columns: repeat(2, minmax(170px,1fr)) minmax(130px,200px) auto; align-items: end; gap: 12px; margin-top: 14px; }
 .http-api-form .fluent-switch { min-height: 36px; }
+.http-api-privilege { align-self: stretch; min-height: 54px !important; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; white-space: normal; }
+.http-api-privilege > span:last-child { width: auto; height: auto; border: 0; border-radius: 0; background: transparent; }
+.http-api-privilege > span:last-child::after { content: none; }
+.http-api-privilege strong { display: block; color: var(--text); font-size: 11px; }
+.http-api-privilege small { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; line-height: 1.35; }
+.http-api-privilege.danger { border-color: color-mix(in srgb, var(--danger) 48%, var(--line)); background: color-mix(in srgb, var(--danger) 8%, transparent); }
+.http-api-privilege.danger strong { color: var(--danger); }
 .http-api-port { display: grid; gap: 5px; color: var(--muted); font-size: 11px; font-weight: 600; }
 .http-api-port input { width: 100%; padding: 8px 9px; border: 1px solid var(--line-strong); border-radius: 5px; color: inherit; background: var(--control); font-variant-numeric: tabular-nums; }
 .http-api-status { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
@@ -1144,6 +1151,7 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .http-api-status strong { color: inherit; font-weight: 600; }
 .http-api-status code { overflow-wrap: anywhere; color: var(--primary); }
 .http-api-status .error-text { color: var(--danger); }
+.http-api-status .http-api-privilege-note { flex-basis: 100%; color: var(--muted); line-height: 1.4; }
 @media (max-width: 720px) { .http-api-form { grid-template-columns: 1fr 1fr; } .http-api-form > button { grid-column: 1 / -1; justify-self: start; } }
 .smart-route-state { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 12px; padding: 13px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-subtle); }
 .smart-route-state.ready { border-color: color-mix(in srgb,var(--success) 24%,var(--line)); }
