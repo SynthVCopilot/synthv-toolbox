@@ -12,6 +12,8 @@ const prepare = read(".github/workflows/prepare-desktop.yml");
 const release = read(".github/workflows/desktop.yml");
 const ciConfig = read(".github/tauri-ci.conf.json");
 const viteConfig = read("src/PiDesktop.Tauri/vite.config.ts");
+const devRustTests = workflow.slice(workflow.indexOf("\n  rust_tests:"));
+const releaseRustTests = release.slice(release.indexOf("\n  rust_tests:"));
 
 assert.match(workflow, /^name: Toolbox Dev Build\n/);
 assert.match(workflow, /^on:\n  pull_request:\n  push:\n    branches: \[main\]\n  workflow_dispatch:\n/m);
@@ -42,6 +44,10 @@ assert.match(workflow, /name: Prepare bundled Node runtime\n        working-dire
 assert.match(release, /name: Build bundled Agent Runtime\n        working-directory: src\/PiDesktop\.Tauri\n        run: npm run build:runtime/);
 assert.match(release, /name: Prepare bundled Node runtime\n        working-directory: src\/PiDesktop\.Tauri\n        env:\n          SYNTHV_TOOLBOX_NODE_TARGET: \$\{\{ matrix\.target \}\}\n        run: npm run prepare:bundled-node/);
 assert.match(read("src/PiDesktop.Tauri/package.json"), /"prepare:bundled-node": "node scripts\/prepare-bundled-node\.mjs"/);
+assert.match(devRustTests, /name: Build bundled Agent Runtime\n        working-directory: src\/PiDesktop\.Tauri\n        run: npm run build:runtime/);
+assert.match(devRustTests, /name: Prepare bundled Node runtime\n        working-directory: src\/PiDesktop\.Tauri\n        env:\n          SYNTHV_TOOLBOX_NODE_TARGET: \$\{\{ matrix\.target \}\}\n        run: npm run prepare:bundled-node/);
+assert.match(releaseRustTests, /name: Build bundled Agent Runtime\n        working-directory: src\/PiDesktop\.Tauri\n        run: npm run build:runtime/);
+assert.match(releaseRustTests, /name: Prepare bundled Node runtime\n        working-directory: src\/PiDesktop\.Tauri\n        env:\n          SYNTHV_TOOLBOX_NODE_TARGET: \$\{\{ matrix\.target \}\}\n        run: npm run prepare:bundled-node/);
 assert.doesNotMatch(workflow, /npm ci --omit=dev/);
 assert.match(workflow, /--config \.\.\/\.\.\/\.github\/tauri-ci\.conf\.json/);
 assert.match(ciConfig, /"beforeBuildCommand": ""/);

@@ -129,6 +129,14 @@ jobs:
       - name: Install platform dependencies
         working-directory: src/PiDesktop.Tauri
         run: npm ci --no-audit --no-fund
+      - name: Build bundled Agent Runtime
+        working-directory: src/PiDesktop.Tauri
+        run: npm run build:runtime
+      - name: Prepare bundled Node runtime
+        working-directory: src/PiDesktop.Tauri
+        env:
+          SYNTHV_TOOLBOX_NODE_TARGET: ${{ matrix.target }}
+        run: npm run prepare:bundled-node
       - name: Test Rust core
         run: cargo test --manifest-path src/PiDesktop.Tauri/src-tauri/Cargo.toml --all-targets -- --test-threads=1
       - name: Test precise SynthV instance controls

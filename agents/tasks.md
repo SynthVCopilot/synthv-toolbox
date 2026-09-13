@@ -14,3 +14,4 @@
 | 007 | [Feature]_独立离线授权 | 直接调用离线授权协议并受保护写入 session | 完整备份后在 Toolbox 中查看和切换当前设备离线授权 | ✅ 已完成 |
 | 008 | [BugFix]_dev_runtime_path | 修复 Linux CI 中 Agent Runtime 合同测试的仓库根路径转换 | 让开发构建在准备阶段可靠找到已安装的运行时依赖 | ✅ 已完成 |
 | 009 | [BugFix]_workbuddy_store_load | 删除运行时独立后无调用的 WorkBuddy 凭据读取函数 | 消除发布门禁的 dead_code 错误 | ✅ 已完成 |
+| 010 | [BugFix]_rust_test_runtime_resources | 为 CI Rust 测试准备受控 Node 与 Agent Runtime 资源 | Tauri 测试构建需要与打包阶段相同的资源输入 | ✅ 已完成 |
