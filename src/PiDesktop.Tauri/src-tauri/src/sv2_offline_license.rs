@@ -241,6 +241,12 @@ fn set_with_transport<T: OfflineTransport>(
                 backup.backup_root.display()
             ));
         }
+        ensure_sv2_not_running().map_err(|error| {
+            format!(
+                "{error} 远端状态可能已改变；可从完整备份恢复：{}",
+                backup.backup_root.display()
+            )
+        })?;
         persist_refreshed_session(data_root, &fingerprint, &rewritten, &*machine_key).map_err(
             |_| {
                 format!(
