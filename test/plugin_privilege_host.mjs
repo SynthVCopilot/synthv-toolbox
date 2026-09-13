@@ -18,7 +18,9 @@ test("the native host reauthorizes every plugin capability invocation", () => {
 });
 
 test("privileged host capabilities require authorization and expose unrestricted network requests", () => {
-  assert.match(host, /"activate"[\s\S]*=> "host\.internal"/);
+  assert.match(host, /"host\.internal" \| "host\.advanced"/);
+  assert.match(host, /invoke_privileged_host_capability/);
+  assert.match(host, /\("host\.internal", "synthv\.accounts", "activate"\)/);
   assert.match(host, /"synthv\.sandbox"/);
   assert.match(host, /"synthv\.authorization"/);
   assert.match(host, /"host\.network"/);
@@ -40,7 +42,8 @@ test("internal account operations stay explicit and require host.internal", () =
   assert.match(host, /"clear-local-session"/);
   assert.match(host, /"clear-offline-license-cache"/);
   assert.match(host, /"force-launch"/);
-  assert.match(host, /"clear-local-session"[\s\S]*"clear-offline-license-cache"[\s\S]*=> "host\.internal"/);
+  assert.match(host, /\("host\.internal", "synthv\.accounts", "clear-local-session"\)/);
+  assert.match(host, /\("host\.internal", "synthv\.accounts", "clear-offline-license-cache"\)/);
   assert.doesNotMatch(host, /functionName|reflect|invokeInternal/);
 });
 
@@ -53,13 +56,16 @@ test("internal diagnostics, paths, and runtime status are explicit capabilities"
   assert.match(host, /"slot-folder"/);
   assert.match(host, /"sandbox-folder"/);
   assert.match(host, /"runtime\.internal"/);
-  assert.match(host, /require_permission\(&invocation\.permission, "host\.internal"\)/);
+  assert.match(host, /\("host\.internal", "synthv\.diagnostics", "cached-state"\)/);
+  assert.match(host, /\("host\.internal", "synthv\.paths", "slot-folder"\)/);
+  assert.match(host, /\("host\.internal", "runtime\.internal", "status"\)/);
   assert.match(host, /fn required_slot_id/);
 });
 
 test("full session access is an explicit internal capability", () => {
   assert.match(host, /capability\("synthv\.session", \["read", "write"\]\)/);
-  assert.match(host, /"synthv\.session"[\s\S]*require_permission\(&invocation\.permission, "host\.internal"\)/);
+  assert.match(host, /\("host\.internal", "synthv\.session", "read"\)/);
+  assert.match(host, /\("host\.internal", "synthv\.session", "write"\)/);
   assert.match(host, /read_full_session/);
   assert.match(host, /write_full_session/);
   assert.match(host, /"expectedSha256"/);

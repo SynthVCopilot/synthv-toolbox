@@ -34,6 +34,8 @@ const AGENT_ENDPOINT_PATH: &str = "/agent/chat";
 pub struct HttpApiStatus {
     pub enabled: bool,
     pub agent_enabled: bool,
+    pub internal_functions_enabled: bool,
+    pub advanced_functions_enabled: bool,
     pub running: bool,
     pub port: u16,
     pub endpoint: Option<String>,
@@ -51,6 +53,8 @@ struct ManagerState {
     port: u16,
     mcp_enabled: bool,
     agent_enabled: bool,
+    http_mcp_internal_enabled: bool,
+    http_mcp_advanced_enabled: bool,
     running: bool,
     last_error: Option<String>,
     shutdown: Option<oneshot::Sender<()>>,
@@ -62,12 +66,16 @@ impl HttpApiManager {
         &self,
         enabled: bool,
         agent_enabled: bool,
+        http_mcp_internal_enabled: bool,
+        http_mcp_advanced_enabled: bool,
         port: u16,
     ) -> HttpApiStatus {
         let state = self.state.lock().await;
         HttpApiStatus {
             enabled,
             agent_enabled,
+            internal_functions_enabled: http_mcp_internal_enabled,
+            advanced_functions_enabled: http_mcp_advanced_enabled,
             running: state.running,
             port,
             endpoint: enabled.then(|| mcp_endpoint(port)),
@@ -99,6 +107,8 @@ impl HttpApiManager {
                 && state.port == context.port
                 && state.mcp_enabled == context.mcp_enabled
                 && state.agent_enabled == context.agent_enabled
+                && state.http_mcp_internal_enabled == context.http_mcp_internal_enabled
+                && state.http_mcp_advanced_enabled == context.http_mcp_advanced_enabled
             {
                 return Ok(());
             }
@@ -112,6 +122,8 @@ impl HttpApiManager {
                 state.port = context.port;
                 state.mcp_enabled = context.mcp_enabled;
                 state.agent_enabled = context.agent_enabled;
+                state.http_mcp_internal_enabled = context.http_mcp_internal_enabled;
+                state.http_mcp_advanced_enabled = context.http_mcp_advanced_enabled;
                 state.running = false;
                 state.last_error = Some(message.clone());
                 return Err(message);
@@ -123,6 +135,8 @@ impl HttpApiManager {
             state.port = context.port;
             state.mcp_enabled = context.mcp_enabled;
             state.agent_enabled = context.agent_enabled;
+            state.http_mcp_internal_enabled = context.http_mcp_internal_enabled;
+            state.http_mcp_advanced_enabled = context.http_mcp_advanced_enabled;
             state.running = true;
             state.last_error = None;
             state.shutdown = Some(sender);
@@ -171,6 +185,8 @@ impl HttpApiManager {
 pub struct HttpApiContext {
     pub mcp_enabled: bool,
     pub agent_enabled: bool,
+    pub http_mcp_internal_enabled: bool,
+    pub http_mcp_advanced_enabled: bool,
     pub port: u16,
     pub app: Option<tauri::AppHandle>,
     pub mcp: Arc<crate::mcp::McpManager>,
@@ -181,6 +197,8 @@ pub struct HttpApiContext {
     pub downloads: Arc<crate::downloads::ComponentDownloadManager>,
     pub media_tasks: Arc<crate::media_tasks::MediaTaskManager>,
     pub file_approvals: Arc<crate::agent_files::FileApprovalManager>,
+    pub sv2_profiles: Arc<crate::sv2_profiles::Sv2ProfileService>,
+    pub agent_runtime: Arc<crate::agent_runtime::AgentRuntime>,
 }
 
 impl HttpApiContext {
@@ -188,6 +206,8 @@ impl HttpApiContext {
         Self {
             mcp_enabled: false,
             agent_enabled: false,
+            http_mcp_internal_enabled: false,
+            http_mcp_advanced_enabled: false,
             port: DEFAULT_HTTP_API_PORT,
             app: Some(app),
             mcp: state.mcp.clone(),
@@ -198,6 +218,8 @@ impl HttpApiContext {
             downloads: state.downloads.clone(),
             media_tasks: state.media_tasks.clone(),
             file_approvals: state.file_approvals.clone(),
+            sv2_profiles: state.sv2_profiles.clone(),
+            agent_runtime: state.agent_runtime.clone(),
         }
     }
 
@@ -245,6 +267,8 @@ async fn health(State(context): State<Arc<HttpApiContext>>) -> impl IntoResponse
         "status":"ok",
         "mcpEnabled": context.mcp_enabled,
         "agentEnabled": context.agent_enabled,
+        "httpMcpInternalEnabled": context.http_mcp_internal_enabled,
+        "httpMcpAdvancedEnabled": context.http_mcp_advanced_enabled,
         "port": context.port
     }))
 }
@@ -353,11 +377,17 @@ async fn handle_rpc(
                 .executor()
                 .await
                 .map_err(|error| (id.clone(), -32603, error))?;
-            let tools = executor.tools().into_iter().map(|tool| json!({
+            let mut tools = executor.tools().into_iter().map(|tool| json!({
                 "name": tool.name,
                 "description": tool.description,
                 "inputSchema": serde_json::from_str::<Value>(&tool.input_schema_json).unwrap_or_else(|_| json!({"type":"object"}))
             })).collect::<Vec<_>>();
+            if context.http_mcp_internal_enabled {
+                tools.push(privileged_tool_definition("toolbox_internal"));
+            }
+            if context.http_mcp_advanced_enabled {
+                tools.push(privileged_tool_definition("toolbox_advanced"));
+            }
             json!({"tools": tools})
         }
         "tools/call" => {
@@ -375,42 +405,108 @@ async fn handle_rpc(
                 .get("arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            let executor = context
-                .executor()
-                .await
-                .map_err(|error| (id.clone(), -32603, error))?;
-            let call = ToolCall {
-                id: id.to_string(),
-                tool_name: name.to_string(),
-                arguments_json: arguments.to_string(),
-            };
-            let result = tokio::task::spawn_blocking(move || executor.execute(&call))
-                .await
-                .map_err(|error| (id.clone(), -32603, format!("工具执行线程失败：{error}")))?
-                .map_err(|error| (id.clone(), -32603, error.to_string()))?;
-            json!({"content":[{"type":"text","text":result.result_json}], "isError":result.is_error})
+            if matches!(name, "toolbox_internal" | "toolbox_advanced") {
+                let enabled = if name == "toolbox_internal" {
+                    context.http_mcp_internal_enabled
+                } else {
+                    context.http_mcp_advanced_enabled
+                };
+                if !enabled {
+                    return Err((id, -32601, "该 MCP 特权工具尚未启用。".to_string()));
+                }
+                let permission = if name == "toolbox_internal" {
+                    "host.internal"
+                } else {
+                    "host.advanced"
+                };
+                let result = execute_privileged_tool(context, permission, arguments)
+                    .await
+                    .map_err(|error| (id.clone(), -32602, error))?;
+                json!({"content":[{"type":"text","text":result.to_string()}], "isError":false})
+            } else {
+                let executor = context
+                    .executor()
+                    .await
+                    .map_err(|error| (id.clone(), -32603, error))?;
+                let call = ToolCall {
+                    id: id.to_string(),
+                    tool_name: name.to_string(),
+                    arguments_json: arguments.to_string(),
+                };
+                let result = tokio::task::spawn_blocking(move || executor.execute(&call))
+                    .await
+                    .map_err(|error| (id.clone(), -32603, format!("工具执行线程失败：{error}")))?
+                    .map_err(|error| (id.clone(), -32603, error.to_string()))?;
+                json!({"content":[{"type":"text","text":result.result_json}], "isError":result.is_error})
+            }
         }
         _ => return Err((id, -32601, format!("不支持的方法：{method}"))),
     };
     Ok(Some(json!({"jsonrpc":"2.0", "id":id, "result":result})))
 }
 
+fn privileged_tool_definition(name: &str) -> Value {
+    json!({
+        "name": name,
+        "description": "调用 Toolbox 已启用的特权宿主能力。",
+        "inputSchema": {
+            "type": "object",
+            "required": ["capability", "operation", "params"],
+            "additionalProperties": false,
+            "properties": {
+                "capability": {"type": "string", "minLength": 1},
+                "operation": {"type": "string", "minLength": 1},
+                "params": {"type": "object"}
+            }
+        }
+    })
+}
+
+async fn execute_privileged_tool(
+    context: &HttpApiContext,
+    permission: &str,
+    arguments: Value,
+) -> Result<Value, String> {
+    let arguments = arguments
+        .as_object()
+        .ok_or_else(|| "特权工具参数必须是对象。".to_string())?;
+    let capability = arguments
+        .get("capability")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "特权工具需要 capability。".to_string())?;
+    let operation = arguments
+        .get("operation")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "特权工具需要 operation。".to_string())?;
+    let params = arguments
+        .get("params")
+        .filter(|value| value.is_object())
+        .cloned()
+        .ok_or_else(|| "特权工具需要对象类型的 params。".to_string())?;
+    crate::agent_runtime_commands::invoke_privileged_host_capability(
+        permission,
+        capability,
+        operation,
+        params,
+        context.sv2_profiles.clone(),
+        context.settings.clone(),
+        context.agent_runtime.clone(),
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn validates_zero_port() {
-        assert!(validate_port(0).is_err());
-        assert!(validate_port(17_831).is_ok());
-        assert!(validate_port(u16::MAX).is_ok());
-    }
-
-    #[tokio::test]
-    async fn initialize_and_ping_use_json_rpc_envelopes() {
-        let context = HttpApiContext {
+    fn test_context() -> HttpApiContext {
+        HttpApiContext {
             mcp_enabled: true,
             agent_enabled: false,
+            http_mcp_internal_enabled: false,
+            http_mcp_advanced_enabled: false,
             port: 17_831,
             app: None,
             mcp: Arc::new(crate::mcp::McpManager::default()),
@@ -427,7 +523,21 @@ mod tests {
                 Arc::new(crate::mcp::McpManager::default()),
             ),
             file_approvals: Arc::new(crate::agent_files::FileApprovalManager::default()),
-        };
+            sv2_profiles: Arc::new(crate::sv2_profiles::Sv2ProfileService::new()),
+            agent_runtime: Arc::new(crate::agent_runtime::AgentRuntime::new()),
+        }
+    }
+
+    #[test]
+    fn validates_zero_port() {
+        assert!(validate_port(0).is_err());
+        assert!(validate_port(17_831).is_ok());
+        assert!(validate_port(u16::MAX).is_ok());
+    }
+
+    #[tokio::test]
+    async fn initialize_and_ping_use_json_rpc_envelopes() {
+        let context = test_context();
         let response = handle_rpc(
             &context,
             json!({"jsonrpc":"2.0","id":1,"method":"initialize"}),
@@ -443,28 +553,73 @@ mod tests {
         assert_eq!(response["result"], json!({}));
     }
 
+    #[test]
+    fn privileged_tools_have_a_fixed_schema_without_a_permission_input() {
+        let schema = privileged_tool_definition("toolbox_internal");
+        assert_eq!(schema["name"], "toolbox_internal");
+        assert!(schema["inputSchema"]["properties"]
+            .get("permission")
+            .is_none());
+        assert_eq!(
+            schema["inputSchema"]["required"],
+            json!(["capability", "operation", "params"])
+        );
+    }
+
+    #[tokio::test]
+    async fn privileged_tools_are_hidden_until_their_domain_is_enabled() {
+        let mut context = test_context();
+        let response = handle_rpc(
+            &context,
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/list"}),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let tools = response["result"]["tools"].as_array().unwrap();
+        assert!(!tools.iter().any(|tool| tool["name"] == "toolbox_internal"));
+        assert!(!tools.iter().any(|tool| tool["name"] == "toolbox_advanced"));
+
+        context.http_mcp_internal_enabled = true;
+        let response = handle_rpc(
+            &context,
+            json!({"jsonrpc":"2.0","id":4,"method":"tools/list"}),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let tools = response["result"]["tools"].as_array().unwrap();
+        assert!(tools.iter().any(|tool| tool["name"] == "toolbox_internal"));
+        assert!(!tools.iter().any(|tool| tool["name"] == "toolbox_advanced"));
+    }
+
+    #[tokio::test]
+    async fn direct_privileged_calls_are_rejected_while_disabled() {
+        let context = test_context();
+        let error = handle_rpc(
+            &context,
+            json!({
+                "jsonrpc":"2.0",
+                "id":5,
+                "method":"tools/call",
+                "params":{
+                    "name":"toolbox_advanced",
+                    "arguments":{
+                        "capability":"host.network",
+                        "operation":"request",
+                        "params":{}
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.1, -32601);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn tool_calls_run_outside_the_async_request_thread() {
-        let context = HttpApiContext {
-            mcp_enabled: true,
-            agent_enabled: false,
-            port: 17_831,
-            app: None,
-            mcp: Arc::new(crate::mcp::McpManager::default()),
-            settings: Arc::new(tokio::sync::RwLock::new(
-                crate::config::ToolboxSettings::default(),
-            )),
-            bridge_dir: std::path::PathBuf::new(),
-            resource_dir: std::path::PathBuf::new(),
-            components_dir: std::path::PathBuf::new(),
-            downloads: Arc::new(crate::downloads::ComponentDownloadManager::persistent()),
-            media_tasks: crate::media_tasks::MediaTaskManager::persistent(
-                std::path::PathBuf::new(),
-                std::path::PathBuf::new(),
-                Arc::new(crate::mcp::McpManager::default()),
-            ),
-            file_approvals: Arc::new(crate::agent_files::FileApprovalManager::default()),
-        };
+        let context = test_context();
         let response = handle_rpc(
             &context,
             json!({

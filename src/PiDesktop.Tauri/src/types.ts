@@ -125,6 +125,8 @@ export interface McpServerConfig {
 export interface HttpApiStatus {
   enabled: boolean;
   agentEnabled: boolean;
+  internalFunctionsEnabled: boolean;
+  advancedFunctionsEnabled: boolean;
   running: boolean;
   port: number;
   endpoint: string | null;

@@ -24,11 +24,28 @@ assert.match(rust, /notifications\/initialized/);
 assert.match(config, /DEFAULT_HTTP_API_PORT: u16 = 17_831/);
 assert.match(config, /http_api_enabled/);
 assert.match(config, /http_agent_enabled/);
+assert.match(config, /pub http_mcp_internal_enabled: bool/);
+assert.match(config, /pub http_mcp_advanced_enabled: bool/);
+assert.match(config, /http_mcp_internal_enabled: false/);
+assert.match(config, /http_mcp_advanced_enabled: false/);
 assert.match(config, /http_api_port/);
 assert.match(commands, /pub async fn get_http_api_status/);
 assert.match(commands, /pub async fn configure_http_api\([\s\S]*enabled: bool,[\s\S]*agent_enabled: bool,[\s\S]*port: u16/);
+assert.match(commands, /pub async fn configure_http_api\([\s\S]*internal_functions_enabled: bool,[\s\S]*advanced_functions_enabled: bool/);
+assert.match(commands, /settings\.http_mcp_internal_enabled = internal_functions_enabled/);
+assert.match(commands, /settings\.http_mcp_advanced_enabled = advanced_functions_enabled/);
+assert.match(commands, /context\.http_mcp_internal_enabled = internal_functions_enabled/);
+assert.match(commands, /context\.http_mcp_advanced_enabled = advanced_functions_enabled/);
 assert.match(commands, /validate_port\(port\)/);
 assert.match(commands, /pub\(crate\) async fn run_agent_message/);
 assert.match(packageJson.scripts["test:contracts"], /http-mcp-server\.mjs/);
+
+assert.match(rust, /"toolbox_internal"/);
+assert.match(rust, /"toolbox_advanced"/);
+assert.match(rust, /if context\.http_mcp_internal_enabled[\s\S]*toolbox_internal/);
+assert.match(rust, /if context\.http_mcp_advanced_enabled[\s\S]*toolbox_advanced/);
+assert.match(rust, /"tools\/call"[\s\S]*mcp_internal_enabled/);
+assert.match(rust, /"tools\/call"[\s\S]*mcp_advanced_enabled/);
+assert.match(rust, /permission/);
 
 console.log("HTTP MCP server contract checks passed");
