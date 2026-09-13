@@ -40,7 +40,9 @@ assert.match(development, /--config\.publish\.channel=nightly/);
 assert.match(development, /--config\.publish\.releaseType=prerelease/);
 assert.match(development, /--publish always/);
 assert.match(development, /actions\/upload-artifact@v4/);
+assert.match(verifyJob, /name: Load compiled Electron main modules[\s\S]*npm run test:electron-main/);
 assert.match(nightlyJob, /permissions:\s+contents: write/);
+assert.match(nightlyJob, /needs: verify/);
 assert.match(nightlyJob, /GH_TOKEN: \$\{\{ github\.token \}\}/);
 assert.doesNotMatch(verifyJob, /contents: write|--publish always|GH_TOKEN/);
 assert.match(prepare, /^name: Prepare Electron Desktop Build/m);
@@ -55,6 +57,7 @@ assert.equal(packageJson.scripts["prepare:bundled-node"], undefined);
 assert.equal(packageJson.scripts["build:electron"], "node scripts/ensure-agent-runtime.mjs && npm run build:renderer && npm run build:host");
 assert.match(packageJson.scripts["build:host"], /electron\/tsconfig\.json/);
 assert.match(packageJson.scripts["build:host"], /scripts\/ensure-agent-runtime\.mjs/);
+assert.equal(packageJson.scripts["test:electron-main"], "electron ../../test/electron-main-smoke.mjs");
 assert.match(packageJson.scripts["test:contracts"], /electron-http-mcp-server\.mjs/);
 assert.equal(agentRuntimePackageJson.scripts.prepare, undefined);
 

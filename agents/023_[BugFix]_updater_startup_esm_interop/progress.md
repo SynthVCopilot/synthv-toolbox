@@ -12,3 +12,4 @@
 - 已以隔离的用户数据目录启动 `release/win-unpacked/Synthesizer V Toolbox.exe` 8 秒；进程持续运行，随后结束该测试进程，启动冒烟测试通过。
 - 已执行 `git diff --check`，无空白错误。
 - 已执行 `npm run test:contracts`，所有合同测试通过，命令覆盖报告为 164 个 renderer 命令。
+- 新增 `test/electron-main-smoke.mjs`，由 Electron 本身加载编译后的 updater 模块；开发构建在打包前执行该测试，nightly 发布依赖跨平台验证成功。

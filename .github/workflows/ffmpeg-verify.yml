@@ -41,6 +41,9 @@ jobs:
       - name: Build desktop assets
         working-directory: src/PiDesktop.Tauri
         run: npm run build:electron
+      - name: Load compiled Electron main modules
+        working-directory: src/PiDesktop.Tauri
+        run: npm run test:electron-main
       - name: Package development artifacts
         run: npm exec --prefix src/PiDesktop.Tauri -- electron-builder --config electron-builder.yml ${{ matrix.target }} --publish never
       - uses: actions/upload-artifact@v4
@@ -51,6 +54,7 @@ jobs:
 
   publish-nightly:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: verify
     permissions:
       contents: write
     strategy:
