@@ -11,6 +11,10 @@ mod sv2_sync;
 mod sv2_session_guard;
 #[path = "../../src/PiDesktop.Tauri/src-tauri/src/sv2_account_probe.rs"]
 mod sv2_account_probe;
+#[path = "../../src/PiDesktop.Tauri/src-tauri/src/sv2_data_backup.rs"]
+pub mod sv2_data_backup;
+#[path = "../../src/PiDesktop.Tauri/src-tauri/src/sv2_session_kit.rs"]
+pub mod sv2_session_kit;
 #[path = "../../src/PiDesktop.Tauri/src-tauri/src/sv2_profiles.rs"]
 mod sv2_profiles;
 #[path = "../../src/PiDesktop.Tauri/src-tauri/src/svp_launch_router.rs"]

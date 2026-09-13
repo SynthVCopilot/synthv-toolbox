@@ -68,6 +68,14 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken}
 #[cfg(windows)]
 use xxhash_rust::xxh32::xxh32;
 
+#[path = "sv2_offline_license.rs"]
+mod sv2_offline_license;
+#[allow(unused_imports)]
+pub use sv2_offline_license::{
+    inspect_offline_license, set_offline_license, Sv2OfflineLicenseOperation,
+    Sv2OfflineLicenseStatus,
+};
+
 const MAX_SESSION_BYTES: usize = 1024 * 1024;
 const MAX_FIRMWARE_BYTES: usize = 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
@@ -3934,3 +3942,7 @@ mod refresh_failure_tests;
 #[cfg(all(test, windows))]
 #[path = "../../../../test/sv2_refresh_flow_tests.rs"]
 mod refresh_flow_tests;
+
+#[cfg(test)]
+#[path = "../../../../test/sv2_offline_license.rs"]
+mod sv2_offline_license_tests;
