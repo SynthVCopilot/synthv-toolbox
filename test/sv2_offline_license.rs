@@ -219,6 +219,42 @@ mod write_flow {
         assert_eq!(server.posts.get(), 0);
         fs::remove_dir_all(root).unwrap();
     }
+    struct CasServer {
+        path: PathBuf,
+    }
+    impl OfflineTransport for CasServer {
+        fn get(&self, url: &str, _: &str) -> Result<(u16, Zeroizing<Vec<u8>>), String> {
+            Server {
+                enabled: Cell::new(false),
+                posts: Cell::new(0),
+                fail: false,
+            }
+            .get(url, "")
+        }
+        fn post(&self, _: &str, _: &str) -> Result<(u16, Zeroizing<Vec<u8>>), String> {
+            fs::write(&self.path, b"changed-by-post").unwrap();
+            Ok((200, Zeroizing::new(br#"{"status":200,"data":{"id":"device","native_product":"Synthesizer V Studio 2 Pro","offline_license_enabled":true}}"#.to_vec())))
+        }
+    }
+    #[test]
+    fn post_time_session_change_is_not_overwritten() {
+        let root = root();
+        fixture(&root, false);
+        let session = root.join("data/license/session");
+        let server = CasServer {
+            path: session.clone(),
+        };
+        assert!(set_with_transport(
+            &root.join("data"),
+            &root.join("backups"),
+            true,
+            false,
+            &server
+        )
+        .is_err());
+        assert_eq!(fs::read(session).unwrap(), b"changed-by-post");
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[test]

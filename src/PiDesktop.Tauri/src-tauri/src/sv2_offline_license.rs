@@ -275,7 +275,7 @@ fn set_with_transport<T: OfflineTransport>(
         }
         Ok(Sv2OfflineLicenseOperation {
             status: checked,
-            backup_path: backup.backup_root.to_string_lossy().into_owned(),
+            backup_path: display_backup_path(&backup.backup_root),
             access_changed,
             refresh_changed,
             detail: if enabled {
@@ -285,6 +285,11 @@ fn set_with_transport<T: OfflineTransport>(
             },
         })
     }
+}
+
+fn display_backup_path(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    text.strip_prefix(r"\\?\").unwrap_or(&text).to_string()
 }
 
 #[cfg(windows)]
