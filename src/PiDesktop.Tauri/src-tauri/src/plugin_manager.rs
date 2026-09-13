@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -38,7 +38,16 @@ pub struct PluginManifest {
     #[serde(default)]
     pub actions: Vec<PluginAction>,
     #[serde(default)]
-    pub permissions: Vec<String>,
+    pub permissions: BTreeMap<String, PluginPermission>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PluginPermission {
+    #[default]
+    None,
+    Optional,
+    Required,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -152,7 +161,7 @@ pub fn install(source: &Path, root: &Path) -> Result<InstalledPlugin, String> {
         let manifest = read_manifest(&staging)?;
         let target = root.join(&manifest.id);
         replace_directory(&staging, &target)?;
-        let state = PluginState::default();
+        let state = PluginState::for_manifest(&manifest);
         write_state(&target, &state)?;
         Ok(installed_plugin(manifest, state))
     })();
@@ -162,10 +171,24 @@ pub fn install(source: &Path, root: &Path) -> Result<InstalledPlugin, String> {
     result
 }
 
-pub fn set_enabled(root: &Path, plugin_id: &str, enabled: bool) -> Result<InstalledPlugin, String> {
+pub fn set_enabled(
+    root: &Path,
+    plugin_id: &str,
+    enabled: bool,
+    internal_functions_globally_enabled: bool,
+    advanced_functions_globally_enabled: bool,
+) -> Result<InstalledPlugin, String> {
     let path = plugin_path(root, plugin_id)?;
     let manifest = read_manifest(&path)?;
     let mut state = read_state(&path)?;
+    if enabled {
+        ensure_required_permissions_granted(
+            &manifest,
+            &state,
+            internal_functions_globally_enabled,
+            advanced_functions_globally_enabled,
+        )?;
+    }
     state.enabled = enabled;
     write_state(&path, &state)?;
     Ok(installed_plugin(manifest, state))
@@ -178,16 +201,14 @@ pub fn set_internal_functions_enabled(
 ) -> Result<InstalledPlugin, String> {
     let path = plugin_path(root, plugin_id)?;
     let manifest = read_manifest(&path)?;
-    if enabled
-        && !manifest
-            .permissions
-            .iter()
-            .any(|value| value == "host.internal")
-    {
+    if enabled && permission_level(&manifest, "host.internal") == PluginPermission::None {
         return Err("插件未声明内部函数权限。".to_string());
     }
     let mut state = read_state(&path)?;
     state.internal_functions_enabled = enabled;
+    if !enabled && permission_level(&manifest, "host.internal") == PluginPermission::Required {
+        state.enabled = false;
+    }
     write_state(&path, &state)?;
     Ok(installed_plugin(manifest, state))
 }
@@ -199,16 +220,14 @@ pub fn set_advanced_functions_enabled(
 ) -> Result<InstalledPlugin, String> {
     let path = plugin_path(root, plugin_id)?;
     let manifest = read_manifest(&path)?;
-    if enabled
-        && !manifest
-            .permissions
-            .iter()
-            .any(|value| value == "host.advanced")
-    {
+    if enabled && permission_level(&manifest, "host.advanced") == PluginPermission::None {
         return Err("插件未声明高级功能权限。".to_string());
     }
     let mut state = read_state(&path)?;
     state.advanced_functions_enabled = enabled;
+    if !enabled && permission_level(&manifest, "host.advanced") == PluginPermission::Required {
+        state.enabled = false;
+    }
     write_state(&path, &state)?;
     Ok(installed_plugin(manifest, state))
 }
@@ -223,14 +242,11 @@ pub fn authorize_capability(
     let path = plugin_path(root, plugin_id)?;
     let manifest = read_manifest(&path)?;
     let state = read_state(&path)?;
-    if !state.enabled {
+    if !plugin_enabled(&manifest, &state) {
         return Err("插件已停用。".to_string());
     }
-    if !manifest
-        .permissions
-        .iter()
-        .any(|declared| declared == permission)
-    {
+    let level = permission_level(&manifest, permission);
+    if level == PluginPermission::None {
         return Err("插件未声明该宿主权限。".to_string());
     }
     match permission {
@@ -248,6 +264,63 @@ pub fn authorize_capability(
         }
         _ => Ok(()),
     }
+}
+
+pub fn disable_plugins_requiring_permission(root: &Path, permission: &str) -> Result<(), String> {
+    if !PERMISSIONS.contains(&permission) {
+        return Err("插件权限无效。".to_string());
+    }
+    if !root.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(root).map_err(io_error)? {
+        let entry = entry.map_err(io_error)?;
+        if !entry.file_type().map_err(io_error)?.is_dir() {
+            continue;
+        }
+        let path = entry.path();
+        reject_symlink(&path)?;
+        let manifest = match read_manifest(&path) {
+            Ok(manifest) => manifest,
+            Err(_) => continue,
+        };
+        if permission_level(&manifest, permission) != PluginPermission::Required {
+            continue;
+        }
+        let mut state = read_state(&path)?;
+        if state.enabled {
+            state.enabled = false;
+            write_state(&path, &state)?;
+        }
+    }
+    Ok(())
+}
+
+pub fn runnable_plugin_ids(
+    root: &Path,
+    internal_functions_globally_enabled: bool,
+    advanced_functions_globally_enabled: bool,
+) -> Result<Vec<String>, String> {
+    list(root).map(|plugins| {
+        plugins
+            .into_iter()
+            .filter(|plugin| {
+                plugin.enabled
+                    && ensure_required_permissions_granted(
+                        &plugin.manifest,
+                        &PluginState {
+                            enabled: plugin.enabled,
+                            internal_functions_enabled: plugin.internal_functions_enabled,
+                            advanced_functions_enabled: plugin.advanced_functions_enabled,
+                        },
+                        internal_functions_globally_enabled,
+                        advanced_functions_globally_enabled,
+                    )
+                    .is_ok()
+            })
+            .map(|plugin| plugin.manifest.id)
+            .collect()
+    })
 }
 
 pub fn uninstall(root: &Path, plugin_id: &str) -> Result<(), String> {
@@ -307,10 +380,11 @@ fn validate_manifest(manifest: &PluginManifest, root: &Path) -> Result<(), Strin
             return Err("插件操作声明无效。".to_string());
         }
     }
-    let mut permissions = HashSet::new();
-    if manifest.permissions.iter().any(|permission| {
-        !PERMISSIONS.contains(&permission.as_str()) || !permissions.insert(permission)
-    }) {
+    if manifest
+        .permissions
+        .keys()
+        .any(|permission| !PERMISSIONS.contains(&permission.as_str()))
+    {
         return Err("插件权限声明无效。".to_string());
     }
     Ok(())
@@ -389,12 +463,68 @@ fn io_error(error: io::Error) -> String {
 }
 
 fn installed_plugin(manifest: PluginManifest, state: PluginState) -> InstalledPlugin {
+    let enabled = plugin_enabled(&manifest, &state);
     InstalledPlugin {
         manifest,
-        enabled: state.enabled,
+        enabled,
         internal_functions_enabled: state.internal_functions_enabled,
         advanced_functions_enabled: state.advanced_functions_enabled,
     }
+}
+
+impl PluginState {
+    fn for_manifest(manifest: &PluginManifest) -> Self {
+        Self {
+            enabled: !requires_plugin_consent(manifest),
+            internal_functions_enabled: false,
+            advanced_functions_enabled: false,
+        }
+    }
+}
+
+fn permission_level(manifest: &PluginManifest, permission: &str) -> PluginPermission {
+    manifest
+        .permissions
+        .get(permission)
+        .copied()
+        .unwrap_or_default()
+}
+
+fn requires_plugin_consent(manifest: &PluginManifest) -> bool {
+    matches!(
+        permission_level(manifest, "host.internal"),
+        PluginPermission::Required
+    ) || matches!(
+        permission_level(manifest, "host.advanced"),
+        PluginPermission::Required
+    )
+}
+
+fn plugin_enabled(manifest: &PluginManifest, state: &PluginState) -> bool {
+    state.enabled
+        && (permission_level(manifest, "host.internal") != PluginPermission::Required
+            || state.internal_functions_enabled)
+        && (permission_level(manifest, "host.advanced") != PluginPermission::Required
+            || state.advanced_functions_enabled)
+}
+
+fn ensure_required_permissions_granted(
+    manifest: &PluginManifest,
+    state: &PluginState,
+    internal_functions_globally_enabled: bool,
+    advanced_functions_globally_enabled: bool,
+) -> Result<(), String> {
+    if permission_level(manifest, "host.internal") == PluginPermission::Required
+        && (!internal_functions_globally_enabled || !state.internal_functions_enabled)
+    {
+        return Err("插件所需的内部函数权限尚未获授权。".to_string());
+    }
+    if permission_level(manifest, "host.advanced") == PluginPermission::Required
+        && (!advanced_functions_globally_enabled || !state.advanced_functions_enabled)
+    {
+        return Err("插件所需的高级功能权限尚未获授权。".to_string());
+    }
+    Ok(())
 }
 
 fn read_state(root: &Path) -> Result<PluginState, String> {

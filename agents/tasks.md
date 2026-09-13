@@ -16,3 +16,4 @@
 | 009 | [BugFix]_workbuddy_store_load | 删除运行时独立后无调用的 WorkBuddy 凭据读取函数 | 消除发布门禁的 dead_code 错误 | ✅ 已完成 |
 | 010 | [BugFix]_rust_test_runtime_resources | 为 CI Rust 测试准备受控 Node 与 Agent Runtime 资源 | Tauri 测试构建需要与打包阶段相同的资源输入 | ✅ 已完成 |
 | 011 | [Feature]_插件特权能力扩展 | 扩充内部底层单操作，并将高级联网和外部文件系统访问改为完全开放 | 对齐插件授权后的实际能力边界 | ✅ 已完成 |
+| 012 | [Feature]_插件权限声明级别 | 为插件权限增加 none、optional、required 三态并强制启用规则 | 让插件需求、用户授权和 Runtime 参与条件保持一致 | ✅ 已完成 |

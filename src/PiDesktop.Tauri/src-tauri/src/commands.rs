@@ -1502,6 +1502,12 @@ pub async fn set_plugin_internal_functions_enabled(
     enabled: bool,
     state: State<'_, AppState>,
 ) -> Result<BootstrapState, String> {
+    if !enabled {
+        crate::plugin_manager::disable_plugins_requiring_permission(
+            &crate::plugin_manager::plugins_root(),
+            "host.internal",
+        )?;
+    }
     {
         let mut settings = state.settings.write().await;
         settings.plugin_internal_functions_enabled = enabled;
@@ -1515,6 +1521,12 @@ pub async fn set_plugin_advanced_functions_enabled(
     enabled: bool,
     state: State<'_, AppState>,
 ) -> Result<BootstrapState, String> {
+    if !enabled {
+        crate::plugin_manager::disable_plugins_requiring_permission(
+            &crate::plugin_manager::plugins_root(),
+            "host.advanced",
+        )?;
+    }
     {
         let mut settings = state.settings.write().await;
         settings.plugin_advanced_functions_enabled = enabled;
