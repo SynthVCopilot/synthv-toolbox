@@ -29,6 +29,6 @@ test("plugin privilege grants require global settings and expose dedicated API m
 test("plugin manager disables individual grants until global permission is enabled", () => {
   assert.match(main, /data-plugin-internal-functions/);
   assert.match(main, /data-plugin-advanced-functions/);
-  assert.match(main, /internalFunctionsAvailable \? "" : "disabled"/);
-  assert.match(main, /advancedFunctionsAvailable \? "" : "disabled"/);
+  assert.match(main, /canGrantInternalFunctions \? "" : "disabled"/);
+  assert.match(main, /canGrantAdvancedFunctions \? "" : "disabled"/);
 });

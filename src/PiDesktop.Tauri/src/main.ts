@@ -1666,6 +1666,10 @@ function renderPlugins(): string {
   const internalFunctionsAvailable = Boolean(app?.pluginInternalFunctionsEnabled);
   const advancedFunctionsAvailable = Boolean(app?.pluginAdvancedFunctionsEnabled);
   const cards = installedPlugins.map(({ manifest, enabled, internalFunctionsEnabled, advancedFunctionsEnabled }) => {
+    const requestsInternalFunctions = manifest.permissions.includes("host.internal");
+    const requestsAdvancedFunctions = manifest.permissions.includes("host.advanced");
+    const canGrantInternalFunctions = internalFunctionsAvailable && requestsInternalFunctions;
+    const canGrantAdvancedFunctions = advancedFunctionsAvailable && requestsAdvancedFunctions;
     const contributions = [
       manifest.backend ? t("plugins.backend") : "",
       manifest.pages.length ? t("plugins.pageCount", { count: manifest.pages.length }) : "",
@@ -1682,8 +1686,8 @@ function renderPlugins(): string {
       <p class="plugin-manager-contributions">${escapeHtml(contributions || t("plugins.noContributions"))}</p>
       <div class="plugin-manager-permissions" aria-label="${t("plugins.permissions")}">${permissions}</div>
       <div class="plugin-manager-privileges">
-        <label class="fluent-switch"><input type="checkbox" data-plugin-internal-functions="${escapeHtml(manifest.id)}" ${internalFunctionsEnabled ? "checked" : ""} ${internalFunctionsAvailable ? "" : "disabled"} /><span></span><span><strong>${t("plugins.internalFunctions")}</strong><small>${internalFunctionsAvailable ? t("plugins.internalFunctionsDescription") : t("plugins.globalPermissionRequired")}</small></span></label>
-        <label class="fluent-switch"><input type="checkbox" data-plugin-advanced-functions="${escapeHtml(manifest.id)}" ${advancedFunctionsEnabled ? "checked" : ""} ${advancedFunctionsAvailable ? "" : "disabled"} /><span></span><span><strong>${t("plugins.advancedFunctions")}</strong><small>${advancedFunctionsAvailable ? t("plugins.advancedFunctionsDescription") : t("plugins.globalPermissionRequired")}</small></span></label>
+        <label class="fluent-switch"><input type="checkbox" data-plugin-internal-functions="${escapeHtml(manifest.id)}" ${internalFunctionsEnabled ? "checked" : ""} ${canGrantInternalFunctions ? "" : "disabled"} /><span></span><span><strong>${t("plugins.internalFunctions")}</strong><small>${!requestsInternalFunctions ? t("plugins.permissionNotRequested") : internalFunctionsAvailable ? t("plugins.internalFunctionsDescription") : t("plugins.globalPermissionRequired")}</small></span></label>
+        <label class="fluent-switch"><input type="checkbox" data-plugin-advanced-functions="${escapeHtml(manifest.id)}" ${advancedFunctionsEnabled ? "checked" : ""} ${canGrantAdvancedFunctions ? "" : "disabled"} /><span></span><span><strong>${t("plugins.advancedFunctions")}</strong><small>${!requestsAdvancedFunctions ? t("plugins.permissionNotRequested") : advancedFunctionsAvailable ? t("plugins.advancedFunctionsDescription") : t("plugins.globalPermissionRequired")}</small></span></label>
       </div>
       <div class="plugin-manager-actions">
         <button class="secondary compact" data-toggle-plugin="${escapeHtml(manifest.id)}" data-plugin-enabled="${enabled}">${icon(enabled ? "check" : "play", 16)} ${enabled ? t("plugins.disable") : t("plugins.enable")}</button>

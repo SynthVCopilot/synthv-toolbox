@@ -178,6 +178,14 @@ pub fn set_internal_functions_enabled(
 ) -> Result<InstalledPlugin, String> {
     let path = plugin_path(root, plugin_id)?;
     let manifest = read_manifest(&path)?;
+    if enabled
+        && !manifest
+            .permissions
+            .iter()
+            .any(|value| value == "host.internal")
+    {
+        return Err("插件未声明内部函数权限。".to_string());
+    }
     let mut state = read_state(&path)?;
     state.internal_functions_enabled = enabled;
     write_state(&path, &state)?;
@@ -191,6 +199,14 @@ pub fn set_advanced_functions_enabled(
 ) -> Result<InstalledPlugin, String> {
     let path = plugin_path(root, plugin_id)?;
     let manifest = read_manifest(&path)?;
+    if enabled
+        && !manifest
+            .permissions
+            .iter()
+            .any(|value| value == "host.advanced")
+    {
+        return Err("插件未声明高级功能权限。".to_string());
+    }
     let mut state = read_state(&path)?;
     state.advanced_functions_enabled = enabled;
     write_state(&path, &state)?;

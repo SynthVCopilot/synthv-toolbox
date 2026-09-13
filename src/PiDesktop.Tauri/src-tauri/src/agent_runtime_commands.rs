@@ -144,7 +144,13 @@ pub async fn set_agent_plugin_internal_functions_enabled(
     enabled: bool,
     state: State<'_, AppState>,
 ) -> Result<crate::plugin_manager::InstalledPlugin, String> {
-    if enabled && !state.settings.read().await.plugin_internal_functions_enabled {
+    if enabled
+        && !state
+            .settings
+            .read()
+            .await
+            .plugin_internal_functions_enabled
+    {
         return Err("请先在设置中启用插件内部函数使用。".to_string());
     }
     crate::plugin_manager::set_internal_functions_enabled(
@@ -160,7 +166,13 @@ pub async fn set_agent_plugin_advanced_functions_enabled(
     enabled: bool,
     state: State<'_, AppState>,
 ) -> Result<crate::plugin_manager::InstalledPlugin, String> {
-    if enabled && !state.settings.read().await.plugin_advanced_functions_enabled {
+    if enabled
+        && !state
+            .settings
+            .read()
+            .await
+            .plugin_advanced_functions_enabled
+    {
         return Err("请先在设置中启用插件高级功能使用。".to_string());
     }
     crate::plugin_manager::set_advanced_functions_enabled(
