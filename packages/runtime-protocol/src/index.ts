@@ -80,12 +80,14 @@ export type AgentEffortLevel = "low" | "mid" | "high" | "max";
 export type AgentThinkingLevel = "low" | "medium" | "high" | "xhigh";
 
 /**
- * Per-level loop policy. `coverage` is the share of runs the budget must let finish on their own
- * (1σ, 2σ, 3σ of the empirical rule); `null` means unlimited. `compactionTrigger` is the share of the
+ * Per-level loop policy. Each budget limit sits `sigmas` log-space deviations above the fitted mean of that
+ * level's runs, so by the union bound over turns and tokens at least `coverage` of runs (the 1σ/2σ/3σ
+ * empirical rule) finish on their own; `null` means unlimited. `compactionTrigger` is the share of the
  * model context window after which Pi compacts; `null` keeps Pi's default reserve.
  */
 export interface AgentEffortProfile {
   coverage: number | null;
+  sigmas: number | null;
   thinking: AgentThinkingLevel;
   compactionTrigger: number | null;
   keepRecentTokens: number;
@@ -97,10 +99,10 @@ export const AGENT_EFFORT_LEVELS: readonly AgentEffortLevel[] = ["low", "mid", "
 export const DEFAULT_AGENT_EFFORT: AgentEffortLevel = "mid";
 
 export const AGENT_EFFORT_PROFILES: Readonly<Record<AgentEffortLevel, AgentEffortProfile>> = {
-  low: { coverage: 0.6827, thinking: "low", compactionTrigger: 0.5, keepRecentTokens: 12_000, maxIdleContinuations: 1 },
-  mid: { coverage: 0.9545, thinking: "medium", compactionTrigger: 0.7, keepRecentTokens: 20_000, maxIdleContinuations: 2 },
-  high: { coverage: 0.9973, thinking: "high", compactionTrigger: 0.85, keepRecentTokens: 32_000, maxIdleContinuations: 3 },
-  max: { coverage: null, thinking: "xhigh", compactionTrigger: null, keepRecentTokens: 48_000, maxIdleContinuations: 4 },
+  low: { coverage: 0.6827, sigmas: 1, thinking: "low", compactionTrigger: 0.5, keepRecentTokens: 12_000, maxIdleContinuations: 1 },
+  mid: { coverage: 0.9545, sigmas: 2, thinking: "medium", compactionTrigger: 0.7, keepRecentTokens: 20_000, maxIdleContinuations: 2 },
+  high: { coverage: 0.9973, sigmas: 3, thinking: "high", compactionTrigger: 0.85, keepRecentTokens: 32_000, maxIdleContinuations: 3 },
+  max: { coverage: null, sigmas: null, thinking: "xhigh", compactionTrigger: null, keepRecentTokens: 48_000, maxIdleContinuations: 4 },
 };
 
 /** Log-normal prior used until enough finished runs exist; medians and log-space deviations per metric. */
@@ -117,6 +119,7 @@ export const AGENT_BUDGET_FLOOR = { turns: 2, tokens: 20_000 } as const;
 
 /** One finished run; `censored` marks runs stopped by their budget, whose true need is at least the recorded usage. */
 export interface AgentUsageSample {
+  level: AgentEffortLevel;
   turns: number;
   tokens: number;
   censored: boolean;
@@ -140,8 +143,9 @@ export interface AgentBudgetUsage extends AgentRunBudget {
  * - `needs_input`: the agent stopped the loop because core information is missing.
  * - `budget_exhausted`: the effort budget ran out before either signal.
  * - `incomplete`: the agent stopped advancing without a signal while budget remained.
+ * - `cancelled`: the user stopped the run.
  */
-export type AgentRunStatus = "completed" | "needs_input" | "budget_exhausted" | "incomplete";
+export type AgentRunStatus = "completed" | "needs_input" | "budget_exhausted" | "incomplete" | "cancelled";
 
 export interface AgentRunOutcome {
   status: AgentRunStatus;
@@ -152,11 +156,16 @@ export interface AgentRunOutcome {
   budget: AgentBudgetUsage;
 }
 
+/** `outcome` is the conversation's latest run outcome, used to restore the plan and any pending question when a session is recreated. */
 export interface AgentSessionInitializeParams {
   sessionId: string;
   cwd?: string;
   systemPrompt?: string;
-  plan?: AgentPlan;
+  outcome?: AgentRunOutcome;
+}
+
+export interface AgentSessionCancelParams {
+  sessionId: string;
 }
 
 export interface AgentSessionSendParams {
@@ -460,7 +469,7 @@ export function validateAgentRunOutcome(value: unknown): AgentRunOutcome | undef
   if (!evidence || !missing || missing.length > AGENT_PLAN_LIMITS.missing) return undefined;
   if (value.status === "completed" && (!summary || !plan || evidence.length !== plan.doneCriteria.length || missing.length)) return undefined;
   if (value.status === "needs_input" && (!summary || !missing.length || evidence.length)) return undefined;
-  if ((value.status === "budget_exhausted" || value.status === "incomplete") && (summary || evidence.length || missing.length)) return undefined;
+  if ((value.status === "budget_exhausted" || value.status === "incomplete" || value.status === "cancelled") && (summary || evidence.length || missing.length)) return undefined;
   return { status: value.status, summary, evidence, missing, plan, budget };
 }
 
@@ -603,7 +612,7 @@ function isAgentTodoStatus(value: unknown): value is AgentTodoStatus {
 }
 
 function isAgentRunStatus(value: unknown): value is AgentRunStatus {
-  return value === "completed" || value === "needs_input" || value === "budget_exhausted" || value === "incomplete";
+  return value === "completed" || value === "needs_input" || value === "budget_exhausted" || value === "incomplete" || value === "cancelled";
 }
 
 function boundedText(value: unknown, maxLength: number): string | undefined {
