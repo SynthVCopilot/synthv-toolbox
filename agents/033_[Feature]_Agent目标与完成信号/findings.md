@@ -30,3 +30,25 @@
 
 - `command-registry.ts` 的 `send_message` 总是发到最近更新的会话（`conversations[0]`），而不是 renderer 当前打开的会话。
 - 本地 `main` 与 `origin/main` 已分叉（本地独有 8 个提交，远端独有 749 个提交）；本分支基于 `origin/main` 的 `25d2062`。
+
+## 设计修订记录
+
+[todo 阻止结束] -> [Rosmontis 指出 todo 不应决定能否结束] -> 移除 `completed` 对 todo 全部结束的校验，改为三类信号 + 预算。
+[固定预算表 6/16/40/100 轮] -> [Rosmontis 要求统计学设计] -> 改为覆盖率定档；经验分位数若直接把预算截断的运行当作完整样本，会让 Low/Mid 预算自我锁死在当前值，因此按右删失用 Kaplan–Meier 估计；删失过多无法估到目标分位时取 max(先验分位, 历史最大值)。
+[先验参数] -> 轮次中位数 4、log σ 0.9；Token 中位数 60k、log σ 1.0 -> 先验预算 Low 7 轮/97k，Mid 19 轮/325k，High 49 轮/969k。
+[Pi 压缩参数] -> `compaction.reserveTokens` 决定触发点（contextWindow - reserve），`keepRecentTokens` 决定保留量；`SettingsManager.applyOverrides` 可按轮覆盖，压缩时实时读取。
+[Pi 工具异常] -> pi-agent-core `agent-loop.js` 将工具 `execute()` 抛出的错误转为 `isError` 结果交给模型，不会中断运行。
+[预算中途停止] -> 用 `tool_call` 返回 `{ block, terminate }` 平滑结束，而不是 `abort()`；超支最多一轮。
+
+## 范围外缺口
+
+- Agent 目前没有接入任何 Toolbox 能力（下载/分离/GAME/音素检查/导入 SV/调参），也没有 Copilot 角色系统提示；翻唱类长任务在接入这些工具前无法实际执行。
+
+## 实现阶段发现
+
+- [子 agent worktree 基点] -> Workflow 创建的 worktree 位于 `25d2062` 而非任务分支 HEAD -> 子 agent 按指令 `git reset --hard 6af45d6` 后建分支；后续派发需同样指定基点。
+- [SettingsManager.applyOverrides] -> 读 `settings-manager.js` -> 内部 `deepMergeObjects`，嵌套合并 `compaction`，可按轮覆盖。
+- [预算耗尽判定时机] -> `turn_end` 在工具执行后触发，耗尽判定晚于本轮工具调用 -> 耗尽后 Pi 仍会发起下一次 LLM 调用，再由 `tool_call` 阻断；实际 LLM 调用最多比 `maxTurns` 多 1 次。
+- [测试替身] -> 单轮 `prompt()` 只对应一个内部回合时无法覆盖预算阻断 -> 替身支持单次 `prompt()` 内多回合。
+- [electron-ai-service 测试] -> `data:` URL 模块中无法解析裸包名 `@synthv-toolbox/runtime-protocol` -> 测试将其重写为已构建 `dist/index.js` 的 `file://` 绝对路径。
+- [sandbox] -> `synthv-service.mjs` 写真实 `~/Library/Application Support/Dreamtonics` 在沙箱中 EACCES -> 既有问题，与本任务无关。

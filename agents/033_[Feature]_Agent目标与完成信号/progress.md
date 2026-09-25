@@ -10,3 +10,11 @@
 - 修改 `packages/runtime-protocol/src/index.ts`：新增计划、档位、预算、运行结果类型与 `checkAgentPlan`、`estimateAgentRunBudget`、`validateAgentRunBudget`、`validateAgentRunOutcome`。
 - 修改 `test/runtime-protocol.mjs`：新增计划校验、档位配置、先验预算、经验分位数与删失修正、运行结果校验测试。
 - `node packages/runtime-protocol/node_modules/typescript/bin/tsc -p packages/runtime-protocol/tsconfig.json --noEmit` 通过；`node --test test/runtime-protocol.mjs` 10/10 通过。
+- 提交协议契约 `6af45d6`（`git add -f` 纳入 `agents/033_*`，因 `agents/` 被 `.gitignore` 忽略但历史记录均强制入库）。
+- 启动 Workflow `agent-goal-implement`（run `wf_63339b8f-f7a`）：`implement:runtime`（分支 `agent-goal-runtime`）与 `implement:host-ui`（分支 `agent-goal-host-ui`）在独立 worktree 并行实现，sonnet / medium。
+- 创建每 15 分钟一次的进度检查 cron（job `488952db`）。
+- Workflow `agent-goal-implement` 完成：`agent-goal-runtime@abb5378`（新增 `packages/agent-runtime/src/task-loop.ts`，改 `index.ts`、`package.json` 加 `typebox@1.3.7`、`test/agent-runtime.mjs` 21 项）；`agent-goal-host-ui@51b40ca`（`ai-service.ts`、`desktop-state.ts`、`command-registry.ts`、`electron/main.ts`、renderer `types.ts`/`api.ts`/`main.ts`/`i18nCopilot.ts`/`i18nSystem.ts`/`styles.css`，新测试 `test/agent-goal-ui.mjs`，重写 `test/electron-ai-service.mjs`，`test:contracts` 加入新测试）。
+- 本分支 `git merge --no-ff agent-goal-runtime`（`3b0e373`）与 `agent-goal-host-ui`（`5708a0f`），无冲突。
+- 集成验证：`npm ci --ignore-scripts`（agent-runtime、PiDesktop.Tauri）；`node --test test/runtime-protocol.mjs` 10/10；`node --test test/agent-runtime.mjs` 21/21；renderer `npx tsc --noEmit` 与 `npx tsc -p electron/tsconfig.json --noEmit` 通过；`npm run build:electron` exit 0。
+- `npm run test:contracts` exit 1：仅 `synthv-service.mjs` 的 "profiles persist locally and session writes reject stale hashes" 因沙箱禁止写 `~/Library/Application Support/Dreamtonics/...`（EACCES）失败，与本改动无关且会写真实用户目录，未绕过沙箱；链上其余 6 个 `--test` 文件 13/13 通过，其余 18 个脚本逐个 exit 0，`agent-goal-ui` 9/9，`chatgpt-copilot-ui` + `conversation-model-picker` 7/7。
+- `test:electron-main` 未运行：`--ignore-scripts` 未下载 Electron 二进制。
