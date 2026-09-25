@@ -1,13 +1,23 @@
 import { CredentialRouter, createCredentialMetadata, type CredentialMetadata, type ProviderAdapterHost, type ProviderRequest, type ProviderRequestContext, type ProviderResponse, type ProviderStreamEvent } from "@model-auth/core";
 import { fileURLToPath } from "node:url";
 import {
+  DEFAULT_AGENT_EFFORT,
   HOST_API_VERSION,
   HOST_HELLO_METHOD,
   PROTOCOL_VERSION_RANGE,
   encodeJsonl,
+  estimateAgentRunBudget,
   isHostApiCompatible,
   negotiateProtocolVersion,
   parseJsonl,
+  validateAgentPlan,
+  validateAgentRunBudget,
+  validateAgentRunOutcome,
+  type AgentEffortProfile,
+  type AgentPlan,
+  type AgentRunBudget,
+  type AgentRunOutcome,
+  type AgentSessionSendResult,
   type ApiVersion,
   type CapabilityDescriptor,
   type HostHello,
@@ -21,6 +31,16 @@ import {
   type RuntimeHello,
   validatePluginManifest,
 } from "@synthv-toolbox/runtime-protocol";
+import {
+  buildOutcome,
+  createTaskLoopExtension,
+  createTaskLoopState,
+  effortProfileFor,
+  isBudgetExhausted,
+  resetRun,
+  runTaskLoop,
+  type PiExtensionApi,
+} from "./task-loop.js";
 
 export const AGENT_RUNTIME_ID = "synthv-toolbox.agent-runtime";
 
@@ -31,12 +51,12 @@ export const AGENT_RUNTIME_CAPABILITIES: CapabilityDescriptor[] = [
 ];
 
 export interface PiSession {
-  prompt(input: string): Promise<string>;
+  prompt(input: string, budget: AgentRunBudget): Promise<{ message: string; outcome: AgentRunOutcome }>;
   dispose(): void | Promise<void>;
 }
 
 export interface PiSessionFactory {
-  create(input: { sessionId: string; cwd?: string; systemPrompt?: string; model?: PiModelSelection }): Promise<PiSession>;
+  create(input: { sessionId: string; cwd?: string; systemPrompt?: string; model?: PiModelSelection; plan?: AgentPlan }): Promise<PiSession>;
 }
 
 export interface PiModelSelection {
@@ -93,11 +113,43 @@ export interface PiResourceLoader {
   reload(): Promise<void>;
 }
 
+export interface PiSettingsManager {
+  applyOverrides(overrides: { compaction?: { enabled?: boolean; reserveTokens?: number; keepRecentTokens?: number } }): void;
+}
+
+export interface PiInlineExtension {
+  name: string;
+  factory: (pi: PiExtensionApi) => void | Promise<void>;
+}
+
+export interface PiAgentSession {
+  prompt(input: string): Promise<void>;
+  dispose(): void | Promise<void>;
+  setThinkingLevel(level: string): void;
+  messages?: unknown[];
+  agent?: { state?: { messages?: unknown[] } };
+}
+
 export interface PiSdk {
   getAgentDir(): string;
-  DefaultResourceLoader: new (options: { cwd: string; agentDir: string; additionalExtensionPaths: string[]; systemPrompt?: string }) => PiResourceLoader;
+  DefaultResourceLoader: new (options: {
+    cwd: string;
+    agentDir: string;
+    additionalExtensionPaths: string[];
+    extensionFactories?: PiInlineExtension[];
+    settingsManager?: PiSettingsManager;
+    systemPrompt?: string;
+  }) => PiResourceLoader;
   ModelRuntime: { create(options: { refreshOnCreate: false }): Promise<{ setRuntimeApiKey(providerId: string, apiKey: string): Promise<void>; getModel(providerId: string, modelId: string): unknown }> };
-  createAgentSession(options: { cwd: string; noTools: "builtin"; resourceLoader: PiResourceLoader; modelRuntime?: unknown; model?: unknown }): Promise<{ session: { prompt(input: string): Promise<void>; dispose(): void | Promise<void>; agent?: { state?: { messages?: unknown[] } } } }>;
+  SettingsManager: { create(cwd: string, agentDir?: string): PiSettingsManager };
+  createAgentSession(options: {
+    cwd: string;
+    noTools: "builtin";
+    resourceLoader: PiResourceLoader;
+    settingsManager?: PiSettingsManager;
+    modelRuntime?: unknown;
+    model?: unknown;
+  }): Promise<{ session: PiAgentSession }>;
 }
 
 export class ModelAuthGateway {
@@ -152,10 +204,14 @@ export function createPiSessionFactory(
     async create(input) {
       const sdk = await loadSdk();
       const cwd = input.cwd ?? process.cwd();
+      const settingsManager = sdk.SettingsManager.create(cwd, sdk.getAgentDir());
+      const state = createTaskLoopState(input.plan ?? null, estimateAgentRunBudget(DEFAULT_AGENT_EFFORT, []));
       const resourceLoader = new sdk.DefaultResourceLoader({
         cwd,
         agentDir: sdk.getAgentDir(),
         additionalExtensionPaths: [...additionalExtensionPaths()],
+        extensionFactories: [createTaskLoopExtension(state)],
+        settingsManager,
         ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
       });
       await resourceLoader.reload();
@@ -164,22 +220,52 @@ export function createPiSessionFactory(
       await modelRuntime.setRuntimeApiKey(input.model.providerId, input.model.apiKey);
       const model = modelRuntime.getModel(input.model.providerId, input.model.modelId);
       if (!model) throw new Error(`Pi does not support ${input.model.providerId}/${input.model.modelId}.`);
+      const contextWindow = getContextWindow(model);
       const result = await sdk.createAgentSession({
         cwd,
         noTools: "builtin",
         resourceLoader,
+        settingsManager,
         modelRuntime,
         model,
       });
       return {
-        prompt: async (text) => {
-          await result.session.prompt(text);
-          return assistantText(result.session.agent?.state?.messages);
+        prompt: async (text, budget) => {
+          resetRun(state, budget);
+          applyEffortProfile(result.session, settingsManager, effortProfileFor(budget.level), contextWindow);
+          const startCount = sessionMessages(result.session).length;
+          await runTaskLoop(state, effortProfileFor(budget.level), text, (round) => result.session.prompt(round));
+          const status = state.signal
+            ? (state.signal.kind === "completed" ? "completed" : "needs_input")
+            : isBudgetExhausted(state) ? "budget_exhausted" : "incomplete";
+          const outcome = buildOutcome(state, status);
+          const validated = validateAgentRunOutcome(outcome);
+          if (!validated) throw new Error("Produced an invalid run outcome.");
+          const runMessages = sessionMessages(result.session).slice(startCount);
+          const message = assistantText(runMessages) || validated.summary || "";
+          return { message, outcome: validated };
         },
         dispose: () => result.session.dispose(),
       };
     },
   };
+}
+
+function sessionMessages(session: PiAgentSession): unknown[] {
+  return session.messages ?? session.agent?.state?.messages ?? [];
+}
+
+function getContextWindow(model: unknown): number {
+  const contextWindow = isRecord(model) ? model.contextWindow : undefined;
+  return typeof contextWindow === "number" && contextWindow > 0 ? contextWindow : 200_000;
+}
+
+/** Applies the level's thinking level and compaction overrides for this run's prompt(); see AGENT_EFFORT_PROFILES. */
+function applyEffortProfile(session: PiAgentSession, settingsManager: PiSettingsManager, profile: AgentEffortProfile, contextWindow: number): void {
+  session.setThinkingLevel(profile.thinking);
+  const reserveTokens = profile.compactionTrigger === null ? 16_384 : Math.max(16_384, Math.round(contextWindow * (1 - profile.compactionTrigger)));
+  const keepRecentTokens = Math.min(profile.keepRecentTokens, Math.floor((contextWindow - reserveTokens) / 2));
+  settingsManager.applyOverrides({ compaction: { enabled: true, reserveTokens, keepRecentTokens } });
 }
 
 export class AgentRuntimeWorker {
@@ -242,12 +328,17 @@ export class AgentRuntimeWorker {
   private async initializeSession(request: RpcRequest): Promise<RpcResponseSuccess | RpcResponseFailure> {
     const params = readSessionParams(request.params, false);
     if (!params) return this.failure(request, "session.invalid", "session.initialize requires sessionId and an optional cwd.");
+    let plan: AgentPlan | undefined;
+    if (params.plan !== undefined) {
+      plan = validateAgentPlan(params.plan);
+      if (!plan) return this.failure(request, "session.invalid", "session.initialize plan is invalid.");
+    }
     const model = await this.hostModelSelection();
     const signature = JSON.stringify([params.cwd ?? "", params.systemPrompt ?? "", model.providerId, model.modelId, model.credentialId ?? ""]);
     const existing = this.sessions.get(params.sessionId);
     if (existing?.signature === signature) return this.success(request, { sessionId: params.sessionId, reused: true });
     if (existing) await existing.session.dispose();
-    const session = await this.sessionsFactory.create({ ...params, model });
+    const session = await this.sessionsFactory.create({ sessionId: params.sessionId, cwd: params.cwd, systemPrompt: params.systemPrompt, model, ...(plan ? { plan } : {}) });
     this.sessions.set(params.sessionId, { session, signature });
     return this.success(request, { sessionId: params.sessionId });
   }
@@ -257,8 +348,17 @@ export class AgentRuntimeWorker {
     if (!params) return this.failure(request, "session.invalid", "session.send requires sessionId and input.");
     const record = this.sessions.get(params.sessionId);
     if (!record) return this.failure(request, "session.not-found", "The session is not initialized.");
-    const message = await record.session.prompt(params.input);
-    return this.success(request, { sessionId: params.sessionId, accepted: true, message });
+    let budget: AgentRunBudget;
+    if (params.budget !== undefined) {
+      const validated = validateAgentRunBudget(params.budget);
+      if (!validated) return this.failure(request, "session.invalid", "session.send budget is invalid.");
+      budget = validated;
+    } else {
+      budget = estimateAgentRunBudget(DEFAULT_AGENT_EFFORT, []);
+    }
+    const { message, outcome } = await record.session.prompt(params.input, budget);
+    const result: AgentSessionSendResult = { sessionId: params.sessionId, accepted: true, message, outcome };
+    return this.success(request, result as unknown as JsonValue);
   }
 
   private async hostModelSelection(): Promise<PiModelSelection> {
@@ -380,12 +480,19 @@ function parseHostHello(value: JsonValue): HostHello | undefined {
   return { hostId: value.hostId, protocol: value.protocol, capabilities };
 }
 
-function readSessionParams(value: JsonValue, requiresInput: boolean): { sessionId: string; cwd?: string; systemPrompt?: string; input: string } | undefined {
+function readSessionParams(value: JsonValue, requiresInput: boolean): { sessionId: string; cwd?: string; systemPrompt?: string; input: string; plan?: JsonValue; budget?: JsonValue } | undefined {
   if (!isRecord(value) || typeof value.sessionId !== "string" || value.sessionId.length === 0) return undefined;
   if (value.cwd !== undefined && typeof value.cwd !== "string") return undefined;
   if (value.systemPrompt !== undefined && (typeof value.systemPrompt !== "string" || value.systemPrompt.length === 0)) return undefined;
   if (requiresInput && (typeof value.input !== "string" || value.input.length === 0)) return undefined;
-  return { sessionId: value.sessionId, ...(typeof value.cwd === "string" ? { cwd: value.cwd } : {}), ...(typeof value.systemPrompt === "string" ? { systemPrompt: value.systemPrompt } : {}), input: typeof value.input === "string" ? value.input : "" };
+  return {
+    sessionId: value.sessionId,
+    ...(typeof value.cwd === "string" ? { cwd: value.cwd } : {}),
+    ...(typeof value.systemPrompt === "string" ? { systemPrompt: value.systemPrompt } : {}),
+    input: typeof value.input === "string" ? value.input : "",
+    ...(value.plan !== undefined ? { plan: value.plan } : {}),
+    ...(value.budget !== undefined ? { budget: value.budget } : {}),
+  };
 }
 
 function isCapabilityDescriptor(value: unknown): value is CapabilityDescriptor {
