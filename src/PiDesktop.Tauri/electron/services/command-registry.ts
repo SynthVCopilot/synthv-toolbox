@@ -1,4 +1,4 @@
-import type { JsonValue } from "@synthv-toolbox/runtime-protocol";
+import { AGENT_EFFORT_LEVELS, type AgentEffortLevel, type JsonValue } from "@synthv-toolbox/runtime-protocol";
 import type { AiService, AiProviderId, AiLoadStrategy } from "./ai-service.js";
 import type { CreativeService } from "./creative-service.js";
 import { registerComponentAudioCommands, type ComponentAudioOptions } from "./component-audio-commands.js";
@@ -59,7 +59,7 @@ export class ElectronCommandRegistry {
     this.register("save_mcp_server", async p => s.desktop.saveMcpServer(objectParam(p, "server")));
     this.register("delete_mcp_server", async p => s.desktop.deleteMcpServer(stringParam(p, "id")));
     this.register("test_mcp_server", async p => ({ succeeded: true, summary: "MCP server configuration is valid.", detail: stringParam(p, "id") }));
-    this.registerAi(s.ai, state);
+    this.registerAi(s.ai, s.desktop, state);
     registerSynthVCommands(this, s.synthv);
     registerComponentAudioCommands(this, s.componentAudio);
     for (const command of CREATIVE_COMMANDS) if (!this.handlers.has(command)) this.register(command, params => s.creative.invoke(command, params));
@@ -67,12 +67,13 @@ export class ElectronCommandRegistry {
     this.register("decide_agent_file_approval", async () => null);
   }
 
-  private registerAi(ai: AiService, state: () => Promise<unknown>): void {
+  private registerAi(ai: AiService, desktop: DesktopStateService, state: () => Promise<unknown>): void {
     this.register("ai_provider_state", async p => ai.ai_provider_state(p.forceCatalog === true)); this.register("ai_provider_usage", async () => ai.ai_provider_usage()); this.register("opencode_provider_catalog", async p => ai.opencode_provider_catalog(p.force === true));
     this.register("authorize_ai_provider", async p => { await ai.authorize_ai_provider(providerParam(p), optionalStringParam(p, "operationId")); return state(); }); this.register("cancel_ai_authorization", async p => { ai.cancel_ai_authorization(stringParam(p, "operationId")); return null; });
     this.register("select_ai_provider", async p => { await ai.select_ai_provider(providerParam(p), stringParam(p, "model")); return state(); }); this.register("add_ai_api_key", async p => { await ai.add_ai_api_key(providerParam(p), stringParam(p, "label"), stringParam(p, "apiKey")); return state(); }); this.register("remove_ai_api_key", async p => { await ai.remove_ai_api_key(providerParam(p), stringParam(p, "credentialId")); return state(); }); this.register("remove_ai_provider_account", async p => { await ai.remove_ai_provider_account(providerParam(p), stringParam(p, "accountId")); return state(); });
     this.register("update_ai_credential", async p => { await ai.update_ai_credential(providerParam(p), stringParam(p, "credentialId"), boolParam(p, "enabled"), numberParam(p, "weight")); return state(); }); this.register("update_ai_provider", async p => { await ai.update_ai_provider(providerParam(p), boolParam(p, "oauthEnabled")); return state(); }); this.register("update_ai_provider_strategy", async p => { await ai.update_ai_provider_strategy(providerParam(p), enumParam(p, "strategy", ["round-robin", "weighted-round-robin", "failover"]) as AiLoadStrategy); return state(); });
-    this.register("list_conversations", async () => ai.list_conversations()); this.register("new_conversation", async () => ai.new_conversation()); this.register("open_conversation", async p => ai.open_conversation(stringParam(p, "id"))); this.register("send_message", async p => { const conversations = await ai.list_conversations(); const current = conversations[0] ?? await ai.new_conversation(); return ai.send_message(current.id, stringParam(p, "input")); });
+    this.register("list_conversations", async () => ai.list_conversations()); this.register("new_conversation", async () => ai.new_conversation()); this.register("open_conversation", async p => ai.open_conversation(stringParam(p, "id"))); this.register("send_message", async p => ai.send_message(stringParam(p, "conversationId"), stringParam(p, "input"), { effort: desktop.agentEffort() }));
+    this.register("set_agent_effort", async p => desktop.update({ agentEffort: enumParam(p, "effort", AGENT_EFFORT_LEVELS) as AgentEffortLevel }));
   }
 
   private async installedPlugins(): Promise<Array<{ manifest: Record<string, unknown>; enabled: boolean; internalFunctionsEnabled: boolean; advancedFunctionsEnabled: boolean }>> { return (await this.host.contributions()).map(({ manifest, state }) => ({ manifest: manifest as unknown as Record<string, unknown>, ...state })); }

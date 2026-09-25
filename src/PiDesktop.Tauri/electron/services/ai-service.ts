@@ -2,6 +2,17 @@ import { CredentialRouter, createCredentialMetadata } from "@model-auth/core";
 import { dirname } from "node:path";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { AgentRuntimeWorker } from "@synthv-toolbox/agent-runtime";
+import {
+  AGENT_EFFORT_LEVELS,
+  DEFAULT_AGENT_EFFORT,
+  estimateAgentRunBudget,
+  validateAgentRunOutcome,
+  type AgentEffortLevel,
+  type AgentPlan,
+  type AgentRunBudget,
+  type AgentRunOutcome,
+  type AgentUsageSample,
+} from "@synthv-toolbox/runtime-protocol";
 
 export type AiProviderId = "anthropic" | "openai-codex" | "workbuddy" | "traecode";
 export type AiLoadStrategy = "round-robin" | "weighted-round-robin" | "failover";
@@ -68,6 +79,7 @@ export interface ConversationMessage {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
+  outcome?: AgentRunOutcome;
 }
 
 export interface ConversationSnapshot {
@@ -349,26 +361,52 @@ export class AiService {
     return cloneConversation(conversation);
   }
 
-  async send_message(conversationId: string, input: string, cwd?: string): Promise<ConversationMessage[]> {
+  async send_message(conversationId: string, input: string, options: { cwd?: string; effort?: AgentEffortLevel } = {}): Promise<ConversationMessage[]> {
     const text = input.trim();
     if (!text) throw new Error("Message is required.");
     if (text.length > 32_000) throw new Error("Message exceeds the 32,000 character limit.");
     const metadata = await this.load();
     const conversation = metadata.conversations.find((item) => item.id === conversationId);
     if (!conversation) throw new Error("Conversation was not found.");
-    const provider = metadata.activeProvider;
-    const model = metadata.providers[provider].model;
-    await this.options.runtime.request("session.initialize", { sessionId: conversation.id, ...(cwd ? { cwd } : {}), model: { provider, model } });
-    const response = await this.options.runtime.request("session.send", { sessionId: conversation.id, input: text });
-    const assistant = typeof response.message === "string" ? response.message.trim() : "";
-    if (!assistant) throw new Error("Agent Runtime did not return an assistant message.");
+    const effort = options.effort ?? DEFAULT_AGENT_EFFORT;
+    const plan = latestPlan(conversation);
+    await this.options.runtime.request("session.initialize", { sessionId: conversation.id, ...(options.cwd ? { cwd: options.cwd } : {}), ...(plan ? { plan } : {}) });
+    const budget = estimateAgentRunBudget(effort, this.agentUsageSamples());
+    const response = await this.options.runtime.request("session.send", { sessionId: conversation.id, input: text, budget });
+    const outcome = validateAgentRunOutcome(response.outcome);
+    if (!outcome) throw new Error("Agent Runtime returned an invalid run outcome.");
+    const assistant = (typeof response.message === "string" ? response.message.trim() : "") || outcome.summary;
     const now = this.now().toISOString();
-    const messages: ConversationMessage[] = [{ role: "user", content: text, createdAt: now }, { role: "assistant", content: assistant, createdAt: now }];
+    const messages: ConversationMessage[] = [
+      { role: "user", content: text, createdAt: now },
+      { role: "assistant", content: assistant, createdAt: now, outcome },
+    ];
     conversation.messages.push(...messages);
     conversation.updatedAt = now;
     if (conversation.title === "New conversation") conversation.title = text.slice(0, 28);
     await this.persist();
     return messages.map((message) => ({ ...message }));
+  }
+
+  agentUsageSamples(): AgentUsageSample[] {
+    if (!this.metadata) throw new Error("AI metadata has not been loaded yet.");
+    const finished = this.metadata.conversations
+      .flatMap((conversation) => conversation.messages)
+      .filter((message): message is ConversationMessage & { outcome: AgentRunOutcome } => message.role === "assistant" && message.outcome !== undefined)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+    const samples: AgentUsageSample[] = [];
+    for (const message of finished) {
+      const { status, budget } = message.outcome;
+      if (status === "incomplete") continue;
+      samples.push({ turns: budget.turns, tokens: budget.tokens, censored: status === "budget_exhausted" });
+    }
+    return samples;
+  }
+
+  async agent_budgets(): Promise<Record<AgentEffortLevel, AgentRunBudget>> {
+    await this.load();
+    const samples = this.agentUsageSamples();
+    return Object.fromEntries(AGENT_EFFORT_LEVELS.map((level) => [level, estimateAgentRunBudget(level, samples)])) as Record<AgentEffortLevel, AgentRunBudget>;
   }
 
   private async removeCredential(provider: AiProviderId, credentialId: string, kind: CredentialKind): Promise<Record<string, unknown>> {
@@ -445,7 +483,20 @@ function parseMetadata(raw: string): AiServiceMetadata {
   if (value.version !== 1 || !isProvider(value.activeProvider) || !Array.isArray(value.credentials) || !Array.isArray(value.conversations) || !value.providers) {
     throw new Error("AI metadata is invalid.");
   }
+  for (const conversation of value.conversations) {
+    for (const message of conversation.messages) {
+      if (message.role === "assistant" && message.outcome !== undefined && !validateAgentRunOutcome(message.outcome)) delete message.outcome;
+    }
+  }
   return value as AiServiceMetadata;
+}
+
+function latestPlan(conversation: ConversationSnapshot): AgentPlan | undefined {
+  for (let index = conversation.messages.length - 1; index >= 0; index--) {
+    const message = conversation.messages[index];
+    if (message.role === "assistant" && message.outcome?.plan) return message.outcome.plan;
+  }
+  return undefined;
 }
 
 function publicCredential(credential: StoredCredential): Omit<StoredCredential, "sealed"> {

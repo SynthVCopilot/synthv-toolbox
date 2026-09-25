@@ -1,8 +1,10 @@
 import packageJson from "../package.json";
-import type { PluginManifest } from "@synthv-toolbox/runtime-protocol";
+import { AGENT_EFFORT_LEVELS, DEFAULT_AGENT_EFFORT, estimateAgentRunBudget, type PluginManifest } from "@synthv-toolbox/runtime-protocol";
 import { hasDesktopBridge, invokeDesktop, listenDesktop, openDesktopDialog } from "../electron/bridge";
 import type {
   AiProviderId,
+  AgentEffortLevel,
+  AgentRunBudget,
   AgentWorkMode,
   AgentFileApproval,
   AiProviderSummary,
@@ -77,6 +79,10 @@ const AUDIO_FILE_EXTENSIONS = ["wav", "flac", "mp3", "m4a", "aac", "ogg", "opus"
 let previewMode: AppMode = "toolbox";
 let previewUpdateChannel: "stable" | "nightly" = "stable";
 let previewAgentWorkMode: AgentWorkMode = "edit";
+let previewAgentEffort: AgentEffortLevel = DEFAULT_AGENT_EFFORT;
+const previewAgentBudgets: Record<AgentEffortLevel, AgentRunBudget> = Object.fromEntries(
+  AGENT_EFFORT_LEVELS.map((level) => [level, estimateAgentRunBudget(level, [])]),
+) as Record<AgentEffortLevel, AgentRunBudget>;
 let previewOnboarding = false;
 let previewConcurrentDisclaimerAccepted = false;
 let previewSv2ConcurrentEnabled = true;
@@ -413,6 +419,37 @@ let previewProfiles: Sv2ProfilesState = {
   }],
 };
 
+const previewAgentOutcome: import("./types").AgentRunOutcome = {
+  status: "completed",
+  summary: "已完成翻唱工作流：分离人声、用 GAME 清理并核对音素后导入 SynthV，完成多轮参数微调。",
+  evidence: [
+    "已在下载目录定位到原曲音频文件。",
+    "人声与伴奏已通过本地分离组件拆分为独立轨道。",
+    "人声已用 GAME 降噪并去除气声残留。",
+    "音素核对通过，歌词与音节对齐无误。",
+    "已导入 SynthV 工程并完成三轮参数微调，音高与力度曲线自然。",
+  ],
+  missing: [],
+  plan: {
+    goal: "把这段翻唱音频制作成可用的 SynthV 工程。",
+    doneCriteria: [
+      "找到原曲音频来源",
+      "人声与伴奏分离完成",
+      "人声已用 GAME 清理",
+      "音素核对通过并导入 SynthV",
+      "完成多轮参数微调",
+    ],
+    todos: [
+      { id: "find-source", title: "找到原曲音频来源", status: "completed" },
+      { id: "separate", title: "分离人声与伴奏", status: "completed" },
+      { id: "clean-vocal", title: "用 GAME 清理人声", status: "completed" },
+      { id: "check-phonemes", title: "核对音素并导入 SynthV", status: "completed" },
+      { id: "tune", title: "多轮参数微调", status: "completed", note: "已完成 3 轮微调。" },
+    ],
+  },
+  budget: { ...previewAgentBudgets[previewAgentEffort], turns: 6, tokens: 42_000 },
+};
+
 const previewSv2VoiceCatalog = [
   { id: "preview-mai-2", name: "Mai 2", vendor: "Dreamtonics", imageDataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E%3Crect width='48' height='48' fill='%236d5ce7'/%3E%3C/svg%3E" },
   { id: "00000000-0000-4000-8000-000000000002", name: null, imageDataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E%3Crect width='48' height='48' fill='%230ea5e9'/%3E%3C/svg%3E" },
@@ -422,6 +459,8 @@ const previewState = (): BootstrapState => ({
   onboardingCompleted: previewOnboarding,
   mode: previewMode,
   agentWorkMode: previewAgentWorkMode,
+  agentEffort: previewAgentEffort,
+  agentBudgets: previewAgentBudgets,
   updateChannel: previewUpdateChannel,
   platform: "preview",
   appVersion: packageJson.version,
@@ -756,6 +795,10 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   }
   if (command === "set_agent_work_mode") {
     previewAgentWorkMode = args?.mode === "solo" ? "solo" : "edit";
+    return previewState() as T;
+  }
+  if (command === "set_agent_effort") {
+    previewAgentEffort = AGENT_EFFORT_LEVELS.includes(args?.effort as AgentEffortLevel) ? (args?.effort as AgentEffortLevel) : DEFAULT_AGENT_EFFORT;
     return previewState() as T;
   }
   if (command === "set_update_channel") {
@@ -1389,7 +1432,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "new_conversation") return { id: "preview", title: "新对话", messages: [] } as T;
   if (command === "open_conversation") return { id: "preview", title: "预览对话", messages: [] } as T;
   if (command === "agent_file_approvals") return [] as T;
-  if (command === "send_message") return [{ role: "assistant", content: "这是本地视觉预览回复。" }] as T;
+  if (command === "send_message") return [{ role: "assistant", content: previewAgentOutcome.summary, outcome: previewAgentOutcome }] as T;
   if (command.startsWith("run_") || ["add_project_reference", "export_project_without_parameters", "export_project_lyrics"].includes(command)) return {
     kind: command.replace(/^run_/, "").replaceAll("_", "-"),
     summary: "预览工作流已完成。",
@@ -1419,6 +1462,7 @@ export const api = {
   completeOnboarding: (mode: AppMode) => call<BootstrapState>("complete_onboarding", { mode }),
   setMode: (mode: AppMode) => call<BootstrapState>("set_mode", { mode }),
   setAgentWorkMode: (mode: AgentWorkMode) => call<BootstrapState>("set_agent_work_mode", { mode }),
+  setAgentEffort: (effort: AgentEffortLevel) => call<BootstrapState>("set_agent_effort", { effort }),
   setUpdateChannel: (channel: import("./types").UpdateChannel) => call<BootstrapState>("set_update_channel", { channel }),
   authorizeAiProvider: (provider: AiProviderId, credentialId?: string, operationId?: string) =>
     call<BootstrapState>("authorize_ai_provider", { provider, credentialId, operationId }),
@@ -1706,7 +1750,7 @@ export const api = {
   listConversations: () => call<ConversationSummary[]>("list_conversations"),
   newConversation: () => call<ConversationSnapshot>("new_conversation"),
   openConversation: (id: string) => call<ConversationSnapshot>("open_conversation", { id }),
-  sendMessage: (input: string) => call<ChatMessage[]>("send_message", { input }),
+  sendMessage: (conversationId: string, input: string) => call<ChatMessage[]>("send_message", { conversationId, input }),
   agentFileApprovals: () => call<AgentFileApproval[]>("agent_file_approvals"),
   decideAgentFileApproval: (id: string, approve: boolean) => call<void>("decide_agent_file_approval", { id, approve }),
   saveMcpServer: (server: McpServerConfig) => call<BootstrapState>("save_mcp_server", { server }),

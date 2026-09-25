@@ -1,3 +1,7 @@
+import type { AgentEffortLevel, AgentPlan, AgentRunBudget, AgentRunOutcome, AgentTodo } from "@synthv-toolbox/runtime-protocol";
+
+export type { AgentEffortLevel, AgentPlan, AgentRunBudget, AgentRunOutcome, AgentTodo };
+
 export type AppMode = "toolbox" | "ai";
 export type AgentWorkMode = "edit" | "solo";
 export type UpdateChannel = "stable" | "nightly";
@@ -471,6 +475,8 @@ export interface BootstrapState {
   onboardingCompleted: boolean;
   mode: AppMode;
   agentWorkMode: AgentWorkMode;
+  agentEffort: AgentEffortLevel;
+  agentBudgets: Record<AgentEffortLevel, AgentRunBudget>;
   updateChannel: UpdateChannel;
   platform: string;
   appVersion: string;
@@ -506,6 +512,7 @@ export interface ConversationSummary {
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
+  outcome?: AgentRunOutcome;
 }
 
 export interface ConversationSnapshot {

@@ -39,6 +39,11 @@ import "./i18nBridge";
 import "./i18nAi";
 import type {
   AiProviderId,
+  AgentEffortLevel,
+  AgentPlan,
+  AgentRunBudget,
+  AgentRunOutcome,
+  AgentTodo,
   AgentWorkMode,
   AgentFileApproval,
   AiProviderSummary,
@@ -2526,6 +2531,58 @@ function renderWorkflowPanel(id: string): string {
   return `<section class="workflow-panel"><div class="workflow-heading"><span class="feature-icon ${feature?.accent ?? "violet"}">${icon(feature?.icon ?? "toolbox", 25)}</span><div><span class="eyebrow">${escapeHtml(group?.title ?? t("workflow.active"))}</span><h2>${escapeHtml(feature?.title ?? t("workflow.defaultTitle"))}</h2><p>${escapeHtml(feature?.description ?? "")}</p></div></div>${form}${result}</section>`;
 }
 
+const AGENT_EFFORT_ORDER: AgentEffortLevel[] = ["low", "mid", "high", "max"];
+const AGENT_EFFORT_COVERAGE: Record<AgentEffortLevel, number> = { low: 68.27, mid: 95.45, high: 99.73, max: 100 };
+
+function agentEffortBudgetLabel(budget: AgentRunBudget | undefined): string {
+  if (!budget || budget.maxTurns === null || budget.maxTokens === null) return t("copilot.effortNoLimit");
+  return t("copilot.effortTitle", { coverage: AGENT_EFFORT_COVERAGE[budget.level], turns: budget.maxTurns, tokens: Math.round(budget.maxTokens / 1000) });
+}
+
+function renderAgentEffortGroup(): string {
+  const current = app?.agentEffort ?? "mid";
+  return `<div class="chat-effort-mode" role="group" aria-label="${escapeHtml(t("copilot.effortGroup"))}">${AGENT_EFFORT_ORDER.map((level) => {
+    const budget = app?.agentBudgets?.[level];
+    const label = level === "low" ? t("copilot.effortLow") : level === "mid" ? t("copilot.effortMid") : level === "high" ? t("copilot.effortHigh") : t("copilot.effortMax");
+    return `<button type="button" class="${current === level ? "active" : ""}" data-agent-effort="${level}" aria-pressed="${current === level}" title="${escapeHtml(agentEffortBudgetLabel(budget))}" aria-label="${escapeHtml(`${label} - ${agentEffortBudgetLabel(budget)}`)}">${escapeHtml(label)}</button>`;
+  }).join("")}</div>`;
+}
+
+function agentTodoStatusLabel(status: AgentTodo["status"]): string {
+  return status === "completed" ? t("copilot.todoCompleted")
+    : status === "in_progress" ? t("copilot.todoInProgress")
+    : status === "cancelled" ? t("copilot.todoCancelled")
+    : t("copilot.todoPending");
+}
+
+function renderAgentGoalCard(plan: AgentPlan, status: AgentRunOutcome["status"] | undefined): string {
+  const relevant = plan.todos.filter((todo) => todo.status !== "cancelled");
+  const completed = relevant.filter((todo) => todo.status === "completed").length;
+  return `<section class="agent-goal-card">
+    <div class="agent-goal-head"><strong>${escapeHtml(t("copilot.currentGoal"))}</strong><small>${t("copilot.goalProgress", { completed, total: relevant.length })}</small></div>
+    <p class="agent-goal-text">${escapeHtml(plan.goal)}</p>
+    <div class="agent-goal-criteria"><strong>${escapeHtml(t("copilot.doneCriteria"))}</strong><ul>${plan.doneCriteria.map((criterion) => `<li>${escapeHtml(criterion)}</li>`).join("")}</ul></div>
+    <ul class="agent-goal-todos">${plan.todos.map((todo) => `<li class="agent-todo agent-todo-${todo.status}"><span class="agent-todo-marker" aria-hidden="true"></span><span class="agent-todo-body"><span class="agent-todo-title">${escapeHtml(todo.title)}</span>${todo.note ? `<small class="agent-todo-note">${escapeHtml(todo.note)}</small>` : ""}</span><span class="agent-todo-status">${escapeHtml(agentTodoStatusLabel(todo.status))}</span></li>`).join("")}</ul>
+    ${status ? `<div class="agent-goal-status">${renderAgentStatusChip(status)}</div>` : ""}
+  </section>`;
+}
+
+function renderAgentStatusChip(status: AgentRunOutcome["status"]): string {
+  const label = status === "completed" ? t("copilot.statusCompleted")
+    : status === "needs_input" ? t("copilot.statusNeedsInput")
+    : status === "budget_exhausted" ? t("copilot.statusBudgetExhausted")
+    : t("copilot.statusIncomplete");
+  return `<span class="agent-status-chip agent-status-${status}">${escapeHtml(label)}</span>`;
+}
+
+function latestAgentPlanMessage(): ChatMessage | undefined {
+  const messages = conversation?.messages ?? [];
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index].role === "assistant" && messages[index].outcome?.plan) return messages[index];
+  }
+  return undefined;
+}
+
 function renderCopilot(): string {
   const messages = conversation?.messages.filter((message) => message.role === "user" || message.role === "assistant") ?? [];
   const approvals = fileApprovals.length ? `<section class="file-approvals"><strong>${t("copilot.fileApproval")}</strong>${fileApprovals.map((item) => `<article><code>${escapeHtml(item.path)}</code><small>${escapeHtml(item.purpose)}</small><button class="primary compact" data-approve-file="${escapeHtml(item.id)}">${t("copilot.approve")}</button><button class="secondary compact" data-deny-file="${escapeHtml(item.id)}">${t("copilot.deny")}</button></article>`).join("")}</section>` : "";
@@ -2535,11 +2592,14 @@ function renderCopilot(): string {
   const providerStatus = provider
     ? t("copilot.connectionCounts", { oauth: provider.accounts.filter((account) => account.authorized).length, keys: provider.apiKeys.length })
     : t("copilot.noConnection");
+  const goalMessage = latestAgentPlanMessage();
+  const goalCard = goalMessage?.outcome?.plan ? renderAgentGoalCard(goalMessage.outcome.plan, goalMessage.outcome.status) : "";
   return `<div class="copilot-layout">
     <aside class="sessions-panel"><div class="sessions-panel-head"><button class="primary full" data-new-conversation>${icon("plus", 17)} ${t("copilot.newConversation")}</button><span class="nav-label">${t("copilot.history")}</span></div><div class="session-list">${conversations.length ? conversations.map((item) => `<button class="session-item ${conversation?.id === item.id ? "active" : ""}" data-conversation="${escapeHtml(item.id)}"><strong>${escapeHtml(item.title)}</strong><small>${t("copilot.messageCount", { count: item.messageCount })} · ${escapeHtml(item.updatedAt.slice(0, 10))}</small></button>`).join("") : `<p class="empty-small">${t("copilot.emptyHistory")}</p>`}</div></aside>
     <section class="chat-panel">
-      <div class="chat-header"><div class="chat-title"><strong>${escapeHtml(conversation?.title ?? t("copilot.newChat"))}</strong><small>${escapeHtml(t("copilot.enabledToolsOnly"))}</small></div><div class="chat-header-actions" aria-label="${escapeHtml(t("copilot.toolbar"))}"><button type="button" class="chat-model-button" data-open-ai-provider-picker aria-label="${escapeHtml(t("copilot.chooseProviderModel", { provider: providerName, model: providerModel }))}"><span class="chat-model-mark">${icon("sparkles", 14)}</span><span><strong>${escapeHtml(providerName)}</strong><small>${escapeHtml(providerModel)} · ${providerStatus}</small></span>${icon("arrow", 14)}</button><div class="chat-work-mode" role="group" aria-label="${escapeHtml(t("copilot.workMode"))}"><button type="button" class="${app?.agentWorkMode === "edit" ? "active" : ""}" data-agent-work-mode="edit" aria-pressed="${app?.agentWorkMode === "edit"}">Edit</button><button type="button" class="${app?.agentWorkMode === "solo" ? "active" : ""}" data-agent-work-mode="solo" aria-pressed="${app?.agentWorkMode === "solo"}">Solo</button></div></div></div>
+      <div class="chat-header"><div class="chat-title"><strong>${escapeHtml(conversation?.title ?? t("copilot.newChat"))}</strong><small>${escapeHtml(t("copilot.enabledToolsOnly"))}</small></div><div class="chat-header-actions" aria-label="${escapeHtml(t("copilot.toolbar"))}"><button type="button" class="chat-model-button" data-open-ai-provider-picker aria-label="${escapeHtml(t("copilot.chooseProviderModel", { provider: providerName, model: providerModel }))}"><span class="chat-model-mark">${icon("sparkles", 14)}</span><span><strong>${escapeHtml(providerName)}</strong><small>${escapeHtml(providerModel)} · ${providerStatus}</small></span>${icon("arrow", 14)}</button><div class="chat-work-mode" role="group" aria-label="${escapeHtml(t("copilot.workMode"))}"><button type="button" class="${app?.agentWorkMode === "edit" ? "active" : ""}" data-agent-work-mode="edit" aria-pressed="${app?.agentWorkMode === "edit"}">Edit</button><button type="button" class="${app?.agentWorkMode === "solo" ? "active" : ""}" data-agent-work-mode="solo" aria-pressed="${app?.agentWorkMode === "solo"}">Solo</button></div>${renderAgentEffortGroup()}</div></div>
       ${approvals}
+      ${goalCard}
       <div class="messages">${messages.length ? messages.map(renderMessage).join("") : `<div class="empty-chat"><span class="mode-icon purple">${icon("bot", 30)}</span><h2>${escapeHtml(t("copilot.emptyTitle"))}</h2><p>${escapeHtml(t("copilot.emptyDescription"))}</p><div class="prompt-chips"><button data-prompt="${escapeHtml(t("copilot.audioPrompt"))}">${escapeHtml(t("copilot.audioAction"))}</button><button data-prompt="${escapeHtml(t("copilot.projectPrompt"))}">${escapeHtml(t("copilot.projectAction"))}</button><button data-prompt="${escapeHtml(t("copilot.planPrompt"))}">${escapeHtml(t("copilot.planAction"))}</button></div></div>`}</div>
       <form id="chat-form" class="composer"><div class="composer-shell"><textarea id="chat-input" rows="1" placeholder="${t("copilot.placeholder")}"></textarea><button class="primary icon-button" type="submit" title="${t("copilot.send")}" aria-label="${t("copilot.send")}">${icon("send", 19)}</button></div><span>${t("copilot.review")}</span></form>
     </section>
@@ -2611,9 +2671,29 @@ function renderAiPage(): string {
   </div>`;
 }
 
+function agentBudgetUsageText(outcome: AgentRunOutcome): string {
+  const { turns, tokens, maxTurns, maxTokens } = outcome.budget;
+  const turnsText = maxTurns === null ? t("copilot.usedNoLimit", { used: turns }) : t("copilot.usedOfLimit", { used: turns, limit: maxTurns });
+  const tokensText = maxTokens === null ? t("copilot.usedNoLimit", { used: tokens }) : t("copilot.usedOfLimit", { used: tokens, limit: maxTokens });
+  return t("copilot.budgetUsage", { turns: turnsText, tokens: tokensText });
+}
+
 function renderMessage(message: ChatMessage): string {
   const mine = message.role === "user";
-  return `<div class="message ${mine ? "user" : "assistant"}"><span class="avatar">${mine ? t("copilot.you") : "π"}</span><div><small>${mine ? t("copilot.you") : "Copilot"}</small><p>${escapeHtml(message.content)}</p></div></div>`;
+  const outcome = message.outcome;
+  const paragraph = message.content ? `<p>${escapeHtml(message.content)}</p>` : "";
+  let outcomeHtml = "";
+  if (outcome) {
+    const summaryLine = outcome.summary && outcome.summary !== message.content ? `<p class="agent-outcome-summary">${escapeHtml(outcome.summary)}</p>` : "";
+    const missingHtml = outcome.status === "needs_input" && outcome.missing.length
+      ? `<div class="agent-outcome-missing"><strong>${escapeHtml(t("copilot.missingInfo"))}</strong><ul>${outcome.missing.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>`
+      : "";
+    const evidenceHtml = outcome.status === "completed" && outcome.plan
+      ? `<details class="agent-outcome-evidence"><summary>${escapeHtml(t("copilot.evidence"))}</summary><ul>${outcome.plan.doneCriteria.map((criterion, index) => `<li><strong>${escapeHtml(criterion)}</strong><span>${escapeHtml(outcome.evidence[index] ?? "")}</span></li>`).join("")}</ul></details>`
+      : "";
+    outcomeHtml = `<div class="agent-outcome">${renderAgentStatusChip(outcome.status)}<small class="agent-outcome-budget">${escapeHtml(agentBudgetUsageText(outcome))}</small>${summaryLine}${missingHtml}${evidenceHtml}</div>`;
+  }
+  return `<div class="message ${mine ? "user" : "assistant"}"><span class="avatar">${mine ? t("copilot.you") : "π"}</span><div><small>${mine ? t("copilot.you") : "Copilot"}</small>${paragraph}${outcomeHtml}</div></div>`;
 }
 
 async function loadFfmpegConfiguration(): Promise<void> {
@@ -3567,7 +3647,7 @@ async function sendPrompt(input: string): Promise<void> {
     const optimistic: ChatMessage = { role: "user", content: input };
     conversation.messages.push(optimistic);
     render();
-    const added = await withAiProviderStateRefresh(() => api.sendMessage(input));
+    const added = await withAiProviderStateRefresh(() => api.sendMessage(conversation!.id, input));
     conversation.messages = conversation.messages.filter((message) => message !== optimistic);
     conversation.messages.push(...added);
     [conversations, fileApprovals] = await Promise.all([
@@ -4408,6 +4488,8 @@ document.addEventListener("click", (event) => {
   if (mode) { void run(async () => { app = await api.setMode(mode); notice = t("system.modeChanged", { mode: t(mode === "ai" ? "settings.ai" : "settings.toolbox") }); }); return; }
   const agentWorkMode = target.dataset.agentWorkMode as AgentWorkMode | undefined;
   if (agentWorkMode) { void run(async () => { app = await api.setAgentWorkMode(agentWorkMode); notice = t("system.agentModeChanged", { mode: agentWorkMode === "solo" ? "Solo" : "Edit" }); }); return; }
+  const agentEffort = target.dataset.agentEffort as AgentEffortLevel | undefined;
+  if (agentEffort) { void run(async () => { app = await api.setAgentEffort(agentEffort); notice = t("system.agentEffortChanged", { level: agentEffort }); }); return; }
   const toolboxProjectTarget = target.dataset.openToolboxProject as "project" | "issues" | "guide" | undefined;
   if (toolboxProjectTarget) {
     void run(async () => { setOpenFeedback(await api.openToolboxProject(toolboxProjectTarget)); });
