@@ -1245,6 +1245,42 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .chat-work-mode button { min-width: 48px; padding: 5px 8px; border: 0; border-radius: 4px; color: var(--muted); background: transparent; cursor: pointer; font: inherit; font-size: 10px; font-weight: 600; }
 .chat-work-mode button:hover { color: inherit; background: var(--control-hover); }
 .chat-work-mode button.active { color: var(--primary); background: var(--primary-soft); }
+.chat-effort-mode { display: inline-flex; padding: 3px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-subtle); }
+.chat-effort-mode button { min-width: 40px; padding: 5px 8px; border: 0; border-radius: 4px; color: var(--muted); background: transparent; cursor: pointer; font: inherit; font-size: 10px; font-weight: 600; }
+.chat-effort-mode button:hover { color: inherit; background: var(--control-hover); }
+.chat-effort-mode button.active { color: var(--primary); background: var(--primary-soft); }
+.agent-goal-card { width: min(100%,760px); margin: 0 auto 16px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-subtle); display: grid; gap: 10px; }
+.agent-goal-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.agent-goal-head strong { font-size: 12px; font-weight: 600; }
+.agent-goal-head small { color: var(--muted); font-size: 11px; }
+.agent-goal-text { margin: 0; font-size: 13px; line-height: 1.55; }
+.agent-goal-criteria strong { display: block; margin-bottom: 4px; font-size: 11px; font-weight: 600; color: var(--muted); }
+.agent-goal-criteria ul { margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.6; }
+.agent-goal-todos { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.agent-todo { display: grid; grid-template-columns: 14px minmax(0,1fr) auto; align-items: start; gap: 8px; font-size: 12px; }
+.agent-todo-marker { width: 12px; height: 12px; margin-top: 3px; border: 2px solid var(--line-strong); border-radius: 3px; background: transparent; }
+.agent-todo-in_progress .agent-todo-marker { border-color: var(--primary); background: var(--primary-soft); }
+.agent-todo-completed .agent-todo-marker { border-color: var(--primary); background: var(--primary); border-radius: 50%; }
+.agent-todo-cancelled .agent-todo-marker { border-color: var(--muted); background: var(--muted); border-radius: 50%; }
+.agent-todo-body { display: grid; gap: 1px; min-width: 0; }
+.agent-todo-title { overflow-wrap: anywhere; }
+.agent-todo-cancelled .agent-todo-title { color: var(--muted); text-decoration: line-through; }
+.agent-todo-note { color: var(--muted); font-size: 10px; }
+.agent-todo-status { color: var(--muted); font-size: 10px; white-space: nowrap; }
+.agent-goal-status { display: flex; justify-content: flex-end; }
+.agent-status-chip { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 999px; font-size: 10px; font-weight: 600; }
+.agent-status-completed { color: var(--success); background: color-mix(in srgb,var(--success) 14%,transparent); }
+.agent-status-needs_input { color: var(--warning); background: color-mix(in srgb,var(--warning) 14%,transparent); }
+.agent-status-budget_exhausted { color: var(--danger); background: color-mix(in srgb,var(--danger) 14%,transparent); }
+.agent-status-incomplete { color: var(--muted); background: var(--surface-subtle); }
+.agent-outcome { display: grid; gap: 6px; margin-top: 8px; }
+.agent-outcome-budget { color: var(--muted); font-size: 10px; }
+.agent-outcome-summary { margin: 0; font-size: 12px; line-height: 1.55; color: var(--muted); }
+.agent-outcome-missing strong { display: block; margin-bottom: 3px; font-size: 11px; font-weight: 600; }
+.agent-outcome-missing ul { margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.6; }
+.agent-outcome-evidence summary { cursor: pointer; font-size: 11px; font-weight: 600; color: var(--muted); }
+.agent-outcome-evidence ul { margin: 6px 0 0; padding-left: 18px; font-size: 12px; line-height: 1.6; }
+.agent-outcome-evidence li span { display: block; color: var(--muted); font-size: 11px; }
 .messages { min-height: 0; overflow: auto; padding: 28px clamp(20px,6vw,96px) 18px; }
 .messages > * { width: min(100%,760px); margin-inline: auto; }
 .empty-chat { min-height: 100%; display: grid; align-content: center; justify-items: center; text-align: center; padding-bottom: clamp(64px,10vh,120px); }
@@ -1550,6 +1586,9 @@ button.path-picker-button { display: inline-flex; flex: 0 0 34px; align-items: c
   .chat-header-actions { align-items: center; flex-direction: row; gap: 6px; }
   .chat-model-button { max-width: calc(100vw - 142px); }
   .chat-work-mode button { min-width: 42px; padding-inline: 7px; }
+  .chat-effort-mode button { min-width: 34px; padding-inline: 6px; }
+  .agent-todo { grid-template-columns: 14px minmax(0,1fr); }
+  .agent-todo-status { grid-column: 2; }
   .ai-provider-summary { align-items: stretch; flex-direction: column; }
   .ai-provider-picker-backdrop { padding: 12px; }
   .ai-auth-method-choice { grid-template-columns: 1fr; }

@@ -9,7 +9,7 @@ addMessages("zh-CN", { system: {
   cleanup: "清理残留", deleteComponent: "删除组件", componentManagement: "本地组件管理", cleanupTitle: "清理“{name}”？", deleteTitle: "删除“{name}”？",
   componentRemoval: "此操作会删除 Synthesizer V Toolbox 管理的本地运行环境与对应配置。依赖此组件的工作流在重新安装前将不可用。",
   componentPreserved: "用户工程、输入素材以及已导出的输出文件不会被删除；之后仍可从组件中心重新安装。",
-  modeChanged: "已切换到{mode}。", agentModeChanged: "Agent 已切换到 {mode} 模式。", updateFound: "发现新版本 v{version}。", latest: "当前已是最新稳定版。", newer: "当前应用版本高于最新稳定版。", scanComplete: "探测完成。",
+  modeChanged: "已切换到{mode}。", agentModeChanged: "Agent 已切换到 {mode} 模式。", agentEffortChanged: "Agent 强度已切换到 {level}。", updateFound: "发现新版本 v{version}。", latest: "当前已是最新稳定版。", newer: "当前应用版本高于最新稳定版。", scanComplete: "探测完成。",
   componentQueued: "组件已加入下载队列。", componentCancelled: "排队中的组件任务已取消。", componentRetried: "组件任务已重新加入队列。",
   startupFailed: "无法启动 Synthesizer V Toolbox", startupHelp: "请确认应用由 Tauri 运行，而不是直接打开前端页面。", testConnection: "测试连接", deleteConnection: "删除连接"
 } });
@@ -23,7 +23,7 @@ addMessages("en", { system: {
   cleanup: "Clean up files", deleteComponent: "Delete component", componentManagement: "Local components", cleanupTitle: "Clean up “{name}”?", deleteTitle: "Delete “{name}”?",
   componentRemoval: "This removes the local runtime and configuration managed by Synthesizer V Toolbox. Workflows that depend on this component will be unavailable until it is reinstalled.",
   componentPreserved: "Your projects, input media, and exported files will be kept. You can reinstall the component from Components later.",
-  modeChanged: "Switched to {mode}.", agentModeChanged: "Agent switched to {mode} mode.", updateFound: "Version v{version} is available.", latest: "You are using the latest stable version.", newer: "Your app version is newer than the latest stable release.", scanComplete: "Scan complete.",
+  modeChanged: "Switched to {mode}.", agentModeChanged: "Agent switched to {mode} mode.", agentEffortChanged: "Agent effort switched to {level}.", updateFound: "Version v{version} is available.", latest: "You are using the latest stable version.", newer: "Your app version is newer than the latest stable release.", scanComplete: "Scan complete.",
   componentQueued: "Component added to the download queue.", componentCancelled: "Queued component task cancelled.", componentRetried: "Component task queued again.",
   startupFailed: "Unable to start Synthesizer V Toolbox", startupHelp: "Run the app through Tauri instead of opening the frontend page directly.", testConnection: "Test connection", deleteConnection: "Delete connection"
 } });

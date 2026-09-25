@@ -199,14 +199,14 @@ async function initializeServices(): Promise<void> {
   await runtimeHost.load();
   ai = new AiService({ metadataPath: join(userData, "ai", "metadata.json"), safeStorage, runtime: agentRuntimePort(runtimeHost.runtime), catalog: modelCatalog(), usage: { query: async (provider, credentialIds) => ({ queriedAt: new Date().toISOString(), accounts: credentialIds.map(credentialId => ({ provider, credentialId, status: "unknown", plan: null, windows: [], balance: null, error: null })) }) }, authorizer: { authorize: authorizeProvider } });
   capabilities = new HostCapabilities(synthv, creative, ai);
+  const desktop = new DesktopStateService(userData, app.getVersion(), runtimeHost, ai, synthv, channel => { updateChannel = channel; updater.setChannel(channel); });
+  await desktop.load();
   const httpServer = new HttpMcpServer({
     mcpTools: async () => (await runtimeHost.mcpTools()).map(name => ({ name, description: name === "toolbox_internal" ? "Invoke an authorized internal Toolbox operation." : "Invoke an authorized advanced Toolbox operation.", inputSchema: { type: "object", properties: { capability: { type: "string" }, operation: { type: "string" }, params: { type: "object" } }, required: ["capability", "operation", "params"], additionalProperties: false }, permission: name === "toolbox_internal" ? "internal" : "advanced" })),
     callMcpTool: async (name, arguments_) => ({ content: await runtimeHost.callMcpTool(name, arguments_ as never) }),
-    agentChat: async (input, conversationId) => { const conversation = conversationId ? await ai.open_conversation(conversationId) : await ai.new_conversation(); return ai.send_message(conversation.id, input); },
+    agentChat: async (input, conversationId) => { const conversation = conversationId ? await ai.open_conversation(conversationId) : await ai.new_conversation(); return ai.send_message(conversation.id, input, { effort: desktop.agentEffort() }); },
   });
   await runtimeHost.attachHttpServer(httpServer);
-  const desktop = new DesktopStateService(userData, app.getVersion(), runtimeHost, ai, synthv, channel => { updateChannel = channel; updater.setChannel(channel); });
-  await desktop.load();
   commandRegistry = new ElectronCommandRegistry(runtimeHost, { ai, creative, desktop, synthv, componentAudio: {
     dataRoot: join(userData, "components"),
     openExternal: url => shell.openExternal(url),

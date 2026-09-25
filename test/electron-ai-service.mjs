@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
+const runtimeProtocolUrl = pathToFileURL(join(root, "packages/runtime-protocol/dist/index.js")).href;
+const { estimateAgentRunBudget } = await import(runtimeProtocolUrl);
 const source = await readFile(join(root, "src/PiDesktop.Tauri/electron/services/ai-service.ts"), "utf8");
 const executable = stripTypeScriptTypes(source
   .replace(
@@ -15,7 +17,8 @@ const executable = stripTypeScriptTypes(source
   .replace(
     'import { AgentRuntimeWorker } from "@synthv-toolbox/agent-runtime";',
     "class AgentRuntimeWorker {}",
-  ), { mode: "transform" });
+  )
+  .replace('from "@synthv-toolbox/runtime-protocol";', `from "${runtimeProtocolUrl}";`), { mode: "transform" });
 const { AiService } = await import(`data:text/javascript;base64,${Buffer.from(executable).toString("base64")}`);
 
 const directory = await mkdtemp(join(tmpdir(), "electron-ai-service-"));
@@ -32,10 +35,11 @@ const safeStorage = {
   },
 };
 const requests = [];
+let nextSendResult = { message: "Runtime response" };
 const runtime = {
   async request(method, params) {
     requests.push({ method, params });
-    return method === "session.send" ? { message: "Runtime response" } : {};
+    return method === "session.send" ? nextSendResult : {};
   },
 };
 const catalog = {
@@ -90,12 +94,82 @@ assert.deepEqual(await service.opencode_provider_catalog(true), { force: true, p
 
 const conversation = await service.new_conversation();
 assert.deepEqual(await service.list_conversations(), [{ id: conversation.id, title: "New conversation", updatedAt: "2026-09-13T00:00:00.000Z", messageCount: 0 }]);
-const messages = await service.send_message(conversation.id, "Explain this score", directory);
+
+const planA = { goal: "G1", doneCriteria: ["done1"], todos: [{ id: "t1", title: "T1", status: "completed" }] };
+const outcomeA = {
+  status: "completed",
+  summary: "S1",
+  evidence: ["evidence1"],
+  missing: [],
+  plan: planA,
+  budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 3, tokens: 500 },
+};
+nextSendResult = { message: "Assistant reply one", outcome: outcomeA };
+const messages = await service.send_message(conversation.id, "Explain this score", { cwd: directory, effort: "mid" });
 assert.deepEqual(messages.map((message) => message.role), ["user", "assistant"]);
 assert.equal(requests[0].method, "session.initialize");
-assert.deepEqual(requests[0].params.model, { provider: "anthropic", model: ["cla", "ude-opus-4-8"].join("") });
+assert.equal(requests[0].params.cwd, directory);
+assert.equal(requests[0].params.plan, undefined, "no prior plan exists yet");
 assert.equal(requests[1].method, "session.send");
+assert.deepEqual(requests[1].params.budget, estimateAgentRunBudget("mid", []));
+assert.equal(messages[1].content, "Assistant reply one");
+assert.deepEqual(messages[1].outcome, outcomeA);
 assert.equal((await service.open_conversation(conversation.id)).messages.length, 2);
+
+const outcomeB = {
+  status: "needs_input",
+  summary: "S2",
+  evidence: [],
+  missing: ["missing-item"],
+  plan: null,
+  budget: { level: "mid", maxTurns: 5, maxTokens: 1200, turns: 4, tokens: 800 },
+};
+nextSendResult = { message: "", outcome: outcomeB };
+const secondTurn = await service.send_message(conversation.id, "Second turn", { effort: "mid" });
+assert.deepEqual(requests[2].params.plan, planA, "the latest plan is carried into the next session.initialize");
+assert.deepEqual(requests[3].params.budget, estimateAgentRunBudget("mid", [{ turns: 3, tokens: 500, censored: false }]));
+assert.equal(secondTurn[1].content, "S2", "an empty runtime message falls back to the outcome summary");
+
+const outcomeC = {
+  status: "budget_exhausted",
+  summary: "",
+  evidence: [],
+  missing: [],
+  plan: null,
+  budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 5, tokens: 1000 },
+};
+nextSendResult = { message: "", outcome: outcomeC };
+const thirdTurn = await service.send_message(conversation.id, "Third turn", { effort: "mid" });
+assert.deepEqual(requests[4].params.plan, planA, "the latest non-null plan is still carried forward");
+assert.equal(thirdTurn[1].content, "", "budget_exhausted outcomes may leave the assistant message empty");
+
+assert.deepEqual(service.agentUsageSamples(), [
+  { turns: 3, tokens: 500, censored: false },
+  { turns: 4, tokens: 800, censored: false },
+  { turns: 5, tokens: 1000, censored: true },
+]);
+const budgets = await service.agent_budgets();
+assert.equal(budgets.max.maxTurns, null);
+assert.equal(budgets.max.maxTokens, null);
+assert.deepEqual(budgets.mid, estimateAgentRunBudget("mid", service.agentUsageSamples()));
+
+nextSendResult = { message: "x", outcome: { status: "bogus" } };
+await assert.rejects(() => service.send_message(conversation.id, "Fourth turn", { effort: "mid" }), /invalid run outcome/);
+
+const droppedPath = join(directory, "dropped-outcome.json");
+await writeFile(droppedPath, JSON.stringify({
+  version: 1,
+  activeProvider: "anthropic",
+  providers: { anthropic: { model: "m", oauthEnabled: true, strategy: "round-robin" }, "openai-codex": { model: "", oauthEnabled: true, strategy: "round-robin" }, workbuddy: { model: "", oauthEnabled: true, strategy: "round-robin" }, traecode: { model: "", oauthEnabled: true, strategy: "round-robin" } },
+  credentials: [],
+  conversations: [{
+    id: "conv-dropped", title: "Dropped", createdAt: "2026-09-13T00:00:00.000Z", updatedAt: "2026-09-13T00:00:00.000Z",
+    messages: [{ role: "assistant", content: "hello", createdAt: "2026-09-13T00:00:00.000Z", outcome: { status: "completed" } }],
+  }],
+}), "utf8");
+const recovered = new AiService({ metadataPath: droppedPath, safeStorage, runtime, catalog, id: () => "recovered" });
+const droppedConversation = await recovered.open_conversation("conv-dropped");
+assert.equal(droppedConversation.messages[0].outcome, undefined, "an invalid stored outcome is dropped when metadata loads");
 
 const cancelled = new AiService({
   metadataPath: join(directory, "cancelled.json"),
