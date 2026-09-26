@@ -31,24 +31,54 @@ export interface PiBeforeAgentStartEvent {
   systemPrompt: string;
 }
 
+export interface PiBeforeAgentStartResult {
+  systemPrompt?: string;
+  message?: { customType: string; content: string; display?: boolean };
+}
+
+export interface PiTurnEndAssistantMessage {
+  role: string;
+  usage?: { input: number; output: number; cacheWrite: number };
+  stopReason?: string;
+  errorMessage?: string;
+  content?: unknown[];
+}
+
 export interface PiTurnEndEvent {
-  message: { role: string; usage?: { input: number; output: number; cacheWrite: number } };
+  message: PiTurnEndAssistantMessage;
 }
 
 export interface PiToolCallEvent {
   toolName: string;
 }
 
+export interface PiToolExecutionEndEvent {
+  toolName: string;
+  isError: boolean;
+}
+
+export interface PiSessionCompactEvent {
+  compactionEntry: { usage?: { input: number; output: number; cacheWrite: number } };
+}
+
 export interface PiExtensionApi {
-  on(event: "before_agent_start", handler: (event: PiBeforeAgentStartEvent) => { systemPrompt?: string } | void): void;
+  on(event: "before_agent_start", handler: (event: PiBeforeAgentStartEvent) => PiBeforeAgentStartResult | void): void;
   on(event: "turn_end", handler: (event: PiTurnEndEvent) => void): void;
   on(event: "tool_call", handler: (event: PiToolCallEvent) => { block?: boolean; reason?: string; terminate?: boolean } | void): void;
+  on(event: "tool_execution_end", handler: (event: PiToolExecutionEndEvent) => void): void;
+  on(event: "session_compact", handler: (event: PiSessionCompactEvent) => void): void;
   registerTool(definition: PiToolDefinition<any>): void;
 }
 
 export type TaskLoopSignal =
   | { kind: "completed"; summary: string; evidence: string[] }
   | { kind: "needs_input"; question: string; missing: string[] };
+
+/** A pending request_input question restored from a seeded needs_input outcome; delivered once, then cleared. */
+export interface TaskLoopPendingInput {
+  question: string;
+  missing: string[];
+}
 
 /** Mutable per-session state the inline extension closes over; persists across prompt() calls except for run-scoped fields, which prompt() resets. */
 export interface TaskLoopState {
@@ -57,11 +87,30 @@ export interface TaskLoopState {
   turns: number;
   tokens: number;
   signal: TaskLoopSignal | null;
-  roundToolCalls: number;
+  roundProgress: number;
+  roundError: { message: string; aborted: boolean } | null;
+  finishAttemptUsed: boolean;
+  cancelled: boolean;
+  lastAssistantText: string;
+  firstRound: boolean;
+  pendingInput: TaskLoopPendingInput | null;
 }
 
-export function createTaskLoopState(plan: AgentPlan | null, budget: AgentRunBudget): TaskLoopState {
-  return { plan, budget, turns: 0, tokens: 0, signal: null, roundToolCalls: 0 };
+export function createTaskLoopState(plan: AgentPlan | null, budget: AgentRunBudget, pendingInput: TaskLoopPendingInput | null = null): TaskLoopState {
+  return {
+    plan,
+    budget,
+    turns: 0,
+    tokens: 0,
+    signal: null,
+    roundProgress: 0,
+    roundError: null,
+    finishAttemptUsed: false,
+    cancelled: false,
+    lastAssistantText: "",
+    firstRound: true,
+    pendingInput,
+  };
 }
 
 /** Resets the fields prompt() must reset for a fresh run; the plan carries over. */
@@ -70,18 +119,17 @@ export function resetRun(state: TaskLoopState, budget: AgentRunBudget): void {
   state.turns = 0;
   state.tokens = 0;
   state.signal = null;
-  state.roundToolCalls = 0;
+  state.roundProgress = 0;
+  state.roundError = null;
+  state.finishAttemptUsed = false;
+  state.cancelled = false;
+  state.lastAssistantText = "";
+  state.firstRound = true;
 }
 
 export function isBudgetExhausted(state: TaskLoopState): boolean {
   const { maxTurns, maxTokens } = state.budget;
   return (maxTurns !== null && state.turns >= maxTurns) || (maxTokens !== null && state.tokens >= maxTokens);
-}
-
-function budgetProgressShort(state: TaskLoopState): string {
-  const { maxTurns, maxTokens } = state.budget;
-  if (maxTurns === null || maxTokens === null) return "unlimited";
-  return `${state.turns}/${maxTurns} turns, ${state.tokens}/${maxTokens} tokens`;
 }
 
 function budgetProgressLong(state: TaskLoopState): string {
@@ -90,15 +138,12 @@ function budgetProgressLong(state: TaskLoopState): string {
   return `${state.turns} of ${maxTurns} turns, ${state.tokens} of ${maxTokens} tokens used`;
 }
 
-function planProgress(plan: AgentPlan | null): string {
-  if (!plan) return "no plan yet";
-  const completed = plan.todos.filter((todo) => todo.status === "completed").length;
-  return `${completed}/${plan.todos.length} todos`;
-}
-
 export function continuationPrompt(state: TaskLoopState): string {
   const goal = state.plan ? state.plan.goal : "the request";
-  return `Keep working toward the current plan's goal (${goal}). Call complete_task once every done criterion is met, or request_input if core information is missing. Budget used: ${budgetProgressLong(state)}.`;
+  return [
+    `Keep working toward the current plan's goal (${goal}). Call complete_task once every done criterion is met, or request_input if core information is missing. Budget used: ${budgetProgressLong(state)}.`,
+    state.plan ? formatPlan(state.plan) : "No plan has been recorded yet.",
+  ].join("\n\n");
 }
 
 function formatTodo(todo: AgentTodo): string {
@@ -111,20 +156,44 @@ function formatPlan(plan: AgentPlan): string {
   return `Current plan:\nGoal: ${plan.goal}\nDone criteria:\n${criteria}\nTodos:\n${todos}`;
 }
 
-/** Appends the task protocol section to the chained system prompt; called once per round (each session.prompt()). */
-export function taskProtocolSection(state: TaskLoopState): string {
-  return [
-    "",
-    "## Task protocol",
-    "Every request is a goal driven to an explicit end.",
-    "Call update_plan first with the goal restated in one sentence, verifiable done criteria, and ordered todos (at most one in_progress).",
-    "Update the plan as steps start, finish, or are cancelled; note rounds of iterative work (for example repeated parameter tuning) in a todo's note.",
-    "End with complete_task (one evidence entry per done criterion, in order) or request_input when core information (a source file, target song, or a required decision) is missing.",
-    "Todos never prevent completion.",
-    `Run budget for this request: ${budgetProgressLong(state)}. The runtime stops automatically once it is exhausted.`,
-    "Write plan text, summaries and questions in the user's language.",
+/** Static task protocol text; never carries run counters or the plan, so it is byte-identical across every round and run. */
+const TASK_PROTOCOL_SECTION = [
+  "",
+  "## Task protocol",
+  "Every request is a goal driven to an explicit end.",
+  "Call update_plan first with the goal restated in one sentence, verifiable done criteria, and ordered todos (at most one in_progress).",
+  "Update the plan as steps start, finish, or are cancelled; note rounds of iterative work (for example repeated parameter tuning) in a todo's note.",
+  "End with complete_task (one evidence entry per done criterion, in order) or request_input when core information (a source file, target song, or a required decision) is missing.",
+  "Todos never prevent completion.",
+  "The runtime enforces a turn and token budget for this request and stops automatically once it is exhausted.",
+  "Write plan text, summaries and questions in the user's language.",
+].join("\n");
+
+export function taskProtocolSection(): string {
+  return TASK_PROTOCOL_SECTION;
+}
+
+/** Dynamic, per-run context delivered once via the before_agent_start message on the first round only. */
+function firstRoundContext(state: TaskLoopState): string {
+  const parts = [
+    `Run budget for this request: ${budgetProgressLong(state)}.`,
     state.plan ? formatPlan(state.plan) : "No plan has been recorded yet.",
-  ].join("\n");
+  ];
+  if (state.pendingInput) {
+    parts.push(
+      `The previous run stopped to ask the user: ${state.pendingInput.question} Missing: ${state.pendingInput.missing.join(", ")}. The next message answers it.`,
+    );
+  }
+  return parts.join("\n\n");
+}
+
+function extractText(message: PiTurnEndAssistantMessage): string {
+  if (!Array.isArray(message.content)) return "";
+  return message.content
+    .filter((part): part is { type: string; text: string } =>
+      typeof part === "object" && part !== null && (part as { type?: unknown }).type === "text" && typeof (part as { text?: unknown }).text === "string")
+    .map((part) => part.text)
+    .join("");
 }
 
 function boundedText(value: unknown, maxLength: number): string | undefined {
@@ -190,9 +259,8 @@ export function createTaskLoopExtension(state: TaskLoopState): { name: string; f
           const checked = checkAgentPlan(params);
           if ("error" in checked) throw new Error(checked.error);
           state.plan = checked.plan;
-          state.signal = null;
           return {
-            content: [{ type: "text", text: `Plan updated: ${planProgress(state.plan)}, ${budgetProgressShort(state)}.` }],
+            content: [{ type: "text", text: `Plan updated: ${planProgress(state.plan)}.` }],
             details: checked.plan,
           };
         },
@@ -254,29 +322,72 @@ export function createTaskLoopExtension(state: TaskLoopState): { name: string; f
         },
       });
 
-      pi.on("before_agent_start", (event) => ({ systemPrompt: `${event.systemPrompt}\n${taskProtocolSection(state)}` }));
+      pi.on("before_agent_start", (event) => {
+        const systemPrompt = `${event.systemPrompt}\n${taskProtocolSection()}`;
+        if (!state.firstRound) return { systemPrompt };
+        state.firstRound = false;
+        const content = firstRoundContext(state);
+        state.pendingInput = null;
+        return {
+          systemPrompt,
+          message: { customType: "synthv-task-context", content, display: false },
+        };
+      });
 
       pi.on("turn_end", (event) => {
-        state.turns += 1;
         const message = event.message;
-        if (message.role === "assistant" && message.usage) {
-          state.tokens += message.usage.input + message.usage.output + message.usage.cacheWrite;
+        if (message.role !== "assistant") return;
+        if (message.usage) state.tokens += message.usage.input + message.usage.output + message.usage.cacheWrite;
+        if (message.stopReason === "error") {
+          state.roundError = { message: message.errorMessage || "Model request failed.", aborted: false };
+          return;
         }
+        if (message.stopReason === "aborted") {
+          state.roundError = { message: message.errorMessage || "Model request aborted.", aborted: true };
+          return;
+        }
+        state.turns += 1;
+        const text = extractText(message);
+        if (text) state.lastAssistantText = text;
+      });
+
+      pi.on("tool_execution_end", (event) => {
+        if (event.isError) return;
+        if (event.toolName === "update_plan" || event.toolName === "complete_task" || event.toolName === "request_input") return;
+        state.roundProgress += 1;
+      });
+
+      pi.on("session_compact", (event) => {
+        const usage = event.compactionEntry?.usage;
+        if (usage) state.tokens += usage.input + usage.output + usage.cacheWrite;
       });
 
       pi.on("tool_call", (event) => {
-        if (!isBudgetExhausted(state)) {
-          state.roundToolCalls += 1;
-          return;
-        }
-        if (event.toolName === "complete_task" || event.toolName === "request_input") {
-          state.roundToolCalls += 1;
+        if (state.signal) return { block: true, reason: "Run already ended.", terminate: true };
+        if (!isBudgetExhausted(state)) return;
+        if ((event.toolName === "complete_task" || event.toolName === "request_input") && !state.finishAttemptUsed) {
+          state.finishAttemptUsed = true;
           return;
         }
         return { block: true, reason: "Run budget exhausted.", terminate: true };
       });
     },
   };
+}
+
+function planProgress(plan: AgentPlan | null): string {
+  if (!plan) return "no plan yet";
+  const completed = plan.todos.filter((todo) => todo.status === "completed").length;
+  return `${completed}/${plan.todos.length} todos`;
+}
+
+async function runRound(state: TaskLoopState, runPrompt: (text: string) => Promise<void>, text: string): Promise<void> {
+  state.roundProgress = 0;
+  // Cast defeats TS narrowing the property to the null literal across the await below.
+  state.roundError = null as TaskLoopState["roundError"];
+  await runPrompt(text);
+  const error = state.roundError;
+  if (error && !error.aborted) throw new Error(error.message);
 }
 
 /** Runs the outer prompt/continuation loop and produces the run outcome. `runPrompt` sends one round to the session. */
@@ -286,20 +397,25 @@ export async function runTaskLoop(
   input: string,
   runPrompt: (text: string) => Promise<void>,
 ): Promise<{ status: AgentRunOutcome["status"] }> {
-  state.roundToolCalls = 0;
-  await runPrompt(input);
-  let idleStreak = state.roundToolCalls === 0 ? 1 : 0;
+  await runRound(state, runPrompt, input);
+  let stopped = Boolean(state.roundError?.aborted);
+  let idleStreak = !stopped && state.roundProgress === 0 ? 1 : 0;
 
-  while (!state.signal && !isBudgetExhausted(state)) {
+  while (!stopped && !state.signal && !isBudgetExhausted(state)) {
     if (idleStreak > profile.maxIdleContinuations) break;
-    state.roundToolCalls = 0;
-    await runPrompt(continuationPrompt(state));
-    idleStreak = state.roundToolCalls === 0 ? idleStreak + 1 : 0;
+    await runRound(state, runPrompt, continuationPrompt(state));
+    if (state.roundError?.aborted) {
+      stopped = true;
+      break;
+    }
+    idleStreak = state.roundProgress === 0 ? idleStreak + 1 : 0;
   }
 
-  const status: AgentRunOutcome["status"] = state.signal
-    ? state.signal.kind === "completed" ? "completed" : "needs_input"
-    : isBudgetExhausted(state) ? "budget_exhausted" : "incomplete";
+  const status: AgentRunOutcome["status"] = state.cancelled
+    ? "cancelled"
+    : state.signal
+      ? state.signal.kind === "completed" ? "completed" : "needs_input"
+      : isBudgetExhausted(state) ? "budget_exhausted" : "incomplete";
   return { status };
 }
 

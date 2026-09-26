@@ -10,11 +10,9 @@ import {
   isHostApiCompatible,
   negotiateProtocolVersion,
   parseJsonl,
-  validateAgentPlan,
   validateAgentRunBudget,
   validateAgentRunOutcome,
   type AgentEffortProfile,
-  type AgentPlan,
   type AgentRunBudget,
   type AgentRunOutcome,
   type AgentSessionSendResult,
@@ -36,27 +34,28 @@ import {
   createTaskLoopExtension,
   createTaskLoopState,
   effortProfileFor,
-  isBudgetExhausted,
   resetRun,
   runTaskLoop,
   type PiExtensionApi,
+  type TaskLoopPendingInput,
 } from "./task-loop.js";
 
 export const AGENT_RUNTIME_ID = "synthv-toolbox.agent-runtime";
 
 export const AGENT_RUNTIME_CAPABILITIES: CapabilityDescriptor[] = [
-  { id: "agent.sessions", version: "1.0", operations: ["initialize", "send", "close"] },
+  { id: "agent.sessions", version: "1.0", operations: ["initialize", "send", "close", "cancel"] },
   { id: "host.capabilities", version: "1.0", operations: ["invoke"] },
   { id: "runtime.plugins", version: "1.0", operations: ["discover", "invoke"] },
 ];
 
 export interface PiSession {
   prompt(input: string, budget: AgentRunBudget): Promise<{ message: string; outcome: AgentRunOutcome }>;
+  cancel(): Promise<boolean>;
   dispose(): void | Promise<void>;
 }
 
 export interface PiSessionFactory {
-  create(input: { sessionId: string; cwd?: string; systemPrompt?: string; model?: PiModelSelection; plan?: AgentPlan }): Promise<PiSession>;
+  create(input: { sessionId: string; cwd?: string; systemPrompt?: string; model?: PiModelSelection; outcome?: AgentRunOutcome }): Promise<PiSession>;
 }
 
 export interface PiModelSelection {
@@ -124,10 +123,9 @@ export interface PiInlineExtension {
 
 export interface PiAgentSession {
   prompt(input: string): Promise<void>;
+  abort(): Promise<void>;
   dispose(): void | Promise<void>;
   setThinkingLevel(level: string): void;
-  messages?: unknown[];
-  agent?: { state?: { messages?: unknown[] } };
 }
 
 export interface PiSdk {
@@ -205,7 +203,9 @@ export function createPiSessionFactory(
       const sdk = await loadSdk();
       const cwd = input.cwd ?? process.cwd();
       const settingsManager = sdk.SettingsManager.create(cwd, sdk.getAgentDir());
-      const state = createTaskLoopState(input.plan ?? null, estimateAgentRunBudget(DEFAULT_AGENT_EFFORT, []));
+      const seededPlan = input.outcome && input.outcome.status !== "completed" ? input.outcome.plan : null;
+      const pendingInput = pendingInputFrom(input.outcome);
+      const state = createTaskLoopState(seededPlan, estimateAgentRunBudget(DEFAULT_AGENT_EFFORT, []), pendingInput);
       const resourceLoader = new sdk.DefaultResourceLoader({
         cwd,
         agentDir: sdk.getAgentDir(),
@@ -229,21 +229,30 @@ export function createPiSessionFactory(
         modelRuntime,
         model,
       });
+      let running = false;
       return {
         prompt: async (text, budget) => {
-          resetRun(state, budget);
-          applyEffortProfile(result.session, settingsManager, effortProfileFor(budget.level), contextWindow);
-          const startCount = sessionMessages(result.session).length;
-          await runTaskLoop(state, effortProfileFor(budget.level), text, (round) => result.session.prompt(round));
-          const status = state.signal
-            ? (state.signal.kind === "completed" ? "completed" : "needs_input")
-            : isBudgetExhausted(state) ? "budget_exhausted" : "incomplete";
-          const outcome = buildOutcome(state, status);
-          const validated = validateAgentRunOutcome(outcome);
-          if (!validated) throw new Error("Produced an invalid run outcome.");
-          const runMessages = sessionMessages(result.session).slice(startCount);
-          const message = assistantText(runMessages) || validated.summary || "";
-          return { message, outcome: validated };
+          if (running) throw new Error("A run is already in progress for this session.");
+          running = true;
+          try {
+            resetRun(state, budget);
+            applyEffortProfile(result.session, settingsManager, effortProfileFor(budget.level), contextWindow);
+            const { status } = await runTaskLoop(state, effortProfileFor(budget.level), text, (round) => result.session.prompt(round));
+            const outcome = buildOutcome(state, status);
+            if (status === "completed") state.plan = null;
+            const validated = validateAgentRunOutcome(outcome);
+            if (!validated) throw new Error("Produced an invalid run outcome.");
+            const message = state.lastAssistantText || validated.summary || "";
+            return { message, outcome: validated };
+          } finally {
+            running = false;
+          }
+        },
+        cancel: async () => {
+          if (!running) return false;
+          state.cancelled = true;
+          await result.session.abort();
+          return true;
         },
         dispose: () => result.session.dispose(),
       };
@@ -251,8 +260,9 @@ export function createPiSessionFactory(
   };
 }
 
-function sessionMessages(session: PiAgentSession): unknown[] {
-  return session.messages ?? session.agent?.state?.messages ?? [];
+function pendingInputFrom(outcome: AgentRunOutcome | undefined): TaskLoopPendingInput | null {
+  if (!outcome || outcome.status !== "needs_input") return null;
+  return { question: outcome.summary, missing: outcome.missing };
 }
 
 function getContextWindow(model: unknown): number {
@@ -302,6 +312,7 @@ export class AgentRuntimeWorker {
       if (request.protocolVersion !== this.negotiatedVersion) return this.failure(request, "protocol.version-mismatch", "The request uses an unnegotiated protocol version.");
       if (request.method === "session.initialize") return await this.initializeSession(request);
       if (request.method === "session.send") return await this.sendToSession(request);
+      if (request.method === "session.cancel") return await this.cancelSession(request);
       if (request.method === "session.close") return await this.closeSession(request);
       if (request.method === "runtime.plugins.discover") return await this.discoverPlugins(request);
       if (request.method === "runtime.plugin.invoke") return await this.invokePlugin(request);
@@ -328,17 +339,17 @@ export class AgentRuntimeWorker {
   private async initializeSession(request: RpcRequest): Promise<RpcResponseSuccess | RpcResponseFailure> {
     const params = readSessionParams(request.params, false);
     if (!params) return this.failure(request, "session.invalid", "session.initialize requires sessionId and an optional cwd.");
-    let plan: AgentPlan | undefined;
-    if (params.plan !== undefined) {
-      plan = validateAgentPlan(params.plan);
-      if (!plan) return this.failure(request, "session.invalid", "session.initialize plan is invalid.");
+    let outcome: AgentRunOutcome | undefined;
+    if (params.outcome !== undefined) {
+      outcome = validateAgentRunOutcome(params.outcome);
+      if (!outcome) return this.failure(request, "session.invalid", "session.initialize outcome is invalid.");
     }
     const model = await this.hostModelSelection();
     const signature = JSON.stringify([params.cwd ?? "", params.systemPrompt ?? "", model.providerId, model.modelId, model.credentialId ?? ""]);
     const existing = this.sessions.get(params.sessionId);
     if (existing?.signature === signature) return this.success(request, { sessionId: params.sessionId, reused: true });
     if (existing) await existing.session.dispose();
-    const session = await this.sessionsFactory.create({ sessionId: params.sessionId, cwd: params.cwd, systemPrompt: params.systemPrompt, model, ...(plan ? { plan } : {}) });
+    const session = await this.sessionsFactory.create({ sessionId: params.sessionId, cwd: params.cwd, systemPrompt: params.systemPrompt, model, ...(outcome ? { outcome } : {}) });
     this.sessions.set(params.sessionId, { session, signature });
     return this.success(request, { sessionId: params.sessionId });
   }
@@ -359,6 +370,15 @@ export class AgentRuntimeWorker {
     const { message, outcome } = await record.session.prompt(params.input, budget);
     const result: AgentSessionSendResult = { sessionId: params.sessionId, accepted: true, message, outcome };
     return this.success(request, result as unknown as JsonValue);
+  }
+
+  private async cancelSession(request: RpcRequest): Promise<RpcResponseSuccess | RpcResponseFailure> {
+    const params = readSessionParams(request.params, false);
+    if (!params) return this.failure(request, "session.invalid", "session.cancel requires sessionId.");
+    const record = this.sessions.get(params.sessionId);
+    if (!record) return this.success(request, { sessionId: params.sessionId, cancelled: false });
+    const cancelled = await record.session.cancel();
+    return this.success(request, { sessionId: params.sessionId, cancelled });
   }
 
   private async hostModelSelection(): Promise<PiModelSelection> {
@@ -480,7 +500,7 @@ function parseHostHello(value: JsonValue): HostHello | undefined {
   return { hostId: value.hostId, protocol: value.protocol, capabilities };
 }
 
-function readSessionParams(value: JsonValue, requiresInput: boolean): { sessionId: string; cwd?: string; systemPrompt?: string; input: string; plan?: JsonValue; budget?: JsonValue } | undefined {
+function readSessionParams(value: JsonValue, requiresInput: boolean): { sessionId: string; cwd?: string; systemPrompt?: string; input: string; outcome?: JsonValue; budget?: JsonValue } | undefined {
   if (!isRecord(value) || typeof value.sessionId !== "string" || value.sessionId.length === 0) return undefined;
   if (value.cwd !== undefined && typeof value.cwd !== "string") return undefined;
   if (value.systemPrompt !== undefined && (typeof value.systemPrompt !== "string" || value.systemPrompt.length === 0)) return undefined;
@@ -490,7 +510,7 @@ function readSessionParams(value: JsonValue, requiresInput: boolean): { sessionI
     ...(typeof value.cwd === "string" ? { cwd: value.cwd } : {}),
     ...(typeof value.systemPrompt === "string" ? { systemPrompt: value.systemPrompt } : {}),
     input: typeof value.input === "string" ? value.input : "",
-    ...(value.plan !== undefined ? { plan: value.plan } : {}),
+    ...(value.outcome !== undefined ? { outcome: value.outcome } : {}),
     ...(value.budget !== undefined ? { budget: value.budget } : {}),
   };
 }
@@ -526,19 +546,6 @@ function unsupported<T>(reason: string): ModelAuthResult<T> {
 function toRouteError(error: unknown): { kind: "http"; status: number } | { kind: "transport" } {
   if (isRecord(error) && typeof error.status === "number") return { kind: "http", status: error.status };
   return { kind: "transport" };
-}
-
-function assistantText(messages: unknown[] | undefined): string {
-  if (!messages) return "";
-  for (const message of [...messages].reverse()) {
-    if (!isRecord(message) || message.role !== "assistant" || !Array.isArray(message.content)) continue;
-    const text = message.content
-      .filter((part): part is Record<string, unknown> => isRecord(part) && part.type === "text" && typeof part.text === "string")
-      .map((part) => part.text as string)
-      .join("");
-    if (text) return text;
-  }
-  return "";
 }
 
 function isHostModelCredential(value: unknown): value is HostModelCredential {

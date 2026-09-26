@@ -123,20 +123,29 @@ export async function runStdioWorker(): Promise<void> {
     await pluginDiscovery.dispose();
   };
 
-  lines.on("line", (line) => {
+  const dispatch = async (line: string): Promise<void> => {
     try {
-      if (hostTransport.accept(parseJsonl(line))) return;
+      const responses = await worker.handleJsonl(line);
+      for (const response of responses) stdout.write(response);
+    } catch (error) {
+      stderr.write(`agent-runtime: ${error instanceof Error ? error.message : "invalid worker input"}\n`);
+    }
+  };
+
+  lines.on("line", (line) => {
+    let message: ReturnType<typeof parseJsonl> | undefined;
+    try {
+      message = parseJsonl(line);
     } catch {
       // Let the worker report malformed input on stderr.
     }
-    queue = queue.then(async () => {
-      try {
-        const responses = await worker.handleJsonl(line);
-        for (const response of responses) stdout.write(response);
-      } catch (error) {
-        stderr.write(`agent-runtime: ${error instanceof Error ? error.message : "invalid worker input"}\n`);
-      }
-    });
+    if (message && hostTransport.accept(message)) return;
+    // session.cancel must reach an in-flight run immediately, not wait behind the serialized request queue.
+    if (message?.kind === "request" && message.method === "session.cancel") {
+      void dispatch(line);
+      return;
+    }
+    queue = queue.then(() => dispatch(line));
   });
   lines.on("close", () => { void shutdown(); });
   process.once("SIGINT", () => { void shutdown(); });
