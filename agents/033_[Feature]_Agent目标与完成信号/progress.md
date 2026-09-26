@@ -26,3 +26,5 @@
 - 残留修正 `ad7ed6b`：零值样本取对数前夹到 1、覆盖率测试去容差、先验注释；成功消息清除本轮错误、轮次间检查取消、测试替身模拟空闲 abort 与压缩替换消息并新增 3 项测试；审批空槽保留网格行、吸顶卡片不透明底、首次发送建对话失败时复位运行标记；Token 用量千分位。
 - 验证：`npm ci --ignore-scripts`（agent-runtime、PiDesktop.Tauri）；`npm run build:electron` exit 0；`npx tsc -p electron/tsconfig.json --noEmit` 通过；`node --test test/runtime-protocol.mjs` 17/17；`node --test test/agent-runtime.mjs` 41/41；合同链 `--test` 批 14/14（不含 synthv-service）；其余 18 个合同脚本逐个 exit 0（`agent-goal-ui` 12/12）；`chatgpt-copilot-ui` + `conversation-model-picker` 7/7；`synthv-service.mjs` 仍因沙箱 EACCES 失败（既有）。
 - 视觉验证：Vite 预览（端口 1421）1280×860 与 960×640 下检查档位切换、当前目标卡片、完成徽标、预算用量与完成依据；预览 mock 临时改动已还原。
+- 按 Rosmontis 指示「按主基线重写」本地 `main`：`git branch legacy/pi-desktop-winui main`（保留 `06d8f30` 起 8 个旧 WinUI 提交）；移除主检出目录中指向空目录 `lsy-404@agents_memory/SynthVCopilot@synthv-toolbox` 的 `agents` 符号链接（目标目录未动）；`git checkout -B main 6983b5a`，结果领先 `origin/main` 16 个提交，工作区干净；`external/pi-agent` 旧子模块目录保留为被忽略的本地目录。
+- 清理：删除 5 个子 agent worktree 与已合并的临时分支；删除进度检查 cron。

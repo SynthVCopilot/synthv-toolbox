@@ -31,4 +31,4 @@
 - [x] 对抗式审查两个子任务的实现并修复确认的问题（26 条确认，三路修复 + 独立复核 + 残留修正）。
 - [x] 合并子分支，运行 Runtime 构建、Electron 构建与合同测试，并在 renderer 预览中做视觉验证。
 - [x] 更新 `project.md`、`tasks.md` 与本任务记录并提交。
-- [ ] 合并到本地 `main`（本地 `main` 与 `origin/main` 已分叉，待 Rosmontis 决定方式）。
+- [x] 按主基线重写本地 `main`：旧 WinUI 历史备份为 `legacy/pi-desktop-winui`，`main` 指向 `origin/main` + 本任务提交。
