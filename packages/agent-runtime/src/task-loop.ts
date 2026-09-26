@@ -346,6 +346,8 @@ export function createTaskLoopExtension(state: TaskLoopState): { name: string; f
           state.roundError = { message: message.errorMessage || "Model request aborted.", aborted: true };
           return;
         }
+        // Pi retries or recovers inside one prompt(); only the round's final assistant message decides whether it failed.
+        state.roundError = null;
         state.turns += 1;
         const text = extractText(message);
         if (text) state.lastAssistantText = text;
@@ -397,25 +399,19 @@ export async function runTaskLoop(
   input: string,
   runPrompt: (text: string) => Promise<void>,
 ): Promise<{ status: AgentRunOutcome["status"] }> {
-  await runRound(state, runPrompt, input);
-  let stopped = Boolean(state.roundError?.aborted);
-  let idleStreak = !stopped && state.roundProgress === 0 ? 1 : 0;
+  // Pi's abort() is a no-op while no model request is active, so cancellation is also checked between rounds.
+  if (!state.cancelled) await runRound(state, runPrompt, input);
+  let idleStreak = state.roundProgress === 0 ? 1 : 0;
 
-  while (!stopped && !state.signal && !isBudgetExhausted(state)) {
+  while (!state.cancelled && !state.roundError?.aborted && !state.signal && !isBudgetExhausted(state)) {
     if (idleStreak > profile.maxIdleContinuations) break;
     await runRound(state, runPrompt, continuationPrompt(state));
-    if (state.roundError?.aborted) {
-      stopped = true;
-      break;
-    }
     idleStreak = state.roundProgress === 0 ? idleStreak + 1 : 0;
   }
 
-  const status: AgentRunOutcome["status"] = state.cancelled
-    ? "cancelled"
-    : state.signal
-      ? state.signal.kind === "completed" ? "completed" : "needs_input"
-      : isBudgetExhausted(state) ? "budget_exhausted" : "incomplete";
+  const status: AgentRunOutcome["status"] = state.signal
+    ? state.signal.kind === "completed" ? "completed" : "needs_input"
+    : state.cancelled ? "cancelled" : isBudgetExhausted(state) ? "budget_exhausted" : "incomplete";
   return { status };
 }
 

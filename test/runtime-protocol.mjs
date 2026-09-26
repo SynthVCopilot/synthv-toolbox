@@ -261,7 +261,7 @@ test("each level's budget covers at least its stated fraction of a correlated jo
     const sample = draw(testRng, 50_000, level);
     const covered = sample.filter((run) => run.turns <= budget.maxTurns && run.tokens <= budget.maxTokens).length;
     const coverage = protocol.AGENT_EFFORT_PROFILES[level].coverage;
-    assert.ok(covered / sample.length >= coverage - 0.01, `${level}: covered ${covered / sample.length}, want >= ${coverage}`);
+    assert.ok(covered / sample.length >= coverage, `${level}: covered ${covered / sample.length}, want >= ${coverage}`);
   }
 });
 
@@ -292,4 +292,11 @@ test("run outcomes carry the evidence, missing information and budget their stat
   assert.equal(protocol.validateAgentRunOutcome({ ...exhausted, budget: { ...budget, turns: -1 } }), undefined);
   const unlimited = { level: "max", maxTurns: null, maxTokens: null, turns: 250, tokens: 9_000_000 };
   assert.deepEqual(protocol.validateAgentRunOutcome({ ...completed, budget: unlimited }).budget, unlimited);
+});
+
+test("zero-usage samples keep budgets finite", () => {
+  const samples = [...Array.from({ length: 10 }, () => ({ level: "low", turns: 3, tokens: 30_000, censored: false })), { level: "low", turns: 0, tokens: 0, censored: false }];
+  const budget = protocol.estimateAgentRunBudget("low", samples);
+  assert.ok(Number.isInteger(budget.maxTurns) && budget.maxTurns >= protocol.AGENT_BUDGET_FLOOR.turns);
+  assert.ok(Number.isInteger(budget.maxTokens) && budget.maxTokens >= protocol.AGENT_BUDGET_FLOOR.tokens);
 });

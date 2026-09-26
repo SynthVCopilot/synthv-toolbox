@@ -105,7 +105,7 @@ export const AGENT_EFFORT_PROFILES: Readonly<Record<AgentEffortLevel, AgentEffor
   max: { coverage: null, sigmas: null, thinking: "xhigh", compactionTrigger: null, keepRecentTokens: 48_000, maxIdleContinuations: 4 },
 };
 
-/** Log-normal prior used until enough finished runs exist; medians and log-space deviations per metric. */
+/** Log-normal prior blended into each level's fit as `AGENT_BUDGET_PRIOR_WEIGHT` pseudo-observations; medians and log-space deviations per metric. */
 export const AGENT_BUDGET_PRIOR = {
   turns: { median: 4, logSigma: 0.9 },
   tokens: { median: 60_000, logSigma: 1 },
@@ -510,7 +510,8 @@ function fitCensoredLogNormal(
 ): { mu: number; sigma: number } {
   const priorMu = Math.log(prior.median);
   const priorSigma = prior.logSigma;
-  const points = samples.map((sample) => ({ y: Math.log(sample.value), censored: sample.censored }));
+  // A run stopped before its first turn records 0, which has no logarithm.
+  const points = samples.map((sample) => ({ y: Math.log(Math.max(sample.value, 1)), censored: sample.censored }));
   const n = points.length;
   let mu = priorMu;
   let sigma = priorSigma;

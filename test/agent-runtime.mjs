@@ -37,7 +37,8 @@ function placeholderOutcome() {
  * tool_execution_end/session_compact hooks, following Pi's real rules:
  * - a tool batch terminates only when every finalized result (blocked ones included) has terminate: true
  * - tool_execution_end fires only for a call that actually executed, carrying whether it errored
- * - `abort()` ends the in-flight round with an assistant message whose stopReason is "aborted"
+ * - `abort()` ends the in-flight round with an assistant message whose stopReason is "aborted", and is a no-op while idle
+ * - auto-compaction replaces the messages array before the summary's usage is reported
  * `rounds` is consumed one entry per session.prompt() call (initial call plus every auto-continuation).
  */
 function createFakeSdk(rounds) {
@@ -52,6 +53,7 @@ function createFakeSdk(rounds) {
   let disposed = false;
   let contextWindow = CONTEXT_WINDOW;
   let aborted = false;
+  let inFlight = false;
   let holdRelease;
 
   const pi = {
@@ -72,10 +74,25 @@ function createFakeSdk(rounds) {
     setThinkingLevel(level) { thinkingLevel = level; },
     messages,
     async abort() {
+      if (!inFlight) return;
       aborted = true;
       if (holdRelease) { const release = holdRelease; holdRelease = undefined; release(); }
     },
     async prompt(text) {
+      inFlight = true;
+      aborted = false;
+      let round;
+      try {
+        round = await runScriptedRound(text);
+      } finally {
+        inFlight = false;
+      }
+      if (round?.after) await round.after();
+    },
+    dispose() { disposed = true; },
+  };
+
+  async function runScriptedRound(text) {
       messages.push({ role: "user", content: [{ type: "text", text }] });
       let systemPrompt = "BASE SYSTEM PROMPT";
       let injectedMessage;
@@ -95,9 +112,10 @@ function createFakeSdk(rounds) {
         const assistantMessage = { role: "assistant", content: [], stopReason: "aborted" };
         messages.push(assistantMessage);
         for (const handler of handlers.turn_end) await handler({ message: assistantMessage });
-        return;
+        return round;
       }
       if (round.compact) {
+        messages.splice(0, messages.length, { role: "compactionSummary", content: [{ type: "text", text: "summary" }] });
         for (const handler of handlers.session_compact) await handler({ compactionEntry: { usage: round.compact } });
       }
       // A single session.prompt() call can drive several internal turns (Pi's own tool-use loop);
@@ -137,9 +155,8 @@ function createFakeSdk(rounds) {
         for (const handler of handlers.turn_end) await handler({ message: assistantMessage });
         if (terminated) break;
       }
-    },
-    dispose() { disposed = true; },
-  };
+      return round;
+  }
 
   const sdk = {
     getAgentDir: () => "/agent",
@@ -895,3 +912,42 @@ async function waitFor(predicate, timeoutMs = 3_000) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
+
+test("a round that recovers from a retried provider error continues normally", async () => {
+  const fake = createFakeSdk([
+    { turns: [
+      { stopReason: "error", errorMessage: "overloaded", usage: { input: 5, output: 0, cacheWrite: 0 } },
+      { toolCalls: [{ name: "update_plan", args: { goal: "G", doneCriteria: ["C"], todos: [{ id: "t1", title: "Step", status: "completed" }] } }, { name: "complete_task", args: { summary: "Done", evidence: ["done"] } }], text: "Recovered", usage: { input: 20, output: 10, cacheWrite: 0 } },
+    ] },
+  ]);
+  const session = await createSession(fake);
+  const { message, outcome } = await session.prompt("Go", budgetFor("mid", 16, 300_000));
+  assert.equal(outcome.status, "completed");
+  assert.equal(message, "Recovered");
+  assert.equal(outcome.budget.turns, 1);
+  assert.equal(outcome.budget.tokens, 35);
+});
+
+test("a cancel that lands between rounds stops the loop before the next round", async () => {
+  let session;
+  const fake = createFakeSdk([
+    { text: "thinking", after: async () => { assert.equal(await session.cancel(), true); } },
+    { text: "must not run" },
+  ]);
+  session = await createSession(fake);
+  const { outcome } = await session.prompt("Go", budgetFor("mid", 16, 300_000));
+  assert.equal(outcome.status, "cancelled");
+  assert.equal(fake.remainingRounds, 1);
+});
+
+test("a run spanning an auto-compaction still returns its final assistant text", async () => {
+  const fake = createFakeSdk([
+    { text: "Working on it" },
+    { compact: { input: 1_000, output: 10, cacheWrite: 0 }, toolCalls: [{ name: "update_plan", args: { goal: "G", doneCriteria: ["C"], todos: [{ id: "t1", title: "Step", status: "completed" }] } }, { name: "complete_task", args: { summary: "Done", evidence: ["done"] } }], text: "Final answer after compaction" },
+  ]);
+  const session = await createSession(fake);
+  const { message, outcome } = await session.prompt("Go", budgetFor("mid", 16, 300_000));
+  assert.equal(outcome.status, "completed");
+  assert.equal(message, "Final answer after compaction");
+  assert.equal(fake.messages[0].role, "compactionSummary");
+});

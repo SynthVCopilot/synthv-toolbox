@@ -2681,7 +2681,9 @@ function renderAiPage(): string {
 function agentBudgetUsageText(outcome: AgentRunOutcome): string {
   const { turns, tokens, maxTurns, maxTokens } = outcome.budget;
   const turnsText = maxTurns === null ? t("copilot.usedNoLimit", { used: turns }) : t("copilot.usedOfLimit", { used: turns, limit: maxTurns });
-  const tokensText = maxTokens === null ? t("copilot.usedNoLimit", { used: tokens }) : t("copilot.usedOfLimit", { used: tokens, limit: maxTokens });
+  const tokensText = maxTokens === null
+    ? t("copilot.usedNoLimit", { used: tokens.toLocaleString(locale()) })
+    : t("copilot.usedOfLimit", { used: tokens.toLocaleString(locale()), limit: maxTokens.toLocaleString(locale()) });
   return t("copilot.budgetUsage", { turns: turnsText, tokens: tokensText });
 }
 
@@ -3653,11 +3655,11 @@ async function sendPrompt(input: string): Promise<void> {
   agentRunInFlight = true;
   notice = "";
   error = "";
-  if (!conversation) conversation = await api.newConversation();
   const optimistic: ChatMessage = { role: "user", content: input };
-  conversation.messages.push(optimistic);
-  render();
   try {
+    if (!conversation) conversation = await api.newConversation();
+    conversation.messages.push(optimistic);
+    render();
     const added = await withAiProviderStateRefresh(() => api.sendMessage(conversation!.id, input));
     conversation.messages = conversation.messages.filter((message) => message !== optimistic);
     conversation.messages.push(...added);
@@ -3669,7 +3671,7 @@ async function sendPrompt(input: string): Promise<void> {
     ]);
     if (app) app.agentBudgets = budgets;
   } catch (reason) {
-    conversation.messages = conversation.messages.filter((message) => message !== optimistic);
+    if (conversation) conversation.messages = conversation.messages.filter((message) => message !== optimistic);
     error = formatError(reason);
   } finally {
     agentRunInFlight = false;
