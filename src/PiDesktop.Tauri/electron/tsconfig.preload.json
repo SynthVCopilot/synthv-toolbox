@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Bundler",
+    "outDir": "../dist/electron-preload"
+  },
+  "include": ["preload.ts"],
+  "exclude": []
+}

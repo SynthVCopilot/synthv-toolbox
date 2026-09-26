@@ -9,7 +9,7 @@ const shortcutActions = new Set(["start", "startLegacy", "stop", "save", "undo",
 
 export type OperationResult = { succeeded: boolean; summary: string; detail: string };
 export type ProcessInfo = { processId: number; processIdentity: string; name: string; productName: string; version: string; command: string; windowTitle: string; isSv2: boolean; sandboxed: boolean | null };
-type Runner = (command: string, args: string[]) => Promise<{ stdout: string; stderr: string; code: number }>;
+type Runner = (command: string, args: string[], env?: NodeJS.ProcessEnv) => Promise<{ stdout: string; stderr: string; code: number }>;
 type Slot = { id: string; displayName: string; createdAtUtc: string; lastActivatedAtUtc: string | null };
 type ProfileStore = { activeSlotId: string | null; slots: Slot[] };
 export type AutostartController = {
@@ -21,10 +21,10 @@ export class SynthVService {
   private pendingRoute: Record<string, unknown> | null = null;
   private readonly syncPreviews = new Map<string, { targetSlotId: string; categories: string[] }>();
   private bridgeClient?: { getStatus(): Promise<{ connected: boolean; status?: { sessionToken?: string }; reason?: string }>; paths: { stopFile: string } };
-  constructor(private readonly root: string, private readonly bridgeDirectory: string, private readonly runner: Runner = runCommand, private readonly autostart?: AutostartController) {}
+  constructor(private readonly root: string, private readonly bridgeDirectory: string, private readonly runner: Runner = runCommand, private readonly autostart?: AutostartController, private readonly platformDataRoot?: string, private readonly env: NodeJS.ProcessEnv = process.env) {}
 
   async scanInstallations(): Promise<Array<Record<string, unknown>>> {
-    const candidates = platform() === "win32" ? windowsCandidates() : macCandidates();
+    const candidates = platform() === "win32" ? windowsCandidates(this.dataRoot(), this.env) : macCandidates(this.dataRoot());
     const found: Array<Record<string, unknown>> = [];
     for (const candidate of candidates) {
       const executable = await firstFile(candidate.executables);
@@ -67,7 +67,7 @@ export class SynthVService {
 
   shortcutProfile(): Record<string, string> { return { bridgeStart: "F13", bridgeStop: "F14", projectSave: platform() === "darwin" ? "⌘S" : "Ctrl+S", detail: "Shortcuts are sent only after the selected SynthV process identity is verified." }; }
 
-  async installBridge(targets: Array<{ scriptsPath: string; bridgeProfile: string }>): Promise<Array<Record<string, unknown>>> {
+  async installBridge(targets: Array<{ scriptsPath: string; bridgeProfile: string; reload?: boolean }>): Promise<Array<Record<string, unknown>>> {
     return Promise.all(targets.map(async target => ({ scriptsPath: target.scriptsPath, bridgeProfile: target.bridgeProfile, result: await this.installBridgeTarget(target) })));
   }
 
@@ -146,33 +146,42 @@ export class SynthVService {
   async getAutostart(): Promise<{ enabled: boolean; error: string | null }> { if (this.autostart) return this.autostart.get(); try { return { enabled: Boolean(JSON.parse(await readFile(join(this.root, "autostart.json"), "utf8")).enabled), error: null }; } catch { return { enabled: false, error: null }; } }
   async reveal(path: string): Promise<void> { const absolute = resolve(path); if (platform() === "win32") await this.run("explorer.exe", ["/select,", absolute]); else await this.run("open", ["-R", absolute]); }
 
-  private async installBridgeTarget(target: { scriptsPath: string; bridgeProfile: string }): Promise<OperationResult> { this.assertBridgeTarget(target); const script = target.bridgeProfile === "sv1" ? "install-sv1-legacy-bridge.mjs" : "install-synthv-bridge.mjs"; const result = await this.run(process.execPath, [join(this.bridgeDirectory, "scripts", script), target.scriptsPath]); return result.code === 0 ? ok("Bridge installed.") : fail("Bridge installation failed.", result.stderr); }
-  private async diagnoseBridgeTarget(target: { scriptsPath: string; bridgeProfile: string }): Promise<OperationResult> { this.assertBridgeTarget(target); const files = target.bridgeProfile === "sv1" ? ["synthv-agent-bridge-sv1.js"] : ["synthv-agent-bridge.js"]; return (await Promise.all(files.map(file => exists(join(target.scriptsPath, file))))).every(Boolean) ? ok("Bridge scripts are installed.") : fail("Bridge scripts are unavailable.", "Expected bridge files are missing."); }
+  private async installBridgeTarget(target: { scriptsPath: string; bridgeProfile: string; reload?: boolean }): Promise<OperationResult> { this.assertBridgeTarget(target); const script = target.bridgeProfile === "sv1" ? "install-sv1-legacy-bridge.mjs" : "install-synthv-bridge.mjs"; const args = [join(this.bridgeDirectory, "scripts", script), "--target", target.scriptsPath, ...(target.reload === false ? ["--no-reload"] : [])]; const result = await this.run(process.execPath, args, { ...this.env, ELECTRON_RUN_AS_NODE: "1" }); return result.code === 0 ? ok("Bridge installed.") : fail("Bridge installation failed.", result.stderr); }
+  private async diagnoseBridgeTarget(target: { scriptsPath: string; bridgeProfile: string }): Promise<OperationResult> { this.assertBridgeTarget(target); const files = target.bridgeProfile === "sv1" ? [join(target.scriptsPath, "SynthV Agent Bridge SV1 Legacy", "SynthVAgentBridgeSV1Legacy.lua")] : [join(target.scriptsPath, "SynthV Agent Bridge", "SynthVAgentBridge.lua"), join(target.scriptsPath, "SynthV Agent Bridge", "StopSynthVAgentBridge.lua")]; return (await Promise.all(files.map(file => exists(file)))).every(Boolean) ? ok("Bridge scripts are installed.") : fail("Bridge scripts are unavailable.", "Expected bridge files are missing."); }
   private assertBridgeTarget(target: { scriptsPath: string; bridgeProfile: string }): void { requireText(target.scriptsPath, "scriptsPath"); if (!bridgeProfiles.has(target.bridgeProfile)) throw new Error("Unsupported Bridge profile."); }
   private async assertProcess(processId: number, identity: string): Promise<void> { if (!Number.isSafeInteger(processId) || processId <= 0 || !identity) throw new Error("Invalid SynthV process target."); if (!(await this.listProcesses()).some(process => process.processId === processId && process.processIdentity === identity)) throw new Error("SynthV process identity changed."); }
   private async assertSlot(slotId: string): Promise<void> { this.slot(await this.readStore(), slotId); }
   private slot(store: ProfileStore, id: string): Slot { if (!isUuid(id)) throw new Error("Invalid profile id."); const slot = store.slots.find(item => item.id === id); if (!slot) throw new Error("Profile was not found."); return slot; }
   private async readStore(): Promise<ProfileStore> { try { const value = JSON.parse(await readFile(this.storePath(), "utf8")); return { activeSlotId: typeof value.activeSlotId === "string" ? value.activeSlotId : null, slots: Array.isArray(value.slots) ? value.slots.filter((slot: unknown): slot is Slot => isSlot(slot)) : [] }; } catch { return { activeSlotId: null, slots: [] }; } }
   private async writeStore(store: ProfileStore): Promise<void> { await mkdir(dirname(this.storePath()), { recursive: true }); await writeFile(this.storePath(), JSON.stringify(store), "utf8"); }
-  private canonicalPath(): string { return platform() === "win32" ? join(process.env.APPDATA ?? this.root, "Dreamtonics", "Synthesizer V Studio 2") : join(homedir(), "Library", "Application Support", "Dreamtonics", "Synthesizer V Studio 2"); }
+  private dataRoot(): string { return dataRootFor(platform(), this.platformDataRoot, this.env.APPDATA, homedir(), this.root); }
+  private canonicalPath(): string { return canonicalPathFor(platform(), this.dataRoot()); }
   private vaultPath(): string { return `${this.canonicalPath()}.toolbox-slots`; }
   private slotPath(id: string): string { return join(this.vaultPath(), "slots", id); }
   private sessionPath(id: string): string { return join(this.slotPath(id), "license", "session"); }
   private storePath(): string { return join(this.root, "sv2-profiles.json"); }
   private async writeConfig(name: string, value: unknown): Promise<void> { await mkdir(this.root, { recursive: true }); await writeFile(join(this.root, name), JSON.stringify(value), "utf8"); }
   private async ensureBridgeClient(): Promise<void> { if (this.bridgeClient) return; const [{ loadConfig }, { FileIpcClient }] = await Promise.all([import(pathToFileURL(join(this.bridgeDirectory, "dist", "src", "config.js")).href), import(pathToFileURL(join(this.bridgeDirectory, "dist", "src", "ipc", "file-ipc-client.js")).href)]); this.bridgeClient = new FileIpcClient(loadConfig()); }
-  private async sandboxie(): Promise<{ start: string; ini: string } | null> { if (platform() !== "win32") return null; const roots = [process.env.SANDBOXIE_HOME, process.env.ProgramW6432, process.env.ProgramFiles, process.env["ProgramFiles(x86)"]].filter((value): value is string => typeof value === "string" && value.length > 0).flatMap(root => root.endsWith("Sandboxie") || root.endsWith("Sandboxie-Plus") ? [root] : [join(root, "Sandboxie-Plus"), join(root, "Sandboxie")]); for (const root of roots) { const start = join(root, "Start.exe"); const ini = join(root, "SbieIni.exe"); if (await exists(start) && await exists(ini)) return { start, ini }; } return null; }
-  private async run(command: string, args: string[]): Promise<{ stdout: string; stderr: string; code: number }> { return this.runner(command, args); }
+  private async sandboxie(): Promise<{ start: string; ini: string } | null> { if (platform() !== "win32") return null; const roots = [this.env.SANDBOXIE_HOME, this.env.ProgramW6432, this.env.ProgramFiles, this.env["ProgramFiles(x86)"]].filter((value): value is string => typeof value === "string" && value.length > 0).flatMap(root => root.endsWith("Sandboxie") || root.endsWith("Sandboxie-Plus") ? [root] : [join(root, "Sandboxie-Plus"), join(root, "Sandboxie")]); for (const root of roots) { const start = join(root, "Start.exe"); const ini = join(root, "SbieIni.exe"); if (await exists(start) && await exists(ini)) return { start, ini }; } return null; }
+  private async run(command: string, args: string[], env?: NodeJS.ProcessEnv): Promise<{ stdout: string; stderr: string; code: number }> { return this.runner(command, args, env); }
 }
 
-function windowsCandidates() { const base = process.env.ProgramFiles ?? "C:\\Program Files"; const appData = process.env.APPDATA ?? ""; return [candidate("Synthesizer V Studio 2 Pro", join(base, "Dreamtonics", "Synthesizer V Studio 2"), [join(appData, "Dreamtonics", "Synthesizer V Studio 2", "scripts")]), candidate("Synthesizer V Studio Pro", join(base, "Dreamtonics", "Synthesizer V Studio Pro"), [join(appData, "Dreamtonics", "Synthesizer V Studio", "scripts")])]; }
-function macCandidates() { return [candidate("Synthesizer V Studio 2 Pro", "/Applications/Synthesizer V Studio 2 Pro.app", [join(homedir(), "Library/Application Support/Dreamtonics/Synthesizer V Studio 2/scripts")]), candidate("Synthesizer V Studio Pro", "/Applications/Synthesizer V Studio Pro.app", [join(homedir(), "Library/Application Support/Dreamtonics/Synthesizer V Studio/scripts")])]; }
+// Pure so the win32 branch is testable from any host platform without stubbing os.platform() or mutating process.env.
+export function dataRootFor(platformName: string, platformDataRoot: string | undefined, appDataEnv: string | undefined, home: string, fallbackRoot: string): string {
+  if (platformDataRoot) return platformDataRoot;
+  return platformName === "win32" ? appDataEnv ?? fallbackRoot : home;
+}
+export function canonicalPathFor(platformName: string, dataRoot: string): string {
+  return platformName === "win32" ? join(dataRoot, "Dreamtonics", "Synthesizer V Studio 2") : join(dataRoot, "Library", "Application Support", "Dreamtonics", "Synthesizer V Studio 2");
+}
+function windowsCandidates(dataRoot: string, env: NodeJS.ProcessEnv) { const base = env.ProgramFiles ?? "C:\\Program Files"; return [candidate("Synthesizer V Studio 2 Pro", join(base, "Dreamtonics", "Synthesizer V Studio 2"), [join(dataRoot, "Dreamtonics", "Synthesizer V Studio 2", "scripts")]), candidate("Synthesizer V Studio Pro", join(base, "Dreamtonics", "Synthesizer V Studio Pro"), [join(dataRoot, "Dreamtonics", "Synthesizer V Studio", "scripts")])]; }
+function macCandidates(dataRoot: string) { return [candidate("Synthesizer V Studio 2 Pro", "/Applications/Synthesizer V Studio 2 Pro.app", [join(dataRoot, "Library/Application Support/Dreamtonics/Synthesizer V Studio 2/scripts")]), candidate("Synthesizer V Studio Pro", "/Applications/Synthesizer V Studio Pro.app", [join(dataRoot, "Library/Application Support/Dreamtonics/Synthesizer V Studio/scripts")])]; }
 function candidate(name: string, root: string, scripts: string[]) { return { name, source: platform() === "win32" ? "Windows standard installation directory" : "macOS Applications", executables: [join(root, "synthv-studio.exe"), join(root, "Contents/MacOS/synthv-studio")], scripts }; }
 function bridgeProfile(name: string): string { return name.includes("Studio 2") ? "sv2" : name.includes("Flat") ? "flat" : "sv1"; }
 function parseWindowsProcesses(text: string): ProcessInfo[] { const parsed: unknown = JSON.parse(text || "[]"); return (Array.isArray(parsed) ? parsed : [parsed]).flatMap(value => processFrom(String((value as Record<string, unknown>).ProcessId ?? ""), String((value as Record<string, unknown>).Name ?? ""), String((value as Record<string, unknown>).CommandLine ?? ""))); }
 function parseMacProcesses(text: string): ProcessInfo[] { return text.split(/\r?\n/).flatMap(line => { const match = line.trim().match(/^(\d+)\s+(\S+)\s*(.*)$/); return match ? processFrom(match[1], basename(match[2]), match[3]) : []; }); }
 function processFrom(pidValue: string, name: string, command: string): ProcessInfo[] { const processId = Number(pidValue); if (!Number.isSafeInteger(processId) || !/synthesizer v|synthv/i.test(`${name} ${command}`)) return []; return [{ processId, processIdentity: `${processId}:${sha256(Buffer.from(command)).slice(0, 16)}`, name, productName: name, version: "", command, windowTitle: "", isSv2: /studio 2/i.test(`${name} ${command}`), sandboxed: /sandbox/i.test(command) }]; }
-async function runCommand(command: string, args: string[]): Promise<{ stdout: string; stderr: string; code: number }> { return new Promise(resolveResult => { const child = spawn(command, args, { shell: false, windowsHide: true }); let stdout = ""; let stderr = ""; child.stdout?.on("data", chunk => { stdout += String(chunk); }); child.stderr?.on("data", chunk => { stderr += String(chunk); }); child.on("error", error => resolveResult({ stdout, stderr: error.message, code: -1 })); child.on("close", code => resolveResult({ stdout, stderr, code: code ?? -1 })); }); }
+async function runCommand(command: string, args: string[], env?: NodeJS.ProcessEnv): Promise<{ stdout: string; stderr: string; code: number }> { return new Promise(resolveResult => { const child = spawn(command, args, { shell: false, windowsHide: true, env: env ?? process.env }); let stdout = ""; let stderr = ""; child.stdout?.on("data", chunk => { stdout += String(chunk); }); child.stderr?.on("data", chunk => { stderr += String(chunk); }); child.on("error", error => resolveResult({ stdout, stderr: error.message, code: -1 })); child.on("close", code => resolveResult({ stdout, stderr, code: code ?? -1 })); }); }
 async function exists(path: string): Promise<boolean> { try { await access(path); return true; } catch { return false; } }
 async function firstFile(paths: string[]): Promise<string | null> { for (const path of paths) { try { if ((await stat(path)).isFile()) return path; } catch {} } return null; }
 async function firstDirectory(paths: string[]): Promise<string | null> { for (const path of paths) { try { if ((await stat(path)).isDirectory()) return path; } catch {} } return null; }

@@ -1306,6 +1306,8 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .composer > span { color: var(--subtle); font-size: 10px; text-align: center; }
 
 .feedback-stack { position: fixed; right: 24px; bottom: 24px; z-index: 200; width: min(380px,calc(100vw - 48px)); display: grid; gap: 8px; pointer-events: none; }
+/* Clears the Copilot composer, which docks at the same corner of the viewport. */
+body:has(.composer) .feedback-stack { bottom: 148px; }
 .toast { display: flex; align-items: flex-start; gap: 9px; margin: 0; padding: 10px 13px; border-radius: 6px; box-shadow: 0 10px 26px rgba(0,0,0,.16); font-size: 12px; pointer-events: auto; }
 .toast pre { margin: 0; font: inherit; white-space: pre-wrap; }
 .toast.success { border: 1px solid rgba(15,123,69,.22); color: #0c6338; background: #e9f6ee; }
