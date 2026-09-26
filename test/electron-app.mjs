@@ -83,8 +83,8 @@ class CdpClient {
   }
 }
 
-async function evaluate(page, expression, { awaitPromise = false, returnByValue = true } = {}) {
-  const result = await page.send("Runtime.evaluate", { expression, awaitPromise, returnByValue });
+async function evaluate(page, expression, { awaitPromise = false, returnByValue = true, includeCommandLineAPI = false } = {}) {
+  const result = await page.send("Runtime.evaluate", { expression, awaitPromise, returnByValue, includeCommandLineAPI });
   if (result.exceptionDetails) {
     const text = result.exceptionDetails.exception?.description ?? result.exceptionDetails.text;
     throw new Error(`Evaluation failed: ${text}`);
@@ -106,20 +106,39 @@ async function listProcessesMatching(needle) {
   }
 }
 
+// Connects to the main process's own Node inspector (--inspect), not the renderer CDP target,
+// so real OS-level window resizing can be driven without adding a debug command to shipped code.
+async function connectInspector(port) {
+  const target = await waitFor(async () => {
+    const list = await fetch(`http://127.0.0.1:${port}/json/list`).then((response) => response.json());
+    return list.find((entry) => typeof entry.webSocketDebuggerUrl === "string");
+  }, { label: "the main process inspector target" });
+  const client = new CdpClient(target.webSocketDebuggerUrl);
+  await client.connect();
+  await client.send("Runtime.enable");
+  return client;
+}
+
 test("built Electron app boots, exposes the desktop bridge, and drives the Copilot effort UI over CDP", async (t) => {
   assert.equal(existsSync(mainScript), true, "dist/electron/main.js must exist; run build:electron first");
 
   const profileDir = await mkdtemp(join(tmpdir(), "synthv-electron-app-profile-"));
+  const dataRootDir = await mkdtemp(join(tmpdir(), "synthv-electron-app-dataroot-"));
   const screenshotDir = process.env.ELECTRON_APP_TEST_SCREENSHOTS_DIR ?? await mkdtemp(join(tmpdir(), "synthv-electron-app-screenshots-"));
   await mkdir(screenshotDir, { recursive: true });
   const port = await freePort();
+  const inspectorPort = await freePort();
 
   const stderrChunks = [];
   const stdoutChunks = [];
-  const child = spawn(electronBinary, [mainScript, `--user-data-dir=${profileDir}`, `--remote-debugging-port=${port}`], {
+  // SYNTHV_TOOLBOX_TEST_DATA_ROOT keeps SynthVService.scanInstallations() (run at startup) away from the
+  // real ~/Library or %APPDATA%; --user-data-dir already isolates app storage. Overriding HOME/APPDATA
+  // process-wide instead hangs this Electron build's DevTools HTTP server in this sandbox (verified: the
+  // process logs "DevTools listening" but /json/list never responds), so this narrower seam is used instead.
+  const child = spawn(electronBinary, [`--inspect=${inspectorPort}`, mainScript, `--user-data-dir=${profileDir}`, `--remote-debugging-port=${port}`], {
     cwd: desktopRoot,
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "true" },
+    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "true", SYNTHV_TOOLBOX_TEST_DATA_ROOT: dataRootDir },
   });
   child.stdout.on("data", (chunk) => stdoutChunks.push(chunk));
   child.stderr.on("data", (chunk) => stderrChunks.push(chunk));
@@ -127,6 +146,8 @@ test("built Electron app boots, exposes the desktop bridge, and drives the Copil
 
   let browserCdp;
   let pageCdp;
+  let inspectorCdp;
+  let exitResult;
   try {
     await waitFor(async () => {
       const response = await fetch(`http://127.0.0.1:${port}/json/version`).catch(() => undefined);
@@ -146,6 +167,7 @@ test("built Electron app boots, exposes the desktop bridge, and drives the Copil
     await Promise.all([browserCdp.connect(), pageCdp.connect()]);
     await pageCdp.send("Runtime.enable");
     await pageCdp.send("Page.enable");
+    inspectorCdp = await connectInspector(inspectorPort);
 
     await t.test("preload bridge is exposed to the renderer", async () => {
       const bridgeType = await waitFor(() => evaluate(pageCdp, "typeof window.toolboxDesktop"), { label: "window.toolboxDesktop" });
@@ -164,6 +186,14 @@ test("built Electron app boots, exposes the desktop bridge, and drives the Copil
     let budgets;
     await t.test("the Low/Mid/High/Max group renders with Mid active and tooltips match agent_budgets", async () => {
       budgets = await evaluate(pageCdp, "window.toolboxDesktop.invoke('agent_budgets')", { awaitPromise: true });
+      assert.deepEqual(Object.keys(budgets).sort(), ["high", "low", "max", "mid"]);
+      for (const level of ["low", "mid", "high"]) {
+        assert.equal(typeof budgets[level].maxTurns, "number", `${level} maxTurns must be numeric`);
+        assert.equal(typeof budgets[level].maxTokens, "number", `${level} maxTokens must be numeric`);
+      }
+      assert.equal(budgets.max.maxTurns, null);
+      assert.equal(budgets.max.maxTokens, null);
+
       const buttons = await evaluate(pageCdp, `Array.from(document.querySelectorAll('.chat-effort-mode button')).map((button) => ({
         level: button.dataset.agentEffort,
         active: button.classList.contains('active'),
@@ -173,11 +203,11 @@ test("built Electron app boots, exposes the desktop bridge, and drives the Copil
       assert.deepEqual(buttons.filter((button) => button.active).map((button) => button.level), ["mid"]);
       for (const button of buttons) {
         const budget = budgets[button.level];
-        if (budget && budget.maxTurns !== null && budget.maxTokens !== null) {
-          assert.match(button.title, new RegExp(String(budget.maxTurns)));
-          assert.match(button.title, new RegExp(String(Math.round(budget.maxTokens / 1000))));
+        if (button.level === "max") {
+          assert.doesNotMatch(button.title, /\d/, "the unlimited Max tooltip must not carry a stale numeric budget");
         } else {
-          assert.equal(button.title.length > 0, true);
+          assert.match(button.title, new RegExp(`\\b${budget.maxTurns}\\b(?!\\s*k)`), `${button.level} tooltip must state its turn limit`);
+          assert.match(button.title, new RegExp(`\\b${Math.round(budget.maxTokens / 1000)}k\\b`), `${button.level} tooltip must state its token limit`);
         }
       }
     });
@@ -192,6 +222,19 @@ test("built Electron app boots, exposes the desktop bridge, and drives the Copil
       assert.equal(settings.agentEffort, "high");
     });
 
+    await t.test("switching effort shows a notice that does not overlap the composer", async () => {
+      await waitFor(() => evaluate(pageCdp, "!!document.querySelector('.feedback-stack .toast')"), { label: "the effort-change notice toast" });
+      const layout = await evaluate(pageCdp, `(() => {
+        const toast = document.querySelector('.feedback-stack .toast').getBoundingClientRect();
+        const composer = document.querySelector('.composer').getBoundingClientRect();
+        return { toast: { left: toast.left, top: toast.top, right: toast.right, bottom: toast.bottom }, composer: { left: composer.left, top: composer.top, right: composer.right, bottom: composer.bottom } };
+      })()`);
+      const intersects = layout.toast.left < layout.composer.right && layout.toast.right > layout.composer.left
+        && layout.toast.top < layout.composer.bottom && layout.toast.bottom > layout.composer.top;
+      assert.equal(intersects, false, "the notice toast must not overlap the composer");
+      await screenshot(pageCdp, screenshotDir, "02-notice-vs-composer");
+    });
+
     await t.test("get_agent_runtime_status reports running", async () => {
       const status = await evaluate(pageCdp, "window.toolboxDesktop.invoke('get_agent_runtime_status')", { awaitPromise: true });
       assert.equal(status.running, true);
@@ -199,10 +242,12 @@ test("built Electron app boots, exposes the desktop bridge, and drives the Copil
 
     await t.test("resizing the real window keeps the effort group and composer inside the viewport", async () => {
       // Electron's DevTools protocol has no Browser.getWindowForTarget/setWindowBounds handler (confirmed
-      // absent from the compiled Electron Framework binary), so the dev-only debug_set_window_bounds
-      // bridge command drives the actual OS window instead; every other interaction stays CDP-driven.
+      // absent from the compiled Electron Framework binary). Drive the actual OS window through the
+      // main process's own Node inspector instead, so shipped code carries no test-only command.
       async function resizeRealWindow(width, height) {
-        await evaluate(pageCdp, `window.toolboxDesktop.invoke('debug_set_window_bounds', { width: ${width}, height: ${height} })`, { awaitPromise: true });
+        // Plain top-level eval on the main process's inspector has no `require`; the CDP Command Line
+        // API (the same mechanism Chrome DevTools' Node integration uses) supplies one.
+        await evaluate(inspectorCdp, `require('electron').BrowserWindow.getAllWindows()[0].setBounds({ width: ${width}, height: ${height} })`, { includeCommandLineAPI: true });
       }
 
       async function assertLayoutFitsViewport(label) {
@@ -227,12 +272,12 @@ test("built Electron app boots, exposes the desktop bridge, and drives the Copil
       await resizeRealWindow(1280, 860);
       await waitFor(() => evaluate(pageCdp, "window.innerWidth > 1100"), { label: "resize to 1280x860 to apply", timeoutMs: 5000 });
       await assertLayoutFitsViewport("1280x860");
-      await screenshot(pageCdp, screenshotDir, "02-resized-1280x860");
+      await screenshot(pageCdp, screenshotDir, "03-resized-1280x860");
 
       await resizeRealWindow(960, 640);
       await waitFor(() => evaluate(pageCdp, "window.innerWidth <= 960"), { label: "resize to the minimum window size to apply", timeoutMs: 5000 });
       await assertLayoutFitsViewport("minimum window size");
-      await screenshot(pageCdp, screenshotDir, "03-resized-minimum");
+      await screenshot(pageCdp, screenshotDir, "04-resized-minimum");
     });
 
     await t.test("the main process logs no error lines", () => {
@@ -241,22 +286,30 @@ test("built Electron app boots, exposes the desktop bridge, and drives the Copil
       assert.deepEqual(errorLines, []);
     });
   } finally {
+    inspectorCdp?.close();
     pageCdp?.close();
     if (browserCdp) {
       try { await browserCdp.send("Browser.close"); } catch { /* best effort graceful shutdown */ }
     }
     browserCdp?.close();
-    const result = await Promise.race([
+    exitResult = await Promise.race([
       exited,
       new Promise((resolve) => setTimeout(() => resolve(undefined), 8000)),
     ]);
-    if (!result) child.kill("SIGKILL");
-    await exited;
+    if (!exitResult) child.kill("SIGKILL");
+    exitResult = await exited;
     await rm(profileDir, { recursive: true, force: true });
+    await rm(dataRootDir, { recursive: true, force: true });
     if (!process.env.ELECTRON_APP_TEST_SCREENSHOTS_DIR) await rm(screenshotDir, { recursive: true, force: true }).catch(() => undefined);
   }
 
-  await t.test("the app quit and left no Electron process behind", async () => {
+  await t.test("the app quit cleanly and left no Electron process behind", async () => {
+    assert.ok(exitResult, "the app must exit rather than be force-killed");
+    assert.equal(exitResult.code, 0, "the app must exit with code 0");
+    assert.equal(exitResult.signal, null, "the app must not have been killed by a signal");
+    const stderrText = Buffer.concat(stderrChunks).toString("utf8");
+    const errorLines = stderrText.split("\n").filter((line) => /error/i.test(line));
+    assert.deepEqual(errorLines, [], "no error lines after shutdown");
     const leftover = await waitFor(async () => {
       const matches = await listProcessesMatching(profileDir);
       return matches.length === 0 ? [] : undefined;

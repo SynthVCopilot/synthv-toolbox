@@ -57,16 +57,6 @@ handlers.register("cancel_toolbox_update_download", async () => updaterDownloadS
 handlers.register("install_toolbox_update", async () => { await updater.restart(); return { succeeded: true, summary: "Installing update.", detail: "" }; });
 handlers.register("open_toolbox_releases", async args => openExternal(optionalUrl(args.releaseUrl, "https://github.com/SynthVCopilot/synthv-toolbox/releases")));
 handlers.register("open_toolbox_project", async args => openExternal(projectUrl(args.target)));
-// Electron's DevTools protocol has no Browser.setWindowBounds handler, so e2e tests resize the real window through this instead; unpackaged builds only.
-if (!app.isPackaged) {
-  handlers.register("debug_set_window_bounds", async args => {
-    if (!mainWindow) throw new Error("Main window is not available.");
-    const width = args.width; const height = args.height;
-    if (typeof width !== "number" || typeof height !== "number") throw new Error("width and height must be numbers.");
-    mainWindow.setBounds({ width, height });
-    return mainWindow.getBounds();
-  });
-}
 let commandRegistry: ElectronCommandRegistry | undefined;
 
 updater.onState((state) => {
@@ -198,7 +188,9 @@ async function createMainWindow(startHidden: boolean): Promise<void> {
 async function initializeServices(): Promise<void> {
   const userData = app.getPath("userData");
   const bridgeDirectory = app.isPackaged ? join(process.resourcesPath, "components", "synthv-agent-bridge") : resolve(currentDirectory, "../../components/synthv-agent-bridge");
-  const synthv = new SynthVService(join(userData, "synthv"), bridgeDirectory, undefined, autostartController());
+  // Lets e2e tests give SynthVService an isolated scan root instead of the real home directory; unset in production.
+  const testDataRoot = process.env.SYNTHV_TOOLBOX_TEST_DATA_ROOT;
+  const synthv = new SynthVService(join(userData, "synthv"), bridgeDirectory, undefined, autostartController(), testDataRoot);
   const componentsRoot = app.isPackaged ? join(process.resourcesPath, "components") : resolve(currentDirectory, "../../components");
   const creative = createCreativeService(join(userData, "creative"), createComponentExecutor(componentsRoot));
   let ai: AiService;

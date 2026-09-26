@@ -29,5 +29,8 @@ test("compiled bridge module stays ESM (the preload build must not overwrite it)
   const compiledUrl = new URL("../src/PiDesktop.Tauri/dist/electron/bridge.js", import.meta.url);
   assert.equal(existsSync(compiledUrl), true, "dist/electron/bridge.js must be present after build:host");
   const compiled = readFileSync(compiledUrl, "utf8");
-  assert.doesNotMatch(compiled, /require\("electron"\)/);
+  // bridge.ts never imports "electron", so absence of that string proves nothing; assert the ESM shape
+  // itself, which is what the preload build's shared-outDir regression actually overwrote it with (CJS).
+  assert.match(compiled, /^export (function|const)/m);
+  assert.doesNotMatch(compiled, /^\s*"use strict";|\bexports\.\w+\s*=|\brequire\(/m);
 });
