@@ -19,8 +19,15 @@ test("Electron build emits native icons beside the compiled main process", () =>
 
 test("compiled preload script is CommonJS (Electron's sandboxed preload loader rejects ESM)", () => {
   const compiledUrl = new URL("../src/PiDesktop.Tauri/dist/electron/preload.js", import.meta.url);
-  if (!existsSync(compiledUrl)) return;
+  assert.equal(existsSync(compiledUrl), true, "dist/electron/preload.js must be present after build:host");
   const compiled = readFileSync(compiledUrl, "utf8");
   assert.doesNotMatch(compiled, /^\s*import /m);
   assert.match(compiled, /require\("electron"\)/);
+});
+
+test("compiled bridge module stays ESM (the preload build must not overwrite it)", () => {
+  const compiledUrl = new URL("../src/PiDesktop.Tauri/dist/electron/bridge.js", import.meta.url);
+  assert.equal(existsSync(compiledUrl), true, "dist/electron/bridge.js must be present after build:host");
+  const compiled = readFileSync(compiledUrl, "utf8");
+  assert.doesNotMatch(compiled, /require\("electron"\)/);
 });

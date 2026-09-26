@@ -21,7 +21,7 @@ export class SynthVService {
   private pendingRoute: Record<string, unknown> | null = null;
   private readonly syncPreviews = new Map<string, { targetSlotId: string; categories: string[] }>();
   private bridgeClient?: { getStatus(): Promise<{ connected: boolean; status?: { sessionToken?: string }; reason?: string }>; paths: { stopFile: string } };
-  constructor(private readonly root: string, private readonly bridgeDirectory: string, private readonly runner: Runner = runCommand, private readonly autostart?: AutostartController, private readonly platformDataRoot: string = homedir()) {}
+  constructor(private readonly root: string, private readonly bridgeDirectory: string, private readonly runner: Runner = runCommand, private readonly autostart?: AutostartController, private readonly platformDataRoot?: string) {}
 
   async scanInstallations(): Promise<Array<Record<string, unknown>>> {
     const candidates = platform() === "win32" ? windowsCandidates() : macCandidates();
@@ -147,14 +147,15 @@ export class SynthVService {
   async reveal(path: string): Promise<void> { const absolute = resolve(path); if (platform() === "win32") await this.run("explorer.exe", ["/select,", absolute]); else await this.run("open", ["-R", absolute]); }
 
   private async installBridgeTarget(target: { scriptsPath: string; bridgeProfile: string }): Promise<OperationResult> { this.assertBridgeTarget(target); const script = target.bridgeProfile === "sv1" ? "install-sv1-legacy-bridge.mjs" : "install-synthv-bridge.mjs"; const result = await this.run(process.execPath, [join(this.bridgeDirectory, "scripts", script), target.scriptsPath]); return result.code === 0 ? ok("Bridge installed.") : fail("Bridge installation failed.", result.stderr); }
-  private async diagnoseBridgeTarget(target: { scriptsPath: string; bridgeProfile: string }): Promise<OperationResult> { this.assertBridgeTarget(target); const files = target.bridgeProfile === "sv1" ? ["synthv-agent-bridge-sv1.js"] : ["synthv-agent-bridge.js"]; return (await Promise.all(files.map(file => exists(join(target.scriptsPath, file))))).every(Boolean) ? ok("Bridge scripts are installed.") : fail("Bridge scripts are unavailable.", "Expected bridge files are missing."); }
+  private async diagnoseBridgeTarget(target: { scriptsPath: string; bridgeProfile: string }): Promise<OperationResult> { this.assertBridgeTarget(target); const files = target.bridgeProfile === "sv1" ? [join(target.scriptsPath, "SynthV Agent Bridge SV1 Legacy", "SynthVAgentBridgeSV1Legacy.lua")] : [join(target.scriptsPath, "SynthV Agent Bridge", "SynthVAgentBridge.lua"), join(target.scriptsPath, "SynthV Agent Bridge", "StopSynthVAgentBridge.lua")]; return (await Promise.all(files.map(file => exists(file)))).every(Boolean) ? ok("Bridge scripts are installed.") : fail("Bridge scripts are unavailable.", "Expected bridge files are missing."); }
   private assertBridgeTarget(target: { scriptsPath: string; bridgeProfile: string }): void { requireText(target.scriptsPath, "scriptsPath"); if (!bridgeProfiles.has(target.bridgeProfile)) throw new Error("Unsupported Bridge profile."); }
   private async assertProcess(processId: number, identity: string): Promise<void> { if (!Number.isSafeInteger(processId) || processId <= 0 || !identity) throw new Error("Invalid SynthV process target."); if (!(await this.listProcesses()).some(process => process.processId === processId && process.processIdentity === identity)) throw new Error("SynthV process identity changed."); }
   private async assertSlot(slotId: string): Promise<void> { this.slot(await this.readStore(), slotId); }
   private slot(store: ProfileStore, id: string): Slot { if (!isUuid(id)) throw new Error("Invalid profile id."); const slot = store.slots.find(item => item.id === id); if (!slot) throw new Error("Profile was not found."); return slot; }
   private async readStore(): Promise<ProfileStore> { try { const value = JSON.parse(await readFile(this.storePath(), "utf8")); return { activeSlotId: typeof value.activeSlotId === "string" ? value.activeSlotId : null, slots: Array.isArray(value.slots) ? value.slots.filter((slot: unknown): slot is Slot => isSlot(slot)) : [] }; } catch { return { activeSlotId: null, slots: [] }; } }
   private async writeStore(store: ProfileStore): Promise<void> { await mkdir(dirname(this.storePath()), { recursive: true }); await writeFile(this.storePath(), JSON.stringify(store), "utf8"); }
-  private canonicalPath(): string { return platform() === "win32" ? join(process.env.APPDATA ?? this.root, "Dreamtonics", "Synthesizer V Studio 2") : join(this.platformDataRoot, "Library", "Application Support", "Dreamtonics", "Synthesizer V Studio 2"); }
+  private dataRoot(): string { return this.platformDataRoot ?? (platform() === "win32" ? process.env.APPDATA ?? this.root : homedir()); }
+  private canonicalPath(): string { return platform() === "win32" ? join(this.dataRoot(), "Dreamtonics", "Synthesizer V Studio 2") : join(this.dataRoot(), "Library", "Application Support", "Dreamtonics", "Synthesizer V Studio 2"); }
   private vaultPath(): string { return `${this.canonicalPath()}.toolbox-slots`; }
   private slotPath(id: string): string { return join(this.vaultPath(), "slots", id); }
   private sessionPath(id: string): string { return join(this.slotPath(id), "license", "session"); }

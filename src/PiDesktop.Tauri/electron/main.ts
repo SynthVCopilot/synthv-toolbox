@@ -57,6 +57,16 @@ handlers.register("cancel_toolbox_update_download", async () => updaterDownloadS
 handlers.register("install_toolbox_update", async () => { await updater.restart(); return { succeeded: true, summary: "Installing update.", detail: "" }; });
 handlers.register("open_toolbox_releases", async args => openExternal(optionalUrl(args.releaseUrl, "https://github.com/SynthVCopilot/synthv-toolbox/releases")));
 handlers.register("open_toolbox_project", async args => openExternal(projectUrl(args.target)));
+// Electron's DevTools protocol has no Browser.setWindowBounds handler, so e2e tests resize the real window through this instead; unpackaged builds only.
+if (!app.isPackaged) {
+  handlers.register("debug_set_window_bounds", async args => {
+    if (!mainWindow) throw new Error("Main window is not available.");
+    const width = args.width; const height = args.height;
+    if (typeof width !== "number" || typeof height !== "number") throw new Error("width and height must be numbers.");
+    mainWindow.setBounds({ width, height });
+    return mainWindow.getBounds();
+  });
+}
 let commandRegistry: ElectronCommandRegistry | undefined;
 
 updater.onState((state) => {
