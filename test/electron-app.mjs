@@ -224,10 +224,12 @@ test("built Electron app boots, exposes the desktop bridge, and drives the Copil
       assert.equal(settings.agentEffort, "high");
     });
 
-    async function assertNoticeDoesNotOverlapComposer(label) {
-      await waitFor(() => evaluate(pageCdp, "!!document.querySelector('.feedback-stack .toast')"), { label: `the effort-change notice toast at ${label}` });
+    async function assertNoticeDoesNotOverlapComposer(label, level) {
+      // An earlier notice can still be on screen, so measure the toast announcing this level.
+      const toastFor = `[...document.querySelectorAll('.feedback-stack .toast')].reverse().find((toast) => toast.textContent.includes(${JSON.stringify(level)}))`;
+      await waitFor(() => evaluate(pageCdp, `!!${toastFor}`), { label: `the ${level} effort notice toast at ${label}` });
       const layout = await evaluate(pageCdp, `(() => {
-        const toast = document.querySelector('.feedback-stack .toast').getBoundingClientRect();
+        const toast = ${toastFor}.getBoundingClientRect();
         const composer = document.querySelector('.composer').getBoundingClientRect();
         return { toast: { left: toast.left, top: toast.top, right: toast.right, bottom: toast.bottom }, composer: { left: composer.left, top: composer.top, right: composer.right, bottom: composer.bottom } };
       })()`);
@@ -237,7 +239,7 @@ test("built Electron app boots, exposes the desktop bridge, and drives the Copil
     }
 
     await t.test("switching effort shows a notice that does not overlap the composer", async () => {
-      await assertNoticeDoesNotOverlapComposer("the default window size");
+      await assertNoticeDoesNotOverlapComposer("the default window size", "High");
       await screenshot(pageCdp, screenshotDir, "02-notice-vs-composer");
     });
 
@@ -286,7 +288,7 @@ test("built Electron app boots, exposes the desktop bridge, and drives the Copil
       await screenshot(pageCdp, screenshotDir, "04-resized-minimum");
 
       await evaluate(pageCdp, "document.querySelector('[data-agent-effort=\"mid\"]').click()");
-      await assertNoticeDoesNotOverlapComposer("the minimum window size");
+      await assertNoticeDoesNotOverlapComposer("the minimum window size", "Mid");
       await screenshot(pageCdp, screenshotDir, "05-notice-vs-composer-minimum");
     });
 

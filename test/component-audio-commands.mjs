@@ -23,8 +23,13 @@ const request = { inputPath, sampleRate: 48000, channels: 1, sampleFormat: "s24"
 const plan = await handlers.get("plan_audio_prepare")({ request });
 assert.match(plan.token, /^[0-9a-f-]{36}$/);
 const job = await handlers.get("start_audio_prepare")({ request, token: plan.token });
-await new Promise(resolve => setTimeout(resolve, 0));
-assert.equal((await handlers.get("audio_job_snapshot")({ id: job.id })).status, "completed");
+const deadline = Date.now() + 5000;
+let snapshot = await handlers.get("audio_job_snapshot")({ id: job.id });
+while (snapshot.status === "running" && Date.now() < deadline) {
+  await new Promise(resolve => setTimeout(resolve, 10));
+  snapshot = await handlers.get("audio_job_snapshot")({ id: job.id });
+}
+assert.equal(snapshot.status, "completed");
 await assert.rejects(handlers.get("start_audio_prepare")({ request, token: plan.token }), /invalid or expired/);
 assert.ok(handlers.has("component_downloads"));
 assert.ok(calls.some(call => call.file.includes("ffprobe")));
