@@ -1,5 +1,5 @@
 # Pi Desktop 项目索引
-> 最后更新：2026-09-13
+> 最后更新：2026-09-25
 
 ## 项目目标
 
@@ -17,7 +17,7 @@
 - `src/PiDesktop.Tauri/electron`：桌面生命周期、IPC、更新与本地服务
 - `src/PiDesktop.Tauri/src`：不依赖桌面框架的 Vue renderer
 - `src/PiDesktop.Tauri/components`：随应用分发的 Bridge 与创作组件
-- `packages/runtime-protocol`：宿主、运行时与插件共享协议
-- `packages/agent-runtime`：PI 会话、模型访问和插件运行时
+- `packages/runtime-protocol`：宿主、运行时与插件共享协议，含 Agent 计划、档位预算统计与运行结果契约
+- `packages/agent-runtime`：PI 会话、模型访问和插件运行时；`task-loop.ts` 负责目标计划、完成/求助信号、预算与续跑循环
 - `packages/plugin-sdk`：插件作者使用的后端与 GUI SDK
 - `test`：Node/Electron 合同与行为测试

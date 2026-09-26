@@ -21,3 +21,8 @@
 - Workflow `agent-goal-review`（run `wf_620151e8-ef3`，opus，33 个 agent）：4 个视角审查 + 逐条独立反驳验证，确认 26 条、驳回 3 条；确认清单保存在会话 scratchpad `confirmed.json`。
 - 修订协议 `f0f89f1`：新增 `cancelled` 状态、`AgentSessionInitializeParams.outcome`（替代 `plan`）、`AgentSessionCancelParams`、`AgentUsageSample.level`、`AgentEffortProfile.sigmas`。
 - Workflow `agent-goal-fix` 首次运行因会话用量上限三个修复 agent 全部失败（无分支、无残留 worktree）；额度恢复后以同一 run 重新启动。
+- Workflow `agent-goal-fix` 重跑完成（6 个 agent）：`agent-goal-fix-stats@7fd8138`（删失对数正态 MAP-EM，按档位分层，k-sigma 上限，16/16）、`agent-goal-fix-runtime@29e8b04`（推进判定、错误即停、静态系统提示 + 首轮上下文消息、信号后阻断、耗尽后单次收尾、事件采集回复、完成后清空计划、outcome 回填、`session.cancel`、并发拒绝、压缩 Token 计入，38/38）、`agent-goal-fix-host@1954265`（`resolveModelSelection` 返回 `credentials[]` 并加真实宿主集成测试、样本带档位、最新 outcome 回填、取消命令与停止按钮、运行不再占用全局遮罩、预算刷新、目标卡片入滚动区、对话头换行、`cancelled` 文案）；opus 复核各自列出残留问题。
+- `git merge --no-ff` 三个修复分支（`32c8668`、`c747264`、`05fe833`），无冲突。
+- 残留修正 `ad7ed6b`：零值样本取对数前夹到 1、覆盖率测试去容差、先验注释；成功消息清除本轮错误、轮次间检查取消、测试替身模拟空闲 abort 与压缩替换消息并新增 3 项测试；审批空槽保留网格行、吸顶卡片不透明底、首次发送建对话失败时复位运行标记；Token 用量千分位。
+- 验证：`npm ci --ignore-scripts`（agent-runtime、PiDesktop.Tauri）；`npm run build:electron` exit 0；`npx tsc -p electron/tsconfig.json --noEmit` 通过；`node --test test/runtime-protocol.mjs` 17/17；`node --test test/agent-runtime.mjs` 41/41；合同链 `--test` 批 14/14（不含 synthv-service）；其余 18 个合同脚本逐个 exit 0（`agent-goal-ui` 12/12）；`chatgpt-copilot-ui` + `conversation-model-picker` 7/7；`synthv-service.mjs` 仍因沙箱 EACCES 失败（既有）。
+- 视觉验证：Vite 预览（端口 1421）1280×860 与 960×640 下检查档位切换、当前目标卡片、完成徽标、预算用量与完成依据；预览 mock 临时改动已还原。
