@@ -272,7 +272,8 @@ function previewAiProvider(providerId: unknown): AiProviderSummary | undefined {
 function refreshPreviewAiProvider(provider: AiProviderSummary): void {
   provider.totalAccounts = provider.accounts.length;
   provider.healthyAccounts = provider.accounts.filter((account) => account.healthy).length;
-  provider.connected = provider.accounts.some((account) => account.authorized);
+  // Match the Electron host: any enabled credential counts, not only OAuth accounts.
+  provider.connected = provider.accounts.some((account) => account.authorized && account.enabled) || provider.apiKeys.some((key) => key.enabled);
   provider.models = [...new Set([...provider.oauthModels, ...provider.apiKeys.flatMap((key) => key.models)])];
 }
 

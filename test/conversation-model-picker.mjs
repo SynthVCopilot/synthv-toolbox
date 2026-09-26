@@ -6,6 +6,9 @@ const main = await readFile(new URL("../src/PiDesktop.Tauri/src/main.ts", import
 const pickerSource = main.slice(main.indexOf("function hasSelectableAiConnection"), main.indexOf("function aiConnectionSummary"));
 const selectionSource = main.slice(main.indexOf("function selectChatModel"), main.indexOf("function aiConnectionSummary"));
 
+const api = await readFile(new URL("../src/PiDesktop.Tauri/src/api.ts", import.meta.url), "utf8");
+const refreshSource = api.slice(api.indexOf("function refreshPreviewAiProvider"), api.indexOf("function previewAccountProbe"));
+
 function provider(overrides = {}) {
   return {
     id: "openai-codex", displayName: "OpenAI", description: "Connected", active: true, connected: true,
@@ -71,6 +74,28 @@ function pickerHarness(providers, catalogError = null) {
   assert.equal(harness.state().app.model.providers[0].model, "new-model");
   assert.equal(harness.state().aiModelPickerOpen, false);
   assert.equal(harness.state().notice, "accountUi.currentAiProviderAndModelUpdated");
+}
+
+{
+  // The Electron host treats any enabled credential, including API keys, as connected;
+  // the browser preview mock must agree so the picker's connection state matches.
+  const factory = new Function("stripTypeScriptTypes", `
+    ${stripTypeScriptTypes(refreshSource)}
+    return { refreshPreviewAiProvider };
+  `);
+  const { refreshPreviewAiProvider } = factory(stripTypeScriptTypes);
+
+  const apiKeyOnly = { accounts: [], apiKeys: [{ enabled: true, models: [] }], oauthModels: [] };
+  refreshPreviewAiProvider(apiKeyOnly);
+  assert.equal(apiKeyOnly.connected, true);
+
+  const disabledApiKeyOnly = { accounts: [], apiKeys: [{ enabled: false, models: [] }], oauthModels: [] };
+  refreshPreviewAiProvider(disabledApiKeyOnly);
+  assert.equal(disabledApiKeyOnly.connected, false);
+
+  const disabledAccount = { accounts: [{ authorized: true, enabled: false }], apiKeys: [], oauthModels: [] };
+  refreshPreviewAiProvider(disabledAccount);
+  assert.equal(disabledAccount.connected, false);
 }
 
 console.log("Conversation model picker behavior passed.");

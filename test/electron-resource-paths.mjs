@@ -17,6 +17,13 @@ test("Electron build emits native icons beside the compiled main process", () =>
   }
 });
 
+test("Electron build emits an app package.json so the unpackaged app reports its own name and version", () => {
+  const appPackage = JSON.parse(readFileSync(new URL("../src/PiDesktop.Tauri/package.json", import.meta.url), "utf8"));
+  const emitted = JSON.parse(readFileSync(new URL("../src/PiDesktop.Tauri/dist/electron/package.json", import.meta.url), "utf8"));
+  assert.equal(emitted.name, appPackage.name);
+  assert.equal(emitted.version, appPackage.version);
+});
+
 test("compiled preload script is CommonJS (Electron's sandboxed preload loader rejects ESM)", () => {
   const compiledUrl = new URL("../src/PiDesktop.Tauri/dist/electron/preload.js", import.meta.url);
   assert.equal(existsSync(compiledUrl), true, "dist/electron/preload.js must be present after build:host");

@@ -110,21 +110,6 @@ export class ElectronRuntimeHost {
 
   private async syncHttpServer(): Promise<void> { if (this.httpServer) await this.httpServer.restart({ enabled: this.settings.httpApiEnabled, agentEnabled: this.settings.httpAgentEnabled, internalEnabled: this.settings.mcpInternalFunctionsEnabled, advancedEnabled: this.settings.mcpAdvancedFunctionsEnabled, port: this.settings.httpApiPort }); }
 
-  async initializeAgentSession(sessionId: string, cwd?: string, systemPrompt?: string): Promise<JsonValue> {
-    const params: Record<string, JsonValue> = { sessionId };
-    if (cwd !== undefined) params.cwd = cwd;
-    if (systemPrompt !== undefined) params.systemPrompt = systemPrompt;
-    return this.runtimeRequest("session.initialize", params);
-  }
-
-  async sendAgentMessage(sessionId: string, input: string): Promise<JsonValue> {
-    return this.runtimeRequest("session.send", { sessionId, input });
-  }
-
-  async closeAgentSession(sessionId: string): Promise<JsonValue> {
-    return this.runtimeRequest("session.close", { sessionId });
-  }
-
   async invokePlugin(pluginId: string, method: string, params: JsonValue): Promise<JsonValue> {
     return this.runtimeRequest("runtime.plugin.invoke", { pluginId, method, params });
   }

@@ -29,9 +29,6 @@ export class ElectronCommandRegistry {
     this.register("set_agent_plugin_enabled", async p => this.pluginMutation(stringParam(p, "pluginId"), () => this.host.setPluginEnabled(stringParam(p, "pluginId"), boolParam(p, "enabled"))));
     this.register("set_agent_plugin_internal_functions_enabled", async p => this.pluginMutation(stringParam(p, "pluginId"), () => this.host.setPluginGrant(stringParam(p, "pluginId"), "internal", boolParam(p, "enabled"))));
     this.register("set_agent_plugin_advanced_functions_enabled", async p => this.pluginMutation(stringParam(p, "pluginId"), () => this.host.setPluginGrant(stringParam(p, "pluginId"), "advanced", boolParam(p, "enabled"))));
-    this.register("agent_session_initialize", async p => this.host.initializeAgentSession(stringParam(p, "sessionId"), optionalStringParam(p, "cwd"), optionalStringParam(p, "systemPrompt")));
-    this.register("agent_session_send", async p => this.host.sendAgentMessage(stringParam(p, "sessionId"), stringParam(p, "input")));
-    this.register("agent_session_close", async p => this.host.closeAgentSession(stringParam(p, "sessionId")));
     this.register("get_agent_runtime_status", async () => ({ running: true, protocolVersion: "1.0" }));
     this.register("start_agent_runtime", async () => ({ runtimeId: "synthv-toolbox.agent-runtime" }));
     this.register("stop_agent_runtime", async () => { await this.host.runtime.dispose(); return null; });
