@@ -1433,6 +1433,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "open_conversation") return { id: "preview", title: "预览对话", messages: [] } as T;
   if (command === "agent_file_approvals") return [] as T;
   if (command === "send_message") return [{ role: "assistant", content: previewAgentOutcome.summary, outcome: previewAgentOutcome }] as T;
+  if (command === "cancel_agent_run") return null as T;
+  if (command === "agent_budgets") return previewAgentBudgets as T;
   if (command.startsWith("run_") || ["add_project_reference", "export_project_without_parameters", "export_project_lyrics"].includes(command)) return {
     kind: command.replace(/^run_/, "").replaceAll("_", "-"),
     summary: "预览工作流已完成。",
@@ -1751,6 +1753,8 @@ export const api = {
   newConversation: () => call<ConversationSnapshot>("new_conversation"),
   openConversation: (id: string) => call<ConversationSnapshot>("open_conversation", { id }),
   sendMessage: (conversationId: string, input: string) => call<ChatMessage[]>("send_message", { conversationId, input }),
+  cancelAgentRun: (conversationId: string) => call<void>("cancel_agent_run", { conversationId }),
+  agentBudgets: () => call<Record<AgentEffortLevel, AgentRunBudget>>("agent_budgets"),
   agentFileApprovals: () => call<AgentFileApproval[]>("agent_file_approvals"),
   decideAgentFileApproval: (id: string, approve: boolean) => call<void>("decide_agent_file_approval", { id, approve }),
   saveMcpServer: (server: McpServerConfig) => call<BootstrapState>("save_mcp_server", { server }),

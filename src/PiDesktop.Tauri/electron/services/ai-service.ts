@@ -8,7 +8,6 @@ import {
   estimateAgentRunBudget,
   validateAgentRunOutcome,
   type AgentEffortLevel,
-  type AgentPlan,
   type AgentRunBudget,
   type AgentRunOutcome,
   type AgentUsageSample,
@@ -73,6 +72,14 @@ export interface ProviderSettings {
   model: string;
   oauthEnabled: boolean;
   strategy: AiLoadStrategy;
+}
+
+export interface HostModelCredential {
+  id: string;
+  providerId: string;
+  modelId: string;
+  authMethod: CredentialKind;
+  apiKey: string;
 }
 
 export interface ConversationMessage {
@@ -201,25 +208,36 @@ export class AiService {
     return { activeProvider: metadata.activeProvider, legacyConfigured: false, providers: providersState, catalogSource: "models-dev", catalogGeneratedAt: this.now().getTime(), catalogError: null };
   }
 
-  async resolveModelSelection(): Promise<{ providerId: string; modelId: string; apiKey: string; credentialId: string }> {
+  async resolveModelSelection(): Promise<{ providerId: string; modelId: string; credentials: HostModelCredential[] }> {
     const metadata = await this.load();
     const providerId = metadata.activeProvider;
     const modelId = metadata.providers[providerId].model;
     if (!modelId) throw new Error("No model is selected.");
     const router = this.createCredentialRouter(metadata);
-    const candidate = router.candidates({ providerId, modelId })[0];
-    if (!candidate) throw new Error(`No eligible credential is configured for ${providerId}/${modelId}.`);
-    const stored = metadata.credentials.find((credential) => credential.id === candidate.id);
-    if (!stored) throw new Error("The selected credential is unavailable.");
-    const decrypted = this.options.safeStorage.decryptString(Buffer.from(stored.sealed, "base64"));
-    let apiKey = decrypted;
-    if (stored.kind === "oauth") {
-      const credential = JSON.parse(decrypted) as { access?: unknown; accessToken?: unknown };
-      const access = credential.access ?? credential.accessToken;
-      if (typeof access !== "string" || !access) throw new Error("The OAuth credential has no access token.");
-      apiKey = access;
+    const candidates = router.candidates({ providerId, modelId });
+    if (!candidates.length) throw new Error(`No eligible credential is configured for ${providerId}/${modelId}.`);
+    const credentials: HostModelCredential[] = [];
+    for (const candidate of candidates) {
+      const stored = metadata.credentials.find((credential) => credential.id === candidate.id);
+      if (!stored) continue;
+      let apiKey: string;
+      try {
+        const decrypted = this.options.safeStorage.decryptString(Buffer.from(stored.sealed, "base64"));
+        if (stored.kind === "oauth") {
+          const credential = JSON.parse(decrypted) as { access?: unknown; accessToken?: unknown };
+          const access = credential.access ?? credential.accessToken;
+          if (typeof access !== "string" || !access) continue;
+          apiKey = access;
+        } else {
+          apiKey = decrypted;
+        }
+      } catch {
+        continue;
+      }
+      credentials.push({ id: stored.id, providerId, modelId, authMethod: stored.kind, apiKey });
     }
-    return { providerId, modelId, apiKey, credentialId: stored.id };
+    if (!credentials.length) throw new Error(`No eligible credential is configured for ${providerId}/${modelId}.`);
+    return { providerId, modelId, credentials };
   }
 
   async authorize_ai_provider(provider: AiProviderId, operationId = this.id()): Promise<Record<string, unknown>> {
@@ -369,8 +387,8 @@ export class AiService {
     const conversation = metadata.conversations.find((item) => item.id === conversationId);
     if (!conversation) throw new Error("Conversation was not found.");
     const effort = options.effort ?? DEFAULT_AGENT_EFFORT;
-    const plan = latestPlan(conversation);
-    await this.options.runtime.request("session.initialize", { sessionId: conversation.id, ...(options.cwd ? { cwd: options.cwd } : {}), ...(plan ? { plan } : {}) });
+    const seedOutcome = latestOutcome(conversation);
+    await this.options.runtime.request("session.initialize", { sessionId: conversation.id, ...(options.cwd ? { cwd: options.cwd } : {}), ...(seedOutcome ? { outcome: seedOutcome } : {}) });
     const budget = estimateAgentRunBudget(effort, this.agentUsageSamples());
     const response = await this.options.runtime.request("session.send", { sessionId: conversation.id, input: text, budget });
     const outcome = validateAgentRunOutcome(response.outcome);
@@ -388,6 +406,10 @@ export class AiService {
     return messages.map((message) => ({ ...message }));
   }
 
+  async cancel_agent_run(conversationId: string): Promise<void> {
+    await this.options.runtime.request("session.cancel", { sessionId: conversationId });
+  }
+
   agentUsageSamples(): AgentUsageSample[] {
     if (!this.metadata) throw new Error("AI metadata has not been loaded yet.");
     const finished = this.metadata.conversations
@@ -397,8 +419,8 @@ export class AiService {
     const samples: AgentUsageSample[] = [];
     for (const message of finished) {
       const { status, budget } = message.outcome;
-      if (status === "incomplete") continue;
-      samples.push({ turns: budget.turns, tokens: budget.tokens, censored: status === "budget_exhausted" });
+      if (status === "incomplete" || status === "cancelled") continue;
+      samples.push({ level: budget.level, turns: budget.turns, tokens: budget.tokens, censored: status === "budget_exhausted" });
     }
     return samples;
   }
@@ -491,10 +513,10 @@ function parseMetadata(raw: string): AiServiceMetadata {
   return value as AiServiceMetadata;
 }
 
-function latestPlan(conversation: ConversationSnapshot): AgentPlan | undefined {
+function latestOutcome(conversation: ConversationSnapshot): AgentRunOutcome | undefined {
   for (let index = conversation.messages.length - 1; index >= 0; index--) {
     const message = conversation.messages[index];
-    if (message.role === "assistant" && message.outcome?.plan) return message.outcome.plan;
+    if (message.role === "assistant" && message.outcome) return message.outcome;
   }
   return undefined;
 }

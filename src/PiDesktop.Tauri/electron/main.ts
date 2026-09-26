@@ -12,6 +12,7 @@ import { DesktopStateService } from "./services/desktop-state.js";
 import { HostCapabilities } from "./services/host-capabilities.js";
 import { HttpMcpServer } from "./services/http-mcp-server.js";
 import { SynthVService } from "./services/synthv-service.js";
+import type { JsonValue } from "@synthv-toolbox/runtime-protocol";
 import { authorizeAnthropic } from "@model-auth/providers/anthropic";
 import { authorizeOpenAI } from "@model-auth/providers/openai";
 import { authorizeTrae } from "@model-auth/providers/trae";
@@ -194,7 +195,7 @@ async function initializeServices(): Promise<void> {
   let capabilities: HostCapabilities;
   const runtimeHost = new ElectronRuntimeHost(join(userData, "runtime"), {
     invoke: (permission, capability, operation, params) => capabilities.invoke(permission, capability, operation, params),
-    resolveModel: () => ai.resolveModelSelection(),
+    resolveModel: () => ai.resolveModelSelection() as unknown as Promise<JsonValue>,
   });
   await runtimeHost.load();
   ai = new AiService({ metadataPath: join(userData, "ai", "metadata.json"), safeStorage, runtime: agentRuntimePort(runtimeHost.runtime), catalog: modelCatalog(), usage: { query: async (provider, credentialIds) => ({ queriedAt: new Date().toISOString(), accounts: credentialIds.map(credentialId => ({ provider, credentialId, status: "unknown", plan: null, windows: [], balance: null, error: null })) }) }, authorizer: { authorize: authorizeProvider } });

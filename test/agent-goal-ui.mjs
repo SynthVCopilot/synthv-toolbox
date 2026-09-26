@@ -42,11 +42,31 @@ test("renderMessage shows a status chip and budget usage, and escapes outcome fi
   assert.match(renderMessage, /message\.content \? `<p>\$\{escapeHtml\(message\.content\)\}<\/p>` : ""/);
 });
 
-test("status chips cover all four run statuses", () => {
+test("status chips cover all five run statuses", () => {
   assert.match(main, /function renderAgentStatusChip/);
-  for (const status of ["completed", "needs_input", "budget_exhausted", "incomplete"]) {
+  for (const status of ["completed", "needs_input", "budget_exhausted", "incomplete", "cancelled"]) {
     assert.match(styles, new RegExp(`\\.agent-status-${status}\\b`));
   }
+});
+
+test("the goal card renders inside the messages scroll container, not as a chat-panel sibling", () => {
+  const renderCopilot = main.slice(main.indexOf("function renderCopilot"), main.indexOf("function usageValue"));
+  assert.match(renderCopilot, /<div class="messages">\$\{goalCard\}/);
+  assert.doesNotMatch(renderCopilot, /\$\{goalCard\}\s*<div class="messages">/);
+  assert.match(styles, /\.agent-goal-card[^{]*\{[^}]*position:\s*sticky/);
+  assert.match(styles, /\.agent-goal-card[^{]*\{[^}]*max-height/);
+});
+
+test("the composer shows a stop button while an agent run is in flight and calls cancelAgentRun", () => {
+  assert.match(main, /let agentRunInFlight/);
+  assert.match(main, /data-cancel-agent-run/);
+  assert.match(main, /api\.cancelAgentRun\(conversation\.id\)/);
+  assert.match(main, /hasAttribute\("data-cancel-agent-run"\)\)\s*\{\s*void cancelAgentRun\(\);\s*return;\s*\}/);
+});
+
+test("the header actions wrap instead of overflowing at the desktop minimum width", () => {
+  const rule = styles.match(/\.chat-header-actions\s*\{[^}]*\}/)?.[0] ?? "";
+  assert.match(rule, /flex-wrap:\s*wrap/);
 });
 
 test("todo status markers use CSS shapes, not emoji or unicode icons", () => {
@@ -77,7 +97,7 @@ test("every new copilot i18n key exists in both zh-CN and en", () => {
   const keys = [
     "effortGroup", "effortLow", "effortMid", "effortHigh", "effortMax", "effortTitle", "effortNoLimit",
     "currentGoal", "goalProgress", "doneCriteria", "todoPending", "todoInProgress", "todoCompleted", "todoCancelled",
-    "statusCompleted", "statusNeedsInput", "statusBudgetExhausted", "statusIncomplete",
+    "statusCompleted", "statusNeedsInput", "statusBudgetExhausted", "statusIncomplete", "statusCancelled", "stop",
     "budgetUsage", "usedOfLimit", "usedNoLimit", "missingInfo", "evidence",
   ];
   for (const key of keys) {
