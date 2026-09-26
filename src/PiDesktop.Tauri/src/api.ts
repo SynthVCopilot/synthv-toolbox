@@ -687,6 +687,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     if (!account && !key) throw new Error("未找到凭据。");
     if (account) { account.enabled = enabled; account.weight = weight; }
     if (key) { key.enabled = enabled; key.weight = weight; }
+    refreshPreviewAiProvider(provider);
     return previewState() as T;
   }
   if (command === "update_ai_provider") {

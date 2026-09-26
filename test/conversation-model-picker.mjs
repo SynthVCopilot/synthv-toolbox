@@ -98,4 +98,11 @@ function pickerHarness(providers, catalogError = null) {
   assert.equal(disabledAccount.connected, false);
 }
 
+
+{
+  // Toggling a credential must recompute connection state, as the host does on every read.
+  const updateBranch = api.slice(api.indexOf('if (command === "update_ai_credential")'), api.indexOf('if (command === "update_ai_provider")'));
+  assert.match(updateBranch, /refreshPreviewAiProvider\(provider\)/);
+}
+
 console.log("Conversation model picker behavior passed.");
