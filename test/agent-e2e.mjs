@@ -33,6 +33,7 @@ const { estimateAgentRunBudget } = await import(runtimeProtocolUrl);
 
 const MODEL_ID = ["cla", "ude-haiku-4-5"].join("");
 const PROVIDER_ID = "anthropic";
+const TEST_API_KEY = "test-api-key";
 
 // ---------------------------------------------------------------------------
 // Scripted Anthropic Messages API server
@@ -43,7 +44,7 @@ function sendSse(res, event, data) {
 }
 
 function writeNormalTurn(res, turn) {
-  const usage = turn.usage ?? { input: 0, output: 0, cacheWrite: 0 };
+  const usage = turn.usage ?? { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 };
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
   sendSse(res, "message_start", {
     type: "message_start",
@@ -55,7 +56,7 @@ function writeNormalTurn(res, turn) {
       content: [],
       stop_reason: null,
       stop_sequence: null,
-      usage: { input_tokens: usage.input, output_tokens: 0, cache_creation_input_tokens: usage.cacheWrite ?? 0, cache_read_input_tokens: 0 },
+      usage: { input_tokens: usage.input, output_tokens: 0, cache_creation_input_tokens: usage.cacheWrite ?? 0, cache_read_input_tokens: usage.cacheRead ?? 0 },
     },
   });
   turn.content.forEach((block, index) => {
@@ -117,9 +118,10 @@ function createMockAnthropicServer() {
       let body = null;
       try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { /* leave null */ }
       const headers = { ...req.headers };
+      const apiKey = headers["x-api-key"];
       delete headers["x-api-key"];
       delete headers.authorization;
-      requests.push({ path: req.url, system: body?.system, tools: body?.tools, messages: body?.messages, headers });
+      requests.push({ path: req.url, system: body?.system, tools: body?.tools, messages: body?.messages, model: body?.model, apiKey, headers });
       const turn = queue.shift();
       if (!turn) {
         res.writeHead(500, { "content-type": "application/json" });
@@ -144,6 +146,7 @@ function createMockAnthropicServer() {
       return server.address().port;
     },
     async close() {
+      server.closeAllConnections();
       await new Promise((resolve) => server.close(resolve));
     },
   };
@@ -176,6 +179,7 @@ test("Real Pi SDK drives the full Electron host chain against a scripted local m
   );
 
   t.after(async () => {
+    await runtimeHost.runtime.dispose();
     await mock.close();
     await rm(tempRoot, { recursive: true, force: true });
     for (const [key, value] of Object.entries(savedEnv)) {
@@ -213,8 +217,15 @@ test("Real Pi SDK drives the full Electron host chain against a scripted local m
   );
   ai = new AiService({ metadataPath, safeStorage, runtime: agentRuntimePort(runtimeHost.runtime), catalog, id: () => `id-${Math.random().toString(36).slice(2)}` });
 
-  await ai.add_ai_api_key(PROVIDER_ID, "Test key", "test-api-key", [MODEL_ID]);
+  await ai.add_ai_api_key(PROVIDER_ID, "Test key", TEST_API_KEY, [MODEL_ID]);
   await ai.select_ai_provider(PROVIDER_ID, MODEL_ID);
+
+  const noRuntime = { request: async () => { throw new Error("This AiService instance is read-only in this test."); } };
+  // Loads metadata.json from disk into a brand-new instance, proving state survived persist() rather than just the live cache.
+  async function reopenFresh(conversationId) {
+    const fresh = new AiService({ metadataPath, safeStorage, runtime: noRuntime, catalog });
+    return fresh.open_conversation(conversationId);
+  }
 
   function toolNames(request) {
     return (request.tools ?? []).map((tool) => tool.name).sort();
@@ -223,13 +234,15 @@ test("Real Pi SDK drives the full Electron host chain against a scripted local m
   await t.test("update_plan then complete_task with evidence completes the run", async () => {
     mock.reset();
     const conversation = await ai.new_conversation();
-    mock.push({ content: [{ type: "tool_use", id: "toolu_1", name: "update_plan", input: { goal: "Summarize the score", doneCriteria: ["Summary written"], todos: [{ id: "t1", title: "Write summary", status: "in_progress" }] } }], stopReason: "tool_use", usage: { input: 500, output: 60, cacheWrite: 0 } });
-    mock.push({ content: [{ type: "text", text: "Done." }, { type: "tool_use", id: "toolu_2", name: "complete_task", input: { summary: "Wrote the summary.", evidence: ["Summary written in the reply."] } }], stopReason: "tool_use", usage: { input: 520, output: 40, cacheWrite: 0 } });
+    mock.push({ content: [{ type: "tool_use", id: "toolu_1", name: "update_plan", input: { goal: "Summarize the score", doneCriteria: ["Summary written"], todos: [{ id: "t1", title: "Write summary", status: "in_progress" }] } }], stopReason: "tool_use", usage: { input: 500, output: 60, cacheWrite: 20, cacheRead: 15 } });
+    mock.push({ content: [{ type: "text", text: "Done." }, { type: "tool_use", id: "toolu_2", name: "complete_task", input: { summary: "Wrote the summary.", evidence: ["Summary written in the reply."] } }], stopReason: "tool_use", usage: { input: 520, output: 40, cacheWrite: 10, cacheRead: 5 } });
 
     const messages = await ai.send_message(conversation.id, "Please summarize this score.", { cwd, effort: "mid" });
     assert.equal(mock.requests.length, 2, "update_plan and complete_task are two separate provider requests");
     assert.deepEqual(toolNames(mock.requests[0]), ["complete_task", "request_input", "update_plan"]);
     assert.deepEqual(toolNames(mock.requests[1]), ["complete_task", "request_input", "update_plan"]);
+    assert.equal(mock.requests[0].apiKey, TEST_API_KEY, "the credential routed through host.model.resolve reaches the provider");
+    assert.equal(mock.requests[0].model, MODEL_ID, "the selected model id is the one sent to the provider");
     const systemPrompts = mock.requests.map((request) => systemText(request.system));
     assert.ok(systemPrompts[0].length > 0, "the runtime sends a non-empty system prompt");
     assert.equal(systemPrompts[0], systemPrompts[1], "the system prompt is byte-identical across every request of the run");
@@ -240,8 +253,14 @@ test("Real Pi SDK drives the full Electron host chain against a scripted local m
     assert.deepEqual(outcome.evidence, ["Summary written in the reply."]);
     assert.equal(outcome.plan.goal, "Summarize the score", "the completed outcome still carries the final plan");
     assert.equal(outcome.budget.turns, 2, "one turn per provider request");
-    assert.equal(outcome.budget.tokens, 500 + 60 + 520 + 40, "tokens are input + output + cache writes summed across every request");
+    assert.equal(outcome.budget.tokens, 500 + 60 + 20 + 520 + 40 + 10, "tokens are input + output + cache writes summed across every request, excluding cache reads");
     assert.equal(messages[1].content, "Done.", "the assistant's accompanying text is returned");
+
+    const persisted = await reopenFresh(conversation.id);
+    const persistedOutcome = persisted.messages[1].outcome;
+    assert.equal(persistedOutcome.status, "completed", "the outcome round-trips through metadata.json, read from a fresh AiService");
+    assert.equal(persistedOutcome.plan.goal, "Summarize the score");
+    assert.equal(persistedOutcome.budget.tokens, outcome.budget.tokens);
   });
 
   await t.test("a text-only reply triggers a continuation prompt before the run completes", async () => {
@@ -260,9 +279,12 @@ test("Real Pi SDK drives the full Electron host chain against a scripted local m
     const outcome = messages[1].outcome;
     assert.equal(outcome.status, "completed");
     assert.equal(outcome.budget.turns, 3);
+
+    const persisted = await reopenFresh(conversation.id);
+    assert.equal(persisted.messages[1].outcome.status, "completed", "the continuation run's outcome round-trips through metadata.json");
   });
 
-  await t.test("request_input reports needs_input, and the next message continues with the restored plan", async () => {
+  await t.test("request_input reports needs_input, and a restarted host continues from the persisted plan", async () => {
     mock.reset();
     const conversation = await ai.new_conversation();
     mock.push({ content: [{ type: "tool_use", id: "toolu_5", name: "update_plan", input: { goal: "Import a project file", doneCriteria: ["File imported"], todos: [{ id: "t1", title: "Locate the file", status: "in_progress" }] } }], stopReason: "tool_use", usage: { input: 300, output: 20, cacheWrite: 0 } });
@@ -274,11 +296,33 @@ test("Real Pi SDK drives the full Electron host chain against a scripted local m
     assert.deepEqual(firstOutcome.missing, ["source file path"]);
     assert.equal(firstOutcome.plan.goal, "Import a project file", "the plan is persisted alongside the needs_input outcome");
 
+    const persisted = await reopenFresh(conversation.id);
+    const persistedOutcome = persisted.messages[1].outcome;
+    assert.equal(persistedOutcome.status, "needs_input", "the needs_input outcome round-trips through metadata.json");
+    assert.equal(persistedOutcome.plan.goal, "Import a project file");
+
+    // A new ElectronRuntimeHost + AiService over the same metadata path and agent dir starts with no
+    // in-memory session, so session.initialize must build a fresh Pi session seeded from the
+    // needs_input outcome just persisted, instead of reusing the first host's live session.
+    let ai2;
+    const runtimeHost2 = new ElectronRuntimeHost(
+      join(tempRoot, "runtime"),
+      { invoke: () => { throw new Error("Plugin capabilities are not used in this e2e test."); }, resolveModel: () => ai2.resolveModelSelection() },
+    );
+    ai2 = new AiService({ metadataPath, safeStorage, runtime: agentRuntimePort(runtimeHost2.runtime), catalog, id: () => `id-${Math.random().toString(36).slice(2)}` });
+
     mock.reset();
     mock.push({ content: [{ type: "tool_use", id: "toolu_7", name: "complete_task", input: { summary: "Imported the file.", evidence: ["Imported the provided file."] } }], stopReason: "tool_use", usage: { input: 50, output: 10, cacheWrite: 0 } });
-    const secondTurn = await ai.send_message(conversation.id, "It's at ./song.svp", { cwd, effort: "mid" });
-    assert.equal(mock.requests.length, 1, "complete_task succeeds without a fresh update_plan call, proving the plan carried over in-session");
-    assert.equal(secondTurn[1].outcome.status, "completed");
+    try {
+      const secondTurn = await ai2.send_message(conversation.id, "It's at ./song.svp", { cwd, effort: "mid" });
+      assert.equal(mock.requests.length, 1, "complete_task succeeds without a fresh update_plan call, proving the restored plan carried the run");
+      const restoredRequestText = mock.requests[0].messages.map(messageText).join("\n");
+      assert.match(restoredRequestText, /Goal: Import a project file/, "the new session's first request restores the persisted plan");
+      assert.match(restoredRequestText, /Which file should I import\?/, "the new session's first request restores the pending question");
+      assert.equal(secondTurn[1].outcome.status, "completed");
+    } finally {
+      await runtimeHost2.runtime.dispose();
+    }
   });
 
   await t.test("scripted usage above the low-effort budget stops the run as budget_exhausted", async () => {
@@ -299,6 +343,9 @@ test("Real Pi SDK drives the full Electron host chain against a scripted local m
     const samples = ai.agentUsageSamples().filter((sample) => sample.level === "low");
     assert.equal(samples.length, 1);
     assert.equal(samples[0].censored, true, "a budget_exhausted run is recorded as a censored sample");
+
+    const persisted = await reopenFresh(conversation.id);
+    assert.equal(persisted.messages[1].outcome.status, "budget_exhausted", "the budget_exhausted outcome round-trips through metadata.json");
   });
 
   await t.test("a provider HTTP 401 rejects send_message and persists nothing", async () => {
@@ -310,8 +357,9 @@ test("Real Pi SDK drives the full Electron host chain against a scripted local m
       () => ai.send_message(conversation.id, "Hello?", { cwd, effort: "mid" }),
       (error) => { assert.match(error.message, /e2e-401-marker/); return true; },
     );
-    const reopened = await ai.open_conversation(conversation.id);
-    assert.equal(reopened.messages.length, 0, "no assistant message is persisted when the provider call fails");
+    assert.equal(mock.requests.length, 1, "the 401 is not retried");
+    const reopened = await reopenFresh(conversation.id);
+    assert.equal(reopened.messages.length, 0, "no assistant message is persisted when the provider call fails, read from a fresh AiService");
   });
 
   await t.test("cancelling a slow streamed turn produces a cancelled outcome", async () => {
@@ -326,8 +374,10 @@ test("Real Pi SDK drives the full Electron host chain against a scripted local m
     await ai.cancel_agent_run(conversation.id);
     const messages = await sendPromise;
     assert.equal(messages[1].outcome.status, "cancelled");
+    assert.equal(mock.requests.length, 1, "the cancelled run made exactly one provider request");
 
-    const reopened = await ai.open_conversation(conversation.id);
-    assert.equal(reopened.messages.length, 2, "a cancelled outcome is persisted like any other outcome");
+    const reopened = await reopenFresh(conversation.id);
+    assert.equal(reopened.messages.length, 2, "a cancelled outcome is persisted like any other outcome, read from a fresh AiService");
+    assert.equal(reopened.messages[1].outcome.status, "cancelled", "the cancelled outcome round-trips through metadata.json");
   });
 });
