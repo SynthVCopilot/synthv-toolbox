@@ -1232,7 +1232,9 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .chat-header strong, .chat-header small { display: block; }
 .chat-header strong { font-size: 14px; font-weight: 600; }
 .chat-header small { margin-top: 3px; color: var(--muted); font-size: 11px; }
-.chat-header-actions { display: flex; flex: 0 1 auto; align-items: center; justify-content: flex-end; gap: 8px; }
+.chat-header-actions { display: flex; flex: 0 1 auto; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; row-gap: 6px; }
+.chat-title { flex: 1 1 120px; }
+.file-approvals:empty { display: none; }
 .chat-model-button { max-width: min(300px,42vw); display: inline-grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 8px; align-items: center; padding: 7px 9px; border: 1px solid var(--line); border-radius: 12px; color: inherit; background: var(--surface-subtle); cursor: pointer; text-align: left; }
 .chat-model-button:hover { border-color: var(--line-strong); background: var(--control-hover); }
 .chat-model-button > span:nth-child(2) { min-width: 0; }
@@ -1249,7 +1251,7 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .chat-effort-mode button { min-width: 40px; padding: 5px 8px; border: 0; border-radius: 4px; color: var(--muted); background: transparent; cursor: pointer; font: inherit; font-size: 10px; font-weight: 600; }
 .chat-effort-mode button:hover { color: inherit; background: var(--control-hover); }
 .chat-effort-mode button.active { color: var(--primary); background: var(--primary-soft); }
-.agent-goal-card { width: min(100%,760px); margin: 0 auto 16px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-subtle); display: grid; gap: 10px; }
+.agent-goal-card { position: sticky; top: 0; z-index: 1; width: min(100%,760px); margin: 0 auto 16px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-subtle); display: grid; gap: 10px; max-height: 40vh; overflow: auto; box-shadow: 0 6px 16px -12px rgba(0,0,0,0.3); }
 .agent-goal-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .agent-goal-head strong { font-size: 12px; font-weight: 600; }
 .agent-goal-head small { color: var(--muted); font-size: 11px; }
@@ -1273,6 +1275,7 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .agent-status-needs_input { color: var(--warning); background: color-mix(in srgb,var(--warning) 14%,transparent); }
 .agent-status-budget_exhausted { color: var(--danger); background: color-mix(in srgb,var(--danger) 14%,transparent); }
 .agent-status-incomplete { color: var(--muted); background: var(--surface-subtle); }
+.agent-status-cancelled { color: var(--muted); background: var(--surface-subtle); }
 .agent-outcome { display: grid; gap: 6px; margin-top: 8px; }
 .agent-outcome-budget { color: var(--muted); font-size: 10px; }
 .agent-outcome-summary { margin: 0; font-size: 12px; line-height: 1.55; color: var(--muted); }

@@ -12,7 +12,7 @@ const source = await readFile(join(root, "src/PiDesktop.Tauri/electron/services/
 const executable = stripTypeScriptTypes(source
   .replace(
     'import { CredentialRouter, createCredentialMetadata } from "@model-auth/core";',
-    'class CredentialRouter { constructor(credentials) { this.credentials = credentials; } }\nconst createCredentialMetadata = (credential) => credential;',
+    'class CredentialRouter { constructor(credentials) { this.credentials = credentials; } candidates({ providerId, modelId }) { return this.credentials.filter((c) => c.enabled && c.providerId === providerId && c.modelIds.includes(modelId)); } }\nconst createCredentialMetadata = (credential) => credential;',
   )
   .replace(
     'import { AgentRuntimeWorker } from "@synthv-toolbox/agent-runtime";',
@@ -109,7 +109,7 @@ const messages = await service.send_message(conversation.id, "Explain this score
 assert.deepEqual(messages.map((message) => message.role), ["user", "assistant"]);
 assert.equal(requests[0].method, "session.initialize");
 assert.equal(requests[0].params.cwd, directory);
-assert.equal(requests[0].params.plan, undefined, "no prior plan exists yet");
+assert.equal(requests[0].params.outcome, undefined, "no prior outcome exists yet");
 assert.equal(requests[1].method, "session.send");
 assert.deepEqual(requests[1].params.budget, estimateAgentRunBudget("mid", []));
 assert.equal(messages[1].content, "Assistant reply one");
@@ -126,8 +126,8 @@ const outcomeB = {
 };
 nextSendResult = { message: "", outcome: outcomeB };
 const secondTurn = await service.send_message(conversation.id, "Second turn", { effort: "mid" });
-assert.deepEqual(requests[2].params.plan, planA, "the latest plan is carried into the next session.initialize");
-assert.deepEqual(requests[3].params.budget, estimateAgentRunBudget("mid", [{ turns: 3, tokens: 500, censored: false }]));
+assert.deepEqual(requests[2].params.outcome, outcomeA, "the latest outcome is carried into the next session.initialize");
+assert.deepEqual(requests[3].params.budget, estimateAgentRunBudget("mid", [{ level: "mid", turns: 3, tokens: 500, censored: false }]));
 assert.equal(secondTurn[1].content, "S2", "an empty runtime message falls back to the outcome summary");
 
 const outcomeC = {
@@ -140,21 +140,37 @@ const outcomeC = {
 };
 nextSendResult = { message: "", outcome: outcomeC };
 const thirdTurn = await service.send_message(conversation.id, "Third turn", { effort: "mid" });
-assert.deepEqual(requests[4].params.plan, planA, "the latest non-null plan is still carried forward");
+assert.deepEqual(requests[4].params.outcome, outcomeB, "the latest outcome is still carried forward");
 assert.equal(thirdTurn[1].content, "", "budget_exhausted outcomes may leave the assistant message empty");
 
+const outcomeD = {
+  status: "cancelled",
+  summary: "",
+  evidence: [],
+  missing: [],
+  plan: null,
+  budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 2, tokens: 300 },
+};
+nextSendResult = { message: "", outcome: outcomeD };
+const fourthTurn = await service.send_message(conversation.id, "Fourth turn", { effort: "mid" });
+assert.equal(fourthTurn[1].content, "", "a cancelled outcome is persisted like any other outcome");
+
 assert.deepEqual(service.agentUsageSamples(), [
-  { turns: 3, tokens: 500, censored: false },
-  { turns: 4, tokens: 800, censored: false },
-  { turns: 5, tokens: 1000, censored: true },
+  { level: "mid", turns: 3, tokens: 500, censored: false },
+  { level: "mid", turns: 4, tokens: 800, censored: false },
+  { level: "mid", turns: 5, tokens: 1000, censored: true },
 ]);
 const budgets = await service.agent_budgets();
 assert.equal(budgets.max.maxTurns, null);
 assert.equal(budgets.max.maxTokens, null);
 assert.deepEqual(budgets.mid, estimateAgentRunBudget("mid", service.agentUsageSamples()));
 
+await service.cancel_agent_run(conversation.id);
+assert.equal(requests.at(-1).method, "session.cancel");
+assert.equal(requests.at(-1).params.sessionId, conversation.id);
+
 nextSendResult = { message: "x", outcome: { status: "bogus" } };
-await assert.rejects(() => service.send_message(conversation.id, "Fourth turn", { effort: "mid" }), /invalid run outcome/);
+await assert.rejects(() => service.send_message(conversation.id, "Fifth turn", { effort: "mid" }), /invalid run outcome/);
 
 const droppedPath = join(directory, "dropped-outcome.json");
 await writeFile(droppedPath, JSON.stringify({
@@ -186,6 +202,14 @@ const cancelled = new AiService({
 const pending = cancelled.authorize_ai_provider("anthropic", "operation-1");
 cancelled.cancel_ai_authorization("operation-1");
 await assert.rejects(pending, /cancelled/);
+
+const resolved = await service.resolveModelSelection();
+assert.equal(resolved.providerId, "anthropic");
+assert.equal(resolved.modelId, ["cla", "ude-opus-4-8"].join(""));
+assert.ok(Array.isArray(resolved.credentials) && resolved.credentials.length >= 1, "an undecryptable oauth candidate (not JSON) is skipped, not fatal");
+assert.ok(resolved.credentials.every((credential) => typeof credential.apiKey === "string" && credential.apiKey.length > 0));
+assert.ok(resolved.credentials.some((credential) => credential.authMethod === "api-key" && credential.apiKey === "rotated-secret"));
+assert.equal(resolved.apiKey, undefined, "the legacy single-credential shape is gone");
 
 await service.remove_ai_api_key("anthropic", credentialId);
 await service.remove_ai_provider_account("anthropic", "anthropic:oauth");
