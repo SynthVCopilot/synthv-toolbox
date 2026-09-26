@@ -18,3 +18,6 @@
 - 集成验证：`npm ci --ignore-scripts`（agent-runtime、PiDesktop.Tauri）；`node --test test/runtime-protocol.mjs` 10/10；`node --test test/agent-runtime.mjs` 21/21；renderer `npx tsc --noEmit` 与 `npx tsc -p electron/tsconfig.json --noEmit` 通过；`npm run build:electron` exit 0。
 - `npm run test:contracts` exit 1：仅 `synthv-service.mjs` 的 "profiles persist locally and session writes reject stale hashes" 因沙箱禁止写 `~/Library/Application Support/Dreamtonics/...`（EACCES）失败，与本改动无关且会写真实用户目录，未绕过沙箱；链上其余 6 个 `--test` 文件 13/13 通过，其余 18 个脚本逐个 exit 0，`agent-goal-ui` 9/9，`chatgpt-copilot-ui` + `conversation-model-picker` 7/7。
 - `test:electron-main` 未运行：`--ignore-scripts` 未下载 Electron 二进制。
+- Workflow `agent-goal-review`（run `wf_620151e8-ef3`，opus，33 个 agent）：4 个视角审查 + 逐条独立反驳验证，确认 26 条、驳回 3 条；确认清单保存在会话 scratchpad `confirmed.json`。
+- 修订协议 `f0f89f1`：新增 `cancelled` 状态、`AgentSessionInitializeParams.outcome`（替代 `plan`）、`AgentSessionCancelParams`、`AgentUsageSample.level`、`AgentEffortProfile.sigmas`。
+- Workflow `agent-goal-fix` 首次运行因会话用量上限三个修复 agent 全部失败（无分支、无残留 worktree）；额度恢复后以同一 run 重新启动。
