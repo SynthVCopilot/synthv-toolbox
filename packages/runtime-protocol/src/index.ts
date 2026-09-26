@@ -111,7 +111,8 @@ export const AGENT_BUDGET_PRIOR = {
   tokens: { median: 60_000, logSigma: 1 },
 } as const;
 
-export const AGENT_BUDGET_MIN_SAMPLES = 20;
+/** Pseudo-observation weight (k0) the prior carries in the censored MAP-EM fit; steadies the first few runs without drowning out a real window of samples. */
+export const AGENT_BUDGET_PRIOR_WEIGHT = 8;
 
 export const AGENT_BUDGET_WINDOW = 200;
 
@@ -481,58 +482,79 @@ export function validateAgentRunBudget(value: unknown): AgentRunBudget | undefin
   return { level: value.level, maxTurns: value.maxTurns, maxTokens: value.maxTokens };
 }
 
-/** Sizes a run budget at the level's coverage quantile of recent finished runs, falling back to the prior. */
+/** Sizes a run budget at `sigmas` log-space deviations above the level's own fitted mean, falling back to the prior when it has no runs. */
 export function estimateAgentRunBudget(level: AgentEffortLevel, samples: readonly AgentUsageSample[]): AgentRunBudget {
-  const coverage = AGENT_EFFORT_PROFILES[level].coverage;
-  if (coverage === null) return { level, maxTurns: null, maxTokens: null };
-  const recent = samples.slice(-AGENT_BUDGET_WINDOW);
+  const { sigmas } = AGENT_EFFORT_PROFILES[level];
+  if (sigmas === null) return { level, maxTurns: null, maxTokens: null };
+  const recent = samples.filter((sample) => sample.level === level).slice(-AGENT_BUDGET_WINDOW);
   const metric = (key: "turns" | "tokens"): number => {
-    const prior = AGENT_BUDGET_PRIOR[key];
-    const priorQuantile = prior.median * Math.exp(prior.logSigma * inverseNormal(coverage));
-    if (recent.filter((sample) => !sample.censored).length < AGENT_BUDGET_MIN_SAMPLES) return Math.max(AGENT_BUDGET_FLOOR[key], Math.ceil(priorQuantile));
-    const empirical = survivalQuantile(recent.map((sample) => ({ value: sample[key], event: !sample.censored })), coverage)
-      ?? Math.max(priorQuantile, ...recent.map((sample) => sample[key]));
-    return Math.max(AGENT_BUDGET_FLOOR[key], Math.ceil(empirical));
+    const { mu, sigma } = fitCensoredLogNormal(recent.map((sample) => ({ value: sample[key], censored: sample.censored })), AGENT_BUDGET_PRIOR[key]);
+    return Math.max(AGENT_BUDGET_FLOOR[key], Math.ceil(Math.exp(mu + sigmas * sigma)));
   };
   return { level, maxTurns: metric("turns"), maxTokens: metric("tokens") };
 }
 
-/** Kaplan–Meier quantile under right censoring; `undefined` when censoring hides the requested quantile. */
-function survivalQuantile(observations: Array<{ value: number; event: boolean }>, quantile: number): number | undefined {
-  const sorted = [...observations].sort((left, right) => left.value - right.value || Number(right.event) - Number(left.event));
-  let atRisk = sorted.length;
-  let survival = 1;
-  for (let index = 0; index < sorted.length;) {
-    const value = sorted[index].value;
-    let events = 0;
-    let leaving = 0;
-    while (index < sorted.length && sorted[index].value === value) {
-      if (sorted[index].event) events++;
-      leaving++;
-      index++;
+const EM_MAX_ITERATIONS = 200;
+const EM_TOLERANCE = 1e-9;
+const LOG_NORMAL_SIGMA_FLOOR = 1e-3;
+
+/**
+ * Fits a log-normal's (mu, sigma) to samples that may be right-censored (the recorded value is only a lower
+ * bound on the true one), by censored maximum a posteriori EM on y = ln(value). The prior contributes
+ * `AGENT_BUDGET_PRIOR_WEIGHT` pseudo-observations from N(ln(prior.median), prior.logSigma^2), so the fit still
+ * moves past the censoring point instead of clamping to the largest observed value.
+ */
+function fitCensoredLogNormal(
+  samples: ReadonlyArray<{ value: number; censored: boolean }>,
+  prior: { median: number; logSigma: number },
+): { mu: number; sigma: number } {
+  const priorMu = Math.log(prior.median);
+  const priorSigma = prior.logSigma;
+  const points = samples.map((sample) => ({ y: Math.log(sample.value), censored: sample.censored }));
+  const n = points.length;
+  let mu = priorMu;
+  let sigma = priorSigma;
+  for (let iteration = 0; iteration < EM_MAX_ITERATIONS; iteration++) {
+    let sumY = 0;
+    let sumY2 = 0;
+    for (const point of points) {
+      if (!point.censored) {
+        sumY += point.y;
+        sumY2 += point.y * point.y;
+        continue;
+      }
+      // E-step for a censored point (true y > point.y): inverse Mills ratio gives its conditional moments.
+      const alpha = (point.y - mu) / sigma;
+      const lambda = inverseMillsRatio(alpha);
+      sumY += mu + sigma * lambda;
+      sumY2 += mu * mu + sigma * sigma + sigma * (point.y + mu) * lambda;
     }
-    if (events) survival *= 1 - events / atRisk;
-    if (1 - survival >= quantile) return value;
-    atRisk -= leaving;
+    const nextMu = (AGENT_BUDGET_PRIOR_WEIGHT * priorMu + sumY) / (AGENT_BUDGET_PRIOR_WEIGHT + n);
+    const priorSpread = AGENT_BUDGET_PRIOR_WEIGHT * (priorSigma * priorSigma + (priorMu - nextMu) * (priorMu - nextMu));
+    const sampleSpread = sumY2 - 2 * nextMu * sumY + n * nextMu * nextMu;
+    const nextSigma = Math.max(Math.sqrt(Math.max(priorSpread + sampleSpread, 0) / (AGENT_BUDGET_PRIOR_WEIGHT + n)), LOG_NORMAL_SIGMA_FLOOR);
+    const converged = Math.abs(nextMu - mu) < EM_TOLERANCE && Math.abs(nextSigma - sigma) < EM_TOLERANCE;
+    mu = nextMu;
+    sigma = nextSigma;
+    if (converged) break;
   }
-  return undefined;
+  return { mu, sigma };
 }
 
-/** Acklam's rational approximation of the standard normal quantile. */
-function inverseNormal(probability: number): number {
-  const a = [-3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2, 1.38357751867269e2, -3.066479806614716e1, 2.506628277459239];
-  const b = [-5.447609879822406e1, 1.615858368580409e2, -1.556989798598866e2, 6.680131188771972e1, -1.328068155288572e1];
-  const c = [-7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
-  const d = [7.784695709041462e-3, 3.224671290700398e-1, 2.445134137142996, 3.754408661907416];
-  const low = 0.02425;
-  if (probability < low) {
-    const q = Math.sqrt(-2 * Math.log(probability));
-    return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
-  }
-  if (probability > 1 - low) return -inverseNormal(1 - probability);
-  const q = probability - 0.5;
-  const r = q * q;
-  return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+/** phi(alpha) / Q(alpha), the standard normal hazard rate used by the censored EM's expectation step. */
+function inverseMillsRatio(alpha: number): number {
+  if (alpha > 6) return alpha + 1 / alpha; // Q(alpha) underflows before erfc's precision does.
+  const density = Math.exp(-0.5 * alpha * alpha) / Math.sqrt(2 * Math.PI);
+  return density / Math.max(standardNormalUpperTail(alpha), Number.MIN_VALUE);
+}
+
+/** 1 - Phi(x), via the Abramowitz & Stegun 7.1.26 erf approximation (max error 1.5e-7). */
+function standardNormalUpperTail(x: number): number {
+  const magnitude = Math.abs(x) / Math.SQRT2;
+  const t = 1 / (1 + 0.3275911 * magnitude);
+  const poly = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))));
+  const erf = 1 - poly * Math.exp(-magnitude * magnitude);
+  return x >= 0 ? 0.5 * (1 - erf) : 0.5 * (1 + erf);
 }
 
 function validateAgentBudgetUsage(value: unknown): AgentBudgetUsage | undefined {

@@ -5,6 +5,32 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import test from "node:test";
 
+function mulberry32(seed) {
+  return function next() {
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function seededNormal(rng) {
+  let u = 0, v = 0;
+  while (u === 0) u = rng();
+  while (v === 0) v = rng();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+/** Standard normal CDF via the Abramowitz & Stegun 7.1.26 erf approximation, independent of the runtime's own. */
+function standardNormalCdf(x) {
+  const sign = x < 0 ? -1 : 1;
+  const magnitude = Math.abs(x) / Math.SQRT2;
+  const t = 1 / (1 + 0.3275911 * magnitude);
+  const poly = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))));
+  const erf = sign * (1 - poly * Math.exp(-magnitude * magnitude));
+  return 0.5 * (1 + erf);
+}
+
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const packageRoot = join(root, "packages", "runtime-protocol");
 const outputDirectory = join(root, "test", ".tmp", "runtime-protocol");
@@ -128,31 +154,122 @@ test("effort levels widen coverage, thinking and compaction as the budget grows"
   assert.deepEqual(profiles.map((profile) => profile.compactionTrigger), [0.5, 0.7, 0.85, null]);
 });
 
-test("run budgets use the log-normal prior until enough finished runs exist", () => {
+test("run budgets equal the prior at each level's own sigma when no runs exist", () => {
   const budgets = protocol.AGENT_EFFORT_LEVELS.map((level) => protocol.estimateAgentRunBudget(level, []));
   assert.deepEqual(budgets[3], { level: "max", maxTurns: null, maxTokens: null });
-  assert.deepEqual(budgets.slice(0, 3).map((budget) => budget.maxTurns), [7, 19, 49]);
-  assert.deepEqual(budgets.slice(0, 3).map((budget) => Math.round(budget.maxTokens / 1000)), [97, 325, 969]);
-  const few = Array.from({ length: protocol.AGENT_BUDGET_MIN_SAMPLES - 1 }, () => ({ turns: 1, tokens: 1000, censored: false }));
-  assert.deepEqual(protocol.estimateAgentRunBudget("mid", few), budgets[1]);
-});
-
-test("run budgets follow the empirical coverage quantile and account for censored runs", () => {
-  const finished = Array.from({ length: 100 }, (_, index) => ({ turns: index + 1, tokens: (index + 1) * 10_000, censored: false }));
-  assert.deepEqual(protocol.estimateAgentRunBudget("low", finished), { level: "low", maxTurns: 69, maxTokens: 690_000 });
-  assert.deepEqual(protocol.estimateAgentRunBudget("mid", finished), { level: "mid", maxTurns: 96, maxTokens: 960_000 });
-  assert.deepEqual(protocol.estimateAgentRunBudget("high", finished), { level: "high", maxTurns: 100, maxTokens: 1_000_000 });
-
-  const small = Array.from({ length: 40 }, () => ({ turns: 1, tokens: 1000, censored: false }));
-  assert.deepEqual(protocol.estimateAgentRunBudget("mid", small), { level: "mid", maxTurns: protocol.AGENT_BUDGET_FLOOR.turns, maxTokens: protocol.AGENT_BUDGET_FLOOR.tokens });
-
-  const censored = [...Array.from({ length: 30 }, () => ({ turns: 3, tokens: 30_000, censored: false })), ...Array.from({ length: 70 }, () => ({ turns: 8, tokens: 90_000, censored: true }))];
-  const naive = protocol.estimateAgentRunBudget("mid", censored.map((sample) => ({ ...sample, censored: false })));
-  const corrected = protocol.estimateAgentRunBudget("mid", censored);
-  assert.ok(corrected.maxTurns >= 19 && corrected.maxTurns > naive.maxTurns);
+  assert.deepEqual(budgets.slice(0, 3).map((budget) => budget.maxTurns), [10, 25, 60]);
+  assert.deepEqual(budgets.slice(0, 3).map((budget) => budget.maxTokens), [1, 2, 3].map((sigmas) => Math.ceil(60_000 * Math.exp(sigmas))));
   assert.equal(protocol.validateAgentRunBudget({ level: "mid", maxTurns: null, maxTokens: 1000 }), undefined);
   assert.equal(protocol.validateAgentRunBudget({ level: "max", maxTurns: 10, maxTokens: null }), undefined);
   assert.deepEqual(protocol.validateAgentRunBudget({ level: "max", maxTurns: null, maxTokens: null }), { level: "max", maxTurns: null, maxTokens: null });
+});
+
+test("fitted budgets converge to the sample's own log-normal mean plus sigma standard deviations", () => {
+  const rng = mulberry32(12345);
+  const trueMuTurns = Math.log(5), trueSigmaTurns = 0.6;
+  const trueMuTokens = Math.log(50_000), trueSigmaTokens = 0.5;
+  const samples = Array.from({ length: 5000 }, () => ({
+    level: "low",
+    turns: Math.exp(trueMuTurns + trueSigmaTurns * seededNormal(rng)),
+    tokens: Math.exp(trueMuTokens + trueSigmaTokens * seededNormal(rng)),
+    censored: false,
+  }));
+  const budget = protocol.estimateAgentRunBudget("low", samples);
+  const sigmas = protocol.AGENT_EFFORT_PROFILES.low.sigmas;
+  const expectedTurns = Math.exp(trueMuTurns + sigmas * trueSigmaTurns);
+  const expectedTokens = Math.exp(trueMuTokens + sigmas * trueSigmaTokens);
+  assert.ok(Math.abs(budget.maxTurns - expectedTurns) / expectedTurns < 0.1);
+  assert.ok(Math.abs(budget.maxTokens - expectedTokens) / expectedTokens < 0.1);
+});
+
+test("heavy censoring at the current budget still raises the next Low budget", () => {
+  const base = protocol.estimateAgentRunBudget("low", []);
+  const samples = [
+    ...Array.from({ length: 27 }, () => ({ level: "low", turns: 2, tokens: 20_000, censored: false })),
+    ...Array.from({ length: 13 }, () => ({ level: "low", turns: base.maxTurns, tokens: base.maxTokens, censored: true })),
+  ];
+  assert.ok(samples.filter((sample) => sample.censored).length / samples.length > 0.32);
+  const next = protocol.estimateAgentRunBudget("low", samples);
+  assert.ok(next.maxTurns > base.maxTurns);
+  assert.ok(next.maxTokens > base.maxTokens);
+});
+
+test("High stays above the window's sample maximum and stays separate from Mid", () => {
+  const rng = mulberry32(777);
+  const draw = (n) => Array.from({ length: n }, () => ({
+    turns: Math.exp(Math.log(6) + 0.5 * seededNormal(rng)),
+    tokens: Math.exp(Math.log(45_000) + 0.45 * seededNormal(rng)),
+  }));
+  for (const n of [20, 50, 100, 200]) {
+    const raw = draw(n);
+    const high = protocol.estimateAgentRunBudget("high", raw.map((sample) => ({ level: "high", ...sample, censored: false })));
+    const mid = protocol.estimateAgentRunBudget("mid", raw.map((sample) => ({ level: "mid", ...sample, censored: false })));
+    const maxTurns = Math.max(...raw.map((sample) => sample.turns));
+    const maxTokens = Math.max(...raw.map((sample) => sample.tokens));
+    assert.ok(high.maxTurns > maxTurns, `n=${n} turns`);
+    assert.ok(high.maxTokens > maxTokens, `n=${n} tokens`);
+    assert.notEqual(high.maxTurns, mid.maxTurns, `n=${n}`);
+  }
+});
+
+test("one extra censored sample at the window maximum does not move High by an order of magnitude", () => {
+  const rng = mulberry32(42);
+  const raw = Array.from({ length: 100 }, () => ({
+    turns: Math.exp(Math.log(6) + 0.5 * seededNormal(rng)),
+    tokens: Math.exp(Math.log(45_000) + 0.45 * seededNormal(rng)),
+  }));
+  const samples = raw.map((sample) => ({ level: "high", ...sample, censored: false }));
+  const before = protocol.estimateAgentRunBudget("high", samples);
+  const maxTurns = Math.max(...raw.map((sample) => sample.turns));
+  const maxTokens = Math.max(...raw.map((sample) => sample.tokens));
+  const after = protocol.estimateAgentRunBudget("high", [...samples, { level: "high", turns: maxTurns, tokens: maxTokens, censored: true }]);
+  assert.ok(after.maxTurns / before.maxTurns < 2);
+  assert.ok(after.maxTokens / before.maxTokens < 2);
+});
+
+test("samples from other levels do not change a level's budget", () => {
+  const rng = mulberry32(42);
+  const midSamples = Array.from({ length: 100 }, () => ({
+    level: "mid",
+    turns: Math.exp(Math.log(6) + 0.5 * seededNormal(rng)),
+    tokens: Math.exp(Math.log(45_000) + 0.45 * seededNormal(rng)),
+    censored: false,
+  }));
+  const before = protocol.estimateAgentRunBudget("mid", midSamples);
+  const otherLevels = Array.from({ length: 500 }, () => ({ level: "low", turns: 1000, tokens: 5_000_000, censored: false }));
+  const after = protocol.estimateAgentRunBudget("mid", [...midSamples, ...otherLevels]);
+  assert.deepEqual(after, before);
+});
+
+test("each level's budget covers at least its stated fraction of a correlated joint distribution", () => {
+  const rho = 0.7;
+  const muTurns = Math.log(6), sigmaTurns = 0.55;
+  const muTokens = Math.log(48_000), sigmaTokens = 0.5;
+  const correlatedPair = (rng) => {
+    const z1 = seededNormal(rng);
+    const z2 = seededNormal(rng);
+    return [z1, rho * z1 + Math.sqrt(1 - rho * rho) * z2];
+  };
+  const draw = (rng, n, level) => Array.from({ length: n }, () => {
+    const [z1, z2] = correlatedPair(rng);
+    return { level, turns: Math.exp(muTurns + sigmaTurns * z1), tokens: Math.exp(muTokens + sigmaTokens * z2), censored: false };
+  });
+  const fitRng = mulberry32(2024);
+  const testRng = mulberry32(99);
+  for (const level of ["low", "mid", "high"]) {
+    const budget = protocol.estimateAgentRunBudget(level, draw(fitRng, 4000, level));
+    const sample = draw(testRng, 50_000, level);
+    const covered = sample.filter((run) => run.turns <= budget.maxTurns && run.tokens <= budget.maxTokens).length;
+    const coverage = protocol.AGENT_EFFORT_PROFILES[level].coverage;
+    assert.ok(covered / sample.length >= coverage - 0.01, `${level}: covered ${covered / sample.length}, want >= ${coverage}`);
+  }
+});
+
+test("AGENT_EFFORT_PROFILES coverage matches 2*Phi(sigmas)-1 to four decimals", () => {
+  for (const level of ["low", "mid", "high"]) {
+    const { coverage, sigmas } = protocol.AGENT_EFFORT_PROFILES[level];
+    assert.equal(coverage.toFixed(4), (2 * standardNormalCdf(sigmas) - 1).toFixed(4));
+  }
 });
 
 test("run outcomes carry the evidence, missing information and budget their status requires", () => {
