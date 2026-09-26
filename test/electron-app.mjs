@@ -123,7 +123,8 @@ test("built Electron app boots, exposes the desktop bridge, and drives the Copil
   assert.equal(existsSync(mainScript), true, "dist/electron/main.js must exist; run build:electron first");
 
   const profileDir = await mkdtemp(join(tmpdir(), "synthv-electron-app-profile-"));
-  const dataRootDir = await mkdtemp(join(tmpdir(), "synthv-electron-app-dataroot-"));
+  const homeDir = await mkdtemp(join(tmpdir(), "synthv-electron-app-home-"));
+  const tmpDir = await mkdtemp(join(tmpdir(), "synthv-electron-app-tmp-"));
   const screenshotDir = process.env.ELECTRON_APP_TEST_SCREENSHOTS_DIR ?? await mkdtemp(join(tmpdir(), "synthv-electron-app-screenshots-"));
   await mkdir(screenshotDir, { recursive: true });
   const port = await freePort();
@@ -131,14 +132,15 @@ test("built Electron app boots, exposes the desktop bridge, and drives the Copil
 
   const stderrChunks = [];
   const stdoutChunks = [];
-  // SYNTHV_TOOLBOX_TEST_DATA_ROOT keeps SynthVService.scanInstallations() (run at startup) away from the
-  // real ~/Library or %APPDATA%; --user-data-dir already isolates app storage. Overriding HOME/APPDATA
-  // process-wide instead hangs this Electron build's DevTools HTTP server in this sandbox (verified: the
-  // process logs "DevTools listening" but /json/list never responds), so this narrower seam is used instead.
-  const child = spawn(electronBinary, [`--inspect=${inspectorPort}`, mainScript, `--user-data-dir=${profileDir}`, `--remote-debugging-port=${port}`], {
+  // HOME/APPDATA/TMPDIR are redirected to temp dirs so SynthVService.scanInstallations() (run at startup)
+  // never touches the real ~/Library or %APPDATA%; --user-data-dir already isolates app storage.
+  // --use-mock-keychain/--password-store=basic avoid macOS Keychain access under the foreign HOME, which
+  // otherwise hangs this Electron build's DevTools HTTP server in this sandbox (it logs "DevTools
+  // listening" but /json/list never responds).
+  const child = spawn(electronBinary, [`--inspect=${inspectorPort}`, "--use-mock-keychain", "--password-store=basic", mainScript, `--user-data-dir=${profileDir}`, `--remote-debugging-port=${port}`], {
     cwd: desktopRoot,
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "true", SYNTHV_TOOLBOX_TEST_DATA_ROOT: dataRootDir },
+    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "true", HOME: homeDir, APPDATA: homeDir, TMPDIR: tmpDir },
   });
   child.stdout.on("data", (chunk) => stdoutChunks.push(chunk));
   child.stderr.on("data", (chunk) => stderrChunks.push(chunk));
@@ -222,8 +224,8 @@ test("built Electron app boots, exposes the desktop bridge, and drives the Copil
       assert.equal(settings.agentEffort, "high");
     });
 
-    await t.test("switching effort shows a notice that does not overlap the composer", async () => {
-      await waitFor(() => evaluate(pageCdp, "!!document.querySelector('.feedback-stack .toast')"), { label: "the effort-change notice toast" });
+    async function assertNoticeDoesNotOverlapComposer(label) {
+      await waitFor(() => evaluate(pageCdp, "!!document.querySelector('.feedback-stack .toast')"), { label: `the effort-change notice toast at ${label}` });
       const layout = await evaluate(pageCdp, `(() => {
         const toast = document.querySelector('.feedback-stack .toast').getBoundingClientRect();
         const composer = document.querySelector('.composer').getBoundingClientRect();
@@ -231,7 +233,11 @@ test("built Electron app boots, exposes the desktop bridge, and drives the Copil
       })()`);
       const intersects = layout.toast.left < layout.composer.right && layout.toast.right > layout.composer.left
         && layout.toast.top < layout.composer.bottom && layout.toast.bottom > layout.composer.top;
-      assert.equal(intersects, false, "the notice toast must not overlap the composer");
+      assert.equal(intersects, false, `the notice toast must not overlap the composer at ${label}`);
+    }
+
+    await t.test("switching effort shows a notice that does not overlap the composer", async () => {
+      await assertNoticeDoesNotOverlapComposer("the default window size");
       await screenshot(pageCdp, screenshotDir, "02-notice-vs-composer");
     });
 
@@ -278,6 +284,10 @@ test("built Electron app boots, exposes the desktop bridge, and drives the Copil
       await waitFor(() => evaluate(pageCdp, "window.innerWidth <= 960"), { label: "resize to the minimum window size to apply", timeoutMs: 5000 });
       await assertLayoutFitsViewport("minimum window size");
       await screenshot(pageCdp, screenshotDir, "04-resized-minimum");
+
+      await evaluate(pageCdp, "document.querySelector('[data-agent-effort=\"mid\"]').click()");
+      await assertNoticeDoesNotOverlapComposer("the minimum window size");
+      await screenshot(pageCdp, screenshotDir, "05-notice-vs-composer-minimum");
     });
 
     await t.test("the main process logs no error lines", () => {
@@ -299,7 +309,8 @@ test("built Electron app boots, exposes the desktop bridge, and drives the Copil
     if (!exitResult) child.kill("SIGKILL");
     exitResult = await exited;
     await rm(profileDir, { recursive: true, force: true });
-    await rm(dataRootDir, { recursive: true, force: true });
+    await rm(homeDir, { recursive: true, force: true });
+    await rm(tmpDir, { recursive: true, force: true });
     if (!process.env.ELECTRON_APP_TEST_SCREENSHOTS_DIR) await rm(screenshotDir, { recursive: true, force: true }).catch(() => undefined);
   }
 

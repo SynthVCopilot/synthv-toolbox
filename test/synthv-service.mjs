@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { lstat, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -105,19 +106,38 @@ test("scanInstallations reads scripts under the injected data root, not the real
 
 test("installBridge runs the real installers, and the fixed diagnosis then reports them as installed", async () => {
   const root = await mkdtemp(join(tmpdir(), "synthv-bridge-install-"));
+  const bridgeDir = await mkdtemp(join(tmpdir(), "synthv-bridge-ipc-"));
+  const realManifest = join(tmpdir(), "synthv-agent-bridge.install.json");
+  const before = await manifestFingerprint(realManifest);
   try {
-    const service = new SynthVService(root, bridgeDirectory, undefined, undefined, root);
+    const service = new SynthVService(root, bridgeDirectory, undefined, undefined, root, { ...process.env, SYNTHV_AGENT_BRIDGE_DIR: bridgeDir });
     const scriptsPath = join(root, "scripts");
 
-    const sv2Install = await service.installBridge([{ scriptsPath, bridgeProfile: "sv2" }]);
+    const sv2Install = await service.installBridge([{ scriptsPath, bridgeProfile: "sv2", reload: false }]);
     assert.equal(sv2Install[0].result.succeeded, true, sv2Install[0].result.detail);
     const sv2Diagnosis = await service.diagnoseBridge([{ scriptsPath, bridgeProfile: "sv2" }]);
     assert.equal(sv2Diagnosis[0].result.succeeded, true);
     assert.equal((await readFile(join(scriptsPath, "SynthV Agent Bridge", "SynthVAgentBridge.lua"), "utf8")).length > 0, true);
+    assert.equal((await stat(join(bridgeDir, "synthv-agent-bridge.install.json"))).isFile(), true);
 
-    const sv1Install = await service.installBridge([{ scriptsPath, bridgeProfile: "sv1" }]);
+    const sv1Install = await service.installBridge([{ scriptsPath, bridgeProfile: "sv1", reload: false }]);
     assert.equal(sv1Install[0].result.succeeded, true, sv1Install[0].result.detail);
     const sv1Diagnosis = await service.diagnoseBridge([{ scriptsPath, bridgeProfile: "sv1" }]);
     assert.equal(sv1Diagnosis[0].result.succeeded, true);
-  } finally { await rm(root, { recursive: true, force: true }); }
+
+    assert.deepEqual(await manifestFingerprint(realManifest), before);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(bridgeDir, { recursive: true, force: true });
+  }
 });
+
+// Regression guard: the real installer defaults its manifest path to os.tmpdir(), so this proves the test never touched it.
+async function manifestFingerprint(path) {
+  try {
+    const [info, content] = await Promise.all([stat(path), readFile(path)]);
+    return { mtimeMs: info.mtimeMs, sha256: createHash("sha256").update(content).digest("hex") };
+  } catch {
+    return null;
+  }
+}

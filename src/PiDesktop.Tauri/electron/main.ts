@@ -188,9 +188,7 @@ async function createMainWindow(startHidden: boolean): Promise<void> {
 async function initializeServices(): Promise<void> {
   const userData = app.getPath("userData");
   const bridgeDirectory = app.isPackaged ? join(process.resourcesPath, "components", "synthv-agent-bridge") : resolve(currentDirectory, "../../components/synthv-agent-bridge");
-  // Lets e2e tests give SynthVService an isolated scan root instead of the real home directory; unset in production.
-  const testDataRoot = process.env.SYNTHV_TOOLBOX_TEST_DATA_ROOT;
-  const synthv = new SynthVService(join(userData, "synthv"), bridgeDirectory, undefined, autostartController(), testDataRoot);
+  const synthv = new SynthVService(join(userData, "synthv"), bridgeDirectory, undefined, autostartController());
   const componentsRoot = app.isPackaged ? join(process.resourcesPath, "components") : resolve(currentDirectory, "../../components");
   const creative = createCreativeService(join(userData, "creative"), createComponentExecutor(componentsRoot));
   let ai: AiService;
