@@ -16,3 +16,11 @@ test("Electron build emits native icons beside the compiled main process", () =>
     assert.equal(existsSync(new URL(`../src/PiDesktop.Tauri/dist/electron/assets/${icon}`, import.meta.url)), true, `${icon} must be present after build`);
   }
 });
+
+test("compiled preload script is CommonJS (Electron's sandboxed preload loader rejects ESM)", () => {
+  const compiledUrl = new URL("../src/PiDesktop.Tauri/dist/electron/preload.js", import.meta.url);
+  if (!existsSync(compiledUrl)) return;
+  const compiled = readFileSync(compiledUrl, "utf8");
+  assert.doesNotMatch(compiled, /^\s*import /m);
+  assert.match(compiled, /require\("electron"\)/);
+});

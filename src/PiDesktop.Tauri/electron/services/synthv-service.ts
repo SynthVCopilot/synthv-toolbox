@@ -21,7 +21,7 @@ export class SynthVService {
   private pendingRoute: Record<string, unknown> | null = null;
   private readonly syncPreviews = new Map<string, { targetSlotId: string; categories: string[] }>();
   private bridgeClient?: { getStatus(): Promise<{ connected: boolean; status?: { sessionToken?: string }; reason?: string }>; paths: { stopFile: string } };
-  constructor(private readonly root: string, private readonly bridgeDirectory: string, private readonly runner: Runner = runCommand, private readonly autostart?: AutostartController) {}
+  constructor(private readonly root: string, private readonly bridgeDirectory: string, private readonly runner: Runner = runCommand, private readonly autostart?: AutostartController, private readonly platformDataRoot: string = homedir()) {}
 
   async scanInstallations(): Promise<Array<Record<string, unknown>>> {
     const candidates = platform() === "win32" ? windowsCandidates() : macCandidates();
@@ -154,7 +154,7 @@ export class SynthVService {
   private slot(store: ProfileStore, id: string): Slot { if (!isUuid(id)) throw new Error("Invalid profile id."); const slot = store.slots.find(item => item.id === id); if (!slot) throw new Error("Profile was not found."); return slot; }
   private async readStore(): Promise<ProfileStore> { try { const value = JSON.parse(await readFile(this.storePath(), "utf8")); return { activeSlotId: typeof value.activeSlotId === "string" ? value.activeSlotId : null, slots: Array.isArray(value.slots) ? value.slots.filter((slot: unknown): slot is Slot => isSlot(slot)) : [] }; } catch { return { activeSlotId: null, slots: [] }; } }
   private async writeStore(store: ProfileStore): Promise<void> { await mkdir(dirname(this.storePath()), { recursive: true }); await writeFile(this.storePath(), JSON.stringify(store), "utf8"); }
-  private canonicalPath(): string { return platform() === "win32" ? join(process.env.APPDATA ?? this.root, "Dreamtonics", "Synthesizer V Studio 2") : join(homedir(), "Library", "Application Support", "Dreamtonics", "Synthesizer V Studio 2"); }
+  private canonicalPath(): string { return platform() === "win32" ? join(process.env.APPDATA ?? this.root, "Dreamtonics", "Synthesizer V Studio 2") : join(this.platformDataRoot, "Library", "Application Support", "Dreamtonics", "Synthesizer V Studio 2"); }
   private vaultPath(): string { return `${this.canonicalPath()}.toolbox-slots`; }
   private slotPath(id: string): string { return join(this.vaultPath(), "slots", id); }
   private sessionPath(id: string): string { return join(this.slotPath(id), "license", "session"); }

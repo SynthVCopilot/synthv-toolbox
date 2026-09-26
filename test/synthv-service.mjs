@@ -33,7 +33,7 @@ test("profiles persist locally and session writes reject stale hashes", async ()
   const previousAppData = process.env.APPDATA;
   if (process.platform === "win32") process.env.APPDATA = root;
   try {
-    const service = new SynthVService(root, root, async () => ({ stdout: "", stderr: "", code: 0 }));
+    const service = new SynthVService(root, root, async () => ({ stdout: "", stderr: "", code: 0 }), undefined, root);
     const state = await service.createProfile("Primary");
     const slotId = state.slots[0].id;
     const written = await service.writeSession(slotId, "offline-license=false", "");
