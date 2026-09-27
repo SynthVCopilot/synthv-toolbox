@@ -2795,5 +2795,5 @@ do
 end
 end
 
-assert(project.undo==85,"expected 85 undo records, got "..project.undo)
+assert(project.undo==87,"expected 87 undo records, got "..project.undo)
 print("Mock SynthV smoke test passed")
