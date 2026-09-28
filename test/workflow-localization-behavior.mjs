@@ -28,7 +28,7 @@ assert.doesNotMatch(implementations, /t\(['"]['"]\)/, 'No empty lookups');
 const ids = ['audio-preparation', 'cover', 'tuning-learning', 'media-import', 'source-separation', 'audio-insight', 'score-to-synthv', 'project-tools', 'audio-to-project', 'project-doctor', 'batch-recipes', 'selective-sync', 'retake-compare', 'ab-audition', 'pronunciation-doctor', 'render-review', 'future-tool'];
 const state = {
   t, locale: () => i18n.global.locale.value, icon: () => '', busy: false, page: 'convert',
-  conversation: undefined, conversations: [], fileApprovals: [], activeAiProvider: () => undefined, aiProviderDisplayName: (provider) => provider.displayName,
+  conversation: undefined, conversations: [], activeAiProvider: () => undefined, aiProviderDisplayName: (provider) => provider.displayName,
   app: { mode: 'ai', bridgeConnected: true, components: [], downloads: [] }, features: [], toolGroups: [], workflowResult: undefined,
   audioRuntime: { available: true, version: '8', detail: 'Runtime detail', source: 'system' },
   audioStartInFlight: false, audioJob: undefined, audioPlanRequestInFlight: false, audioLoudnessAnalysisInFlight: false,

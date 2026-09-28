@@ -27,3 +27,29 @@ fixed-length digests only.
 `QUERY_RESPONSE_BUDGET_EXCEEDED` reports only the action, strategy, measured
 character count, budget, and narrowing guidance. It never echoes the rejected
 Query payload.
+
+## Transport family
+
+| Code | Stage | Project write | `retry` | Caller action |
+|---|---|---:|---|---|
+| `BRIDGE_NOT_CONNECTED` | freshRead | No | `start_bridge` | No heartbeat, or a stale one; start or reconnect Synthesizer V Studio, then retry |
+| `BRIDGE_TIMEOUT` (`claimed: false`) | as reported | No | `query_again` | The request was never claimed; reread, then retry |
+| `BRIDGE_TIMEOUT` (`claimed: true`) | mutated | Yes (`wrote: true`) | `query_again` | SynthV claimed the request before timing out; the outcome is unknown, reread and compare before retrying |
+| `BRIDGE_BUSY` | accepted | No | `retry_later` | Another client or request holds the single-writer lock; wait and retry |
+
+`BRIDGE_NOT_CONNECTED` is raised before any lock or request file is created:
+`FileIpcClient` checks the heartbeat first and fails fast. `claimed` on a
+`BRIDGE_TIMEOUT` reports whether the request file still carried this
+client's `requestId` when the deadline passed; once claimed, the Lua host may
+have already started the mutation, so the public envelope reports
+`wrote: true` and `phase: "mutated"` even though the request never received a
+response.
+
+## Retry values
+
+`retry` is one of `correct_request`, `query_again`, `undo_once_then_query_again`
+(precedence given to `undoRequired`), `retry_later` (`BRIDGE_BUSY`), or
+`start_bridge` (`BRIDGE_NOT_CONNECTED`). External MCP clients written against
+an earlier version of this bridge that only expected `correct_request` and
+`query_again` must treat unrecognized `retry` values the same as
+`query_again`.

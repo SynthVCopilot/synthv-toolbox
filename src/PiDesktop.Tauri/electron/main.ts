@@ -6,12 +6,16 @@ import { createUpdaterService } from "./updater.js";
 import { ElectronRuntimeHost } from "./services/runtime-host.js";
 import { ElectronCommandRegistry } from "./services/command-registry.js";
 import { AiService, agentRuntimePort, type AiProviderId } from "./services/ai-service.js";
+import { AgentApprovalBroker } from "./services/agent-approvals.js";
 import { createCreativeService } from "./services/creative-service.js";
 import { createComponentExecutor } from "./services/component-executor.js";
 import { DesktopStateService } from "./services/desktop-state.js";
 import { HostCapabilities } from "./services/host-capabilities.js";
 import { HttpMcpServer } from "./services/http-mcp-server.js";
+import { loadEmbeddedBridge } from "./services/synthv-bridge.js";
+import { createSynthVDeliveryRegistry, createSynthVToolsExtension } from "./services/synthv-agent-tools.js";
 import { SynthVService } from "./services/synthv-service.js";
+import { createPiSessionFactory } from "@synthv-toolbox/agent-runtime";
 import type { JsonValue } from "@synthv-toolbox/runtime-protocol";
 import { authorizeAnthropic } from "@model-auth/providers/anthropic";
 import { authorizeOpenAI } from "@model-auth/providers/openai";
@@ -59,9 +63,11 @@ handlers.register("open_toolbox_releases", async args => openExternal(optionalUr
 handlers.register("open_toolbox_project", async args => openExternal(projectUrl(args.target)));
 let commandRegistry: ElectronCommandRegistry | undefined;
 
-updater.onState((state) => {
-  mainWindow?.webContents.send("toolbox:event", { event: "updater.state", payload: state });
-});
+function emitToRenderer(event: string, payload: unknown): void {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("toolbox:event", { event, payload });
+}
+
+updater.onState((state) => { emitToRenderer("updater.state", state); });
 
 function isLoginLaunch(): boolean {
   return process.argv.includes("--toolbox-autostart") || app.getLoginItemSettings().wasOpenedAtLogin;
@@ -188,19 +194,33 @@ async function createMainWindow(startHidden: boolean): Promise<void> {
 async function initializeServices(): Promise<void> {
   const userData = app.getPath("userData");
   const bridgeDirectory = app.isPackaged ? join(process.resourcesPath, "components", "synthv-agent-bridge") : resolve(currentDirectory, "../../components/synthv-agent-bridge");
-  const synthv = new SynthVService(join(userData, "synthv"), bridgeDirectory, undefined, autostartController());
+  const bridge = await loadEmbeddedBridge(bridgeDirectory, "synthv-toolbox");
+  const bridgeIpcDirectory = (await bridge.status()).ipcDirectory;
+  const synthv = new SynthVService(join(userData, "synthv"), bridgeDirectory, bridge, bridgeIpcDirectory, undefined, autostartController());
   const componentsRoot = app.isPackaged ? join(process.resourcesPath, "components") : resolve(currentDirectory, "../../components");
   const creative = createCreativeService(join(userData, "creative"), createComponentExecutor(componentsRoot));
   let ai: AiService;
   let capabilities: HostCapabilities;
+  let desktop: DesktopStateService;
+  const delivery = createSynthVDeliveryRegistry();
+  const approvals = new AgentApprovalBroker(
+    (snapshot) => emitToRenderer("agent.approvals.changed", snapshot),
+    { execute: async (item) => bridge.tools.find(tool => tool.name === item.tool)?.call(item.params) ?? { text: "", isError: true }, deliver: (resolution) => delivery.deliver(resolution) },
+  );
   const runtimeHost = new ElectronRuntimeHost(join(userData, "runtime"), {
     invoke: (permission, capability, operation, params) => capabilities.invoke(permission, capability, operation, params),
     resolveModel: () => ai.resolveModelSelection() as unknown as Promise<JsonValue>,
+  }, {
+    sessionFactory: createPiSessionFactory({
+      extensions: ({ sessionId, guards, runState }) => [createSynthVToolsExtension({ bridge, approvals, sessionId, guards, runState, registry: delivery, workMode: () => desktop.agentWorkMode() })],
+      persistTranscripts: () => desktop.agentTranscriptsEnabled(),
+    }),
+    onAgentProgress: (progress) => emitToRenderer("agent.run.progress", progress),
   });
   await runtimeHost.load();
-  ai = new AiService({ metadataPath: join(userData, "ai", "metadata.json"), safeStorage, runtime: agentRuntimePort(runtimeHost.runtime), catalog: modelCatalog(), usage: { query: async (provider, credentialIds) => ({ queriedAt: new Date().toISOString(), accounts: credentialIds.map(credentialId => ({ provider, credentialId, status: "unknown", plan: null, windows: [], balance: null, error: null })) }) }, authorizer: { authorize: authorizeProvider } });
+  ai = new AiService({ metadataPath: join(userData, "ai", "metadata.json"), safeStorage, runtime: agentRuntimePort(runtimeHost.runtime), catalog: modelCatalog(), approvals, usage: { query: async (provider, credentialIds) => ({ queriedAt: new Date().toISOString(), accounts: credentialIds.map(credentialId => ({ provider, credentialId, status: "unknown", plan: null, windows: [], balance: null, error: null })) }) }, authorizer: { authorize: authorizeProvider } });
   capabilities = new HostCapabilities(synthv, creative, ai);
-  const desktop = new DesktopStateService(userData, app.getVersion(), runtimeHost, ai, synthv, channel => { updateChannel = channel; updater.setChannel(channel); });
+  desktop = new DesktopStateService(userData, app.getVersion(), runtimeHost, ai, synthv, channel => { updateChannel = channel; updater.setChannel(channel); });
   await desktop.load();
   const httpServer = new HttpMcpServer({
     mcpTools: async () => (await runtimeHost.mcpTools()).map(name => ({ name, description: name === "toolbox_internal" ? "Invoke an authorized internal Toolbox operation." : "Invoke an authorized advanced Toolbox operation.", inputSchema: { type: "object", properties: { capability: { type: "string" }, operation: { type: "string" }, params: { type: "object" } }, required: ["capability", "operation", "params"], additionalProperties: false }, permission: name === "toolbox_internal" ? "internal" : "advanced" })),
@@ -218,10 +238,13 @@ async function initializeServices(): Promise<void> {
         : await dialog.showSaveDialog({ defaultPath: defaultName });
       return result.canceled ? undefined : result.filePath;
     },
-  } }, (event, payload) => {
-    mainWindow?.webContents.send("toolbox:event", { event, payload });
-  });
+  }, approvals }, emitToRenderer);
+  registerQuitCleanup(async () => { approvals.dispose(); await bridge.close(); });
 }
+
+let quitCleanupDone = false;
+let quitCleanup: (() => Promise<void>) | undefined;
+function registerQuitCleanup(cleanup: () => Promise<void>): void { quitCleanup = cleanup; }
 
 function updaterDownloadState(): Record<string, unknown> { const state = updater.state(); return { status: state.phase === "ready" ? "ready" : state.phase === "error" ? "failed" : state.phase === "idle" ? "idle" : "downloading", downloadedBytes: 0, totalBytes: null, error: state.error ?? null, fileName: state.version ? `Synthesizer V Toolbox ${state.version}` : null }; }
 async function openExternal(url: string): Promise<Record<string, unknown>> { await shell.openExternal(url); return { succeeded: true, summary: "Opened in browser.", detail: url }; }
@@ -246,5 +269,11 @@ if (!app.requestSingleInstanceLock()) {
   app.on("activate", () => {
     void showMainWindow();
   });
-  app.on("before-quit", () => { quitting = true; });
+  app.on("before-quit", (event) => {
+    quitting = true;
+    if (quitCleanupDone || !quitCleanup) return;
+    event.preventDefault();
+    quitCleanupDone = true;
+    void quitCleanup().finally(() => app.quit());
+  });
 }

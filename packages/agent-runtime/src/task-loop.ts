@@ -17,6 +17,16 @@ export interface PiToolResult {
   terminate?: boolean;
 }
 
+/**
+ * The one details convention in-process tools use for both the task loop's progress rule and the
+ * progress projector.
+ */
+export interface AgentToolDetails {
+  activity?: { status?: "running" | "awaiting_approval"; summary?: string };
+  progress?: false;
+  traceId?: string;
+}
+
 export interface PiToolDefinition<TParams = Record<string, unknown>> {
   name: string;
   label: string;
@@ -24,7 +34,8 @@ export interface PiToolDefinition<TParams = Record<string, unknown>> {
   promptSnippet?: string;
   promptGuidelines?: string[];
   parameters: unknown;
-  execute(toolCallId: string, params: TParams): Promise<PiToolResult>;
+  executionMode?: "sequential" | "parallel";
+  execute(toolCallId: string, params: TParams, signal?: AbortSignal, onUpdate?: (partial: PiToolResult) => void): Promise<PiToolResult>;
 }
 
 export interface PiBeforeAgentStartEvent {
@@ -55,6 +66,7 @@ export interface PiToolCallEvent {
 export interface PiToolExecutionEndEvent {
   toolName: string;
   isError: boolean;
+  result?: { details?: unknown };
 }
 
 export interface PiSessionCompactEvent {
@@ -67,7 +79,10 @@ export interface PiExtensionApi {
   on(event: "tool_call", handler: (event: PiToolCallEvent) => { block?: boolean; reason?: string; terminate?: boolean } | void): void;
   on(event: "tool_execution_end", handler: (event: PiToolExecutionEndEvent) => void): void;
   on(event: "session_compact", handler: (event: PiSessionCompactEvent) => void): void;
+  on(event: "session_shutdown", handler: () => void | Promise<void>): void;
   registerTool(definition: PiToolDefinition<any>): void;
+  /** Injects a custom message into the session; deliverAs "steer" targets an in-flight run without starting a new one. */
+  sendMessage(message: { customType: string; content: string; display?: boolean; details?: unknown }, options?: { deliverAs?: "steer" | "followUp" | "nextTurn"; triggerTurn?: boolean }): void | Promise<void>;
 }
 
 export type TaskLoopSignal =
@@ -187,13 +202,47 @@ function firstRoundContext(state: TaskLoopState): string {
   return parts.join("\n\n");
 }
 
-function extractText(message: PiTurnEndAssistantMessage): string {
+export function extractText(message: PiTurnEndAssistantMessage): string {
   if (!Array.isArray(message.content)) return "";
   return message.content
     .filter((part): part is { type: string; text: string } =>
       typeof part === "object" && part !== null && (part as { type?: unknown }).type === "text" && typeof (part as { text?: unknown }).text === "string")
     .map((part) => part.text)
     .join("");
+}
+
+/** The task loop's own tools; never shown as tool activity and never gate the completion check. */
+export const TASK_LOOP_TOOL_NAMES = ["update_plan", "complete_task", "request_input"] as const;
+
+function isTaskLoopToolName(name: string): name is typeof TASK_LOOP_TOOL_NAMES[number] {
+  return (TASK_LOOP_TOOL_NAMES as readonly string[]).includes(name);
+}
+
+function isAgentToolDetails(value: unknown): value is AgentToolDetails {
+  return typeof value === "object" && value !== null;
+}
+
+/** A completion check registered by an extension; a non-null return is the reason complete_task must fail. */
+export type CompletionGuardCheck = () => string | null;
+
+/** Registers completion checks and runs them in registration order, stopping at the first failure. */
+export interface CompletionGuardRegistry {
+  register(check: CompletionGuardCheck): void;
+  run(): string | null;
+}
+
+export function createCompletionGuardRegistry(): CompletionGuardRegistry {
+  const checks: CompletionGuardCheck[] = [];
+  return {
+    register(check) { checks.push(check); },
+    run() {
+      for (const check of checks) {
+        const reason = check();
+        if (reason) return reason;
+      }
+      return null;
+    },
+  };
 }
 
 function boundedText(value: unknown, maxLength: number): string | undefined {
@@ -240,7 +289,7 @@ const RequestInputParams = Type.Object({
 });
 
 /** Builds the per-session inline extension: the update_plan/complete_task/request_input tools plus the loop hooks. */
-export function createTaskLoopExtension(state: TaskLoopState): { name: string; factory: (pi: PiExtensionApi) => void } {
+export function createTaskLoopExtension(state: TaskLoopState, runCompletionGuards: () => string | null = () => null): { name: string; factory: (pi: PiExtensionApi) => void } {
   return {
     name: "synthv-task-loop",
     factory: (pi: PiExtensionApi) => {
@@ -286,6 +335,8 @@ export function createTaskLoopExtension(state: TaskLoopState): { name: string; f
           if (!summary) throw new Error(`summary must be non-empty text of at most ${AGENT_PLAN_LIMITS.summaryLength} characters.`);
           const evidence = boundedTextList(params.evidence, AGENT_PLAN_LIMITS.evidenceLength);
           if (!evidence) throw new Error(`Each evidence entry must be non-empty text of at most ${AGENT_PLAN_LIMITS.evidenceLength} characters.`);
+          const guardReason = runCompletionGuards();
+          if (guardReason) throw new Error(guardReason);
           state.signal = { kind: "completed", summary, evidence };
           return {
             content: [{ type: "text", text: `Marked complete: ${summary}` }],
@@ -355,7 +406,9 @@ export function createTaskLoopExtension(state: TaskLoopState): { name: string; f
 
       pi.on("tool_execution_end", (event) => {
         if (event.isError) return;
-        if (event.toolName === "update_plan" || event.toolName === "complete_task" || event.toolName === "request_input") return;
+        if (isTaskLoopToolName(event.toolName)) return;
+        const details = event.result?.details;
+        if (isAgentToolDetails(details) && details.progress === false) return;
         state.roundProgress += 1;
       });
 
@@ -365,6 +418,7 @@ export function createTaskLoopExtension(state: TaskLoopState): { name: string; f
       });
 
       pi.on("tool_call", (event) => {
+        if (state.cancelled) return { block: true, reason: "Run was cancelled.", terminate: true };
         if (state.signal) return { block: true, reason: "Run already ended.", terminate: true };
         if (!isBudgetExhausted(state)) return;
         if ((event.toolName === "complete_task" || event.toolName === "request_input") && !state.finishAttemptUsed) {

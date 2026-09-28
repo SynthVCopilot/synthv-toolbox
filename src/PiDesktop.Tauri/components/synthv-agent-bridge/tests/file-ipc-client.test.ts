@@ -24,8 +24,23 @@ import {
 const sleep = (milliseconds: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
+async function writeFreshHeartbeat(config: BridgeConfig): Promise<void> {
+  await fs.mkdir(config.paths.directory, { recursive: true });
+  await writeJsonAtomically(config.paths.statusFile, {
+    protocolVersion: 3,
+    state: "running",
+    updatedAtEpochMs: Date.now(),
+    bridgeVersion: "0.1.0",
+    executorBuildId: EXECUTOR_BUILD_ID,
+    host: { osType: "Linux" },
+    projectFile: "song.svp",
+    ipcDirectory: config.paths.directory,
+  });
+}
+
 async function createFixture(
   overrides: NodeJS.ProcessEnv = {},
+  { connected = true }: { connected?: boolean } = {},
 ): Promise<{
   directory: string;
   config: BridgeConfig;
@@ -43,6 +58,9 @@ async function createFixture(
     },
     directory,
   );
+  if (connected) {
+    await writeFreshHeartbeat(config);
+  }
   return { directory, config, client: new FileIpcClient(config) };
 }
 

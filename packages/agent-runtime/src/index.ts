@@ -1,6 +1,8 @@
 import { CredentialRouter, createCredentialMetadata, type CredentialMetadata, type ProviderAdapterHost, type ProviderRequest, type ProviderRequestContext, type ProviderResponse, type ProviderStreamEvent } from "@model-auth/core";
 import { fileURLToPath } from "node:url";
 import {
+  AGENT_RUN_ID_MAX_LENGTH,
+  AGENT_RUN_PROGRESS_EVENT,
   DEFAULT_AGENT_EFFORT,
   HOST_API_VERSION,
   HOST_HELLO_METHOD,
@@ -23,6 +25,7 @@ import {
   type PluginManifest,
   type PluginPermission,
   pluginPermissionLevel,
+  type RpcNotification,
   type RpcRequest,
   type RpcResponseFailure,
   type RpcResponseSuccess,
@@ -31,14 +34,24 @@ import {
 } from "@synthv-toolbox/runtime-protocol";
 import {
   buildOutcome,
+  createCompletionGuardRegistry,
   createTaskLoopExtension,
   createTaskLoopState,
   effortProfileFor,
   resetRun,
   runTaskLoop,
+  TASK_LOOP_TOOL_NAMES,
+  type AgentToolDetails,
   type PiExtensionApi,
+  type PiToolDefinition,
+  type PiToolResult,
   type TaskLoopPendingInput,
 } from "./task-loop.js";
+import { createRunProgress, type AgentRunView } from "./progress.js";
+
+export type { AgentToolDetails, PiExtensionApi, PiToolDefinition, PiToolResult };
+export type { AgentRunView } from "./progress.js";
+export { TASK_LOOP_TOOL_NAMES };
 
 export const AGENT_RUNTIME_ID = "synthv-toolbox.agent-runtime";
 
@@ -46,17 +59,28 @@ export const AGENT_RUNTIME_CAPABILITIES: CapabilityDescriptor[] = [
   { id: "agent.sessions", version: "1.0", operations: ["initialize", "send", "close", "cancel"] },
   { id: "host.capabilities", version: "1.0", operations: ["invoke"] },
   { id: "runtime.plugins", version: "1.0", operations: ["discover", "invoke"] },
+  { id: "agent.progress", version: "1.0", operations: ["session.progress"] },
 ];
 
 export interface PiSession {
-  prompt(input: string, budget: AgentRunBudget): Promise<{ message: string; outcome: AgentRunOutcome }>;
+  /** runId is stamped on every progress notification for this run; runState() exposes the same value. */
+  prompt(input: string, budget: AgentRunBudget, report: (view: AgentRunView) => void, runId: string): Promise<{ message: string; outcome: AgentRunOutcome }>;
   cancel(): Promise<boolean>;
   dispose(): void | Promise<void>;
+  readonly running: boolean;
 }
 
 export interface PiSessionFactory {
   create(input: { sessionId: string; cwd?: string; systemPrompt?: string; model?: PiModelSelection; outcome?: AgentRunOutcome }): Promise<PiSession>;
 }
+
+/** Registers a check the completion tool consults; a non-null return is the reason it fails. */
+export interface AgentSessionGuards {
+  completion(check: () => string | null): void;
+}
+
+/** Whether this session currently has a run in flight, and that run's id. */
+export type AgentRunStateAccessor = () => { active: boolean; runId: string | null };
 
 export interface PiModelSelection {
   providerId: string;
@@ -126,6 +150,10 @@ export interface PiAgentSession {
   abort(): Promise<void>;
   dispose(): void | Promise<void>;
   setThinkingLevel(level: string): void;
+  /** Drops any steering/follow-up messages queued through sendMessage, so a message queued just before cancel never starts a new turn. */
+  clearQueue(): { steering: unknown[]; followUp: unknown[] };
+  /** Fires after extensions for every raw agent event; returns an unsubscribe function. */
+  subscribe(listener: (event: unknown) => void): () => void;
 }
 
 export interface PiSdk {
@@ -140,6 +168,7 @@ export interface PiSdk {
   }) => PiResourceLoader;
   ModelRuntime: { create(options: { refreshOnCreate: false }): Promise<{ setRuntimeApiKey(providerId: string, apiKey: string): Promise<void>; getModel(providerId: string, modelId: string): unknown }> };
   SettingsManager: { create(cwd: string, agentDir?: string): PiSettingsManager };
+  SessionManager: { inMemory(cwd: string): unknown; create(cwd: string): unknown };
   createAgentSession(options: {
     cwd: string;
     noTools: "builtin";
@@ -147,6 +176,7 @@ export interface PiSdk {
     settingsManager?: PiSettingsManager;
     modelRuntime?: unknown;
     model?: unknown;
+    sessionManager?: unknown;
   }): Promise<{ session: PiAgentSession }>;
 }
 
@@ -194,10 +224,16 @@ export class ModelAuthGateway {
 
 export type ModelAuthResult<T> = { kind: "ok"; value: T } | { kind: "unsupported"; reason: string };
 
-export function createPiSessionFactory(
-  additionalExtensionPaths: () => readonly string[] = () => [],
-  loadSdk: () => Promise<PiSdk> = loadPiSdk,
-): PiSessionFactory {
+export interface PiSessionFactoryOptions {
+  extensionPaths?: () => readonly string[];
+  extensions?: (session: { sessionId: string; guards: AgentSessionGuards; runState: AgentRunStateAccessor }) => readonly PiInlineExtension[];
+  loadSdk?: () => Promise<PiSdk>;
+  /** false (the default) keeps transcripts in memory; true persists them under the Pi agent directory. Read once per session creation. */
+  persistTranscripts?: () => boolean;
+}
+
+export function createPiSessionFactory(options: PiSessionFactoryOptions = {}): PiSessionFactory {
+  const loadSdk = options.loadSdk ?? loadPiSdk;
   return {
     async create(input) {
       const sdk = await loadSdk();
@@ -206,11 +242,18 @@ export function createPiSessionFactory(
       const seededPlan = input.outcome && input.outcome.status !== "completed" ? input.outcome.plan : null;
       const pendingInput = pendingInputFrom(input.outcome);
       const state = createTaskLoopState(seededPlan, estimateAgentRunBudget(DEFAULT_AGENT_EFFORT, []), pendingInput);
+      let running = false;
+      let currentRunId: string | null = null;
+      let currentProjector: ReturnType<typeof createRunProgress> | null = null;
+      const completionGuards = createCompletionGuardRegistry();
+      const guards: AgentSessionGuards = { completion: completionGuards.register };
+      // False once cancel() has been requested, even while abort() is still winding down, so deliver() queues instead of steering.
+      const runState: AgentRunStateAccessor = () => ({ active: running && !state.cancelled, runId: currentRunId });
       const resourceLoader = new sdk.DefaultResourceLoader({
         cwd,
         agentDir: sdk.getAgentDir(),
-        additionalExtensionPaths: [...additionalExtensionPaths()],
-        extensionFactories: [createTaskLoopExtension(state)],
+        additionalExtensionPaths: [...(options.extensionPaths?.() ?? [])],
+        extensionFactories: [createTaskLoopExtension(state, completionGuards.run), ...(options.extensions?.({ sessionId: input.sessionId, guards, runState }) ?? [])],
         settingsManager,
         ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
       });
@@ -221,6 +264,9 @@ export function createPiSessionFactory(
       const model = modelRuntime.getModel(input.model.providerId, input.model.modelId);
       if (!model) throw new Error(`Pi does not support ${input.model.providerId}/${input.model.modelId}.`);
       const contextWindow = getContextWindow(model);
+      // Omitting sessionDir lets Pi resolve its own default under the agent dir (sessions/<encoded-cwd>/);
+      // passing agentDir there would write transcripts flat into the agent dir root instead.
+      const sessionManager = options.persistTranscripts?.() ? sdk.SessionManager.create(cwd) : sdk.SessionManager.inMemory(cwd);
       const result = await sdk.createAgentSession({
         cwd,
         noTools: "builtin",
@@ -228,16 +274,24 @@ export function createPiSessionFactory(
         settingsManager,
         modelRuntime,
         model,
+        sessionManager,
       });
-      let running = false;
+      const unsubscribe = result.session.subscribe((event) => currentProjector?.handle(event));
       return {
-        prompt: async (text, budget) => {
+        prompt: async (text, budget, report = () => {}, runId) => {
           if (running) throw new Error("A run is already in progress for this session.");
           running = true;
+          currentRunId = runId;
+          resetRun(state, budget);
+          const projector = createRunProgress(state, report);
+          currentProjector = projector;
+          projector.start();
           try {
-            resetRun(state, budget);
             applyEffortProfile(result.session, settingsManager, effortProfileFor(budget.level), contextWindow);
-            const { status } = await runTaskLoop(state, effortProfileFor(budget.level), text, (round) => result.session.prompt(round));
+            const { status } = await runTaskLoop(state, effortProfileFor(budget.level), text, (round) => {
+              projector.round();
+              return result.session.prompt(round);
+            });
             const outcome = buildOutcome(state, status);
             if (status === "completed") state.plan = null;
             const validated = validateAgentRunOutcome(outcome);
@@ -245,16 +299,23 @@ export function createPiSessionFactory(
             const message = state.lastAssistantText || validated.summary || "";
             return { message, outcome: validated };
           } finally {
+            projector.end();
+            currentProjector = null;
             running = false;
+            currentRunId = null;
           }
         },
         cancel: async () => {
           if (!running) return false;
+          // Order matters: flip cancelled before anything else can steer a queued resolution into a new turn.
           state.cancelled = true;
+          currentProjector?.cancelling();
+          result.session.clearQueue();
           await result.session.abort();
           return true;
         },
-        dispose: () => result.session.dispose(),
+        dispose: () => { unsubscribe(); return result.session.dispose(); },
+        get running() { return running; },
       };
     },
   };
@@ -286,6 +347,7 @@ export class AgentRuntimeWorker {
     private readonly sessionsFactory: PiSessionFactory = createPiSessionFactory(),
     private readonly hostCapabilities?: HostCapabilityTransport,
     private readonly pluginDiscovery?: PluginDiscovery,
+    private readonly notify: (notification: RpcNotification) => void = () => {},
   ) {}
 
   async handleJsonl(line: string): Promise<string[]> {
@@ -348,6 +410,7 @@ export class AgentRuntimeWorker {
     const signature = JSON.stringify([params.cwd ?? "", params.systemPrompt ?? "", model.providerId, model.modelId, model.credentialId ?? ""]);
     const existing = this.sessions.get(params.sessionId);
     if (existing?.signature === signature) return this.success(request, { sessionId: params.sessionId, reused: true });
+    if (existing?.session.running) return this.failure(request, "session.busy", "The session has a run in progress; wait for it to finish or cancel it first.");
     if (existing) await existing.session.dispose();
     const session = await this.sessionsFactory.create({ sessionId: params.sessionId, cwd: params.cwd, systemPrompt: params.systemPrompt, model, ...(outcome ? { outcome } : {}) });
     this.sessions.set(params.sessionId, { session, signature });
@@ -357,6 +420,8 @@ export class AgentRuntimeWorker {
   private async sendToSession(request: RpcRequest): Promise<RpcResponseSuccess | RpcResponseFailure> {
     const params = readSessionParams(request.params, true);
     if (!params) return this.failure(request, "session.invalid", "session.send requires sessionId and input.");
+    const runId = params.runId;
+    if (!isValidRunId(runId)) return this.failure(request, "session.invalid", `session.send requires a non-empty runId of at most ${AGENT_RUN_ID_MAX_LENGTH} characters.`);
     const record = this.sessions.get(params.sessionId);
     if (!record) return this.failure(request, "session.not-found", "The session is not initialized.");
     let budget: AgentRunBudget;
@@ -367,9 +432,23 @@ export class AgentRuntimeWorker {
     } else {
       budget = estimateAgentRunBudget(DEFAULT_AGENT_EFFORT, []);
     }
-    const { message, outcome } = await record.session.prompt(params.input, budget);
+    const sessionId = params.sessionId;
+    const protocolVersion = this.negotiatedVersion ?? request.protocolVersion;
+    const report = (view: AgentRunView): void => {
+      const notification: RpcNotification = { kind: "notification", protocolVersion, event: AGENT_RUN_PROGRESS_EVENT, params: { sessionId, runId, ...view } as unknown as JsonValue };
+      this.safeNotify(notification);
+    };
+    const { message, outcome } = await record.session.prompt(params.input, budget, report, runId);
     const result: AgentSessionSendResult = { sessionId: params.sessionId, accepted: true, message, outcome };
     return this.success(request, result as unknown as JsonValue);
+  }
+
+  private safeNotify(notification: RpcNotification): void {
+    try {
+      this.notify(notification);
+    } catch {
+      // A misbehaving notification sink must never fail the run.
+    }
   }
 
   private async cancelSession(request: RpcRequest): Promise<RpcResponseSuccess | RpcResponseFailure> {
@@ -500,7 +579,7 @@ function parseHostHello(value: JsonValue): HostHello | undefined {
   return { hostId: value.hostId, protocol: value.protocol, capabilities };
 }
 
-function readSessionParams(value: JsonValue, requiresInput: boolean): { sessionId: string; cwd?: string; systemPrompt?: string; input: string; outcome?: JsonValue; budget?: JsonValue } | undefined {
+function readSessionParams(value: JsonValue, requiresInput: boolean): { sessionId: string; cwd?: string; systemPrompt?: string; input: string; outcome?: JsonValue; budget?: JsonValue; runId?: JsonValue } | undefined {
   if (!isRecord(value) || typeof value.sessionId !== "string" || value.sessionId.length === 0) return undefined;
   if (value.cwd !== undefined && typeof value.cwd !== "string") return undefined;
   if (value.systemPrompt !== undefined && (typeof value.systemPrompt !== "string" || value.systemPrompt.length === 0)) return undefined;
@@ -512,7 +591,12 @@ function readSessionParams(value: JsonValue, requiresInput: boolean): { sessionI
     input: typeof value.input === "string" ? value.input : "",
     ...(value.outcome !== undefined ? { outcome: value.outcome } : {}),
     ...(value.budget !== undefined ? { budget: value.budget } : {}),
+    ...(value.runId !== undefined ? { runId: value.runId } : {}),
   };
+}
+
+function isValidRunId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= AGENT_RUN_ID_MAX_LENGTH;
 }
 
 function isCapabilityDescriptor(value: unknown): value is CapabilityDescriptor {

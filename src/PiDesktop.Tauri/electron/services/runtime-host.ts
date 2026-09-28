@@ -2,13 +2,21 @@ import { cp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/pro
 import { join, resolve } from "node:path";
 import { AgentRuntimeWorker, type PiSessionFactory } from "@synthv-toolbox/agent-runtime";
 import {
+  AGENT_RUN_PROGRESS_EVENT,
   pluginPermissionLevel,
   validatePluginManifest,
+  type AgentRunProgress,
   type JsonValue,
   type PluginManifest,
   type PluginPermission,
+  type RpcNotification,
 } from "@synthv-toolbox/runtime-protocol";
 import type { HttpMcpServer } from "./http-mcp-server.js";
+
+export interface ElectronRuntimeHostOptions {
+  sessionFactory?: PiSessionFactory;
+  onAgentProgress?: (progress: AgentRunProgress) => void;
+}
 
 export interface RuntimeHostSettings {
   pluginInternalFunctionsEnabled: boolean;
@@ -51,22 +59,30 @@ export class ElectronRuntimeHost {
   constructor(
     private readonly root: string,
     private readonly hostCapabilities: HostCapabilityInvoker,
-    sessionFactory?: PiSessionFactory,
+    options: ElectronRuntimeHostOptions = {},
   ) {
-    this.runtime = new AgentRuntimeWorker(sessionFactory, {
-      request: async (method, value) => {
-        if (method === "host.model.resolve") {
-          if (!this.hostCapabilities.resolveModel) throw new Error("No model resolver is configured.");
-          return this.hostCapabilities.resolveModel();
-        }
-        if (method !== "host.capability.invoke") throw new Error("Unsupported host runtime request.");
-        const request = value as { pluginId?: string; permission?: PluginPermission; capability?: string; operation?: string; params?: JsonValue };
-        if (request.permission !== "host.internal" && request.permission !== "host.advanced") throw new Error("Unsupported plugin host permission.");
-        if (typeof request.pluginId !== "string") throw new Error("Plugin host requests require pluginId.");
-        await this.assertPluginPermission(request.pluginId, request.permission);
-        return this.hostCapabilities.invoke(request.permission, request.capability ?? "", request.operation ?? "", request.params ?? null);
+    this.runtime = new AgentRuntimeWorker(
+      options.sessionFactory,
+      {
+        request: async (method, value) => {
+          if (method === "host.model.resolve") {
+            if (!this.hostCapabilities.resolveModel) throw new Error("No model resolver is configured.");
+            return this.hostCapabilities.resolveModel();
+          }
+          if (method !== "host.capability.invoke") throw new Error("Unsupported host runtime request.");
+          const request = value as { pluginId?: string; permission?: PluginPermission; capability?: string; operation?: string; params?: JsonValue };
+          if (request.permission !== "host.internal" && request.permission !== "host.advanced") throw new Error("Unsupported plugin host permission.");
+          if (typeof request.pluginId !== "string") throw new Error("Plugin host requests require pluginId.");
+          await this.assertPluginPermission(request.pluginId, request.permission);
+          return this.hostCapabilities.invoke(request.permission, request.capability ?? "", request.operation ?? "", request.params ?? null);
+        },
       },
-    });
+      undefined,
+      (notification: RpcNotification) => {
+        if (notification.event !== AGENT_RUN_PROGRESS_EVENT || !options.onAgentProgress) return;
+        options.onAgentProgress(notification.params as unknown as AgentRunProgress);
+      },
+    );
   }
 
   async load(): Promise<RuntimeHostSettings> {

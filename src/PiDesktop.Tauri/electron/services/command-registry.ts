@@ -1,4 +1,5 @@
 import { AGENT_EFFORT_LEVELS, type AgentEffortLevel, type JsonValue } from "@synthv-toolbox/runtime-protocol";
+import type { AgentApprovalBroker } from "./agent-approvals.js";
 import type { AiService, AiProviderId, AiLoadStrategy } from "./ai-service.js";
 import type { CreativeService } from "./creative-service.js";
 import { registerComponentAudioCommands, type ComponentAudioOptions } from "./component-audio-commands.js";
@@ -9,7 +10,7 @@ import type { SynthVService } from "./synthv-service.js";
 
 export type EventSink = (event: string, payload: JsonValue) => void;
 export type CommandHandler = (params: Record<string, unknown>) => Promise<unknown>;
-export interface ElectronServices { ai: AiService; creative: CreativeService; desktop: DesktopStateService; synthv: SynthVService; componentAudio: ComponentAudioOptions; }
+export interface ElectronServices { ai: AiService; creative: CreativeService; desktop: DesktopStateService; synthv: SynthVService; componentAudio: ComponentAudioOptions; approvals: AgentApprovalBroker; }
 
 const CREATIVE_COMMANDS = [
   "list_workflow_recipes", "list_creative_history", "list_project_checkpoints", "get_project_backup_state", "restore_project_checkpoint", "export_workflow_report", "lookup_chinese_rhyme", "build_lyric_template", "generate_lyric_candidates", "list_lyric_projects", "create_lyric_project", "save_lyric_project", "load_lyric_project", "restore_lyric_project_version", "export_lyric_project_text", "read_lyric_bridge_selection", "preview_lyric_bridge_fit", "confirm_lyric_bridge_fit", "run_project_doctor", "run_pronunciation_diagnostics", "run_render_review", "run_audio_to_project", "run_score_to_synthv", "run_retake_workbench", "run_batch_workflow", "run_audio_probe", "preview_media_source", "media_tasks", "queue_media_import", "queue_media_separation", "queue_cover", "cancel_media_task", "retry_media_task", "list_tuning_profiles", "learn_tuning_profile", "record_tuning_outcome", "apply_tuning_profile", "run_solo_tuning", "run_game_to_midi", "run_project_probe", "add_project_reference", "export_project_without_parameters", "export_project_lyrics", "review_workflow", "ffmpeg_status", "get_ffmpeg_configuration", "set_ffmpeg_directory", "open_ffmpeg_download_page", "probe_media", "plan_audio_prepare", "start_audio_prepare", "analyze_loudness", "plan_loudness_normalize", "start_loudness_normalize", "audio_job_snapshot", "cancel_audio_job", "audio_artifact_info", "reveal_audio_artifact", "save_audio_artifact",
@@ -44,6 +45,7 @@ export class ElectronCommandRegistry {
     this.register("complete_onboarding", async p => s.desktop.update({ onboardingCompleted: true, mode: enumParam(p, "mode", ["toolbox", "ai"] as const) }));
     this.register("set_mode", async p => s.desktop.update({ mode: enumParam(p, "mode", ["toolbox", "ai"] as const) }));
     this.register("set_agent_work_mode", async p => s.desktop.update({ agentWorkMode: enumParam(p, "mode", ["edit", "solo"] as const) }));
+    this.register("set_agent_transcripts", async p => s.desktop.update({ agentTranscriptsEnabled: boolParam(p, "enabled") }));
     this.register("set_update_channel", async p => s.desktop.update({ updateChannel: enumParam(p, "channel", ["stable", "nightly"] as const) }));
     this.register("save_scripts_path", async p => s.desktop.update({ scriptsPath: stringParam(p, "scriptsPath") }));
     this.register("set_sv2_concurrent_enabled", async p => s.desktop.update({ sv2ConcurrentEnabled: boolParam(p, "enabled") }));
@@ -60,8 +62,8 @@ export class ElectronCommandRegistry {
     registerSynthVCommands(this, s.synthv);
     registerComponentAudioCommands(this, s.componentAudio);
     for (const command of CREATIVE_COMMANDS) if (!this.handlers.has(command)) this.register(command, params => s.creative.invoke(command, params));
-    this.register("agent_file_approvals", async () => []);
-    this.register("decide_agent_file_approval", async () => null);
+    this.register("agent_approvals", async () => s.approvals.snapshot());
+    this.register("decide_agent_approval", async p => { s.approvals.decide(stringParam(p, "id"), boolParam(p, "approve")); return null; });
   }
 
   private registerAi(ai: AiService, desktop: DesktopStateService, state: () => Promise<unknown>): void {
@@ -69,7 +71,7 @@ export class ElectronCommandRegistry {
     this.register("authorize_ai_provider", async p => { await ai.authorize_ai_provider(providerParam(p), optionalStringParam(p, "operationId")); return state(); }); this.register("cancel_ai_authorization", async p => { ai.cancel_ai_authorization(stringParam(p, "operationId")); return null; });
     this.register("select_ai_provider", async p => { await ai.select_ai_provider(providerParam(p), stringParam(p, "model")); return state(); }); this.register("add_ai_api_key", async p => { await ai.add_ai_api_key(providerParam(p), stringParam(p, "label"), stringParam(p, "apiKey")); return state(); }); this.register("remove_ai_api_key", async p => { await ai.remove_ai_api_key(providerParam(p), stringParam(p, "credentialId")); return state(); }); this.register("remove_ai_provider_account", async p => { await ai.remove_ai_provider_account(providerParam(p), stringParam(p, "accountId")); return state(); });
     this.register("update_ai_credential", async p => { await ai.update_ai_credential(providerParam(p), stringParam(p, "credentialId"), boolParam(p, "enabled"), numberParam(p, "weight")); return state(); }); this.register("update_ai_provider", async p => { await ai.update_ai_provider(providerParam(p), boolParam(p, "oauthEnabled")); return state(); }); this.register("update_ai_provider_strategy", async p => { await ai.update_ai_provider_strategy(providerParam(p), enumParam(p, "strategy", ["round-robin", "weighted-round-robin", "failover"]) as AiLoadStrategy); return state(); });
-    this.register("list_conversations", async () => ai.list_conversations()); this.register("new_conversation", async () => ai.new_conversation()); this.register("open_conversation", async p => ai.open_conversation(stringParam(p, "id"))); this.register("send_message", async p => ai.send_message(stringParam(p, "conversationId"), stringParam(p, "input"), { effort: desktop.agentEffort() }));
+    this.register("list_conversations", async () => ai.list_conversations()); this.register("new_conversation", async () => ai.new_conversation()); this.register("open_conversation", async p => ai.open_conversation(stringParam(p, "id"))); this.register("send_message", async p => ai.send_message(stringParam(p, "conversationId"), stringParam(p, "input"), { effort: desktop.agentEffort(), runId: stringParam(p, "runId") }));
     this.register("cancel_agent_run", async p => { await ai.cancel_agent_run(stringParam(p, "conversationId")); return null; });
     this.register("agent_budgets", async () => ai.agent_budgets());
     this.register("set_agent_effort", async p => desktop.update({ agentEffort: enumParam(p, "effort", AGENT_EFFORT_LEVELS) as AgentEffortLevel }));

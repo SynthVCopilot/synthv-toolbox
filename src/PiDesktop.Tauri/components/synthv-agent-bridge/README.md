@@ -169,6 +169,13 @@ Codex / Claude Code / another local stdio MCP host
 
 File IPC is deliberately used for the first version because it works within SynthV's documented Lua environment and is easy to inspect and recover. See [docs/architecture.md](docs/architecture.md).
 
+`src/bridge-core.ts` builds the six public tools once and hands them to
+either front end: `src/server.ts` wraps them in an MCP `Server`/
+`StdioServerTransport` pair, and `src/embedded.ts` (bundled to
+`dist/src/embedded.js`) exposes the same tools, JSON Schemas, and a
+`classify()` risk/category call for an in-process host such as the desktop
+app, with no MCP transport in between.
+
 Local score inspection is the bounded exception to the Node server's
 project-data pass-through role: it reads only an explicitly supplied absolute
 MusicXML/MIDI path. Inspection stays in Node; an approved import sends converted

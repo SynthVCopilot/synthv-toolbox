@@ -382,6 +382,35 @@ The v3 runtime uses these seams:
 - The dormant Snapshot cache remains an optional component rather than an
   active runtime seam.
 
+## Embedded front end
+
+`src/bridge-core.ts` builds the six public tools once, independent of any
+transport: `createBridgeCore(config, { clientLabel })` owns the
+`FileIpcClient`, `GuardTokenStore`, `SidebarStatusMonitor`, and
+`WriterLedger`, and registers the v3 facade into a plain
+`publicTools` array instead of an `McpServer`.
+
+- `src/server.ts` wraps `createBridgeCore` with a real `McpServer` and a
+  `StdioServerTransport`, deriving `clientLabel` from the connected MCP
+  client's own name.
+- `src/embedded.ts` wraps the same core for an in-process caller (the
+  Electron host): each public tool's JSON Schema is derived with the MCP
+  SDK's `toJsonSchemaCompat`, so it is byte-for-byte the schema an external
+  MCP client would see, and `call(input)` re-validates through the same zod
+  shape (`z.object(shape).safeParse`) because in-process callers do not fill
+  zod defaults the way `pi-ai`'s argument validator does for a real MCP
+  round trip.
+- `classify(name, input)` reports `{ category, risk }` for the Electron
+  approval gate: `category` mirrors the read/uiChange/projectWrite/
+  executorControl table already used by external MCP tooling; `risk` is
+  derived only from `v3-command-policy.ts` (delete/transaction categories,
+  `sharedGroupPolicy: "allowAllReferences"`, and `sv_status` `reload`), never
+  from a name list, so a newly added destructive action is classified
+  automatically or the catalog policy test fails first.
+- `src/embedded.ts` is bundled by `scripts/bundle.mjs` into a self-contained
+  `dist/src/embedded.js` with zod and the MCP SDK inlined, so the Electron
+  host loads it with a bare dynamic `import()` and no extra dependency.
+
 ## Delivery and acceptance
 
 Implementation history, rollback rules, and release gates are in

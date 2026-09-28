@@ -15,6 +15,7 @@ export interface BridgePaths {
   readonly reloadFile: string;
   readonly installFile: string;
   readonly lockFile: string;
+  readonly writerFile: string;
   readonly sessionFile: string;
   readonly sidebarClientStatusFile: string;
   readonly sidebarRuntimeStatusFile: string;
@@ -102,6 +103,7 @@ export function loadConfig(
       reloadFile: `${prefix}.reload`,
       installFile: `${prefix}.install.json`,
       lockFile: `${prefix}.lock`,
+      writerFile: `${prefix}.writer.json`,
       sessionFile: `${prefix}.session.json`,
       sidebarClientStatusFile: `${prefix}.sidebar.client-status.txt`,
       sidebarRuntimeStatusFile: `${prefix}.sidebar.runtime-status.txt`,

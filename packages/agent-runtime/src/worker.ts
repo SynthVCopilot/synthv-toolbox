@@ -108,7 +108,13 @@ async function readPluginState(root: string): Promise<{ enabled: boolean }> {
 export async function runStdioWorker(): Promise<void> {
   const hostTransport = new StdioHostTransport((line) => stdout.write(line));
   const pluginDiscovery = new FilePluginDiscovery(hostTransport);
-  const worker = new AgentRuntimeWorker(createPiSessionFactory(() => pluginDiscovery.extensionPaths()), hostTransport, pluginDiscovery);
+  // No SynthV tools here: the stdio runtime has no approval channel, so createPiSessionFactory gets no extensions.
+  const worker = new AgentRuntimeWorker(
+    createPiSessionFactory({ extensionPaths: () => pluginDiscovery.extensionPaths() }),
+    hostTransport,
+    pluginDiscovery,
+    (notification) => stdout.write(encodeJsonl(notification)),
+  );
   const lines = createInterface({ input: stdin, crlfDelay: Infinity });
   let queue = Promise.resolve();
   let shuttingDown = false;

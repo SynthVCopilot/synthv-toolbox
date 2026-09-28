@@ -1,7 +1,3 @@
-import type {
-  McpServer,
-  RegisteredTool,
-} from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
@@ -25,12 +21,16 @@ import {
 import {
   registerV3InternalAdapters,
   type ActionToolDefinitions,
+  type RegisterTool,
   V3_INTERNAL_ADAPTER_NAMES,
 } from "./v3-surface.js";
 import { commandPolicyFor } from "./v3-command-policy.js";
+import type { WriterLedger } from "./writer-ledger.js";
 
 type JsonRecord = Record<string, unknown>;
-type RegisterTool = McpServer["registerTool"];
+
+export const V3_FACADE_INSTRUCTIONS =
+  "Use sv_describe for unfamiliar capabilities. Query only the intended target with contextMode=writeIntent before sv_command. Indices are 1-based. Guards remain private, shared Group content fails closed, and one logical command uses one SynthV Undo boundary. sv_review reports the optional Sidebar runtime status.";
 
 interface CollectedTool {
   readonly config: unknown;
@@ -182,7 +182,8 @@ function failurePhaseForCode(
     }
     if (
       (details as JsonRecord).undoRequired === true ||
-      (details as JsonRecord).partialWritePossible === true
+      (details as JsonRecord).partialWritePossible === true ||
+      (code === "BRIDGE_TIMEOUT" && (details as JsonRecord).claimed === true)
     ) {
       return "mutated";
     }
@@ -287,14 +288,21 @@ function collectV3Internals(
   getSessionToken?: () => Promise<string | undefined>,
 ): ReadonlyMap<string, CollectedTool> {
   const tools = new Map<string, CollectedTool>();
-  const collect = ((
+  const collect: RegisterTool = <Shape extends z.ZodRawShape | z.ZodType>(
     name: string,
-    config: unknown,
-    handler: CollectedTool["handler"],
-  ): RegisteredTool => {
-    tools.set(name, { config, handler });
-    return {} as RegisteredTool;
-  }) as RegisterTool;
+    config: {
+      readonly title: string;
+      readonly description: string;
+      readonly inputSchema: Shape;
+      readonly annotations?: unknown;
+    },
+    handler: (input: any) => CallToolResult | Promise<CallToolResult>,
+  ): void => {
+    tools.set(name, {
+      config,
+      handler: handler as CollectedTool["handler"],
+    });
+  };
   registerV3InternalAdapters(
     collect,
     definitions,
@@ -308,11 +316,16 @@ export function registerV3Facade(
   registerTool: RegisterTool,
   definitions: ActionToolDefinitions,
   guardTokens: GuardTokenStore,
-  getSessionToken?: () => Promise<string | undefined>,
-  getSidebarBuildIdentity: () => Promise<SidebarBuildIdentity> = async () => ({
-    state: "absent",
-  }),
+  deps: {
+    readonly getSessionToken?: () => Promise<string | undefined>;
+    readonly getSidebarBuildIdentity?: () => Promise<SidebarBuildIdentity>;
+    readonly writerLedger: WriterLedger;
+  },
 ): void {
+  const getSessionToken = deps.getSessionToken;
+  const getSidebarBuildIdentity =
+    deps.getSidebarBuildIdentity ?? (async () => ({ state: "absent" as const }));
+  const writerLedger = deps.writerLedger;
   const internals = collectV3Internals(
     definitions,
     guardTokens,
@@ -367,14 +380,17 @@ export function registerV3Facade(
           input,
           "freshRead",
         );
-        return result.isError
-          ? result
-          : jsonResult(
-              withBuildIdentity(
-                readJsonResult(result),
-                await getSidebarBuildIdentity(),
-              ),
-            );
+        if (result.isError) {
+          return result;
+        }
+        const root = asRecord(readJsonResult(result), "status result");
+        const withWriters =
+          input.operation === "bridge"
+            ? { ...root, writers: await writerLedger.status() }
+            : root;
+        return jsonResult(
+          withBuildIdentity(withWriters, await getSidebarBuildIdentity()),
+        );
       }),
   );
 
@@ -530,6 +546,9 @@ export function registerV3Facade(
               ) as V3CommandDispatchResult;
             },
           });
+          if (outcome.outcome === "changed") {
+            await writerLedger.record(input.action);
+          }
           return jsonResult(outcome);
         } catch (error) {
           if (error instanceof CollectedCommandFailure) {
@@ -566,9 +585,13 @@ export function registerV3Facade(
           input,
           "verified",
         );
-        return result.isError
-          ? result
-          : jsonResult(withTraceId(readJsonResult(result)));
+        if (result.isError) {
+          return result;
+        }
+        if (definitions.get(input.action)?.annotations?.readOnlyHint !== true) {
+          await writerLedger.record(input.action);
+        }
+        return jsonResult(withTraceId(readJsonResult(result)));
       }),
   );
 

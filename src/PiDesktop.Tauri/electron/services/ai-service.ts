@@ -34,6 +34,10 @@ export interface AgentRuntimePort {
   request(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>>;
 }
 
+export interface AgentApprovalCancellationPort {
+  cancelConversation(conversationId: string): void;
+}
+
 export interface ProviderCatalogPort {
   models(provider: AiProviderId, force: boolean): Promise<string[]>;
   opencode(force: boolean): Promise<Record<string, unknown>>;
@@ -110,6 +114,7 @@ export interface AiServiceOptions {
   safeStorage: SafeStoragePort;
   runtime: AgentRuntimePort;
   catalog: ProviderCatalogPort;
+  approvals: AgentApprovalCancellationPort;
   usage?: ProviderUsagePort;
   authorizer?: ProviderAuthorizer;
   files?: MetadataFilePort;
@@ -160,12 +165,19 @@ export function agentRuntimePort(worker: Pick<AgentRuntimeWorker, "handleJsonl">
   };
 }
 
+interface ActiveRun {
+  runId: string;
+  cancelRequested: boolean;
+  sendIssued: boolean;
+}
+
 /** Stores encrypted credential material locally and delegates model requests to the shared Agent Runtime. */
 export class AiService {
   private readonly files: MetadataFilePort;
   private readonly now: () => Date;
   private readonly id: () => string;
   private readonly operations = new Map<string, AbortController>();
+  private readonly activeRuns = new Map<string, ActiveRun>();
   private metadata?: AiServiceMetadata;
 
   constructor(private readonly options: AiServiceOptions) {
@@ -379,35 +391,58 @@ export class AiService {
     return cloneConversation(conversation);
   }
 
-  async send_message(conversationId: string, input: string, options: { cwd?: string; effort?: AgentEffortLevel } = {}): Promise<ConversationMessage[]> {
+  async send_message(conversationId: string, input: string, options: { cwd?: string; effort?: AgentEffortLevel; runId?: string } = {}): Promise<ConversationMessage[]> {
     const text = input.trim();
     if (!text) throw new Error("Message is required.");
     if (text.length > 32_000) throw new Error("Message exceeds the 32,000 character limit.");
-    const metadata = await this.load();
-    const conversation = metadata.conversations.find((item) => item.id === conversationId);
-    if (!conversation) throw new Error("Conversation was not found.");
+    if (this.activeRuns.has(conversationId)) throw new Error("A run is already in progress.");
     const effort = options.effort ?? DEFAULT_AGENT_EFFORT;
-    const seedOutcome = latestOutcome(conversation);
-    await this.options.runtime.request("session.initialize", { sessionId: conversation.id, ...(options.cwd ? { cwd: options.cwd } : {}), ...(seedOutcome ? { outcome: seedOutcome } : {}) });
+    const active: ActiveRun = { runId: options.runId ?? this.id(), cancelRequested: false, sendIssued: false };
+    this.activeRuns.set(conversationId, active);
+    try {
+      const metadata = await this.load();
+      const conversation = metadata.conversations.find((item) => item.id === conversationId);
+      if (!conversation) throw new Error("Conversation was not found.");
+      const seedOutcome = latestOutcome(conversation);
+      await this.options.runtime.request("session.initialize", { sessionId: conversation.id, ...(options.cwd ? { cwd: options.cwd } : {}), ...(seedOutcome ? { outcome: seedOutcome } : {}) });
+      const { assistant, outcome } = active.cancelRequested
+        ? { assistant: "", outcome: cancelledOutcome(effort, this.agentUsageSamples()) }
+        : await this.runSend(conversation.id, text, effort, active);
+      const now = this.now().toISOString();
+      const messages: ConversationMessage[] = [
+        { role: "user", content: text, createdAt: now },
+        { role: "assistant", content: assistant, createdAt: now, outcome },
+      ];
+      conversation.messages.push(...messages);
+      conversation.updatedAt = now;
+      if (conversation.title === "New conversation") conversation.title = text.slice(0, 28);
+      await this.persist();
+      return messages.map((message) => ({ ...message }));
+    } finally {
+      this.activeRuns.delete(conversationId);
+    }
+  }
+
+  private async runSend(sessionId: string, text: string, effort: AgentEffortLevel, active: ActiveRun): Promise<{ assistant: string; outcome: AgentRunOutcome }> {
+    active.sendIssued = true;
     const budget = estimateAgentRunBudget(effort, this.agentUsageSamples());
-    const response = await this.options.runtime.request("session.send", { sessionId: conversation.id, input: text, budget });
+    const response = await this.options.runtime.request("session.send", { sessionId, input: text, runId: active.runId, budget });
     const outcome = validateAgentRunOutcome(response.outcome);
     if (!outcome) throw new Error("Agent Runtime returned an invalid run outcome.");
     const assistant = (typeof response.message === "string" ? response.message.trim() : "") || outcome.summary;
-    const now = this.now().toISOString();
-    const messages: ConversationMessage[] = [
-      { role: "user", content: text, createdAt: now },
-      { role: "assistant", content: assistant, createdAt: now, outcome },
-    ];
-    conversation.messages.push(...messages);
-    conversation.updatedAt = now;
-    if (conversation.title === "New conversation") conversation.title = text.slice(0, 28);
-    await this.persist();
-    return messages.map((message) => ({ ...message }));
+    return { assistant, outcome };
   }
 
   async cancel_agent_run(conversationId: string): Promise<void> {
+    const active = this.activeRuns.get(conversationId);
+    if (active && !active.sendIssued) {
+      active.cancelRequested = true;
+      this.options.approvals.cancelConversation(conversationId);
+      return;
+    }
+    // Cancel the run first so deliver() sees runState().active === false and queues rather than steers.
     await this.options.runtime.request("session.cancel", { sessionId: conversationId });
+    this.options.approvals.cancelConversation(conversationId);
   }
 
   agentUsageSamples(): AgentUsageSample[] {
@@ -511,6 +546,11 @@ function parseMetadata(raw: string): AiServiceMetadata {
     }
   }
   return value as AiServiceMetadata;
+}
+
+function cancelledOutcome(effort: AgentEffortLevel, samples: AgentUsageSample[]): AgentRunOutcome {
+  const budget = estimateAgentRunBudget(effort, samples);
+  return { status: "cancelled", summary: "", evidence: [], missing: [], plan: null, budget: { ...budget, turns: 0, tokens: 0 } };
 }
 
 function latestOutcome(conversation: ConversationSnapshot): AgentRunOutcome | undefined {

@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import http from "node:http";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createMockAnthropicServer, messageText, systemText } from "./fixtures/mock-anthropic-server.mjs";
+import { startFakeHost } from "./fixtures/synthv-fake-host.mjs";
 
 // Drives the real @earendil-works/pi-coding-agent SDK through the full Electron host chain
 // (ElectronRuntimeHost -> AgentRuntimeWorker -> createPiSessionFactory -> Pi) against a scripted
@@ -34,125 +35,6 @@ const { estimateAgentRunBudget } = await import(runtimeProtocolUrl);
 const MODEL_ID = ["cla", "ude-haiku-4-5"].join("");
 const PROVIDER_ID = "anthropic";
 const TEST_API_KEY = "test-api-key";
-
-// ---------------------------------------------------------------------------
-// Scripted Anthropic Messages API server
-// ---------------------------------------------------------------------------
-
-function sendSse(res, event, data) {
-  res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-}
-
-function writeNormalTurn(res, turn) {
-  const usage = turn.usage ?? { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 };
-  res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
-  sendSse(res, "message_start", {
-    type: "message_start",
-    message: {
-      id: `msg_${Math.random().toString(36).slice(2)}`,
-      type: "message",
-      role: "assistant",
-      model: MODEL_ID,
-      content: [],
-      stop_reason: null,
-      stop_sequence: null,
-      usage: { input_tokens: usage.input, output_tokens: 0, cache_creation_input_tokens: usage.cacheWrite ?? 0, cache_read_input_tokens: usage.cacheRead ?? 0 },
-    },
-  });
-  turn.content.forEach((block, index) => {
-    if (block.type === "text") {
-      sendSse(res, "content_block_start", { type: "content_block_start", index, content_block: { type: "text", text: "" } });
-      sendSse(res, "content_block_delta", { type: "content_block_delta", index, delta: { type: "text_delta", text: block.text } });
-      sendSse(res, "content_block_stop", { type: "content_block_stop", index });
-    } else if (block.type === "tool_use") {
-      sendSse(res, "content_block_start", { type: "content_block_start", index, content_block: { type: "tool_use", id: block.id, name: block.name, input: {} } });
-      sendSse(res, "content_block_delta", { type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: JSON.stringify(block.input) } });
-      sendSse(res, "content_block_stop", { type: "content_block_stop", index });
-    }
-  });
-  sendSse(res, "message_delta", { type: "message_delta", delta: { stop_reason: turn.stopReason, stop_sequence: null }, usage: { output_tokens: usage.output } });
-  sendSse(res, "message_stop", { type: "message_stop" });
-  res.end();
-}
-
-function writeSlowTurn(res, turn) {
-  res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
-  sendSse(res, "message_start", {
-    type: "message_start",
-    message: { id: "msg_slow", type: "message", role: "assistant", model: MODEL_ID, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } },
-  });
-  sendSse(res, "content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
-  sendSse(res, "content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Working on it" } });
-  turn.onStarted?.();
-  const timer = setTimeout(() => {
-    // Only reached if the caller failed to cancel in time; finish the turn so the test does not hang.
-    try {
-      sendSse(res, "content_block_stop", { type: "content_block_stop", index: 0 });
-      sendSse(res, "message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 5 } });
-      sendSse(res, "message_stop", { type: "message_stop" });
-      res.end();
-    } catch { /* connection already gone */ }
-  }, 5000);
-  res.on("close", () => clearTimeout(timer));
-}
-
-function messageText(message) {
-  if (typeof message?.content === "string") return message.content;
-  if (!Array.isArray(message?.content)) return "";
-  return message.content.filter((block) => block?.type === "text").map((block) => block.text).join("");
-}
-
-function systemText(system) {
-  if (typeof system === "string") return system;
-  if (!Array.isArray(system)) return "";
-  return system.filter((block) => block?.type === "text").map((block) => block.text).join("");
-}
-
-function createMockAnthropicServer() {
-  const requests = [];
-  let queue = [];
-  const server = http.createServer((req, res) => {
-    const chunks = [];
-    req.on("data", (chunk) => chunks.push(chunk));
-    req.on("end", () => {
-      let body = null;
-      try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { /* leave null */ }
-      const headers = { ...req.headers };
-      const apiKey = headers["x-api-key"];
-      delete headers["x-api-key"];
-      delete headers.authorization;
-      requests.push({ path: req.url, system: body?.system, tools: body?.tools, messages: body?.messages, model: body?.model, apiKey, headers });
-      const turn = queue.shift();
-      if (!turn) {
-        res.writeHead(500, { "content-type": "application/json" });
-        res.end(JSON.stringify({ type: "error", error: { type: "overloaded_error", message: "No scripted turn was queued for this request." } }));
-        return;
-      }
-      if (turn.kind === "error") {
-        res.writeHead(turn.status, { "content-type": "application/json" });
-        res.end(JSON.stringify({ type: "error", error: { type: turn.errorType ?? "authentication_error", message: turn.message } }));
-        return;
-      }
-      if (turn.kind === "slow") writeSlowTurn(res, turn);
-      else writeNormalTurn(res, turn);
-    });
-  });
-  return {
-    requests,
-    push(turn) { queue.push(turn); },
-    reset() { queue = []; requests.length = 0; },
-    async listen() {
-      await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-      return server.address().port;
-    },
-    async close() {
-      server.closeAllConnections();
-      await new Promise((resolve) => server.close(resolve));
-    },
-  };
-}
-
-// ---------------------------------------------------------------------------
 
 test("Real Pi SDK drives the full Electron host chain against a scripted local model", async (t) => {
   const savedEnv = { PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR, HOME: process.env.HOME, PI_OFFLINE: process.env.PI_OFFLINE, PI_SKIP_VERSION_CHECK: process.env.PI_SKIP_VERSION_CHECK, ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY };
@@ -215,7 +97,7 @@ test("Real Pi SDK drives the full Electron host chain against a scripted local m
     join(tempRoot, "runtime"),
     { invoke: () => { throw new Error("Plugin capabilities are not used in this e2e test."); }, resolveModel: () => ai.resolveModelSelection() },
   );
-  ai = new AiService({ metadataPath, safeStorage, runtime: agentRuntimePort(runtimeHost.runtime), catalog, id: () => `id-${Math.random().toString(36).slice(2)}` });
+  ai = new AiService({ metadataPath, safeStorage, runtime: agentRuntimePort(runtimeHost.runtime), catalog, approvals: { cancelConversation() {} }, id: () => `id-${Math.random().toString(36).slice(2)}` });
 
   await ai.add_ai_api_key(PROVIDER_ID, "Test key", TEST_API_KEY, [MODEL_ID]);
   await ai.select_ai_provider(PROVIDER_ID, MODEL_ID);
@@ -229,6 +111,22 @@ test("Real Pi SDK drives the full Electron host chain against a scripted local m
 
   function toolNames(request) {
     return (request.tools ?? []).map((tool) => tool.name).sort();
+  }
+
+  // Anthropic tool_result blocks live in a later request's `messages`, keyed by the tool_use id the
+  // model saw; this is the actual content returned to the model, as opposed to the outcome we observe
+  // from the host side.
+  function toolResultFor(messages, toolUseId) {
+    for (const message of messages ?? []) {
+      if (!Array.isArray(message.content)) continue;
+      for (const block of message.content) {
+        if (block?.type !== "tool_result" || block.tool_use_id !== toolUseId) continue;
+        if (typeof block.content === "string") return block.content;
+        if (Array.isArray(block.content)) return block.content.map((piece) => piece?.text ?? "").join("");
+        return JSON.stringify(block.content);
+      }
+    }
+    return undefined;
   }
 
   await t.test("update_plan then complete_task with evidence completes the run", async () => {
@@ -309,7 +207,7 @@ test("Real Pi SDK drives the full Electron host chain against a scripted local m
       join(tempRoot, "runtime"),
       { invoke: () => { throw new Error("Plugin capabilities are not used in this e2e test."); }, resolveModel: () => ai2.resolveModelSelection() },
     );
-    ai2 = new AiService({ metadataPath, safeStorage, runtime: agentRuntimePort(runtimeHost2.runtime), catalog, id: () => `id-${Math.random().toString(36).slice(2)}` });
+    ai2 = new AiService({ metadataPath, safeStorage, runtime: agentRuntimePort(runtimeHost2.runtime), catalog, approvals: { cancelConversation() {} }, id: () => `id-${Math.random().toString(36).slice(2)}` });
 
     mock.reset();
     mock.push({ content: [{ type: "tool_use", id: "toolu_7", name: "complete_task", input: { summary: "Imported the file.", evidence: ["Imported the provided file."] } }], stopReason: "tool_use", usage: { input: 50, output: 10, cacheWrite: 0 } });
@@ -379,5 +277,166 @@ test("Real Pi SDK drives the full Electron host chain against a scripted local m
     const reopened = await reopenFresh(conversation.id);
     assert.equal(reopened.messages.length, 2, "a cancelled outcome is persisted like any other outcome, read from a fresh AiService");
     assert.equal(reopened.messages[1].outcome.status, "cancelled", "the cancelled outcome round-trips through metadata.json");
+  });
+
+  await t.test("SynthV Edit-mode approvals: submit -> approval_pending -> decide -> executed resolution delivered; Stop cancels a pending approval; BRIDGE_NOT_CONNECTED yields needs_input", async (st) => {
+    const { createPiSessionFactory } = await import(agentRuntimeUrl);
+    const { createSynthVToolsExtension, createSynthVDeliveryRegistry } = await loadElectronModule("electron/services/synthv-agent-tools.ts");
+    const { AgentApprovalBroker } = await loadElectronModule("electron/services/agent-approvals.ts");
+    const bridgeComponentDir = join(tauriRoot, "components/synthv-agent-bridge");
+    const { loadConfig } = await import(pathToFileURL(join(bridgeComponentDir, "dist/src/config.js")).href);
+    const { createEmbeddedBridge } = await import(pathToFileURL(join(bridgeComponentDir, "dist/src/embedded.js")).href);
+
+    async function waitUntil(predicate, timeoutMs = 5000) {
+      const deadline = Date.now() + timeoutMs;
+      while (!predicate()) {
+        if (Date.now() > deadline) throw new Error("waitUntil timed out");
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    }
+
+    // A fresh host + AiService wired with the real SynthV tools extension, over the same persisted
+    // provider/model selection as the outer `ai`, against either a running or a disconnected fake bridge host.
+    async function withSynthVSession(connected, run) {
+      const ipcDirectory = await mkdtemp(join(tmpdir(), "agent-e2e-bridge-"));
+      const config = loadConfig({
+        SYNTHV_AGENT_BRIDGE_DIR: ipcDirectory,
+        SYNTHV_AGENT_BRIDGE_TIMEOUT_MS: "2000",
+        SYNTHV_AGENT_BRIDGE_POLL_MS: "5",
+        SYNTHV_AGENT_BRIDGE_STALE_REQUEST_MS: "3000",
+        SYNTHV_AGENT_BRIDGE_STATUS_STALE_MS: "5000",
+      }, ipcDirectory);
+      const bridge = createEmbeddedBridge({ config, clientLabel: "agent-e2e" });
+      const receivedActions = [];
+      const host = connected ? await startFakeHost({ ipcDirectory, handler: async (action) => { receivedActions.push(action); return { reloaded: true }; } }) : undefined;
+      const registry = createSynthVDeliveryRegistry();
+      const approvals = new AgentApprovalBroker(
+        () => {},
+        { execute: async (item) => bridge.tools.find((tool) => tool.name === item.tool).call(item.params), deliver: (resolution) => registry.deliver(resolution) },
+      );
+      let synthVAi;
+      const synthVRuntimeHost = new ElectronRuntimeHost(
+        join(tempRoot, `runtime-synthv-${Math.random().toString(36).slice(2)}`),
+        { invoke: () => { throw new Error("Plugin capabilities are not used in this e2e test."); }, resolveModel: () => synthVAi.resolveModelSelection() },
+        {
+          sessionFactory: createPiSessionFactory({
+            extensions: ({ sessionId, guards, runState }) => [createSynthVToolsExtension({ bridge, approvals, workMode: () => "edit", sessionId, guards, runState, registry })],
+          }),
+        },
+      );
+      synthVAi = new AiService({ metadataPath, safeStorage, runtime: agentRuntimePort(synthVRuntimeHost.runtime), catalog, approvals, id: () => `id-${Math.random().toString(36).slice(2)}` });
+      try {
+        await run({ ai: synthVAi, approvals, receivedActions });
+      } finally {
+        await synthVRuntimeHost.runtime.dispose();
+        await host?.stop();
+        await bridge.close();
+        await rm(ipcDirectory, { recursive: true, force: true });
+      }
+    }
+
+    await st.test("decide(approve) resolves the gated call, and sv_await_approval delivers the executed resolution", async () => {
+      await withSynthVSession(true, async ({ ai: synthVAi, approvals, receivedActions }) => {
+        mock.reset();
+        const conversation = await synthVAi.new_conversation();
+        mock.push({ content: [{ type: "tool_use", id: "toolu_sv_0", name: "update_plan", input: { goal: "Reload the SynthV bridge", doneCriteria: ["Bridge reloaded"], todos: [{ id: "t1", title: "Reload the bridge", status: "in_progress" }] } }], stopReason: "tool_use", usage: { input: 90, output: 20, cacheWrite: 0 } });
+        mock.push({ content: [{ type: "tool_use", id: "toolu_sv_1", name: "sv_status", input: { operation: "reload" } }], stopReason: "tool_use", usage: { input: 100, output: 20, cacheWrite: 0 } });
+        mock.push({ content: [{ type: "tool_use", id: "toolu_sv_2", name: "sv_await_approval", input: {} }], stopReason: "tool_use", usage: { input: 120, output: 20, cacheWrite: 0 } });
+        mock.push({ content: [{ type: "text", text: "Reloaded." }, { type: "tool_use", id: "toolu_sv_3", name: "complete_task", input: { summary: "Reloaded the bridge.", evidence: ["The gated reload was approved and executed."] } }], stopReason: "tool_use", usage: { input: 140, output: 20, cacheWrite: 0 } });
+
+        const sendPromise = synthVAi.send_message(conversation.id, "Reload the bridge.", { cwd, effort: "mid" });
+        await waitUntil(() => approvals.list().length === 1);
+        const [approval] = approvals.list();
+        assert.equal(approval.category, "executorControl");
+        assert.equal(approval.risk, "high");
+        approvals.decide(approval.id, true);
+
+        const messages = await sendPromise;
+        assert.equal(mock.requests.length, 4, "update_plan, the gated call, sv_await_approval, then complete_task");
+        assert.equal(messages[1].outcome.status, "completed");
+        assert.deepEqual(receivedActions, ["reload_bridge"], "exactly one reload reached the fake host, after approval");
+
+        const finalRequest = mock.requests.at(-1);
+        const awaitResult = toolResultFor(finalRequest.messages, "toolu_sv_2");
+        assert.ok(awaitResult, "the model's history carries a tool_result for the sv_await_approval call");
+        assert.match(awaitResult, /"outcome":"executed"/, "sv_await_approval's tool result carries the executed resolution");
+        assert.match(awaitResult, /"ok":true/);
+      });
+    });
+
+    await st.test("Stop while an approval is pending resolves it as cancelled and ends the run cancelled, with no write reaching the host", async () => {
+      await withSynthVSession(true, async ({ ai: synthVAi, approvals, receivedActions }) => {
+        mock.reset();
+        const conversation = await synthVAi.new_conversation();
+        mock.push({ content: [{ type: "tool_use", id: "toolu_sv_4", name: "sv_status", input: { operation: "reload" } }], stopReason: "tool_use", usage: { input: 100, output: 20, cacheWrite: 0 } });
+        mock.push({ content: [{ type: "tool_use", id: "toolu_sv_5", name: "sv_await_approval", input: {} }], stopReason: "tool_use", usage: { input: 120, output: 20, cacheWrite: 0 } });
+
+        const sendPromise = synthVAi.send_message(conversation.id, "Reload the bridge.", { cwd, effort: "mid" });
+        await waitUntil(() => approvals.list().length === 1);
+        const [approval] = approvals.list();
+        // A second live waiter here reliably avoids a race where the tool's own wait() would otherwise
+        // settle before Pi's abort() propagates, sending the run into an unplanned extra round.
+        const resolutionPromise = approvals.wait(approval.id, conversation.id);
+        await synthVAi.cancel_agent_run(conversation.id);
+
+        const resolution = await resolutionPromise;
+        assert.equal(resolution.outcome, "cancelled");
+        assert.deepEqual(approvals.list(), [], "the pending approval no longer sits in the pending list once Stop cancels it");
+        assert.deepEqual(receivedActions, [], "no write request reached the host: Stop cancelled the approval before it executed");
+
+        // Stop must resolve the pending approval as cancelled regardless of how the underlying Pi
+        // session's own abort surfaces on send_message (a graceful cancelled outcome, or a rejection
+        // from the in-flight provider call the abort tore down).
+        await sendPromise.then(
+          (messages) => assert.equal(messages[1].outcome.status, "cancelled", "Stop while an approval is pending cancels the whole run"),
+          () => {}, // the abort itself may reject send_message; the approval-cancellation and no-write assertions above are what this test verifies
+        );
+      });
+    });
+
+    await st.test("Stop during a slow turn cancels the pending approval without steering it into an unplanned continuation turn", async () => {
+      await withSynthVSession(true, async ({ ai: synthVAi, approvals, receivedActions }) => {
+        mock.reset();
+        const conversation = await synthVAi.new_conversation();
+        mock.push({ content: [{ type: "tool_use", id: "toolu_stop_1", name: "sv_status", input: { operation: "reload" } }], stopReason: "tool_use", usage: { input: 100, output: 20, cacheWrite: 0 } });
+        let started;
+        const startedPromise = new Promise((resolve) => { started = resolve; });
+        mock.push({ kind: "slow", onStarted: () => started() });
+        // Only reached if a bug steers the cancelled approval into an unplanned continuation turn.
+        mock.push({ content: [{ type: "tool_use", id: "toolu_stop_3", name: "sv_ui", input: { action: "set_selection", operation: "clear", kind: "all" } }], stopReason: "tool_use", usage: { input: 130, output: 20, cacheWrite: 0 } });
+
+        const sendPromise = synthVAi.send_message(conversation.id, "Reload then clear the selection.", { cwd, effort: "mid" });
+        await waitUntil(() => approvals.list().length === 1);
+        await startedPromise;
+        await synthVAi.cancel_agent_run(conversation.id);
+
+        await sendPromise.then(
+          (messages) => assert.equal(messages[1].outcome.status, "cancelled", "Stop during the slow turn cancels the whole run"),
+          () => {}, // the abort itself may reject send_message; the assertions below are what this test verifies
+        );
+
+        assert.equal(mock.requests.length, 2, "no unplanned continuation turn is started after Stop");
+        assert.deepEqual(receivedActions, [], "the cancelled resolution never reaches the host through a steered continuation");
+        assert.deepEqual(approvals.list(), [], "Stop resolves the pending approval instead of leaving it pending");
+      });
+    });
+
+    await st.test("a disconnected bridge fails the gated call fast, and the model's request_input yields needs_input", async () => {
+      await withSynthVSession(false, async ({ ai: synthVAi, approvals }) => {
+        mock.reset();
+        const conversation = await synthVAi.new_conversation();
+        mock.push({ content: [{ type: "tool_use", id: "toolu_sv_6", name: "sv_status", input: { operation: "reload" } }], stopReason: "tool_use", usage: { input: 100, output: 20, cacheWrite: 0 } });
+        mock.push({ content: [{ type: "tool_use", id: "toolu_sv_7", name: "request_input", input: { question: "SynthV Agent Bridge is not connected. Should I keep waiting or would you like to start it?", missing: ["bridge connection"] } }], stopReason: "tool_use", usage: { input: 120, output: 20, cacheWrite: 0 } });
+
+        const messages = await synthVAi.send_message(conversation.id, "Reload the bridge.", { cwd, effort: "mid" });
+        assert.equal(mock.requests.length, 2, "the failed gated call, then request_input");
+        assert.equal(messages[1].outcome.status, "needs_input");
+        assert.deepEqual(approvals.list(), [], "a disconnected bridge never submits an approval");
+
+        const gatedCallResult = toolResultFor(mock.requests[1].messages, "toolu_sv_6");
+        assert.ok(gatedCallResult, "the model's history carries a tool_result for the gated sv_status call");
+        assert.match(gatedCallResult, /BRIDGE_NOT_CONNECTED/, "the model actually saw BRIDGE_NOT_CONNECTED, not just a needs_input outcome");
+      });
+    });
   });
 });

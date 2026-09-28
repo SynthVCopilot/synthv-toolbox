@@ -39,6 +39,12 @@ export class BridgeUnavailableError extends BridgeError {
   }
 }
 
+export class BridgeNotConnectedError extends BridgeError {
+  public constructor(message: string, details?: unknown) {
+    super(message, "BRIDGE_NOT_CONNECTED", details);
+  }
+}
+
 export interface PublicError {
   readonly code: string;
   readonly message: string;

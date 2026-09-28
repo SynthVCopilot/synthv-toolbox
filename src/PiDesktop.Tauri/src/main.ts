@@ -39,13 +39,18 @@ import "./i18nBridge";
 import "./i18nAi";
 import type {
   AiProviderId,
+  AgentApproval,
+  AgentApprovalResolution,
+  AgentApprovalsSnapshot,
   AgentEffortLevel,
   AgentPlan,
   AgentRunBudget,
   AgentRunOutcome,
+  AgentRunPhase,
+  AgentRunProgress,
   AgentTodo,
+  AgentToolActivity,
   AgentWorkMode,
-  AgentFileApproval,
   AiProviderSummary,
   AiProviderUsageAccount,
   AiProviderUsageWindow,
@@ -155,8 +160,14 @@ let notice = "";
 let error = "";
 let conversations: ConversationSummary[] = [];
 let conversation: ConversationSnapshot | undefined;
-let fileApprovals: AgentFileApproval[] = [];
+let approvalsSnapshot: AgentApprovalsSnapshot = { pending: [], recent: [] };
 let agentRunInFlight = false;
+let agentRunCancelling = false;
+let liveRunId: string | undefined;
+let liveRunLastSeq = 0;
+let liveRun: AgentRunProgress | undefined;
+let patchRafHandle: number | undefined;
+const lastSlotHtml = new Map<string, string>();
 let installedPlugins: InstalledPlugin[] = [];
 let profiles: Sv2ProfilesState | undefined;
 let activeWorkflow: Feature["id"] | undefined;
@@ -1099,23 +1110,9 @@ function render(): void {
   const meta = pageMeta(page);
   const pageHtml = renderPage();
   const pluginPage = isPluginPageId(page) ? pluginRegistry.page(page) : undefined;
-  const noticeHtml = notice ? `<div class="toast success">${icon("check", 18)}<pre>${escapeHtml(notice)}</pre></div>` : "";
-  const errorHtml = error ? `<div class="toast error"><pre>${escapeHtml(error)}</pre></div>` : "";
-  const nextToastSignature = `${notice}\u0000${error}`;
-  if (nextToastSignature !== toastSignature) {
-    toastSignature = nextToastSignature;
-    if (toastDismissTimer !== undefined) window.clearTimeout(toastDismissTimer);
-    if (notice || error) {
-      toastDismissTimer = window.setTimeout(() => {
-        toastDismissTimer = undefined;
-        if (`${notice}\u0000${error}` !== nextToastSignature) return;
-        notice = "";
-        error = "";
-        render();
-      }, 4200);
-    }
-  }
-  const overlayHtml = pendingInstanceTermination ? renderInstanceTerminationDialog() : pendingComponentRemovalId ? renderComponentRemovalDialog() : pendingProfileDeletionId ? renderProfileDeletionDialog() : pendingBlockedSwitchSlot ? renderBlockedSwitchDialog() : pendingConcurrentLaunchSlot ? renderConcurrentDisclaimer() : pendingSvpRoute ? renderSvpRouteDialog() : pendingAccountIndicatorConsent ? renderAccountIndicatorConsent() : pendingOfflineSessionReplacement ? renderOfflineSessionReplacementDialog() : pendingOfflineLicenseSteps ? renderOfflineLicenseSteps() : accountManagerOpen && page === "accounts" ? renderAccountManager() : pendingAudioPlan ? renderAudioPlanDialog() : renderAiModelPicker();
+  scheduleToastDismiss();
+  const { noticeHtml, errorHtml } = toastHtml();
+  const overlayHtml =pendingInstanceTermination ? renderInstanceTerminationDialog() : pendingComponentRemovalId ? renderComponentRemovalDialog() : pendingProfileDeletionId ? renderProfileDeletionDialog() : pendingBlockedSwitchSlot ? renderBlockedSwitchDialog() : pendingConcurrentLaunchSlot ? renderConcurrentDisclaimer() : pendingSvpRoute ? renderSvpRouteDialog() : pendingAccountIndicatorConsent ? renderAccountIndicatorConsent() : pendingOfflineSessionReplacement ? renderOfflineSessionReplacementDialog() : pendingOfflineLicenseSteps ? renderOfflineLicenseSteps() : accountManagerOpen && page === "accounts" ? renderAccountManager() : pendingAudioPlan ? renderAudioPlanDialog() : renderAiModelPicker();
   const nextShellState = {
     page,
     sidebarCollapsed,
@@ -2589,26 +2586,295 @@ function latestAgentPlanMessage(): ChatMessage | undefined {
   return undefined;
 }
 
+const AGENT_TOOL_DISPLAY_NAME_KEYS: Record<string, string> = {
+  sv_command: "copilot.toolNameSvCommand",
+  sv_ui: "copilot.toolNameSvUi",
+  sv_status: "copilot.toolNameSvStatus",
+  sv_query: "copilot.toolNameSvQuery",
+  sv_describe: "copilot.toolNameSvDescribe",
+  sv_review: "copilot.toolNameSvReview",
+};
+
+function agentToolDisplayName(name: string): string {
+  const key = AGENT_TOOL_DISPLAY_NAME_KEYS[name];
+  return key ? t(key) : name;
+}
+
+function agentToolActivityStatusLabel(status: AgentToolActivity["status"]): string {
+  return status === "succeeded" ? t("copilot.toolSucceeded")
+    : status === "failed" ? t("copilot.toolFailed")
+    : status === "awaiting_approval" ? t("copilot.toolAwaitingApproval")
+    : t("copilot.toolRunning");
+}
+
+const AGENT_RUN_PHASE_KEYS: Record<AgentRunPhase, string> = {
+  starting: "copilot.phaseStarting",
+  waiting_model: "copilot.phaseWaitingModel",
+  thinking: "copilot.phaseThinking",
+  writing: "copilot.phaseWriting",
+  running_tools: "copilot.phaseRunningTools",
+  compacting: "copilot.phaseCompacting",
+  retrying: "copilot.phaseRetrying",
+  cancelling: "copilot.phaseCancelling",
+  ended: "copilot.phaseEnded",
+};
+
+function agentRunPhaseLabel(phase: AgentRunPhase): string {
+  return t(AGENT_RUN_PHASE_KEYS[phase]);
+}
+
+function agentApprovalCategoryLabel(category: AgentApproval["category"]): string {
+  return category === "projectWrite" ? t("copilot.categoryProjectWrite")
+    : category === "executorControl" ? t("copilot.categoryExecutorControl")
+    : t("copilot.categoryUiChange");
+}
+
+function agentApprovalRiskLabel(): string {
+  return t("copilot.riskHigh");
+}
+
+function agentApprovalResolutionLabel(resolution: AgentApprovalResolution): string {
+  if (resolution.outcome === "executed") return resolution.ok ? t("copilot.resolutionExecuted") : t("copilot.resolutionExecutedFailed");
+  if (resolution.outcome === "denied") return t("copilot.resolutionDenied");
+  if (resolution.outcome === "expired") return t("copilot.resolutionExpired");
+  return t("copilot.resolutionCancelled");
+}
+
+function renderToolActivity(activity: AgentToolActivity, resolution: AgentApprovalResolution | undefined): string {
+  // A gated call's tool row ends at "awaiting_approval" and never moves on its own; once its approval
+  // resolves, show that outcome on this same row instead of leaving a stale "awaiting approval" status
+  // alongside a second, separate resolution row for the same call.
+  if (resolution) {
+    const succeeded = resolution.outcome === "executed" && resolution.ok;
+    const failedExecution = resolution.outcome === "executed" && !resolution.ok;
+    const summaryHtml = failedExecution && resolution.summary ? `<small>${escapeHtml(approvalFailureSummary(resolution.summary))}</small>` : "";
+    return `<li class="agent-tool-activity agent-approval-resolution agent-tool-activity-${succeeded ? "succeeded" : "failed"}" data-tool-call-id="${escapeHtml(activity.id)}" data-approval-resolution-id="${escapeHtml(resolution.id)}"><span class="agent-tool-activity-marker" aria-hidden="true"></span><span class="agent-tool-activity-body"><strong>${escapeHtml(agentToolDisplayName(activity.name))}</strong><small>${escapeHtml(activity.summary)}</small>${summaryHtml}</span><span class="agent-tool-activity-status">${escapeHtml(agentApprovalResolutionLabel(resolution))}</span></li>`;
+  }
+  return `<li class="agent-tool-activity agent-tool-activity-${activity.status}" data-tool-call-id="${escapeHtml(activity.id)}"><span class="agent-tool-activity-marker" aria-hidden="true"></span><span class="agent-tool-activity-body"><strong>${escapeHtml(agentToolDisplayName(activity.name))}</strong><small>${escapeHtml(activity.summary)}</small></span><span class="agent-tool-activity-status">${escapeHtml(agentToolActivityStatusLabel(activity.status))}</span></li>`;
+}
+
+/** Extracts the bridge's error code from a failed execution's summary (the broker's own envelope, see agent-approvals.ts), the same rule the progress projector applies to a failed tool call; falls back to the raw text when it does not parse as that shape. */
+function approvalFailureSummary(summary: string): string {
+  try {
+    const parsed: unknown = JSON.parse(summary);
+    if (parsed && typeof parsed === "object") {
+      const error = (parsed as { error?: unknown }).error;
+      if (error && typeof error === "object" && typeof (error as { code?: unknown }).code === "string") return (error as { code: string }).code;
+    }
+  } catch { /* not JSON; show the raw text */ }
+  return summary;
+}
+
+function renderApprovalResolution(resolution: AgentApprovalResolution): string {
+  const succeeded = resolution.outcome === "executed" && resolution.ok;
+  // denied/expired/cancelled carry a broker-generated English sentence meant for the model, not this
+  // localized card: agentApprovalResolutionLabel already shows the right status in the viewer's language.
+  const failedExecution = resolution.outcome === "executed" && !resolution.ok;
+  const summaryHtml = failedExecution && resolution.summary ? `<small>${escapeHtml(approvalFailureSummary(resolution.summary))}</small>` : "";
+  return `<li class="agent-tool-activity agent-approval-resolution agent-tool-activity-${succeeded ? "succeeded" : "failed"}" data-approval-resolution-id="${escapeHtml(resolution.id)}"><span class="agent-tool-activity-marker" aria-hidden="true"></span><span class="agent-tool-activity-body"><strong>${escapeHtml(agentToolDisplayName(resolution.tool))}</strong><small>${escapeHtml(resolution.action)}</small>${summaryHtml}</span><span class="agent-tool-activity-status">${escapeHtml(agentApprovalResolutionLabel(resolution))}</span></li>`;
+}
+
+function currentConversationResolutions(): AgentApprovalResolution[] {
+  // Scoped by conversation only, not by the current/last runId: a resolution can arrive after its
+  // own run ended (approved from a card while a later run, or none, is active) and must still show.
+  const conversationId = conversation?.id;
+  if (!conversationId) return [];
+  return approvalsSnapshot.recent.filter((resolution) => resolution.conversationId === conversationId);
+}
+
+function renderApprovalResolutionsSlot(): string {
+  // A resolution whose tool call is still shown in the live tool-activity list is rendered on that row
+  // instead (see renderToolActivity); listing it again here would show the same outcome twice.
+  const liveToolCallIds = new Set(liveRunId && liveRun ? liveRun.tools.map((activity) => activity.id) : []);
+  const resolutions = currentConversationResolutions().filter((resolution) => !liveToolCallIds.has(resolution.toolCallId));
+  if (!resolutions.length) return "";
+  return `<ul class="agent-tool-activity-list agent-approval-resolutions">${resolutions.map(renderApprovalResolution).join("")}</ul>`;
+}
+
+function agentBudgetUsageTextFromBudget(budget: AgentRunOutcome["budget"]): string {
+  const { turns, tokens, maxTurns, maxTokens } = budget;
+  const turnsText = maxTurns === null ? t("copilot.usedNoLimit", { used: turns }) : t("copilot.usedOfLimit", { used: turns, limit: maxTurns });
+  const tokensText = maxTokens === null
+    ? t("copilot.usedNoLimit", { used: tokens.toLocaleString(locale()) })
+    : t("copilot.usedOfLimit", { used: tokens.toLocaleString(locale()), limit: maxTokens.toLocaleString(locale()) });
+  return t("copilot.budgetUsage", { turns: turnsText, tokens: tokensText });
+}
+
+function renderAgentBudgetMeter(budget: AgentRunOutcome["budget"]): string {
+  const rows: Array<{ label: string; used: number; limit: number | null }> = [
+    { label: t("copilot.budgetTurns"), used: budget.turns, limit: budget.maxTurns },
+    { label: t("copilot.budgetTokens"), used: budget.tokens, limit: budget.maxTokens },
+  ];
+  return `<div class="agent-budget-meter">${rows.map((row) => {
+    const percent = row.limit ? Math.min(100, Math.round((row.used / row.limit) * 100)) : 0;
+    const text = row.limit === null
+      ? t("copilot.usedNoLimit", { used: row.used.toLocaleString(locale()) })
+      : t("copilot.usedOfLimit", { used: row.used.toLocaleString(locale()), limit: row.limit.toLocaleString(locale()) });
+    return `<div class="agent-budget-row${row.limit === null ? " agent-budget-row-unlimited" : ""}"><span class="agent-budget-label">${escapeHtml(row.label)}</span><span class="agent-budget-bar"><span class="agent-budget-fill" style="width:${percent}%"></span></span><small>${escapeHtml(text)}</small></div>`;
+  }).join("")}</div>`;
+}
+
+function renderLiveRunPanel(view: AgentRunProgress): string {
+  const resolutionsByToolCallId = new Map(currentConversationResolutions().map((resolution) => [resolution.toolCallId, resolution] as const));
+  const toolsHtml = view.tools.length
+    ? `<ul class="agent-tool-activity-list">${view.tools.map((activity) => renderToolActivity(activity, resolutionsByToolCallId.get(activity.id))).join("")}</ul>${view.toolCount > view.tools.length ? `<small class="agent-tool-earlier">${escapeHtml(t("copilot.earlierTools", { count: view.toolCount - view.tools.length }))}</small>` : ""}`
+    : "";
+  const retryHtml = view.retry ? `<span class="agent-retry-chip">${escapeHtml(t("copilot.retryChip", { attempt: view.retry.attempt, max: view.retry.maxAttempts }))}</span>` : "";
+  const pendingInputHtml = view.pendingInput
+    ? `<div class="agent-pending-input"><strong>${escapeHtml(t("copilot.pendingInputLabel"))}</strong><p>${escapeHtml(view.pendingInput.question)}</p></div>`
+    : "";
+  return `<div class="agent-live"><div class="agent-live-head"><span class="agent-phase-chip agent-phase-${view.phase}">${escapeHtml(agentRunPhaseLabel(view.phase))}</span><span class="agent-round-chip">${escapeHtml(t("copilot.roundChip", { round: view.round }))}</span>${retryHtml}</div>${view.text ? `<p class="agent-live-text">${escapeHtml(view.text)}</p>` : ""}${toolsHtml}${renderAgentBudgetMeter(view.budget)}${pendingInputHtml}</div>`;
+}
+
+function renderAgentGoalSlot(): string {
+  if (liveRunId && liveRun) return liveRun.plan ? renderAgentGoalCard(liveRun.plan, undefined) : "";
+  const goalMessage = latestAgentPlanMessage();
+  return goalMessage?.outcome?.plan ? renderAgentGoalCard(goalMessage.outcome.plan, goalMessage.outcome.status) : "";
+}
+
+function renderLiveRunSlot(): string {
+  const liveHtml = liveRunId && liveRun ? renderLiveRunPanel(liveRun) : "";
+  return `${liveHtml}${renderApprovalResolutionsSlot()}`;
+}
+
+/** The composer's single action button (send while idle, Stop/Stopping during a run): patched on its own so Stop never triggers a full page render. */
+function renderComposerAction(): string {
+  return agentRunInFlight
+    ? `<button class="secondary icon-button${agentRunCancelling ? " stopping" : ""}" type="button" data-cancel-agent-run title="${escapeHtml(agentRunCancelling ? t("copilot.stopping") : t("copilot.stop"))}" aria-label="${escapeHtml(agentRunCancelling ? t("copilot.stopping") : t("copilot.stop"))}" ${agentRunCancelling ? "disabled" : ""}>${agentRunCancelling ? escapeHtml(t("copilot.stopping")) : icon("stop", 19)}</button>`
+    : `<button class="primary icon-button" type="submit" title="${t("copilot.send")}" aria-label="${t("copilot.send")}">${icon("send", 19)}</button>`;
+}
+
+function approvalConversationTitle(approval: AgentApproval): string | undefined {
+  if (approval.conversationId === conversation?.id) return undefined;
+  // A generic label still marks this card as foreign when the conversation is not (yet) in the sidebar list,
+  // so a high-risk approval never looks like it belongs to the conversation currently open on screen.
+  return conversations.find((item) => item.id === approval.conversationId)?.title ?? t("copilot.approvalOtherConversation");
+}
+
+function formatApprovalCountdown(expiresAtUtc: string): string {
+  const expiresAt = Date.parse(expiresAtUtc);
+  const remainingSeconds = Number.isFinite(expiresAt) ? Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000)) : 0;
+  const minutes = Math.floor(remainingSeconds / 60);
+  const seconds = remainingSeconds % 60;
+  return t("copilot.approvalCountdown", { minutes, seconds: seconds.toString().padStart(2, "0") });
+}
+
+function renderApprovalCard(approval: AgentApproval, countdownText: string): string {
+  const remoteTitle = approvalConversationTitle(approval);
+  return `<article class="agent-approval" data-approval-id="${escapeHtml(approval.id)}">
+    <div class="agent-approval-head"><strong>${escapeHtml(agentToolDisplayName(approval.tool))}</strong><span class="agent-approval-category agent-approval-category-${approval.category}">${escapeHtml(agentApprovalCategoryLabel(approval.category))}</span><span class="agent-approval-risk agent-approval-risk-${approval.risk}">${escapeHtml(agentApprovalRiskLabel())}</span></div>
+    <p class="agent-approval-action">${escapeHtml(approval.action)}</p>
+    ${remoteTitle ? `<small class="agent-approval-conversation">${escapeHtml(t("copilot.approvalConversation", { title: remoteTitle }))}</small>` : ""}
+    <code class="agent-approval-preview">${escapeHtml(approval.preview)}</code>
+    <span class="agent-approval-countdown" data-expires-at="${escapeHtml(approval.expiresAtUtc)}">${escapeHtml(countdownText)}</span>
+    <div class="agent-approval-actions"><button type="button" class="primary compact" data-approve-agent="${escapeHtml(approval.id)}">${escapeHtml(t("copilot.approve"))}</button><button type="button" class="secondary compact" data-deny-agent="${escapeHtml(approval.id)}">${escapeHtml(t("copilot.deny"))}</button></div>
+  </article>`;
+}
+
+function renderApprovalsSlot(): string {
+  return approvalsSnapshot.pending.map((approval) => renderApprovalCard(approval, formatApprovalCountdown(approval.expiresAtUtc))).join("");
+}
+
+// Same markup as renderApprovalsSlot but with the countdown text held constant, so a diff against
+// this key does not fire every second purely because the remaining time changed.
+function renderApprovalsSlotDiffKey(): string {
+  return approvalsSnapshot.pending.map((approval) => renderApprovalCard(approval, "")).join("");
+}
+
+function tickApprovalCountdowns(): void {
+  if (page !== "copilot" || !approvalsSnapshot.pending.length) return;
+  document.querySelectorAll<HTMLElement>("#agent-approvals-slot [data-expires-at]").forEach((element) => {
+    element.textContent = formatApprovalCountdown(element.dataset.expiresAt ?? "");
+  });
+}
+
+function patchSlot(id: string, html: string, diffKey: string = html): void {
+  const element = document.getElementById(id);
+  if (!element || lastSlotHtml.get(id) === diffKey) return;
+  lastSlotHtml.set(id, diffKey);
+  element.innerHTML = html;
+}
+
+function toastHtml(): { noticeHtml: string; errorHtml: string } {
+  return {
+    noticeHtml: notice ? `<div class="toast success">${icon("check", 18)}<pre>${escapeHtml(notice)}</pre></div>` : "",
+    errorHtml: error ? `<div class="toast error"><pre>${escapeHtml(error)}</pre></div>` : "",
+  };
+}
+
+function scheduleToastDismiss(): void {
+  const nextToastSignature = `${notice}\u0000${error}`;
+  if (nextToastSignature === toastSignature) return;
+  toastSignature = nextToastSignature;
+  if (toastDismissTimer !== undefined) window.clearTimeout(toastDismissTimer);
+  if (notice || error) {
+    toastDismissTimer = window.setTimeout(() => {
+      toastDismissTimer = undefined;
+      if (`${notice}\u0000${error}` !== nextToastSignature) return;
+      notice = "";
+      error = "";
+      // Toast-only clear: a full render() here would replace the whole copilot page,
+      // the same scroll/selection reset patchToast's callers are trying to avoid.
+      patchToast();
+    }, 4200);
+  }
+}
+
+// Patches only the toast slot, so an approval decision or Stop can surface notice/error
+// without a full render() resetting the conversation's scroll, open <details> and selection.
+function patchToast(): void {
+  scheduleToastDismiss();
+  const { noticeHtml, errorHtml } = toastHtml();
+  shellController?.updateToast(noticeHtml, errorHtml);
+}
+
+function applyLiveRunPatch(): void {
+  if (page !== "copilot") return;
+  const messagesElement = document.querySelector<HTMLElement>(".messages");
+  const pinnedToBottom = Boolean(
+    messagesElement && messagesElement.scrollHeight - messagesElement.scrollTop - messagesElement.clientHeight <= 32,
+  );
+  patchSlot("agent-goal-slot", renderAgentGoalSlot());
+  patchSlot("agent-live-run", renderLiveRunSlot());
+  patchSlot("agent-approvals-slot", renderApprovalsSlot(), renderApprovalsSlotDiffKey());
+  tickApprovalCountdowns();
+  if (messagesElement && pinnedToBottom) messagesElement.scrollTop = messagesElement.scrollHeight;
+}
+
+function patchLiveRun(): void {
+  if (page !== "copilot") return;
+  if (patchRafHandle !== undefined) return;
+  patchRafHandle = window.requestAnimationFrame(() => {
+    patchRafHandle = undefined;
+    applyLiveRunPatch();
+  });
+}
+
 function renderCopilot(): string {
   const messages = conversation?.messages.filter((message) => message.role === "user" || message.role === "assistant") ?? [];
-  const approvals = `<section class="file-approvals">${fileApprovals.length ? `<strong>${t("copilot.fileApproval")}</strong>${fileApprovals.map((item) => `<article><code>${escapeHtml(item.path)}</code><small>${escapeHtml(item.purpose)}</small><button class="primary compact" data-approve-file="${escapeHtml(item.id)}">${t("copilot.approve")}</button><button class="secondary compact" data-deny-file="${escapeHtml(item.id)}">${t("copilot.deny")}</button></article>`).join("")}` : ""}</section>`;
   const provider = activeAiProvider();
   const providerName = provider ? aiProviderDisplayName(provider) : t("copilot.noProvider");
   const providerModel = provider?.model || t("copilot.chooseModel");
   const providerStatus = provider
     ? t("copilot.connectionCounts", { oauth: provider.accounts.filter((account) => account.authorized).length, keys: provider.apiKeys.length })
     : t("copilot.noConnection");
-  const goalMessage = latestAgentPlanMessage();
-  const goalCard = goalMessage?.outcome?.plan ? renderAgentGoalCard(goalMessage.outcome.plan, goalMessage.outcome.status) : "";
+  // A full render embeds the same snapshot patchSlot would apply, so the cache must be
+  // resynced here or later patches would diff against what patchSlot last wrote, not the DOM.
+  const goalSlotHtml = renderAgentGoalSlot();
+  const liveRunSlotHtml = renderLiveRunSlot();
+  const approvalsSlotHtml = renderApprovalsSlot();
+  const composerActionHtml = renderComposerAction();
+  lastSlotHtml.set("agent-goal-slot", goalSlotHtml);
+  lastSlotHtml.set("agent-live-run", liveRunSlotHtml);
+  lastSlotHtml.set("agent-approvals-slot", renderApprovalsSlotDiffKey());
+  lastSlotHtml.set("agent-composer-action", composerActionHtml);
   return `<div class="copilot-layout">
     <aside class="sessions-panel"><div class="sessions-panel-head"><button class="primary full" data-new-conversation>${icon("plus", 17)} ${t("copilot.newConversation")}</button><span class="nav-label">${t("copilot.history")}</span></div><div class="session-list">${conversations.length ? conversations.map((item) => `<button class="session-item ${conversation?.id === item.id ? "active" : ""}" data-conversation="${escapeHtml(item.id)}"><strong>${escapeHtml(item.title)}</strong><small>${t("copilot.messageCount", { count: item.messageCount })} · ${escapeHtml(item.updatedAt.slice(0, 10))}</small></button>`).join("") : `<p class="empty-small">${t("copilot.emptyHistory")}</p>`}</div></aside>
     <section class="chat-panel">
       <div class="chat-header"><div class="chat-title"><strong>${escapeHtml(conversation?.title ?? t("copilot.newChat"))}</strong><small>${escapeHtml(t("copilot.enabledToolsOnly"))}</small></div><div class="chat-header-actions" aria-label="${escapeHtml(t("copilot.toolbar"))}"><button type="button" class="chat-model-button" data-open-ai-provider-picker aria-label="${escapeHtml(t("copilot.chooseProviderModel", { provider: providerName, model: providerModel }))}"><span class="chat-model-mark">${icon("sparkles", 14)}</span><span><strong>${escapeHtml(providerName)}</strong><small>${escapeHtml(providerModel)} · ${providerStatus}</small></span>${icon("arrow", 14)}</button><div class="chat-work-mode" role="group" aria-label="${escapeHtml(t("copilot.workMode"))}"><button type="button" class="${app?.agentWorkMode === "edit" ? "active" : ""}" data-agent-work-mode="edit" aria-pressed="${app?.agentWorkMode === "edit"}">Edit</button><button type="button" class="${app?.agentWorkMode === "solo" ? "active" : ""}" data-agent-work-mode="solo" aria-pressed="${app?.agentWorkMode === "solo"}">Solo</button></div>${renderAgentEffortGroup()}</div></div>
-      ${approvals}
-      <div class="messages">${goalCard}${messages.length ? messages.map(renderMessage).join("") : `<div class="empty-chat"><span class="mode-icon purple">${icon("bot", 30)}</span><h2>${escapeHtml(t("copilot.emptyTitle"))}</h2><p>${escapeHtml(t("copilot.emptyDescription"))}</p><div class="prompt-chips"><button data-prompt="${escapeHtml(t("copilot.audioPrompt"))}">${escapeHtml(t("copilot.audioAction"))}</button><button data-prompt="${escapeHtml(t("copilot.projectPrompt"))}">${escapeHtml(t("copilot.projectAction"))}</button><button data-prompt="${escapeHtml(t("copilot.planPrompt"))}">${escapeHtml(t("copilot.planAction"))}</button></div></div>`}</div>
-      <form id="chat-form" class="composer"><div class="composer-shell"><textarea id="chat-input" rows="1" placeholder="${t("copilot.placeholder")}" ${agentRunInFlight ? "disabled" : ""}></textarea>${agentRunInFlight
-        ? `<button class="secondary icon-button" type="button" data-cancel-agent-run title="${t("copilot.stop")}" aria-label="${t("copilot.stop")}">${icon("stop", 19)}</button>`
-        : `<button class="primary icon-button" type="submit" title="${t("copilot.send")}" aria-label="${t("copilot.send")}">${icon("send", 19)}</button>`}</div><span>${t("copilot.review")}</span></form>
+      <div id="agent-approvals-slot" class="agent-approvals-slot">${approvalsSlotHtml}</div>
+      <div class="messages"><div id="agent-goal-slot">${goalSlotHtml}</div>${messages.length ? messages.map(renderMessage).join("") : `<div class="empty-chat"><span class="mode-icon purple">${icon("bot", 30)}</span><h2>${escapeHtml(t("copilot.emptyTitle"))}</h2><p>${escapeHtml(t("copilot.emptyDescription"))}</p><div class="prompt-chips"><button data-prompt="${escapeHtml(t("copilot.audioPrompt"))}">${escapeHtml(t("copilot.audioAction"))}</button><button data-prompt="${escapeHtml(t("copilot.projectPrompt"))}">${escapeHtml(t("copilot.projectAction"))}</button><button data-prompt="${escapeHtml(t("copilot.planPrompt"))}">${escapeHtml(t("copilot.planAction"))}</button></div></div>`}<div id="agent-live-run">${liveRunSlotHtml}</div></div>
+      <form id="chat-form" class="composer"><div class="composer-shell"><textarea id="chat-input" rows="1" placeholder="${t("copilot.placeholder")}" ${agentRunInFlight ? "disabled" : ""}></textarea><span id="agent-composer-action">${composerActionHtml}</span></div><span>${t("copilot.review")}</span></form>
     </section>
   </div>`;
 }
@@ -2679,12 +2945,7 @@ function renderAiPage(): string {
 }
 
 function agentBudgetUsageText(outcome: AgentRunOutcome): string {
-  const { turns, tokens, maxTurns, maxTokens } = outcome.budget;
-  const turnsText = maxTurns === null ? t("copilot.usedNoLimit", { used: turns }) : t("copilot.usedOfLimit", { used: turns, limit: maxTurns });
-  const tokensText = maxTokens === null
-    ? t("copilot.usedNoLimit", { used: tokens.toLocaleString(locale()) })
-    : t("copilot.usedOfLimit", { used: tokens.toLocaleString(locale()), limit: maxTokens.toLocaleString(locale()) });
-  return t("copilot.budgetUsage", { turns: turnsText, tokens: tokensText });
+  return agentBudgetUsageTextFromBudget(outcome.budget);
 }
 
 function renderMessage(message: ChatMessage): string {
@@ -3082,6 +3343,7 @@ function renderSettings(): string {
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.mode")}</h2><p>${t("settings.modeDescription")}</p></div></div><div class="mode-setting"><button class="setting-choice ${app.mode === "toolbox" ? "active" : ""}" data-set-mode="toolbox"><span class="mode-icon slate">${icon("toolbox", 23)}</span><span><strong>${t("settings.toolbox")}</strong><small>${t("settings.toolboxDescription")}</small></span>${app.mode === "toolbox" ? icon("check", 20) : ""}</button><button class="setting-choice ${app.mode === "ai" ? "active" : ""}" data-set-mode="ai"><span class="mode-icon purple">${icon("sparkles", 23)}</span><span><strong>${t("settings.ai")}</strong><small>${t("settings.aiDescription")}</small></span>${app.mode === "ai" ? icon("check", 20) : ""}</button></div></section>
     ${showSvpRouting ? `<section class="panel smart-route-settings"><div class="section-heading"><div><h2>${t("settings.smartRoute")}</h2><p>${t("settings.smartRouteDescription")}</p></div><label class="toolbox-switch large"><input id="svp-routing-enabled" type="checkbox" ${app.smartSvpLaunchEnabled ? "checked" : ""} ${association.supported ? "" : "disabled"} aria-label="${t("settings.smartRoute")}" /><span></span>${app.smartSvpLaunchEnabled ? t("settings.enabled") : t("settings.disabled")}</label></div><label class="toolbox-switch large"><input id="svp-routing-always-ask" type="checkbox" ${app.smartSvpAlwaysAsk ? "checked" : ""} ${app.smartSvpLaunchEnabled && association.supported && !busy ? "" : "disabled"} aria-label="${t("settings.alwaysAsk")}" /><span></span>${t("settings.alwaysAsk")}</label><div class="smart-route-state ${association.isDefault ? "ready" : "pending"}"><span class="feature-icon ${association.isDefault ? "emerald" : "blue"}">${icon("file", 20)}</span><div><strong>${escapeHtml(associationLabel)}</strong><p>${escapeHtml(association.detail)}</p></div><button class="secondary compact" data-open-svp-default-apps ${association.supported ? "" : "disabled"}>${t("settings.openDefaults")}</button></div></section>` : ""}
     <section class="panel plugin-privilege-settings"><div class="section-heading"><div><h2>${t("settings.pluginPrivileges")}</h2><p>${t("settings.pluginPrivilegesDescription")}</p></div></div><label class="toolbox-switch"><input id="plugin-internal-functions-enabled" type="checkbox" ${app.pluginInternalFunctionsEnabled ? "checked" : ""} /><span></span><span><strong>${t("settings.pluginInternalFunctions")}</strong><small>${t("settings.pluginInternalFunctionsDescription")}</small></span></label><label class="toolbox-switch"><input id="plugin-advanced-functions-enabled" type="checkbox" ${app.pluginAdvancedFunctionsEnabled ? "checked" : ""} /><span></span><span><strong>${t("settings.pluginAdvancedFunctions")}</strong><small>${t("settings.pluginAdvancedFunctionsDescription")}</small></span></label></section>
+    ${app.mode === "ai" ? `<section class="panel agent-transcripts-settings"><div class="section-heading"><div><h2>${t("settings.agentTranscripts")}</h2><p>${t("settings.agentTranscriptsDescription")}</p></div></div><label class="toolbox-switch"><input id="agent-transcripts-enabled" type="checkbox" ${app.agentTranscriptsEnabled ? "checked" : ""} /><span></span><span><strong>${t("settings.agentTranscripts")}</strong><small>${app.agentTranscriptsEnabled ? t("settings.enabled") : t("settings.disabled")}</small></span></label></section>` : ""}
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.dataPlatform")}</h2><p>${t("settings.dataPlatformDescription")}</p></div></div><dl class="detail-list"><div><dt>${t("settings.platform")}</dt><dd>${escapeHtml(app.platform)}</dd></div><div><dt>${t("settings.config")}</dt><dd><code>${escapeHtml(app.configPath)}</code></dd></div><div><dt>${t("settings.appVersion")}</dt><dd>${escapeHtml(app.appVersion)}</dd></div></dl></section></div>`;
 }
 
@@ -3511,7 +3773,6 @@ function wireForms(): void {
     if (!input) return;
     void sendPrompt(input);
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-approve-file], [data-deny-file]").forEach((button) => button.addEventListener("click", () => void run(async () => { await api.decideAgentFileApproval(button.dataset.approveFile ?? button.dataset.denyFile ?? "", button.hasAttribute("data-approve-file")); fileApprovals = await api.agentFileApprovals(); notice = button.hasAttribute("data-approve-file") ? t("accountNotice.fileApproved") : t("accountNotice.fileDenied"); })));
   document.querySelector<HTMLTextAreaElement>("#chat-input")?.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
@@ -3549,6 +3810,13 @@ function wireForms(): void {
     void run(async () => {
       app = await api.setPluginAdvancedFunctionsEnabled(enabled);
       await reloadPluginState();
+      notice = enabled ? t("settings.enabled") : t("settings.disabled");
+    });
+  });
+  document.querySelector<HTMLInputElement>("#agent-transcripts-enabled")?.addEventListener("change", (event) => {
+    const enabled = (event.currentTarget as HTMLInputElement).checked;
+    void run(async () => {
+      app = await api.setAgentTranscriptsEnabled(enabled);
       notice = enabled ? t("settings.enabled") : t("settings.disabled");
     });
   });
@@ -3653,20 +3921,25 @@ async function sendPrompt(input: string): Promise<void> {
   }
   if (agentRunInFlight) return;
   agentRunInFlight = true;
+  agentRunCancelling = false;
   notice = "";
   error = "";
   const optimistic: ChatMessage = { role: "user", content: input };
+  const runId = crypto.randomUUID();
+  liveRunId = runId;
+  liveRunLastSeq = 0;
+  liveRun = undefined;
   try {
     if (!conversation) conversation = await api.newConversation();
     conversation.messages.push(optimistic);
     render();
-    const added = await withAiProviderStateRefresh(() => api.sendMessage(conversation!.id, input));
+    const added = await withAiProviderStateRefresh(() => api.sendMessage(conversation!.id, input, runId));
     conversation.messages = conversation.messages.filter((message) => message !== optimistic);
     conversation.messages.push(...added);
     let budgets: Record<AgentEffortLevel, AgentRunBudget> | undefined;
-    [conversations, fileApprovals, budgets] = await Promise.all([
+    [conversations, approvalsSnapshot, budgets] = await Promise.all([
       api.listConversations(),
-      api.agentFileApprovals(),
+      api.agentApprovals(),
       api.agentBudgets(),
     ]);
     if (app) app.agentBudgets = budgets;
@@ -3675,17 +3948,43 @@ async function sendPrompt(input: string): Promise<void> {
     error = formatError(reason);
   } finally {
     agentRunInFlight = false;
+    agentRunCancelling = false;
+    liveRunId = undefined;
+    liveRun = undefined;
     render();
   }
 }
 
+async function decideApproval(id: string, approve: boolean, trigger?: HTMLElement): Promise<void> {
+  // Goes straight to the API, not through run(): a full render() here would replace the whole
+  // copilot page and reset the conversation's scroll position, open <details>, and text selection.
+  // The card itself disappears once the agent.approvals.changed push removes it from the snapshot.
+  const actions = trigger?.closest<HTMLElement>(".agent-approval-actions");
+  actions?.querySelectorAll<HTMLButtonElement>("button").forEach((button) => { button.disabled = true; });
+  try {
+    await api.decideAgentApproval(id, approve);
+    notice = t(approve ? "copilot.approvalApproved" : "copilot.approvalDenied");
+    patchToast();
+    patchLiveRun();
+  } catch (reason) {
+    error = formatError(reason);
+    patchToast();
+    // The snapshot did not change, so the approvals slot's diff key skips a re-render; re-enable directly.
+    actions?.querySelectorAll<HTMLButtonElement>("button").forEach((button) => { button.disabled = false; });
+  }
+}
+
 async function cancelAgentRun(): Promise<void> {
-  if (!conversation || !agentRunInFlight) return;
+  if (!conversation || !agentRunInFlight || agentRunCancelling) return;
+  agentRunCancelling = true;
+  patchSlot("agent-composer-action", renderComposerAction());
   try {
     await api.cancelAgentRun(conversation.id);
   } catch (reason) {
+    agentRunCancelling = false;
     error = formatError(reason);
-    render();
+    patchToast();
+    patchSlot("agent-composer-action", renderComposerAction());
   }
 }
 
@@ -4500,7 +4799,7 @@ document.addEventListener("click", (event) => {
     accountManagerOpen = false;
     notice = "";
     error = "";
-    if (page === "copilot") void run(async () => { [conversations, fileApprovals] = await Promise.all([api.listConversations(), api.agentFileApprovals()]); });
+    if (page === "copilot") void run(async () => { [conversations, approvalsSnapshot] = await Promise.all([api.listConversations(), api.agentApprovals()]); });
     else if (page === "history") scheduleHistoryRefresh();
     else if (enteringPlugins) void run(reloadPluginState);
     else if (enteringAccounts && (app?.platform === "windows" || app?.platform === "macos" || app?.platform === "preview")) {
@@ -4861,9 +5160,11 @@ document.addEventListener("click", (event) => {
     });
     return;
   }
-  if (target.hasAttribute("data-new-conversation")) { if (agentRunInFlight) return; void run(async () => { conversation = await api.newConversation(); [conversations, fileApprovals] = await Promise.all([api.listConversations(), api.agentFileApprovals()]); }); return; }
-  if (target.dataset.conversation) { if (agentRunInFlight) return; void run(async () => { conversation = await api.openConversation(target.dataset.conversation ?? ""); fileApprovals = await api.agentFileApprovals(); }); return; }
+  if (target.hasAttribute("data-new-conversation")) { if (agentRunInFlight) return; void run(async () => { conversation = await api.newConversation(); [conversations, approvalsSnapshot] = await Promise.all([api.listConversations(), api.agentApprovals()]); }); return; }
+  if (target.dataset.conversation) { if (agentRunInFlight) return; void run(async () => { conversation = await api.openConversation(target.dataset.conversation ?? ""); approvalsSnapshot = await api.agentApprovals(); }); return; }
   if (target.hasAttribute("data-cancel-agent-run")) { void cancelAgentRun(); return; }
+  if (target.dataset.approveAgent) { void decideApproval(target.dataset.approveAgent, true, target); return; }
+  if (target.dataset.denyAgent) { void decideApproval(target.dataset.denyAgent, false, target); return; }
   if (target.dataset.prompt) { void sendPrompt(target.dataset.prompt); return; }
   if (target.dataset.testMcp) { void run(async () => { setFeedback(await api.testMcpServer(target.dataset.testMcp ?? "")); }); return; }
   if (target.dataset.deleteMcp) { void run(async () => { app = await api.deleteMcpServer(target.dataset.deleteMcp ?? ""); notice = t("connections.deleted"); }); }
@@ -4926,11 +5227,41 @@ async function listenForAudioPreparationDrops(): Promise<void> {
   });
 }
 
+async function listenForAgentRunProgress(): Promise<void> {
+  if (!hasDesktopBridge()) return;
+  await listenDesktop<AgentRunProgress>("agent.run.progress", (progress) => {
+    if (progress.runId !== liveRunId || progress.seq <= liveRunLastSeq) return;
+    liveRunLastSeq = progress.seq;
+    liveRun = progress;
+    patchLiveRun();
+  });
+}
+
+async function listenForAgentApprovals(): Promise<void> {
+  if (!hasDesktopBridge()) return;
+  await listenDesktop<AgentApprovalsSnapshot>("agent.approvals.changed", (snapshot) => {
+    approvalsSnapshot = snapshot;
+    patchLiveRun();
+    const knownIds = new Set(conversations.map((item) => item.id));
+    const hasUnknownConversation = snapshot.pending.some((approval) => approval.conversationId !== conversation?.id && !knownIds.has(approval.conversationId));
+    if (hasUnknownConversation) {
+      void api.listConversations().then((next) => {
+        conversations = next;
+        patchLiveRun();
+      });
+    }
+  });
+}
+
+window.setInterval(tickApprovalCountdowns, 1000);
+
 void (async () => {
   try {
     await refresh();
     await listenForSvpRouteRequests();
     await listenForAudioPreparationDrops();
+    await listenForAgentRunProgress();
+    await listenForAgentApprovals();
     startInstanceRefresh();
     render();
     refreshAiCatalogLive();

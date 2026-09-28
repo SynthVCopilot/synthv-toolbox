@@ -12,6 +12,7 @@ interface DesktopSettings {
   mode: "toolbox" | "ai";
   agentWorkMode: "edit" | "solo";
   agentEffort: AgentEffortLevel;
+  agentTranscriptsEnabled: boolean;
   updateChannel: "stable" | "nightly";
   scriptsPath?: string;
   concurrentDisclaimerAccepted: boolean;
@@ -22,7 +23,7 @@ interface DesktopSettings {
   mcpServers: Data[];
 }
 
-const defaults = (): DesktopSettings => ({ onboardingCompleted: false, mode: "toolbox", agentWorkMode: "edit", agentEffort: DEFAULT_AGENT_EFFORT, updateChannel: "stable", concurrentDisclaimerAccepted: false, sv2ConcurrentEnabled: false, sv2AccountIndicatorEnabled: false, smartSvpLaunchEnabled: false, smartSvpAlwaysAsk: false, mcpServers: [] });
+const defaults = (): DesktopSettings => ({ onboardingCompleted: false, mode: "toolbox", agentWorkMode: "edit", agentEffort: DEFAULT_AGENT_EFFORT, agentTranscriptsEnabled: false, updateChannel: "stable", concurrentDisclaimerAccepted: false, sv2ConcurrentEnabled: false, sv2AccountIndicatorEnabled: false, smartSvpLaunchEnabled: false, smartSvpAlwaysAsk: false, mcpServers: [] });
 
 export class DesktopStateService {
   private settings = defaults();
@@ -38,6 +39,8 @@ export class DesktopStateService {
   }
 
   agentEffort(): AgentEffortLevel { return this.settings.agentEffort; }
+  agentWorkMode(): "edit" | "solo" { return this.settings.agentWorkMode; }
+  agentTranscriptsEnabled(): boolean { return this.settings.agentTranscriptsEnabled; }
 
   async bootstrap(): Promise<Data> {
     const runtime = this.runtime.settingsSnapshot();

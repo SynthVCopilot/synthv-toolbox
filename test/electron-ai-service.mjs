@@ -52,12 +52,15 @@ const catalog = {
   },
 };
 const usage = { async query(provider, credentialIds) { return { provider, credentialIds }; } };
+const cancelledConversations = [];
+const approvals = { cancelConversation(conversationId) { cancelledConversations.push(conversationId); } };
 let identifier = 0;
 const service = new AiService({
   metadataPath,
   safeStorage,
   runtime,
   catalog,
+  approvals,
   usage,
   now: () => new Date("2026-09-13T00:00:00.000Z"),
   id: () => `id-${++identifier}`,
@@ -112,6 +115,8 @@ assert.equal(requests[0].params.cwd, directory);
 assert.equal(requests[0].params.outcome, undefined, "no prior outcome exists yet");
 assert.equal(requests[1].method, "session.send");
 assert.deepEqual(requests[1].params.budget, estimateAgentRunBudget("mid", []));
+assert.equal(typeof requests[1].params.runId, "string");
+assert.ok(requests[1].params.runId.length > 0, "a runId is generated and forwarded when the caller omits one");
 assert.equal(messages[1].content, "Assistant reply one");
 assert.deepEqual(messages[1].outcome, outcomeA);
 assert.equal((await service.open_conversation(conversation.id)).messages.length, 2);
@@ -168,6 +173,7 @@ assert.deepEqual(budgets.mid, estimateAgentRunBudget("mid", service.agentUsageSa
 await service.cancel_agent_run(conversation.id);
 assert.equal(requests.at(-1).method, "session.cancel");
 assert.equal(requests.at(-1).params.sessionId, conversation.id);
+assert.deepEqual(cancelledConversations, [conversation.id], "Stop cancels this conversation's pending approvals on the active-run path");
 
 nextSendResult = { message: "x", outcome: { status: "bogus" } };
 await assert.rejects(() => service.send_message(conversation.id, "Fifth turn", { effort: "mid" }), /invalid run outcome/);
@@ -183,7 +189,7 @@ await writeFile(droppedPath, JSON.stringify({
     messages: [{ role: "assistant", content: "hello", createdAt: "2026-09-13T00:00:00.000Z", outcome: { status: "completed" } }],
   }],
 }), "utf8");
-const recovered = new AiService({ metadataPath: droppedPath, safeStorage, runtime, catalog, id: () => "recovered" });
+const recovered = new AiService({ metadataPath: droppedPath, safeStorage, runtime, catalog, approvals, id: () => "recovered" });
 const droppedConversation = await recovered.open_conversation("conv-dropped");
 assert.equal(droppedConversation.messages[0].outcome, undefined, "an invalid stored outcome is dropped when metadata loads");
 
@@ -192,6 +198,7 @@ const cancelled = new AiService({
   safeStorage,
   runtime,
   catalog,
+  approvals,
   id: () => "cancelled",
   authorizer: {
     authorize(_provider, signal) {
@@ -215,5 +222,51 @@ await service.remove_ai_api_key("anthropic", credentialId);
 await service.remove_ai_provider_account("anthropic", "anthropic:oauth");
 const anthropic = (await service.ai_provider_state()).providers.find((provider) => provider.id === "anthropic");
 assert.equal(anthropic.accounts.length + anthropic.apiKeys.length, 0);
+
+{
+  // Active-run registry: a caller-supplied runId is forwarded verbatim, a second concurrent send on the
+  // same conversation is rejected before session.initialize, and cancelling before session.send is issued
+  // skips the send and persists a zero-usage cancelled outcome.
+  const activeRunRequests = [];
+  let releaseInitialize;
+  let blockNextInitialize = true;
+  const activeRunRuntime = {
+    async request(method, params) {
+      activeRunRequests.push({ method, params });
+      if (method === "session.initialize" && blockNextInitialize) { blockNextInitialize = false; await new Promise((resolve) => { releaseInitialize = resolve; }); }
+      if (method === "session.send") return { message: "Handled.", outcome: { status: "completed", summary: "Handled.", evidence: ["e"], missing: [], plan: { goal: "G", doneCriteria: ["e"], todos: [{ id: "t1", title: "T", status: "completed" }] }, budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 1, tokens: 10 } } };
+      return {};
+    },
+  };
+  let activeRunIdentifier = 0;
+  const activeRunCancelled = [];
+  const activeRunApprovals = { cancelConversation(conversationId) { activeRunCancelled.push(conversationId); } };
+  const activeRunService = new AiService({ metadataPath: join(directory, "active-run.json"), safeStorage, runtime: activeRunRuntime, catalog, approvals: activeRunApprovals, id: () => `active-${++activeRunIdentifier}` });
+  const conversation = await activeRunService.new_conversation();
+
+  const firstSend = activeRunService.send_message(conversation.id, "First", { runId: "explicit-run-id" });
+  await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(
+    () => activeRunService.send_message(conversation.id, "Second", {}),
+    /already in progress/,
+    "a second send on the same conversation is rejected before session.initialize",
+  );
+  await activeRunService.cancel_agent_run(conversation.id);
+  assert.deepEqual(activeRunCancelled, [conversation.id], "Stop cancels pending approvals even on the early-cancel path, before session.send is issued");
+  releaseInitialize();
+  const firstMessages = await firstSend;
+  assert.equal(firstMessages[1].outcome.status, "cancelled", "cancelling before session.send is issued skips the send and persists a cancelled outcome");
+  assert.equal(firstMessages[1].outcome.budget.turns, 0, "the cancelled outcome carries zero usage");
+  assert.equal(firstMessages[1].outcome.budget.tokens, 0);
+  assert.equal(activeRunRequests.filter((request) => request.method === "session.send").length, 0, "session.send is never called when cancelled before it is issued");
+  assert.equal(activeRunRequests.find((request) => request.method === "session.initialize").params.outcome, undefined);
+  assert.equal(firstMessages[0].content, "First", "the user message is still persisted for a run cancelled before session.send");
+  assert.equal(firstMessages[1].outcome.runId ?? undefined, undefined, "no progress data (including runId) is stored in the persisted outcome");
+
+  const thirdSend = await activeRunService.send_message(conversation.id, "Third");
+  assert.equal(thirdSend[1].outcome.status, "completed", "the active-run slot is released after the cancelled run finishes");
+  const sendRequest = activeRunRequests.filter((request) => request.method === "session.send").at(-1);
+  assert.match(sendRequest.params.runId, /^active-\d+$/, "a runId is generated when the caller omits one");
+}
 
 console.log("Electron AI service persists encrypted credentials and drives Agent Runtime sessions.");

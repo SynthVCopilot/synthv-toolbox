@@ -41,3 +41,21 @@ test("compiled bridge module stays ESM (the preload build must not overwrite it)
   assert.match(compiled, /^export (function|const)/m);
   assert.doesNotMatch(compiled, /^\s*"use strict";|\bexports\.\w+\s*=|\brequire\(/m);
 });
+
+test("build:bridge emits a self-contained dist/src/embedded.js with no bare zod or MCP SDK imports", () => {
+  const compiledUrl = new URL("../src/PiDesktop.Tauri/components/synthv-agent-bridge/dist/src/embedded.js", import.meta.url);
+  assert.equal(existsSync(compiledUrl), true, "dist/src/embedded.js must be present after build:bridge");
+  const compiled = readFileSync(compiledUrl, "utf8");
+  assert.doesNotMatch(compiled, /from\s+"zod"/);
+  assert.doesNotMatch(compiled, /from\s+"@modelcontextprotocol\//);
+});
+
+test("ensure-bridge.mjs lists dist/src/embedded.js among the bridge entries it verifies", () => {
+  const ensureBridge = readFileSync(new URL("../src/PiDesktop.Tauri/scripts/ensure-bridge.mjs", import.meta.url), "utf8");
+  assert.match(ensureBridge, /dist\/src\/embedded\.js/);
+});
+
+test("electron-builder.yml still ships the bridge component's dist directory", () => {
+  const builderConfig = readFileSync(new URL("../electron-builder.yml", import.meta.url), "utf8");
+  assert.match(builderConfig, /components\/synthv-agent-bridge\/dist/);
+});

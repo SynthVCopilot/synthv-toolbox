@@ -1,11 +1,40 @@
-import type { AgentEffortLevel, AgentPlan, AgentRunBudget, AgentRunOutcome, AgentTodo } from "@synthv-toolbox/runtime-protocol";
+import type {
+  AgentEffortLevel,
+  AgentPlan,
+  AgentRunBudget,
+  AgentRunOutcome,
+  AgentRunPhase,
+  AgentRunProgress,
+  AgentTodo,
+  AgentToolActivity,
+  AgentApproval,
+  AgentApprovalTool,
+  AgentApprovalCategory,
+  AgentApprovalOutcome,
+  AgentApprovalResolution,
+  AgentApprovalsSnapshot,
+} from "@synthv-toolbox/runtime-protocol";
 
-export type { AgentEffortLevel, AgentPlan, AgentRunBudget, AgentRunOutcome, AgentTodo };
+export type {
+  AgentEffortLevel,
+  AgentPlan,
+  AgentRunBudget,
+  AgentRunOutcome,
+  AgentRunPhase,
+  AgentRunProgress,
+  AgentTodo,
+  AgentToolActivity,
+  AgentApproval,
+  AgentApprovalTool,
+  AgentApprovalCategory,
+  AgentApprovalOutcome,
+  AgentApprovalResolution,
+  AgentApprovalsSnapshot,
+};
 
 export type AppMode = "toolbox" | "ai";
 export type AgentWorkMode = "edit" | "solo";
 export type UpdateChannel = "stable" | "nightly";
-export interface AgentFileApproval { id: string; path: string; purpose: string; createdAtUtc: string; }
 
 export type AiProviderId = "anthropic" | "openai-codex" | "workbuddy" | "traecode";
 export type AiAuthMethod = "oauth" | "api-key";
@@ -477,6 +506,7 @@ export interface BootstrapState {
   agentWorkMode: AgentWorkMode;
   agentEffort: AgentEffortLevel;
   agentBudgets: Record<AgentEffortLevel, AgentRunBudget>;
+  agentTranscriptsEnabled: boolean;
   updateChannel: UpdateChannel;
   platform: string;
   appVersion: string;

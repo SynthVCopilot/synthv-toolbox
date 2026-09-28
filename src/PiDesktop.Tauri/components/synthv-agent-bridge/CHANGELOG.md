@@ -11,6 +11,26 @@ All notable changes will be documented in this file.
 - Added `record_ai_usage`, which stores an explicit versioned AI-usage
   disclosure on a fingerprint-guarded Track through SynthV's persistent Script
   Data API.
+- Added an embedded front end (`src/embedded.ts`, bundled as
+  `dist/src/embedded.js`) that exposes the same six public tools, instructions,
+  and JSON Schemas as the MCP server for in-process callers, plus a
+  `classify(name, input)` risk/category classification driven entirely by the
+  existing v3 command policy catalog.
+- Added a `writers` field to `sv_status` (`operation: "bridge"`) reporting the
+  last successful write's client label, pid, and action, and whether it came
+  from a different client than the caller.
+- Added the `BRIDGE_NOT_CONNECTED` error, raised before any lock or request
+  file is created when the heartbeat is missing or stale.
+
+### Changed
+
+- `BRIDGE_TIMEOUT` now reports `claimed`: whether the Lua host had already
+  claimed the request when the deadline passed. A claimed `sv_command` timeout
+  now reports `phase: "mutated"` and `wrote: true`.
+- `retry` now also reports `retry_later` for `BRIDGE_BUSY` and `start_bridge`
+  for `BRIDGE_NOT_CONNECTED`.
+- The single-writer lock file now records the requesting client's label
+  alongside its pid and request id.
 
 ## 0.3.1 - 2026-08-12
 

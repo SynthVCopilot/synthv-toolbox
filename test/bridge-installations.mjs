@@ -15,7 +15,7 @@ const legacyBridge = read('../src/PiDesktop.Tauri/components/synthv-agent-bridge
 
 assert.match(synthv, /install-sv1-legacy-bridge\.mjs/);
 assert.match(synthv, /install-synthv-bridge\.mjs/);
-assert.match(synthv, /ensureBridgeClient/);
+assert.match(synthv, /SYNTHV_AGENT_BRIDGE_DIR: this\.bridgeIpcDirectory/);
 assert.match(modernBridge, /BRIDGE_VERSION = "0\.3\.1"/);
 assert.match(modernBridge, /PROTOCOL_VERSION = 3/);
 assert.match(stopBridge, /BRIDGE_NAME = "SynthV Agent Bridge"/);

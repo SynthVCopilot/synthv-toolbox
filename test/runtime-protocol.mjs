@@ -294,6 +294,29 @@ test("run outcomes carry the evidence, missing information and budget their stat
   assert.deepEqual(protocol.validateAgentRunOutcome({ ...completed, budget: unlimited }).budget, unlimited);
 });
 
+test("an AgentRunProgress notification round-trips through encodeJsonl/parseJsonl and validateRpcMessage", () => {
+  assert.equal(protocol.AGENT_RUN_PROGRESS_EVENT, "session.progress");
+  const progress = {
+    sessionId: "s1",
+    runId: "run-1",
+    seq: 3,
+    phase: "running_tools",
+    round: 1,
+    text: "Working on it",
+    plan: null,
+    tools: [{ id: "call-1", name: "sv_query", status: "running", round: 1, summary: "get_selection" }],
+    toolCount: 1,
+    budget: { level: "mid", maxTurns: 16, maxTokens: 300_000, turns: 1, tokens: 500 },
+    retry: null,
+    pendingInput: null,
+  };
+  const notification = { kind: "notification", protocolVersion: "1.0", event: protocol.AGENT_RUN_PROGRESS_EVENT, params: progress };
+  const line = protocol.encodeJsonl(notification);
+  const parsed = protocol.parseJsonl(line.trimEnd());
+  assert.deepEqual(parsed, notification);
+  assert.deepEqual(protocol.validateRpcMessage(notification), notification);
+});
+
 test("zero-usage samples keep budgets finite", () => {
   const samples = [...Array.from({ length: 10 }, () => ({ level: "low", turns: 3, tokens: 30_000, censored: false })), { level: "low", turns: 0, tokens: 0, censored: false }];
   const budget = protocol.estimateAgentRunBudget("low", samples);

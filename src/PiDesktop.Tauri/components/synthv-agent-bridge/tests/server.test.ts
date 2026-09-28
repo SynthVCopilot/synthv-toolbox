@@ -10,10 +10,8 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { loadConfig } from "../src/config.js";
 import { LOCAL_ACTIONS } from "../src/local-actions.js";
 import { BRIDGE_ACTIONS } from "../src/protocol.js";
-import {
-  createServer,
-  TRACK_DISPLAY_COLOR_PATTERN,
-} from "../src/server.js";
+import { createServer } from "../src/server.js";
+import { TRACK_DISPLAY_COLOR_PATTERN } from "../src/action-tools.js";
 import { transactionEligibleActionNames } from "../src/v3-command-policy.js";
 import { V3_INTERNAL_ADAPTER_NAMES } from "../src/v3-surface.js";
 
@@ -29,11 +27,11 @@ test("track color schema accepts public RGB and native ARGB forms", () => {
 
 test("every protocol action has exactly one internal action definition", async () => {
   const compiledServer = await readFile(
-    new URL("../src/server.js", import.meta.url),
+    new URL("../src/action-tools.js", import.meta.url),
     "utf8",
   );
   const registered = [
-    ...compiledServer.matchAll(/server\.registerTool\(\s*"([^"]+)"/g),
+    ...compiledServer.matchAll(/registry\.registerTool\(\s*"([^"]+)"/g),
   ].map((match) => match[1]);
 
   assert.equal(new Set(registered).size, registered.length);
@@ -55,7 +53,7 @@ test("Vocal template track creation is available to transactions", () => {
 
 test("MCP tool text results use compact JSON", async () => {
   const compiledServer = await readFile(
-    new URL("../src/server.js", import.meta.url),
+    new URL("../src/action-tools.js", import.meta.url),
     "utf8",
   );
   assert.doesNotMatch(
@@ -265,7 +263,7 @@ test("v3 private adapters cannot be confused with public or legacy MCP tools", (
 
 test("v3 add_notes can create an editable non-main note group", async () => {
   const [compiledServer, bridgeSource] = await Promise.all([
-    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/action-tools.js", import.meta.url), "utf8"),
     readFile(
       new URL("../../synthv/SynthVAgentBridge.lua", import.meta.url),
       "utf8",
@@ -280,7 +278,7 @@ test("v3 add_notes can create an editable non-main note group", async () => {
 
 test("empty Vocal Mode maps are initialized by clone validation", async () => {
   const [compiledServer, bridgeSource] = await Promise.all([
-    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/action-tools.js", import.meta.url), "utf8"),
     readFile(
       new URL("../../synthv/SynthVAgentBridge.lua", import.meta.url),
       "utf8",
@@ -306,7 +304,7 @@ test("empty Vocal Mode maps are initialized by clone validation", async () => {
 
 test("Group Voice reports the official singer identity boundary", async () => {
   const [compiledServer, bridgeSource, projectorSource] = await Promise.all([
-    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/action-tools.js", import.meta.url), "utf8"),
     readFile(
       new URL("../../synthv/SynthVAgentBridge.lua", import.meta.url),
       "utf8",
@@ -330,7 +328,7 @@ test("Group Voice reports the official singer identity boundary", async () => {
 
 test("same-Group tuning is one prevalidated Lua undo record", async () => {
   const [compiledServer, bridgeSource] = await Promise.all([
-    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/action-tools.js", import.meta.url), "utf8"),
     readFile(
       new URL("../../synthv/SynthVAgentBridge.lua", import.meta.url),
       "utf8",
@@ -377,7 +375,7 @@ test("same-Group tuning is one prevalidated Lua undo record", async () => {
 
 test("deterministic note transforms stay guarded and use one edit undo boundary", async () => {
   const [compiledServer, bridgeSource] = await Promise.all([
-    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/action-tools.js", import.meta.url), "utf8"),
     readFile(
       new URL("../../synthv/SynthVAgentBridge.lua", import.meta.url),
       "utf8",
@@ -455,7 +453,7 @@ test("automation writes fail closed without the fresh host definition range", as
 
 test("P1 uses low-latency host polling and exposes selective phoneme computation", async () => {
   const [compiledServer, bridgeSource] = await Promise.all([
-    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/action-tools.js", import.meta.url), "utf8"),
     readFile(
       new URL("../../synthv/SynthVAgentBridge.lua", import.meta.url),
       "utf8",
@@ -469,7 +467,7 @@ test("P1 uses low-latency host polling and exposes selective phoneme computation
 
 test("P2 exposes one bounded write-ready phrase context", async () => {
   const [compiledServer, bridgeSource] = await Promise.all([
-    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/action-tools.js", import.meta.url), "utf8"),
     readFile(
       new URL("../../synthv/SynthVAgentBridge.lua", import.meta.url),
       "utf8",
@@ -487,7 +485,7 @@ test("P2 exposes one bounded write-ready phrase context", async () => {
 
 test("P3 exposes explicit coverage, guarded cursors, and one-sweep multi-range reads", async () => {
   const [compiledServer, bridgeSource] = await Promise.all([
-    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/action-tools.js", import.meta.url), "utf8"),
     readFile(
       new URL("../../synthv/SynthVAgentBridge.lua", import.meta.url),
       "utf8",

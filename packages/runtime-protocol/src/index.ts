@@ -172,8 +172,56 @@ export interface AgentSessionCancelParams {
 export interface AgentSessionSendParams {
   sessionId: string;
   input: string;
+  /** Non-empty, at most `AGENT_RUN_ID_MAX_LENGTH` characters; identifies this run's progress notifications. */
+  runId: string;
   budget?: AgentRunBudget;
 }
+
+export const AGENT_RUN_ID_MAX_LENGTH = 64;
+
+export const AGENT_RUN_PROGRESS_EVENT = "session.progress";
+
+export type AgentRunPhase =
+  | "starting"
+  | "waiting_model"
+  | "thinking"
+  | "writing"
+  | "running_tools"
+  | "compacting"
+  | "retrying"
+  | "cancelling"
+  | "ended";
+
+export type AgentToolActivityStatus = "running" | "awaiting_approval" | "succeeded" | "failed";
+
+export interface AgentToolActivity {
+  /** toolCallId */
+  id: string;
+  name: string;
+  status: AgentToolActivityStatus;
+  round: number;
+  summary: string;
+}
+
+export interface AgentRunProgress {
+  sessionId: string;
+  runId: string;
+  seq: number;
+  phase: AgentRunPhase;
+  round: number;
+  /** Tail of the streamed assistant text; carries a leading ellipsis once truncated. */
+  text: string;
+  plan: AgentPlan | null;
+  /** The last AGENT_PROGRESS_LIMITS.tools activities. */
+  tools: AgentToolActivity[];
+  /** Count of every activity so far, unbounded by AGENT_PROGRESS_LIMITS.tools. */
+  toolCount: number;
+  budget: AgentBudgetUsage;
+  retry: { attempt: number; maxAttempts: number } | null;
+  pendingInput: { question: string; missing: string[] } | null;
+}
+
+export const AGENT_PROGRESS_LIMITS = { text: 32_000, tools: 40, summary: 160 } as const;
 
 export interface AgentSessionSendResult {
   sessionId: string;
@@ -181,6 +229,51 @@ export interface AgentSessionSendResult {
   message: string;
   outcome: AgentRunOutcome;
 }
+
+export type AgentApprovalTool = "sv_command" | "sv_ui" | "sv_status";
+export type AgentApprovalCategory = "projectWrite" | "uiChange" | "executorControl";
+
+export interface AgentApproval {
+  id: string;
+  conversationId: string;
+  runId: string;
+  toolCallId: string;
+  tool: AgentApprovalTool;
+  action: string;
+  category: AgentApprovalCategory;
+  risk: "high";
+  /** Display-only, at most AGENT_APPROVAL_LIMITS.preview characters. */
+  preview: string;
+  createdAtUtc: string;
+  expiresAtUtc: string;
+}
+
+export type AgentApprovalOutcome = "executed" | "denied" | "expired" | "cancelled";
+
+export interface AgentApprovalResolution {
+  id: string;
+  conversationId: string;
+  runId: string;
+  toolCallId: string;
+  tool: string;
+  action: string;
+  outcome: AgentApprovalOutcome;
+  /** True only when outcome is "executed" and the bridge result was not an error. */
+  ok: boolean;
+  /** Bridge error code or short result, at most AGENT_APPROVAL_LIMITS.summary characters. */
+  summary: string;
+  resolvedAtUtc: string;
+}
+
+/** recent is newest first, at most AGENT_APPROVAL_LIMITS.recent entries. */
+export interface AgentApprovalsSnapshot {
+  pending: AgentApproval[];
+  recent: AgentApprovalResolution[];
+}
+
+export const AGENT_APPROVAL_LIMITS = { preview: 800, summary: 300, recent: 20, timeoutMs: 120_000 } as const;
+
+export const AGENT_APPROVALS_CHANGED_EVENT = "agent.approvals.changed";
 
 export const AGENT_PLAN_LIMITS = {
   goalLength: 500,

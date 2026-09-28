@@ -29,3 +29,20 @@ test("the Electron command registry validates input, routes plugin commands, and
   await assert.rejects(() => registry.invoke("configure_http_api", { enabled: true, agentEnabled: true, internalFunctionsEnabled: false, advancedFunctionsEnabled: false, port: 80 }), /TCP port/);
   await assert.rejects(() => registry.invoke("install_agent_plugin", { sourcePath: "" }), /non-empty string/);
 });
+
+test("the file-approval commands are gone, replaced by broker-backed approval commands, and send_message requires runId", async () => {
+  const host = { async load() { return {}; }, async contributions() { return []; }, runtime: { dispose: async () => {} } };
+  const approvals = { snapshot: () => ({ pending: [{ id: "a1" }], recent: [] }), decide: () => {} };
+  const desktop = { agentEffort: () => "mid" };
+  const ai = { send_message: async (conversationId, input, options) => [{ role: "user", content: input, createdAt: "" }, { role: "assistant", content: "", createdAt: "", outcome: undefined, ...options }] };
+  const registry = new ElectronCommandRegistry(host, { ai, creative: {}, desktop, synthv: {}, approvals, componentAudio: { dataRoot: process.cwd() } });
+  const commands = registry.commands();
+  assert.ok(!commands.includes("agent_file_approvals"), "agent_file_approvals is removed");
+  assert.ok(!commands.includes("decide_agent_file_approval"), "decide_agent_file_approval is removed");
+  assert.ok(commands.includes("agent_approvals"));
+  assert.ok(commands.includes("decide_agent_approval"));
+  assert.deepEqual(await registry.invoke("agent_approvals"), { pending: [{ id: "a1" }], recent: [] });
+  await assert.rejects(() => registry.invoke("send_message", { conversationId: "c1", input: "hi" }), /runId must be a non-empty string/);
+  const sent = await registry.invoke("send_message", { conversationId: "c1", input: "hi", runId: "run-1" });
+  assert.equal(sent[1].runId, "run-1");
+});

@@ -1,8 +1,7 @@
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type {
-  McpServer,
-  RegisteredTool,
-} from "@modelcontextprotocol/sdk/server/mcp.js";
+  CallToolResult,
+  ToolAnnotations,
+} from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
 import { BridgeError, BridgeProtocolError, toPublicError } from "./errors.js";
@@ -37,9 +36,40 @@ import {
 } from "./v3-query-projector.js";
 
 type JsonRecord = Record<string, unknown>;
-type RegisterTool = McpServer["registerTool"];
 
-export type ActionToolDefinitions = ReadonlyMap<string, RegisteredTool>;
+export interface ActionTool {
+  readonly title: string;
+  readonly description: string;
+  readonly inputSchema: unknown;
+  readonly annotations?: ToolAnnotations;
+  readonly handler: (
+    input: unknown,
+    extra?: unknown,
+  ) => CallToolResult | Promise<CallToolResult>;
+}
+
+export type ActionToolDefinitions = ReadonlyMap<string, ActionTool>;
+
+type InferToolInput<Shape> = Shape extends z.ZodType
+  ? z.infer<Shape>
+  : Shape extends z.ZodRawShape
+    ? z.infer<z.ZodObject<Shape>>
+    : unknown;
+
+export interface RegisterTool {
+  <Shape extends z.ZodRawShape | z.ZodType>(
+    name: string,
+    config: {
+      readonly title: string;
+      readonly description: string;
+      readonly inputSchema: Shape;
+      readonly annotations?: ToolAnnotations;
+    },
+    handler: (
+      input: InferToolInput<Shape>,
+    ) => CallToolResult | Promise<CallToolResult>,
+  ): void;
+}
 
 const V3_INCLUDE_VALUES = [
   "notes",
@@ -127,7 +157,7 @@ function readJsonResult(result: CallToolResult): unknown {
 }
 
 function parseActionInput(
-  tool: RegisteredTool,
+  tool: ActionTool,
   action: string,
   args: JsonRecord,
 ): unknown {
@@ -222,7 +252,7 @@ async function invokeActionTool(
   return handler(parsed);
 }
 
-function isReadAction(tool: RegisteredTool): boolean {
+function isReadAction(tool: ActionTool): boolean {
   return tool.annotations?.readOnlyHint === true;
 }
 
@@ -1212,7 +1242,7 @@ function minimalWriteResult(
   return commandOutcome(action, root);
 }
 
-function describeActionTool(name: string, tool: RegisteredTool): JsonRecord {
+function describeActionTool(name: string, tool: ActionTool): JsonRecord {
   const commandPolicy = optionalCommandPolicy(name);
   const stability = describeV3CapabilityStability(name);
   const schema = tool.inputSchema;

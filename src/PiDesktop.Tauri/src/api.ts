@@ -3,10 +3,10 @@ import { AGENT_EFFORT_LEVELS, DEFAULT_AGENT_EFFORT, estimateAgentRunBudget, type
 import { hasDesktopBridge, invokeDesktop, listenDesktop, openDesktopDialog } from "../electron/bridge";
 import type {
   AiProviderId,
+  AgentApprovalsSnapshot,
   AgentEffortLevel,
   AgentRunBudget,
   AgentWorkMode,
-  AgentFileApproval,
   AiProviderSummary,
   AiProviderUsageSnapshot,
   AppMode,
@@ -80,6 +80,7 @@ let previewMode: AppMode = "toolbox";
 let previewUpdateChannel: "stable" | "nightly" = "stable";
 let previewAgentWorkMode: AgentWorkMode = "edit";
 let previewAgentEffort: AgentEffortLevel = DEFAULT_AGENT_EFFORT;
+let previewAgentTranscriptsEnabled = false;
 const previewAgentBudgets: Record<AgentEffortLevel, AgentRunBudget> = Object.fromEntries(
   AGENT_EFFORT_LEVELS.map((level) => [level, estimateAgentRunBudget(level, [])]),
 ) as Record<AgentEffortLevel, AgentRunBudget>;
@@ -462,6 +463,7 @@ const previewState = (): BootstrapState => ({
   agentWorkMode: previewAgentWorkMode,
   agentEffort: previewAgentEffort,
   agentBudgets: previewAgentBudgets,
+  agentTranscriptsEnabled: previewAgentTranscriptsEnabled,
   updateChannel: previewUpdateChannel,
   platform: "preview",
   appVersion: packageJson.version,
@@ -805,6 +807,10 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   }
   if (command === "set_update_channel") {
     previewUpdateChannel = args?.channel === "nightly" ? "nightly" : "stable";
+    return previewState() as T;
+  }
+  if (command === "set_agent_transcripts") {
+    previewAgentTranscriptsEnabled = Boolean(args?.enabled);
     return previewState() as T;
   }
   if (command === "scan_synthv") return previewState().installations as T;
@@ -1433,7 +1439,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "list_conversations") return [] as T;
   if (command === "new_conversation") return { id: "preview", title: "新对话", messages: [] } as T;
   if (command === "open_conversation") return { id: "preview", title: "预览对话", messages: [] } as T;
-  if (command === "agent_file_approvals") return [] as T;
+  if (command === "agent_approvals") return { pending: [], recent: [] } as T;
+  if (command === "decide_agent_approval") return undefined as T;
   if (command === "send_message") return [{ role: "assistant", content: previewAgentOutcome.summary, outcome: previewAgentOutcome }] as T;
   if (command === "cancel_agent_run") return null as T;
   if (command === "agent_budgets") return previewAgentBudgets as T;
@@ -1754,11 +1761,12 @@ export const api = {
   listConversations: () => call<ConversationSummary[]>("list_conversations"),
   newConversation: () => call<ConversationSnapshot>("new_conversation"),
   openConversation: (id: string) => call<ConversationSnapshot>("open_conversation", { id }),
-  sendMessage: (conversationId: string, input: string) => call<ChatMessage[]>("send_message", { conversationId, input }),
+  sendMessage: (conversationId: string, input: string, runId: string) => call<ChatMessage[]>("send_message", { conversationId, input, runId }),
   cancelAgentRun: (conversationId: string) => call<void>("cancel_agent_run", { conversationId }),
   agentBudgets: () => call<Record<AgentEffortLevel, AgentRunBudget>>("agent_budgets"),
-  agentFileApprovals: () => call<AgentFileApproval[]>("agent_file_approvals"),
-  decideAgentFileApproval: (id: string, approve: boolean) => call<void>("decide_agent_file_approval", { id, approve }),
+  agentApprovals: () => call<AgentApprovalsSnapshot>("agent_approvals"),
+  decideAgentApproval: (id: string, approve: boolean) => call<void>("decide_agent_approval", { id, approve }),
+  setAgentTranscriptsEnabled: (enabled: boolean) => call<BootstrapState>("set_agent_transcripts", { enabled }),
   saveMcpServer: (server: McpServerConfig) => call<BootstrapState>("save_mcp_server", { server }),
   deleteMcpServer: (id: string) => call<BootstrapState>("delete_mcp_server", { id }),
   testMcpServer: (id: string) => call<OperationResult>("test_mcp_server", { id }),
