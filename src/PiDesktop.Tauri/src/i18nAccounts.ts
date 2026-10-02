@@ -488,57 +488,22 @@ addMessages("zh-CN", { accountUi: {
   "offlineLicenseEligibilityUnknown": "离线资格：尚未确认",
   "offlineLicenseNoCachedProducts": "没有可显示的本机离线产品缓存。",
   "offlineLicenseDirectGuard": "操作前只备份当前槽位的加密 session 文件，且必须关闭 SV2；启用会覆盖本机永久授权缓存。",
-  "enableOfflineLicense": "启用离线授权",
-  "disableOfflineLicense": "停用离线授权",
   "offlineRemoteStatus": "{state} · {device} · 检查于 {checkedAt}",
-  "offlineOperationResult": "备份：{backupPath}；access：{accessChanged}；refresh：{refreshChanged}",
   "offlineRemoteEnabled": "服务端离线授权已启用",
   "offlineRemoteDisabled": "服务端离线授权未启用",
   "offlineCurrentDevice": "当前设备",
   "offlineOtherDevice": "离线授权属于其他设备，请在原设备上停用。",
   "offlineCheckFirst": "正在读取服务端离线授权状态…",
   "offlineCheck": "重新读取离线状态",
-  "offlineChanged": "已变化",
-  "offlineUnchanged": "未变化",
   "offlineLicenseId": "授权 ID",
   "offlineProductId": "产品 ID",
-  "restoreOfflineSession": "从已验证 session 恢复",
-  "restoreOfflineSessionTitle": "确认恢复加密 session",
-  "restoreOfflineSessionChoose": "选择加密 session 文件",
-  "restoreOfflineSessionSource": "选定来源",
-  "restoreOfflineSessionDestination": "当前槽位",
-  "restoreOfflineSessionCredentials": "凭据元数据（已脱敏）",
-  "restoreOfflineSessionProducts": "本地缓存产品原始字段",
-  "restoreOfflineSessionNoProducts": "没有本地离线产品缓存记录。",
-  "restoreOfflineSessionGuard": "确认后 Toolbox 会退出。独立助手会在 SV2 和其它 Toolbox 实例均关闭后重新验证两个 SHA-256、校验来源可解密、创建并校验备份，再原子替换整个 session。access、refresh、设备和用户标识不会显示，也不能逐字段修改。",
-  "restoreOfflineSessionConfirm": "退出 Toolbox 并恢复",
   "vendor": "供应商",
-  "category": "类别"
-  ,"sessionDetails": "Session 授权明细"
-  ,"sessionDetailsDescription": "按需读取完整 session，包含当前授权字段和原始内容。"
-  ,"showSessionDetails": "显示完整授权明细"
-  ,"refreshSessionDetails": "重新读取 session"
-  ,"rawSessionData": "原始 session 数据"
-  ,"sessionPath": "session 路径"
-  ,"accessExpiry": "access 到期时间"
-  ,"sessionWrittenAt": "写入时间"
-  ,"device": "设备字段"
-  ,"user": "用户字段"
-  ,"notAvailable": "未找到"
-  ,"sessionDetailsLoaded": "已读取完整 session 授权明细。"
-  ,"copyAccess": "复制 access"
-  ,"copyRefresh": "复制 refresh"
-  ,"copied": "已复制"
-  ,"editFullSession": "编辑完整明文"
-  ,"saveSession": "保存 session"
-  ,"sessionSaved": "session 已保存，备份与新哈希："
-  ,"sessionProductRow": "产品行"
-  ,"offlineProgressDescription": "操作正在执行，当前步骤会持续更新；失败会停在出错步骤。"
-  ,"offlineStepPreflight": "预检 SV2 与当前授权状态"
-  ,"offlineStepBackup": "备份当前槽位的加密 session"
-  ,"offlineStepRemote": "提交远程离线授权请求"
-  ,"offlineStepLocal": "写入或清理本地离线缓存"
-  ,"offlineStepRead": "重新读取并核验结果"
+  "category": "类别",
+  "showSessionDetails": "显示完整授权明细",
+  "device": "设备字段",
+  "user": "用户字段",
+  "notAvailable": "未找到",
+  "copied": "已复制"
 } });
 
 addMessages("en", { accountUi: {
@@ -551,55 +516,33 @@ addMessages("en", { accountUi: {
   "offlineLicenseEligibilityUnknown": "License eligibility: not checked",
   "offlineLicenseNoCachedProducts": "No local offline product cache is available to display.",
   "offlineLicenseDirectGuard": "The operation backs up only the current slot's encrypted session file and requires SV2 to be closed. Enabling overwrites the local permanent-license cache.",
-  "enableOfflineLicense": "Enable offline license",
-  "disableOfflineLicense": "Disable offline license",
   "offlineRemoteStatus": "{state} · {device} · checked {checkedAt}",
-  "offlineOperationResult": "Backup: {backupPath}; access: {accessChanged}; refresh: {refreshChanged}",
   "offlineRemoteEnabled": "Server offline authorization is enabled",
   "offlineRemoteDisabled": "Server offline authorization is disabled",
   "offlineCurrentDevice": "Current device",
   "offlineOtherDevice": "Offline authorization belongs to another device. Disable it on that device first.",
   "offlineCheckFirst": "Reading the server offline authorization status…",
   "offlineCheck": "Read offline status again",
-  "offlineChanged": "changed",
-  "offlineUnchanged": "unchanged",
   "offlineLicenseId": "License ID",
   "offlineProductId": "Product ID",
-  "restoreOfflineSession": "Restore from a verified session",
-  "restoreOfflineSessionTitle": "Confirm encrypted session restore",
-  "restoreOfflineSessionChoose": "Choose encrypted session file",
-  "restoreOfflineSessionSource": "Selected source",
-  "restoreOfflineSessionDestination": "Current slot",
-  "restoreOfflineSessionCredentials": "Credential metadata (redacted)",
-  "restoreOfflineSessionProducts": "Raw local cached-product fields",
-  "restoreOfflineSessionNoProducts": "No local offline product cache is present.",
-  "restoreOfflineSessionGuard": "After confirmation Toolbox exits. A separate helper waits for SV2 and any other Toolbox instance to close, revalidates both SHA-256 values and decryptability, creates and verifies a backup, then atomically replaces the whole session. Access, refresh, device, and user identifiers are never shown and cannot be changed field by field.",
-  "restoreOfflineSessionConfirm": "Exit Toolbox and restore",
   "vendor": "Vendor",
-  "category": "Category"
-  ,"sessionDetails": "Session authorization details"
-  ,"sessionDetailsDescription": "Read the complete session on demand, including authorization fields and raw content."
-  ,"showSessionDetails": "Show full authorization details"
-  ,"refreshSessionDetails": "Read session again"
-  ,"rawSessionData": "Raw session data"
-  ,"sessionPath": "Session path"
-  ,"accessExpiry": "Access expiry"
-  ,"sessionWrittenAt": "Written at"
-  ,"device": "Device field"
-  ,"user": "User field"
-  ,"notAvailable": "Not found"
-  ,"sessionDetailsLoaded": "Complete session authorization details loaded."
-  ,"copyAccess": "Copy access"
-  ,"copyRefresh": "Copy refresh"
-  ,"copied": "Copied"
-  ,"editFullSession": "Edit complete plaintext"
-  ,"saveSession": "Save session"
-  ,"sessionSaved": "Session saved. Backup and new hash:"
-  ,"sessionProductRow": "Product row"
-  ,"offlineProgressDescription": "The operation is running. The current step will update continuously; failures stay on the failed step."
-  ,"offlineStepPreflight": "Preflight SV2 and authorization state"
-  ,"offlineStepBackup": "Back up the current slot's encrypted session"
-  ,"offlineStepRemote": "Submit remote offline authorization request"
-  ,"offlineStepLocal": "Write or clear the local offline cache"
-  ,"offlineStepRead": "Read back and verify the result"
+  "category": "Category",
+  "showSessionDetails": "Show full authorization details",
+  "device": "Device field",
+  "user": "User field",
+  "notAvailable": "Not found",
+  "copied": "Copied"
+} });
+
+addMessages("zh-CN", { accountUi: {
+  webQueryTitle: "高级：网页授权查询", webQueryDescription: "独立保存官方网页登录。查询通过官方连接测试检查可用性，成功后立即退出测试。",
+  webLogin: "网页登录", webQuery: "查询可用状态", webLoginOpened: "已打开官方网页登录。",
+  webAvailable: "连接测试通过", webBusy: "存在使用中设备", webUnknown: "尚未查询", webLoginRequired: "需要网页登录", webQueryFailed: "查询未完成",
+  webOfflineDevices: "离线授权设备：{devices}", webNoOfflineDevices: "没有返回离线授权设备。",
+} });
+addMessages("en", { accountUi: {
+  webQueryTitle: "Advanced: web license query", webQueryDescription: "Keeps a separate official web sign-in. Checks availability with the official connection test and exits the test immediately after success.",
+  webLogin: "Web sign-in", webQuery: "Check availability", webLoginOpened: "Official web sign-in opened.",
+  webAvailable: "Connection test passed", webBusy: "A device is in use", webUnknown: "Not checked", webLoginRequired: "Web sign-in required", webQueryFailed: "Query incomplete",
+  webOfflineDevices: "Offline license devices: {devices}", webNoOfflineDevices: "No offline license devices were returned.",
 } });

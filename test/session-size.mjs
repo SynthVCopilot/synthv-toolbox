@@ -47,7 +47,9 @@ test("profile state and profile-state IPC include per-slot session-size metadata
     const service = new SynthVService(root, root, noBridge, root, async () => ({ stdout: "", stderr: "", code: 0 }), undefined, root);
     const created = await service.createProfile("Primary");
     const slotId = created.slots[0].id;
-    await service.writeSession(slotId, "a".repeat(4097), "");
+    const session = join(created.slots[0].dataPath, "license", "session");
+    await mkdir(join(created.slots[0].dataPath, "license"), { recursive: true });
+    await writeFile(session, Buffer.alloc(4097));
     const state = await service.profileState();
     assert.deepEqual(state.slots[0].sessionSize, { status: "offline", sizeBytes: 4097 });
 
@@ -55,5 +57,20 @@ test("profile state and profile-state IPC include per-slot session-size metadata
     registerSynthVCommands({ register: (name, handler) => handlers.set(name, handler) }, service);
     const ipcState = await handlers.get("sv2_profile_state")({});
     assert.deepEqual(ipcState.slots[0].sessionSize, { status: "offline", sizeBytes: 4097 });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("active slots inspect the live official session rather than the saved slot copy", async () => {
+  const root = await mkdtemp(join(tmpdir(), "session-size-active-"));
+  try {
+    const service = new SynthVService(root, root, noBridge, root, async () => ({ stdout: "", stderr: "", code: 0 }), undefined, root);
+    const created = await service.createProfile("Primary");
+    const slot = created.slots[0];
+    await mkdir(join(slot.dataPath, "license"), { recursive: true });
+    await writeFile(join(slot.dataPath, "license", "session"), Buffer.alloc(4096));
+    const activated = await service.activateProfile(slot.id);
+    await writeFile(join(activated.canonicalPath, "license", "session"), Buffer.alloc(4097));
+    assert.equal((await service.sessionSize(slot.id)).status, "offline");
+    assert.equal((await service.profileState()).slots[0].sessionSize.status, "offline");
   } finally { await rm(root, { recursive: true, force: true }); }
 });

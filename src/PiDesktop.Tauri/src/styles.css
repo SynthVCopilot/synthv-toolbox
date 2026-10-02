@@ -1719,3 +1719,5 @@ button.path-picker-button { display: inline-flex; flex: 0 0 34px; align-items: c
   .workflow-result > pre { color: #f5f5f5; background: #111; }
   .onboarding { background: radial-gradient(circle at 12% 6%, rgba(96,205,255,.09), transparent 30%), radial-gradient(circle at 92% 95%, rgba(58,131,190,.06), transparent 26%), var(--mica); }
 }
+
+.web-account-panel > p, .web-account-panel > ul, .web-account-panel > .manager-action-row { grid-column: 1 / -1; }

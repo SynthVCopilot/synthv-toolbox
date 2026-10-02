@@ -226,6 +226,13 @@ export interface Sv2SessionProtection {
 export type Sv2AccountProbeSessionStatus = "ready" | "missing" | "inUse" | "expired" | "loginRequired" | "invalid" | "syncFailed" | "accountMismatch" | "unsupported" | "offline";
 export type Sv2AuthorizationStatus = "verified" | "unknown";
 export type Sv2OfflineLicenseCacheStatus = "active" | "inactive" | "unknown";
+export interface Sv2WebAccountSnapshot {
+  status: "ready" | "loginRequired" | "error";
+  use: "available" | "busy" | "unknown";
+  offlineDevices: Array<{ name: string; enabled: boolean }>;
+  licenses: Array<{ name: string; status: string; type: string }>;
+  checkedAtUtc: string;
+}
 export type Sv2OfflineLicenseEligibility = "eligible" | "ineligible" | "unknown";
 
 export interface Sv2OfflineCachedField {
@@ -247,70 +254,6 @@ export interface Sv2OfflineLicense {
   cacheStatus: Sv2OfflineLicenseCacheStatus;
   eligibility: Sv2OfflineLicenseEligibility;
   cachedProducts: Sv2OfflineCachedProduct[];
-}
-
-export interface Sv2OfflineLicenseStatus {
-  enabled: boolean;
-  eligible: boolean;
-  localCacheStatus: Sv2OfflineLicenseCacheStatus;
-  currentDevice: boolean;
-  deviceName?: string | null;
-  checkedAtUtc: string;
-  cachedProducts: Sv2OfflineCachedProduct[];
-}
-
-export interface Sv2OfflineLicenseOperation {
-  status: Sv2OfflineLicenseStatus;
-  backupPath: string;
-  accessChanged: boolean;
-  refreshChanged: boolean;
-  detail: string;
-}
-
-export interface Sv2SessionCredentialMetadata {
-  accessTokenLength: number;
-  refreshTokenLength: number;
-  accessExpiry: string;
-  writtenAt: string;
-  deviceIdentifierLength: number;
-  userIdentifierLength?: number | null;
-}
-
-export interface Sv2SessionCachedField {
-  key: string;
-  value: string;
-}
-
-export interface Sv2SessionCachedProduct {
-  fields: Sv2SessionCachedField[];
-}
-
-export interface Sv2SessionInspection {
-  path: string;
-  sha256: string;
-  encryptedBytes: number;
-  plaintextLines: number;
-  credentials: Sv2SessionCredentialMetadata;
-  cachedProducts: Sv2SessionCachedProduct[];
-}
-
-export interface Sv2SessionReplacementPreview {
-  source: Sv2SessionInspection;
-  destination: Sv2SessionInspection;
-}
-
-export interface Sv2SessionDocument {
-  path: string;
-  encryptedSha256: string;
-  encryptedBytes: number;
-  plaintext: string;
-}
-
-export interface Sv2SessionDocumentWriteResult {
-  path: string;
-  backupPath: string;
-  encryptedSha256: string;
-  encryptedBytes: number;
 }
 
 export interface Sv2AuthorizedVoiceProduct {

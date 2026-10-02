@@ -15,6 +15,8 @@ import { HttpMcpServer } from "./services/http-mcp-server.js";
 import { loadEmbeddedBridge } from "./services/synthv-bridge.js";
 import { createSynthVDeliveryRegistry, createSynthVToolsExtension } from "./services/synthv-agent-tools.js";
 import { SynthVService } from "./services/synthv-service.js";
+import { DreamtonicsWebAccounts, type WebAccountBrowser } from "./services/dreamtonics-web.js";
+import { createDreamtonicsBrowser } from "./services/dreamtonics-browser.js";
 import { createPiSessionFactory } from "@synthv-toolbox/agent-runtime";
 import type { JsonValue } from "@synthv-toolbox/runtime-protocol";
 import { authorizeAnthropic } from "@model-auth/providers/anthropic";
@@ -196,7 +198,13 @@ async function initializeServices(): Promise<void> {
   const bridgeDirectory = app.isPackaged ? join(process.resourcesPath, "components", "synthv-agent-bridge") : resolve(currentDirectory, "../../components/synthv-agent-bridge");
   const bridge = await loadEmbeddedBridge(bridgeDirectory, "synthv-toolbox");
   const bridgeIpcDirectory = (await bridge.status()).ipcDirectory;
-  const synthv = new SynthVService(join(userData, "synthv"), bridgeDirectory, bridge, bridgeIpcDirectory, undefined, autostartController());
+  const accountBrowsers = new Map<string, WebAccountBrowser>();
+  const webAccounts = new DreamtonicsWebAccounts((slotId) => {
+    let browser = accountBrowsers.get(slotId);
+    if (!browser) { browser = createDreamtonicsBrowser(slotId); accountBrowsers.set(slotId, browser); }
+    return browser;
+  });
+  const synthv = new SynthVService(join(userData, "synthv"), bridgeDirectory, bridge, bridgeIpcDirectory, undefined, autostartController(), undefined, process.env, webAccounts);
   const componentsRoot = app.isPackaged ? join(process.resourcesPath, "components") : resolve(currentDirectory, "../../components");
   const creative = createCreativeService(join(userData, "creative"), createComponentExecutor(componentsRoot));
   let ai: AiService;

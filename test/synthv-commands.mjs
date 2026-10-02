@@ -12,9 +12,9 @@ test("SynthV command mapping preserves validated API parameters", async () => {
   };
   registerSynthVCommands({ register: (name, handler) => handlers.set(name, handler) }, service);
   await handlers.get("send_synthv_bridge_shortcut")({ processId: 7, processIdentity: "7:stable", action: "start" });
-  await handlers.get("write_sv2_session_document")({ slotId: "slot", plaintext: "session", expectedSha256: "hash" });
+  for (const name of ["read_sv2_session_document", "write_sv2_session_document", "sv2_set_offline_license"]) assert.equal(handlers.has(name), false);
   await handlers.get("install_bridge")({ targets: [{ scriptsPath: "C:/scripts", bridgeProfile: "sv2" }] });
-  assert.deepEqual(calls, [["shortcut", 7, "7:stable", "start"], ["write", "slot", "session", "hash"], ["install", [{ scriptsPath: "C:/scripts", bridgeProfile: "sv2" }]]]);
+  assert.deepEqual(calls, [["shortcut", 7, "7:stable", "start"], ["install", [{ scriptsPath: "C:/scripts", bridgeProfile: "sv2" }]]]);
   assert.throws(() => handlers.get("send_synthv_bridge_shortcut")({ processId: 0, processIdentity: "x", action: "start" }), /positive integer/);
   assert.throws(() => handlers.get("install_bridge")({ targets: [{ scriptsPath: "", bridgeProfile: "sv2" }] }), /non-empty string/);
 });

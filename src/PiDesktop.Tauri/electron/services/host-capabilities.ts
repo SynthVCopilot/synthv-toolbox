@@ -20,9 +20,9 @@ export class HostCapabilities {
   private async internal(capability: string, operation: string, params: Data): Promise<JsonValue> {
     if (capability === "synthv") {
       if (operation === "profile-state") return await this.synthv.profileState() as JsonValue;
+      if (operation === "session-size") return await this.synthv.sessionSize(text(params, "slotId")) as JsonValue;
       if (operation === "scan") return await this.synthv.scanInstallations() as JsonValue;
-      if (operation === "session-read") return await this.synthv.readSession(text(params, "slotId")) as JsonValue;
-      if (operation === "offline-inspect") return await this.synthv.inspectOfflineLicense(text(params, "slotId")) as JsonValue;
+
       if (operation === "processes") return await this.synthv.listProcesses() as unknown as JsonValue;
     }
     if (capability === "creative") return await this.creative.invoke(operation, params) as JsonValue;
@@ -56,7 +56,8 @@ export class HostCapabilities {
     }
     if (capability === "synthv") {
       if (operation === "activate-profile") return await this.synthv.activateProfile(text(params, "slotId")) as JsonValue;
-      if (operation === "offline-set") return await this.synthv.setOfflineLicense(text(params, "slotId"), boolean(params, "enabled")) as unknown as JsonValue;
+      if (operation === "web-account-query") return await this.synthv.webAccountQuery(text(params, "slotId")) as unknown as JsonValue;
+
     }
     throw new Error(`Unsupported advanced host operation: ${capability}.${operation}`);
   }
