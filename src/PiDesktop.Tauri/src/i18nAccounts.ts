@@ -195,6 +195,21 @@ addMessages("zh-CN", { accountUi: {
   "smartRoutingWorksOnlyWhileToolboxIsAlreadyRunning": "智能路由只在工具箱已经运行时生效",
   "onAColdStartOrWhenThisFeatureIs": "冷启动或关闭此功能时，工具箱会把工程透明转交给原始 .svp 处理程序；不会监控、终止或劫持已经启动的 SV2。路由优先采用账号服务返回的授权摘要，并以你的确认记录作为补充；任何未知结果都必须由你选择账号。"
 } });
+
+addMessages("zh-CN", { accountUi: {
+  "sessionSizeOffline": "离线",
+  "sessionSizeOnline": "在线",
+  "sessionSizeUnknown": "未知",
+  "sessionSizeUnavailable": "大小不可用",
+  "sessionSizeBytes": "{size} 字节"
+} });
+addMessages("en", { accountUi: {
+  "sessionSizeOffline": "Offline",
+  "sessionSizeOnline": "Online",
+  "sessionSizeUnknown": "Unknown",
+  "sessionSizeUnavailable": "Size unavailable",
+  "sessionSizeBytes": "{size} bytes"
+} });
 addMessages("en", { accountUi: {
   addConnection: "Add connection", noConnectedProvider: "No model provider connected", chooseModel: "Choose a model.", addCredentialsFirst: "Add an OAuth subscription or API key to choose a model.",
   "toolboxDoesNotModifySvBypassAccountRestrictionsOr": "Toolbox does not modify SV2, bypass account restrictions, or disconnect other sessions. Continuing means you understand and accept this risk.",

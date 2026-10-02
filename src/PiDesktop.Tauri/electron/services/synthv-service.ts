@@ -9,6 +9,17 @@ const shortcutActions = new Set(["start", "startLegacy", "stop", "save", "undo",
 
 export type OperationResult = { succeeded: boolean; summary: string; detail: string };
 export type ProcessInfo = { processId: number; processIdentity: string; name: string; productName: string; version: string; command: string; windowTitle: string; isSv2: boolean; sandboxed: boolean | null };
+export const SESSION_OFFLINE_THRESHOLD_BYTES = 4096;
+export type SessionSizeInspection = { status: "offline" | "online" | "unknown"; sizeBytes: number | null };
+export async function inspectSessionSize(filePath: string): Promise<SessionSizeInspection> {
+  try {
+    const metadata = await stat(filePath);
+    if (!metadata.isFile()) return { status: "unknown", sizeBytes: null };
+    return { status: metadata.size > SESSION_OFFLINE_THRESHOLD_BYTES ? "offline" : "online", sizeBytes: metadata.size };
+  } catch {
+    return { status: "unknown", sizeBytes: null };
+  }
+}
 type Runner = (command: string, args: string[], env?: NodeJS.ProcessEnv) => Promise<{ stdout: string; stderr: string; code: number }>;
 type Slot = { id: string; displayName: string; createdAtUtc: string; lastActivatedAtUtc: string | null };
 type ProfileStore = { activeSlotId: string | null; slots: Slot[] };
@@ -76,7 +87,7 @@ export class SynthVService {
 
   async profileState(): Promise<Record<string, unknown>> {
     const store = await this.readStore();
-    const slots = await Promise.all(store.slots.map(async slot => ({ ...slot, isActive: slot.id === store.activeSlotId, dataPath: this.slotPath(slot.id), sessionCached: await exists(this.sessionPath(slot.id)), installedVoiceIds: [] })));
+    const slots = await Promise.all(store.slots.map(async slot => ({ ...slot, isActive: slot.id === store.activeSlotId, dataPath: this.slotPath(slot.id), sessionCached: await exists(this.sessionPath(slot.id)), sessionSize: await inspectSessionSize(this.sessionPath(slot.id)), installedVoiceIds: [] })));
     const sandbox = await this.sandboxie();
     return { supported: platform() === "win32" || platform() === "darwin", canonicalPath: this.canonicalPath(), vaultPath: this.vaultPath(), activeSlotId: store.activeSlotId, canonicalRootExists: await exists(this.canonicalPath()), canImportCurrent: await exists(this.canonicalPath()), recoveryRequired: false, recoveryDetail: "", slots, blockers: [], concurrentProvider: sandbox ? { available: true, name: "Sandboxie", edition: "", version: "", installPath: dirname(sandbox.start), detail: "Sandboxie launch tools were found; a configured isolated box is required." } : { available: false, name: "Sandboxie", edition: "", version: "", installPath: "", detail: "Sandboxie Start.exe and SbieIni.exe were not found." }, concurrentDefaults: { appSettings: false, voiceLibraries: false } };
   }

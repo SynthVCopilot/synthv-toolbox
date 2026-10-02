@@ -1907,6 +1907,19 @@ function renderSessionDocument(slot: Sv2ProfileSlot): string {
   return `<details class="session-document-details" open><summary>${t("accountUi.sessionDetails")}</summary><dl class="profile-storage-list compact session-credential-list">${credentialFields}<div><dt>SHA-256</dt><dd><code>${escapeHtml(document.encryptedSha256)}</code></dd></div><div><dt>${t("accountUi.sessionPath")}</dt><dd><code>${escapeHtml(document.path)}</code></dd></div></dl>${productFields}<form class="session-editor" data-write-sv2-session="${escapeHtml(slot.id)}"><label>${t("accountUi.editFullSession")}<textarea name="plaintext" spellcheck="false">${escapeHtml(document.plaintext)}</textarea></label><button class="secondary" type="submit">${icon("check", 14)} ${t("accountUi.saveSession")}</button></form><details class="session-raw-details"><summary>${t("accountUi.rawSessionData")}</summary><pre>${escapeHtml(document.plaintext)}</pre></details><button class="secondary" data-read-sv2-session="${escapeHtml(slot.id)}">${icon("refresh", 14)} ${t("accountUi.refreshSessionDetails")}</button></details>`;
 }
 
+function renderSessionSizeIndicator(slot: Sv2ProfileSlot): string {
+  const inspection = slot.sessionSize ?? { status: "unknown" as const, sizeBytes: null };
+  const statusLabel = inspection.status === "offline"
+    ? t("accountUi.sessionSizeOffline")
+    : inspection.status === "online"
+      ? t("accountUi.sessionSizeOnline")
+      : t("accountUi.sessionSizeUnknown");
+  const sizeLabel = inspection.sizeBytes === null
+    ? t("accountUi.sessionSizeUnavailable")
+    : t("accountUi.sessionSizeBytes", { size: inspection.sizeBytes });
+  return `<span class="session-size-indicator ${inspection.status}">${escapeHtml(statusLabel)} · ${escapeHtml(sizeLabel)}</span>`;
+}
+
 function renderOfflineLicenseSteps(): string {
   const pending = pendingOfflineLicenseSteps;
   if (!pending) return "";
@@ -1922,7 +1935,7 @@ function renderAccountManager(): string {
   if (managedSlot) managedProfileSlotId = managedSlot.id;
   let body = "";
   if (accountManagerSection === "profile" && !supportsWindowsSv2Extensions()) {
-    body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${managedSlot.sessionCached ? t("accountUi.accountInformationNeedsRefresh") : t("accountUi.signedOut")}</h3></div>${managedSlot.isActive ? `<span class="profile-active-badge">${t("accountUi.currentDefault")}</span>` : ""}</div>
+    body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${managedSlot.sessionCached ? t("accountUi.accountInformationNeedsRefresh") : t("accountUi.signedOut")}</h3><p>${renderSessionSizeIndicator(managedSlot)}</p></div>${managedSlot.isActive ? `<span class="profile-active-badge">${t("accountUi.currentDefault")}</span>` : ""}</div>
       <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>${t("accounts.managerNote")}<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" placeholder="${t("accounts.notePlaceholder")}" /></label><button class="secondary">${t("accounts.saveNote")}</button></form>
       <div class="manager-action-row">${managedSlot.isActive ? "" : `<button class="secondary" data-profile-activate="${managedSlot.id}">${icon("check", 15)} ${t("accounts.setDefault")}</button>`}<button class="secondary" data-profile-folder="${managedSlot.id}">${icon("folder", 15)} ${t("accounts.openData")}</button><button class="secondary component-remove-action" data-delete-profile="${managedSlot.id}">${icon("trash", 15)} ${t("accounts.delete")}</button></div>
       <dl class="profile-storage-list compact"><div><dt>${t("accounts.data")}</dt><dd><code title="${escapeHtml(managedSlot.dataPath)}">${escapeHtml(managedSlot.dataPath)}</code></dd></div></dl></div>` : `<div class="empty-inline">${t("accounts.noAccounts")}</div>`;
@@ -1967,7 +1980,7 @@ function renderAccountManager(): string {
     const canSetOffline = !!remoteOffline && remoteOffline.currentDevice && (remoteOffline.enabled || remoteOffline.eligible) && !busy;
     const sessionDocumentHtml = renderSessionDocument(managedSlot);
     const offlineLicensePanel = managedSlot ? `<section class="authorization-panel offline-license-panel"><div class="authorization-heading"><div><strong>${t("accountUi.offlineLicense")}</strong><small>${escapeHtml(offlineCacheLabel)} · ${escapeHtml(offlineEligibilityLabel)}</small>${remoteSummary}</div><span class="inventory-status ${remoteOffline?.enabled ? "verified" : "unknown"}">${remoteOffline ? t(remoteOffline.enabled ? "accountUi.offlineRemoteEnabled" : "accountUi.offlineRemoteDisabled") : offlineCacheLabel}</span></div><p>${t("accountUi.offlineLicenseDirectGuard")}</p>${offlineProductList}<div class="manager-action-row"><button class="secondary" data-offline-license-set="${managedSlot.id}" data-offline-license-enabled="${!remoteOffline?.enabled}" ${canSetOffline ? "" : "disabled"}>${remoteOffline?.enabled ? t("accountUi.disableOfflineLicense") : t("accountUi.enableOfflineLicense")}</button><button class="secondary" data-offline-session-restore="${managedSlot.id}" ${busy ? "disabled" : ""}>${icon("shield", 15)} ${t("accountUi.restoreOfflineSession")}</button></div></section><section class="authorization-panel session-document-panel"><div class="authorization-heading"><div><strong>${t("accountUi.sessionDetails")}</strong><small>${t("accountUi.sessionDetailsDescription")}</small></div></div>${sessionDocumentHtml}</section>` : "";
-    body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(officialIdentity.name ?? (managedSlot.sessionCached ? t("accountUi.accountInformationNeedsRefresh") : t("accountUi.signedOut")))}</h3><p>${escapeHtml(officialIdentity.email ?? t("accountUi.accountInformationNeedsRefresh"))}</p><p>${accountUseDot(managedUseState)} ${escapeHtml(managedUseState.label)}</p></div>${managedSlot.isActive ? `<span class="profile-active-badge">${t("accountUi.currentDefault")}</span>` : ""}</div>
+    body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${escapeHtml(officialIdentity.name ?? (managedSlot.sessionCached ? t("accountUi.accountInformationNeedsRefresh") : t("accountUi.signedOut")))}</h3><p>${escapeHtml(officialIdentity.email ?? t("accountUi.accountInformationNeedsRefresh"))}</p><p>${accountUseDot(managedUseState)} ${escapeHtml(managedUseState.label)}</p><p>${renderSessionSizeIndicator(managedSlot)}</p></div>${managedSlot.isActive ? `<span class="profile-active-badge">${t("accountUi.currentDefault")}</span>` : ""}</div>
       <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>${t("accountUi.note")}<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" placeholder="${t("accountUi.eGProductionAccount")}" /></label><button class="secondary">${t("accountUi.saveNote")}</button></form>
       <section class="authorization-panel"><div class="authorization-heading"><div><strong>${t("accountUi.availableAuthorizations")}</strong><small>${escapeHtml(authorizationSummary)}</small></div><span class="inventory-status ${authorizationStatus ? "verified" : "unknown"}">${authorizationStatus ? t("accountUi.authorizationsDetail", { p0: authorizations.length }) : t("accountUi.notRead")}</span></div>${authorizationList}</section>
       ${offlineLicensePanel}

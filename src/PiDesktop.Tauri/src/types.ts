@@ -342,6 +342,7 @@ export interface Sv2ProfileSlot {
   lastActivatedAtUtc?: string;
   isActive: boolean;
   sessionCached: boolean;
+  sessionSize?: { status: "offline" | "online" | "unknown"; sizeBytes: number | null };
   installedVoiceIds: string[];
   dataPath: string;
   sessionProtection: Sv2SessionProtection;

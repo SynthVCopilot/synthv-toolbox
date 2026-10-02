@@ -330,6 +330,7 @@ let previewProfiles: Sv2ProfilesState = {
     lastActivatedAtUtc: new Date().toISOString(),
     isActive: true,
     sessionCached: true,
+    sessionSize: { status: "offline", sizeBytes: 8192 },
     installedVoiceIds: [],
     dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\slots\\11111111-1111-4111-8111-111111111111",
     sessionProtection: {
@@ -369,6 +370,7 @@ let previewProfiles: Sv2ProfilesState = {
     createdAtUtc: new Date().toISOString(),
     isActive: false,
     sessionCached: true,
+    sessionSize: { status: "online", sizeBytes: 4096 },
     installedVoiceIds: ["00000000-0000-4000-8000-000000000002"],
     dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\slots\\22222222-2222-4222-8222-222222222222",
     sessionProtection: {
