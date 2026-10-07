@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, realpath, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, readFile, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,6 +58,35 @@ const pronunciation = await run("run_pronunciation_diagnostics", { projectPath: 
 assert.equal(pronunciation.kind, "pronunciation-check");
 assert.equal(pronunciation.data.inspectedItems, 2);
 
+const libraryFixturePath = fileURLToPath(new URL("./fixtures/component-library-reference.svp", import.meta.url));
+const libraryFixtureBytes = await readFile(libraryFixturePath);
+const librarySource = path.join(root, "library-reference.svp");
+await writeFile(librarySource, libraryFixtureBytes);
+const libraryDoctor = await run("run_project_doctor", { projectPath: librarySource });
+assert.equal(libraryDoctor.data.noteCount, 4);
+assert.equal(libraryDoctor.data.ok, true);
+const libraryPronunciation = await run("run_pronunciation_diagnostics", { projectPath: librarySource });
+assert.equal(libraryPronunciation.data.inspectedItems, 4);
+assert.equal(libraryPronunciation.data.issues.length, 1);
+assert.deepEqual(await readFile(librarySource), libraryFixtureBytes);
+
+const repeatedProject = JSON.parse(libraryFixtureBytes.toString("utf8"));
+repeatedProject.library[0].notes[3].duration = 0;
+repeatedProject.tracks[0].groups.push({ groupID: "library-verse", blickOffset: 1411200000 });
+const repeatedBytes = Buffer.from(JSON.stringify(repeatedProject, null, 2));
+const repeatedPath = path.join(root, "repeated-library-reference.svp");
+await writeFile(repeatedPath, repeatedBytes);
+const repeatedDoctor = await run("run_project_doctor", { projectPath: repeatedPath });
+assert.equal(repeatedDoctor.data.noteCount, 8);
+assert.deepEqual(repeatedDoctor.data.issues.filter(issue => issue.code === "NOTE_TIMING_INVALID").map(issue => issue.location), [
+  "tracks[0].groups[0]@blickOffset=0.notes[3]",
+  "tracks[0].groups[1]@blickOffset=1411200000.notes[3]",
+]);
+const repeatedPronunciation = await run("run_pronunciation_diagnostics", { projectPath: repeatedPath });
+assert.equal(repeatedPronunciation.data.inspectedItems, 8);
+assert.equal(repeatedPronunciation.data.issues.filter(issue => issue.code === "LYRIC_EMPTY_OR_CONTROL").length, 2);
+assert.deepEqual(await readFile(repeatedPath), repeatedBytes);
+
 const copy = await run("export_project_without_parameters", { projectPath: source, outputName: "clean.svp" });
 assert.equal(copy.kind, "export-project-without-parameters");
 assert.equal(copy.outputPath, path.join(dataRoot, "output", "clean.svp"));
@@ -86,6 +115,24 @@ assert.equal(reference.kind, "add-project-reference");
 assert.equal(JSON.parse(await readFile(reference.outputPath, "utf8")).tracks.length, 2);
 assert.deepEqual(await readFile(source), originalBytes);
 await assert.rejects(run("export_project_without_parameters", { projectPath: source, outputName: "clean.svp" }), /already exists|已存在/u);
+const externalOutput = path.join(root, "external-output");
+await mkdir(externalOutput);
+const outputRoot = path.join(dataRoot, "output");
+await symlink(externalOutput, path.join(outputRoot, "escape"), process.platform === "win32" ? "junction" : "dir");
+await assert.rejects(run("export_project_without_parameters", { projectPath: source, outputName: "escape/escaped.svp" }), /不在数据根/u);
+await assert.rejects(readFile(path.join(externalOutput, "escaped.svp")), error => error.code === "ENOENT");
+const danglingTarget = path.join(externalOutput, "dangling-target.svp");
+const danglingOutput = path.join(outputRoot, "dangling.svp");
+let danglingLinkCreated = true;
+try { await symlink(danglingTarget, danglingOutput, "file"); }
+catch (error) {
+  danglingLinkCreated = false;
+  if (process.platform !== "win32" || !["EPERM", "EACCES", "ENOTSUP"].includes(error.code)) throw error;
+}
+if (danglingLinkCreated) {
+  await assert.rejects(run("export_project_without_parameters", { projectPath: source, outputName: "dangling.svp" }), /符号链接/u);
+  await assert.rejects(readFile(danglingTarget), error => error.code === "ENOENT");
+}
 
 const attemptAudio = async (command, args, dependencies) => {
   try { return await run(command, args); }

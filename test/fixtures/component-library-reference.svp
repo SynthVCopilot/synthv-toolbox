@@ -1,0 +1,45 @@
+{
+  "version": 196,
+  "time": {
+    "tempo": [
+      {
+        "position": 0,
+        "bpm": 120
+      }
+    ]
+  },
+  "library": [
+    {
+      "uuid": "library-verse",
+      "name": "Verse",
+      "notes": [
+        { "onset": 0, "duration": 705600000, "pitch": 60, "lyrics": "la" },
+        { "onset": 705600000, "duration": 705600000, "pitch": 62, "lyrics": "mi" },
+        { "onset": 1411200000, "duration": 705600000, "pitch": 64, "lyrics": "do" },
+        { "onset": 2116800000, "duration": 705600000, "pitch": 65, "lyrics": "sp" }
+      ],
+      "parameters": {}
+    }
+  ],
+  "tracks": [
+    {
+      "name": "Lead",
+      "mainGroup": {
+        "uuid": "lead-main",
+        "notes": [],
+        "parameters": {}
+      },
+      "mainRef": {
+        "groupID": "lead-main",
+        "blickOffset": 0,
+        "isInstrumental": false
+      },
+      "groups": [
+        {
+          "groupID": "library-verse",
+          "blickOffset": 0
+        }
+      ]
+    }
+  ]
+}
