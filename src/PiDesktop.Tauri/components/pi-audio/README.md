@@ -60,16 +60,19 @@ PANNs(可选):按 requirements.txt 注释装 torch(CPU)+panns-inference。
 
 ## 数据纪律(统一数据根)
 
-所有数据统一放 **`~/.SynthVcopilot/`**,并且**硬禁止 `..` 穿透**:
+所有数据统一放在组件数据根,并且**硬禁止 `..` 穿透**。桌面应用通过
+`SYNTHV_TOOLBOX_DATA_ROOT` 将数据根设为应用私有组件目录；独立运行时默认使用
+`~/.SynthVcopilot/`:
 
 | 内容 | 位置 |
 |---|---|
-| PANNs checkpoint (~300MB) | `~/.SynthVcopilot/models/panns/`(显式传 checkpoint_path) |
-| MIDI 等输出写入 | `~/.SynthVcopilot/output/`(`--midi` 只收相对名;绝对路径仅根内放行) |
-| 配置 / 历史（Toolbox Agent） | `~/.SynthVcopilot/config.json` / `history/` |
+| PANNs checkpoint (~300MB) | `<数据根>/models/panns/`(显式传 checkpoint_path) |
+| MIDI 等输出写入 | `<数据根>/output/`(`--midi` 只收相对名;绝对路径仅根内放行) |
+| 配置 / 历史（Toolbox Agent） | `<数据根>/config.json` / `history/` |
 
-唯一根外例外:AudioSet 标签 CSV(~60KB)——panns_inference 库在 import 时硬编码读
-`~/panns_data/class_labels_indices.csv`,无法重定向,已自动预置。
+独立运行且未设置 `SYNTHV_TOOLBOX_DATA_ROOT` 时,AudioSet 标签 CSV 会按
+`panns_inference` 的固定约定写入 `~/panns_data/`。应用隔离运行会拒绝 PANNs
+分析,避免写入应用数据根之外。
 
 ## 验证记录
 

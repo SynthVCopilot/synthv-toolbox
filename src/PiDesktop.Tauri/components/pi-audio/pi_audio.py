@@ -57,15 +57,17 @@ def note_name(p: int) -> str:
 
 
 def data_root():
-    """统一数据根：~/.SynthVcopilot（模型/输出/配置/历史都在这个根下）。"""
+    """统一数据根：模型、输出、配置与历史都保存在同一个根目录。"""
+    import os
     import pathlib
 
-    return pathlib.Path.home() / ".SynthVcopilot"
+    configured = os.environ.get("SYNTHV_TOOLBOX_DATA_ROOT")
+    return pathlib.Path(configured).expanduser().resolve() if configured else pathlib.Path.home() / ".SynthVcopilot"
 
 
 def safe_output_path(name_or_rel: str, subdir: str = "output", suffix: str | None = None,
                      allow_external: bool = False):
-    """把（可能来自外部的）输出路径安全落到 ~/.SynthVcopilot/ 数据根下。
+    """把（可能来自外部的）输出路径安全落到组件数据根下。
 
     规则：硬禁止 `..` 穿透；相对路径落到 `<root>/<subdir>/` 下；
     绝对路径默认仅当**已在数据根内**时放行；经受信任调用方验证的
@@ -96,6 +98,8 @@ def safe_output_path(name_or_rel: str, subdir: str = "output", suffix: str | Non
     if suffix and out.suffix.lower() != suffix:
         out = out.with_suffix(suffix)
     out.parent.mkdir(parents=True, exist_ok=True)
+    if out.exists():
+        raise FileExistsError(f"输出文件已存在，拒绝覆盖: {out}")
     return out
 
 
@@ -124,6 +128,9 @@ def _ensure_panns_assets():
     返回 checkpoint 绝对路径（显式传给 AudioTagging，避免库把大模型下到根外）。
     """
     import os
+
+    if os.environ.get("SYNTHV_TOOLBOX_DATA_ROOT"):
+        raise RuntimeError("PANNs labels require a home-directory data path; isolated desktop runs do not write there.")
 
     models = data_root() / "models" / "panns"
     models.mkdir(parents=True, exist_ok=True)

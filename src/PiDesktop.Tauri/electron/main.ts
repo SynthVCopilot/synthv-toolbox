@@ -198,7 +198,10 @@ async function initializeServices(): Promise<void> {
   const bridgeIpcDirectory = (await bridge.status()).ipcDirectory;
   const synthv = new SynthVService(join(userData, "synthv"), bridgeDirectory, bridge, bridgeIpcDirectory, undefined, autostartController());
   const componentsRoot = app.isPackaged ? join(process.resourcesPath, "components") : resolve(currentDirectory, "../../components");
-  const creative = createCreativeService(join(userData, "creative"), createComponentExecutor(componentsRoot));
+  const creative = createCreativeService(
+    join(userData, "creative"),
+    createComponentExecutor(componentsRoot, undefined, undefined, { dataRoot: join(userData, "components") }),
+  );
   let ai: AiService;
   let capabilities: HostCapabilities;
   let desktop: DesktopStateService;
