@@ -22,7 +22,7 @@ class AudioMidiLyricsTests(unittest.TestCase):
             args = SimpleNamespace(vocal="vocal.wav", inst=None, advanced=False,
                                    lyrics_file=str(lyrics), transcribe=False, midi=str(output),
                                    output_external=True, tol=0.08)
-            with patch.object(pi_audio, "extract_notes", return_value=[{"pitch": 60, "start": 0, "end": 1, "velocity": 90}]), \
+            with patch.object(pi_audio, "extract_notes", return_value=([{"pitch": 60, "start": 0, "end": 1, "velocity": 90}], {"hardwareEnabled": False})), \
                  patch.object(pi_audio, "transcribe_words", side_effect=AssertionError("Unexpected transcription")):
                 pi_audio.cmd_pair_diff(args)
             events = [event for track in mido.MidiFile(output, charset="utf-8").tracks for event in track]
@@ -39,7 +39,7 @@ class AudioMidiLyricsTests(unittest.TestCase):
     def test_melody_only_workflow_does_not_load_transcription(self):
         args = SimpleNamespace(vocal="vocal.wav", inst=None, advanced=False,
                                lyrics_file=None, transcribe=False, midi=None, tol=0.08)
-        with patch.object(pi_audio, "extract_notes", return_value=[{"pitch": 60, "start": 0, "end": 1, "velocity": 90}]), \
+        with patch.object(pi_audio, "extract_notes", return_value=([{"pitch": 60, "start": 0, "end": 1, "velocity": 90}], {"hardwareEnabled": False})), \
              patch.object(pi_audio, "transcribe_words", side_effect=AssertionError("Unexpected transcription")):
             result = pi_audio.cmd_pair_diff(args)
         self.assertEqual(result["mono_notes"], 1)

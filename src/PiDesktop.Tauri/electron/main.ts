@@ -200,7 +200,8 @@ async function initializeServices(): Promise<void> {
   const componentsRoot = app.isPackaged ? join(process.resourcesPath, "components") : resolve(currentDirectory, "../../components");
   const creative = createCreativeService(
     join(userData, "creative"),
-    createComponentExecutor(componentsRoot, undefined, undefined, { dataRoot: join(userData, "components") }),
+    createComponentExecutor(componentsRoot, undefined, undefined, { dataRoot: join(userData, "creative") }),
+    bridge,
   );
   let ai: AiService;
   let capabilities: HostCapabilities;
@@ -242,7 +243,7 @@ async function initializeServices(): Promise<void> {
       return result.canceled ? undefined : result.filePath;
     },
   }, approvals }, emitToRenderer);
-  registerQuitCleanup(async () => { approvals.dispose(); await bridge.close(); });
+  registerQuitCleanup(async () => { approvals.dispose(); creative.dispose?.(); await bridge.close(); });
 }
 
 let quitCleanupDone = false;

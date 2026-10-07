@@ -11,15 +11,15 @@ const messages = read(join(root, "src", "PiDesktop.Tauri", "src", "featureMessag
 const i18n = read(join(root, "src", "PiDesktop.Tauri", "src", "i18n.ts"));
 
 for (const [group, ids] of Object.entries({
-  import: ["cover"],
-  convert: ["source-separation", "audio-to-project", "audio-preparation"],
-  analysis: ["tuning-learning", "audio-insight"],
-  quality: ["project-doctor", "pronunciation-doctor", "render-review"],
+  import: ["score-to-synthv"],
+  convert: ["audio-to-project", "audio-preparation", "project-tools"],
+  analysis: ["audio-insight"],
+  quality: ["project-doctor", "pronunciation-doctor", "render-review", "batch-recipes"],
 })) {
   assert.match(catalog, new RegExp(`id: "${group}"[\\s\\S]*?featureIds: \\[${ids.map((id) => `"${id}"`).join(", ")}\\]`));
 }
 
-for (const hidden of ["media-import", "score-to-synthv", "project-tools", "ab-audition", "retake-compare", "batch-recipes", "selective-sync"]) {
+for (const hidden of ["cover", "media-import", "source-separation", "tuning-learning", "ab-audition", "retake-compare", "selective-sync"]) {
   assert.doesNotMatch(catalog.match(/const groupDefinitions:[\s\S]*?\n\];/)?.[0] ?? "", new RegExp(`"${hidden}"`));
 }
 

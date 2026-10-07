@@ -142,6 +142,10 @@ try {
   }
   assert.equal((await restarted.invoke("load_lyric_project", { id: created.id })).versions.length, 30);
 
+  const umlaut = await service.invoke("lookup_chinese_rhyme", { query: "lǜ", matchMode: "exact" });
+  assert.ok(umlaut.characters.some(item => item.character === "绿"));
+  assert.ok(!umlaut.characters.some(item => item.character === "路"));
+
   const template = await service.invoke("build_lyric_template", {
     language: "zh-CN", title: "夜行", sections: [section], rhymeTargets: { A: "ang", B: "ing" },
   });
@@ -154,7 +158,9 @@ try {
 
   const exported = await service.invoke("export_lyric_project_text", { title: "月光下", draft: "月光照着我 🌙" });
   assert.equal(await readFile(exported.detail, "utf8"), "月光照着我 🌙");
-  await assert.rejects(service.invoke("export_lyric_project_text", { title: "月光下", draft: "不可覆盖" }), /EEXIST/u);
+  const exportedAgain = await service.invoke("export_lyric_project_text", { title: "月光下", draft: "新的副本" });
+  assert.notEqual(exportedAgain.detail, exported.detail);
+  assert.equal(await readFile(exportedAgain.detail, "utf8"), "新的副本");
   assert.equal(await readFile(exported.detail, "utf8"), "月光照着我 🌙");
 
   const polyphonic = await service.invoke("lookup_chinese_rhyme", { query: "行", matchMode: "exact" });

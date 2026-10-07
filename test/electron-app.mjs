@@ -191,6 +191,10 @@ test("built Electron app boots, exposes the desktop bridge, and drives the Copil
     await pageCdp.send("Page.enable");
     inspectorCdp = await connectInspector(inspectorPort);
 
+    await t.test("hardware acceleration is enabled by default", async () => {
+      assert.equal(await evaluate(inspectorCdp, "require('electron').app.isHardwareAccelerationEnabled()", { includeCommandLineAPI: true }), true);
+    });
+
     await t.test("preload bridge is exposed to the renderer", async () => {
       const bridgeType = await waitFor(() => evaluate(pageCdp, "typeof window.toolboxDesktop"), { label: "window.toolboxDesktop" });
       assert.equal(bridgeType, "object");

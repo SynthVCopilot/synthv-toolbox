@@ -4,7 +4,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { polyphonic } from "pinyin-pro";
 
 type Args = Record<string, unknown>;
-type RhymeEntry = { character: string; pinyin: string[]; finals: string[]; families: string[] };
+type RhymeEntry = { character: string; pinyin: string[]; finals: string[]; families: string[]; readings: Array<{ pinyin: string; final: string }> };
 type RhymeMatchMode = "family" | "exact";
 type LyricSectionRequest = { id: string; kind: "intro" | "verse" | "preChorus" | "chorus" | "bridge" | "instrumental" | "outro" | "custom"; label: string; lineCount: number; rhymeScheme: string };
 type LyricCandidateSet = { language: "zh-CN"; brief: string; imagery: string; sectionLabel: string; targetRhyme?: string | null; candidates: Array<{ text: string; rhymeFoot?: string | null; rhymeMatched?: boolean | null; note: string }> };
@@ -330,7 +330,7 @@ export function createLyricService(dataRoot: string): LyricService {
     };
   };
 
-  const removeToneMarks = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/gu, "").replace(/ü/giu, "v").toLowerCase();
+  const removeToneMarks = (value: string) => value.normalize("NFD").replace(/u\u0308/giu, "v").replace(/[\u0300-\u036f]/gu, "").toLowerCase();
   const classifyFinal = (final: string) => {
     const normalized = removeToneMarks(final);
     const match = normalized.match(/(ang|eng|ong|an|en|un|in|ao|ou|ai|ei|ia|ie|iao|iu|ua|uo|uai|ui|ue|ve|a|o|e|i|u|v)$/u);
@@ -347,7 +347,8 @@ export function createLyricService(dataRoot: string): LyricService {
           const pinyin = [...new Set(pronunciations.filter((item) => item.isZh).map((item) => removeToneMarks(item.pinyin)))].sort();
           if (!pinyin.length) return [];
           const finals = [...new Set(pronunciations.filter((item) => item.isZh).map((item) => removeToneMarks(item.final)))].sort();
-          return [{ character, pinyin, finals, families: [...new Set(finals.map(classifyFinal))].sort() }];
+          const readings = pronunciations.filter(item => item.isZh).map(item => ({ pinyin: removeToneMarks(item.pinyin), final: removeToneMarks(item.final) }));
+          return [{ character, pinyin, finals, families: [...new Set(finals.map(classifyFinal))].sort(), readings }];
         });
       });
     }
@@ -373,9 +374,8 @@ export function createLyricService(dataRoot: string): LyricService {
       const roman = removeToneMarks(query).replace(/[^a-zv]/gu, "");
       if (!roman) throw new Error("query must contain Chinese characters or pinyin.");
       queryPinyin = [roman];
-      const matchedPronunciations = index.flatMap((item) => item.pinyin.filter((pronunciation) => pronunciation === roman).map(() => item));
-      const matched = matchedPronunciations[0];
-      if (matched) targetKeys = (mode === "exact" ? matched.finals : matched.families);
+      const matchedPronunciations = index.flatMap(item => item.readings.filter(reading => reading.pinyin === roman));
+      if (matchedPronunciations.length) targetKeys = [...new Set(matchedPronunciations.map(reading => mode === "exact" ? reading.final : classifyFinal(reading.final)))];
       else {
         const normalizedFinal = roman.replace(/^(zh|ch|sh|b|p|m|f|d|t|n|l|g|k|h|j|q|x|r|z|c|s|y|w)/u, "");
         targetKeys = [mode === "exact" ? normalizedFinal : classifyFinal(normalizedFinal)].filter(Boolean);
@@ -404,7 +404,7 @@ export function createLyricService(dataRoot: string): LyricService {
     await assertNoEscapingSymlink(directory, root, true);
     const canonicalDirectory = await realpath(directory);
     assertInsideRoot(root, canonicalDirectory);
-    const path = join(canonicalDirectory, `${safeName}.txt`);
+    const path = join(canonicalDirectory, `${safeName}-${randomUUID()}.txt`);
     const temporary = `${path}.${randomUUID()}.tmp`;
     const handle = await open(temporary, "wx", 0o600);
     try {

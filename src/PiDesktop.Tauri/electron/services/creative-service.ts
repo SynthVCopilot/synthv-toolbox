@@ -1,71 +1,143 @@
-import { copyFile, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
-import { basename, dirname, extname, join, resolve, relative, isAbsolute } from "node:path";
-import { randomUUID } from "node:crypto";
+import { constants } from "node:fs";
+import { copyFile, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { createLyricService, LYRIC_COMMANDS } from "./lyric-service.js";
+import { createCreativeBridge, CREATIVE_BRIDGE_COMMANDS } from "./creative-bridge.js";
+import type { EmbeddedBridge } from "./synthv-bridge.js";
 
-type Data = Record<string, unknown>;
+type Data = Record<string, any>;
 type TaskExecutor = (kind: string, args: Data) => Promise<Data>;
+export interface CreativeService { invoke(command: string, args: Data): Promise<unknown>; dispose?(): void; }
 
-export interface CreativeService {
-  invoke(command: string, args: Data): Promise<unknown>;
-}
-
-export function createCreativeService(dataRoot: string, executeTask: TaskExecutor = async command => { throw new Error(`No component executor is configured for ${command}.`); }): CreativeService {
-  const root = resolve(dataRoot);
-  const safe = (...parts: string[]) => {
-    const path = resolve(root, ...parts);
-    if (relative(root, path).startsWith("..") || !path.startsWith(root)) throw new Error("Path escapes the creative data root.");
+export function createCreativeService(dataRoot: string, executeTask: TaskExecutor = async command => { throw new Error(`No component executor is configured for ${command}.`); }, bridge?: EmbeddedBridge): CreativeService {
+  const root = resolve(dataRoot), lyrics = createLyricService(root), connected = bridge ? createCreativeBridge(bridge) : undefined;
+  let queue: Promise<unknown> = Promise.resolve();
+  const serialize = <T>(fn: () => Promise<T>) => { const next = queue.then(fn, fn); queue = next.catch(() => undefined); return next; };
+  const now = () => new Date().toISOString();
+  const managed = async (...parts: string[]) => {
+    const path = resolve(root, ...parts), suffix = relative(root, path);
+    if (!suffix || isAbsolute(suffix) || suffix === ".." || suffix.startsWith(`..${sep}`)) throw new Error("Path escapes the creative data root.");
+    for (let current = path; current !== dirname(root); current = dirname(current)) {
+      try { if ((await lstat(current)).isSymbolicLink()) throw new Error("Creative data paths must not contain symbolic links."); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      if (current === root) break;
+    }
     return path;
   };
-  const readJson = async <T>(path: string, fallback: T): Promise<T> => {
-    try { return JSON.parse(await readFile(path, "utf8")) as T; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return fallback; throw error; }
+  const readList = async (path: string): Promise<Data[]> => {
+    try { const value = JSON.parse(await readFile(path, "utf8")); if (!Array.isArray(value)) throw new Error("Creative storage is invalid."); return value; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
   };
   const writeJson = async (path: string, value: unknown) => {
     await mkdir(dirname(path), { recursive: true });
     const temporary = `${path}.${randomUUID()}.tmp`;
-    await writeFile(temporary, JSON.stringify(value, null, 2), "utf8");
-    await rename(temporary, path);
+    try { await writeFile(temporary, JSON.stringify(value, null, 2), { encoding: "utf8", flag: "wx", mode: 0o600 }); await rename(temporary, path); }
+    finally { await rm(temporary, { force: true }); }
   };
-  const projects = safe("lyrics", "projects.json");
-  const history = safe("creative-history", "entries.json");
-  const tuning = safe("tuning", "profiles.json");
-  const tasks = safe("media", "tasks.json");
-  const list = async <T>(path: string): Promise<T[]> => readJson<T[]>(path, []);
-  const id = () => randomUUID();
-  const now = () => new Date().toISOString();
   const recipes = [
-    { id: "project-doctor", title: "Project doctor", description: "Inspect project data.", kind: "project-doctor", inputKind: "project", supportsBatch: true, requiresBridge: false, requiresAi: false, defaultParameters: {} },
-    { id: "lyric-template", title: "Lyric template", description: "Create a lyric structure.", kind: "lyric-template", inputKind: "lyrics", supportsBatch: false, requiresBridge: false, requiresAi: false, defaultParameters: { language: "zh-CN", rhymeMode: "family" } },
-  ];
-  const appendHistory = async (kind: string, summary: string, data: Data = {}) => {
-    const entries = await list<Data>(history);
-    entries.unshift({ id: id(), kind, summary, data, createdAt: now() });
-    await writeJson(history, entries.slice(0, 200));
+    ["project-doctor", "Project diagnostics", "project"], ["pronunciation-check", "Lyric structure diagnostics", "project"],
+    ["project-probe", "Project inspection", "project"], ["project-no-params", "Project copy without parameters", "project"], ["render-review", "Rendered audio review", "audio"],
+  ].map(([id, title, inputKind]) => ({ id, title, description: title, kind: id, inputKind, supportsBatch: true, requiresBridge: false, requiresAi: false, defaultParameters: {} }));
+  const record = (kind: string, parameters: Data, result: Data) => serialize(async () => {
+    const path = await managed("creative-history", "entries.json"), entries = await readList(path);
+    entries.unshift({ id: randomUUID(), kind: result.kind ?? kind, title: result.summary ?? kind, summary: result.summary ?? kind, createdAtUtc: now(), outputPath: result.outputPath, parameters, result: result.data ?? result });
+    await writeJson(path, entries.slice(0, 200));
+  });
+  const checkpoint = (projectPath: string, label = "Saved project snapshot") => serialize(async () => {
+    if (!isAbsolute(projectPath) || extname(projectPath).toLowerCase() !== ".svp") throw new Error("An absolute local SVP path is required.");
+    const file = await lstat(projectPath);
+    if (!file.isFile() || file.size > 64 * 1024 * 1024) throw new Error("The SVP must be a regular file no larger than 64 MiB.");
+    const bytes = await readFile(projectPath), sourceSha256 = sha(bytes);
+    const path = await managed("project-checkpoints", "entries.json"), entries = await readList(path);
+    const existing = entries.find(item => item.sourcePath === projectPath && item.sourceSha256 === sourceSha256);
+    if (existing) return existing;
+    const id = randomUUID(), snapshotPath = await managed("project-checkpoints", id, basename(projectPath));
+    await mkdir(dirname(snapshotPath), { recursive: true });
+    await writeFile(snapshotPath, bytes, { flag: "wx", mode: 0o600 });
+    const entry = { id, label, sourcePath: projectPath, snapshotPath, sourceSha256, sourceSize: bytes.length, createdAtUtc: now() };
+    entries.unshift(entry); await writeJson(path, entries); return entry;
+  });
+  const tracked = new Map<string, Data>();
+  const track = async (path: string) => {
+    const state = tracked.get(path) ?? { sourcePath: path, lastSeenAtUtc: now(), lastBackupAtUtc: null, lastError: null, backupCount: 0 };
+    tracked.set(path, state); state.lastSeenAtUtc = now();
+    try { const saved = await checkpoint(path); state.lastBackupAtUtc = saved.createdAtUtc; state.lastError = null; state.backupCount = (await readList(await managed("project-checkpoints", "entries.json"))).filter(item => item.sourcePath === path).length; }
+    catch (error) { state.lastError = String(error); throw error; }
   };
-  const lyricProject = (input: Data, existing?: Data): Data => {
-    const revision = Number(existing?.revision ?? 0) + 1;
-    const versions = Array.isArray(existing?.versions) ? [...existing.versions] : [];
-    if (existing) versions.push({ revision: Number(existing.revision), title: existing.title, draft: existing.draft, sections: existing.sections, rhymeTargets: existing.rhymeTargets, candidateHistory: existing.candidateHistory, savedAt: now() });
-    return { id: existing?.id ?? id(), title: String(input.title ?? "Untitled"), draft: String(input.draft ?? ""), sections: Array.isArray(input.sections) ? input.sections : [], rhymeTargets: input.rhymeTargets && typeof input.rhymeTargets === "object" ? input.rhymeTargets : {}, candidateHistory: Array.isArray(input.candidateHistory) ? input.candidateHistory : [], revision, versions, createdAt: existing?.createdAt ?? now(), updatedAt: now() };
+  let backingUp = false;
+  const timer = setInterval(() => {
+    if (backingUp) return;
+    backingUp = true;
+    void Promise.all([...tracked.keys()].map(path => track(path).catch(() => undefined))).finally(() => { backingUp = false; });
+  }, 60_000);
+  timer.unref();
+  const execute = async (command: string, args: Data): Promise<Data> => {
+    if (typeof args.projectPath === "string" && args.projectPath) await track(args.projectPath);
+    let result: Data;
+    if (CREATIVE_BRIDGE_COMMANDS.includes(command)) {
+      if (!connected) throw new Error("SynthV Bridge is unavailable.");
+      result = await connected.invoke(command, args);
+    } else {
+      result = await executeTask(command, args);
+      if (command === "run_audio_to_project" && args.importToSynthv === true) {
+        if (!connected || typeof result.outputPath !== "string") throw new Error("Audio output is unavailable for SynthV import.");
+        const imported = await connected.invoke("run_score_to_synthv", { ...args, scorePath: result.outputPath });
+        result = { ...result, summary: imported.summary, data: { ...result.data, synthv: imported.data } };
+      }
+    }
+    if (!result || result.succeeded === false || typeof result.summary !== "string" || !result.data || typeof result.data !== "object") throw new Error(String(result?.summary ?? "The component did not return a valid workflow result."));
+    await record(command, args, result); return result;
   };
-  return { async invoke(command, args) {
+  return { dispose() { clearInterval(timer); }, async invoke(command, args) {
+    if ((LYRIC_COMMANDS as readonly string[]).includes(command)) {
+      const result = await lyrics.invoke(command, args);
+      if (command === "build_lyric_template" || command === "export_lyric_project_text") await record(command, args, result as Data);
+      return result;
+    }
+    if (command.includes("lyric_bridge")) {
+      if (!connected) throw new Error("SynthV Bridge is unavailable.");
+      return connected.invoke(command, args);
+    }
     if (command === "list_workflow_recipes") return recipes;
-    if (command === "list_creative_history") return (await list<Data>(history)).slice(0, Number(args.limit ?? 50));
-    if (command === "export_workflow_report") { const path = safe("reports", `${id()}.${args.format === "json" ? "json" : "txt"}`); await mkdir(dirname(path), { recursive: true }); await writeFile(path, args.format === "json" ? JSON.stringify(args, null, 2) : `${args.kind ?? "report"}\n${args.summary ?? ""}`, "utf8"); return { succeeded: true, summary: "Report exported.", detail: path }; }
-    if (command === "lookup_chinese_rhyme") { const query = String(args.query ?? "").trim(); const family = query.endsWith("ang") || /[ang光旁长]/u.test(query) ? "ang" : query; return { query, matchMode: args.matchMode ?? "family", rhymeKeys: family ? [family] : [], matches: family ? [{ key: family, label: family, examples: ["光", "旁", "长"] }] : [] }; }
-    if (command === "build_lyric_template") { const sections = Array.isArray(args.sections) ? args.sections : []; const lines = sections.flatMap((section: any) => Array.from({ length: Number(section.lineCount ?? 0) }, (_, index) => ({ lineNumber: index + 1, rhymeLabel: section.rhymeScheme?.[index] ?? null, placeholder: `${section.label ?? "Section"} ${index + 1}` }))); const result = { kind: "lyric-template", summary: `Created ${lines.length} lyric lines.`, data: { language: args.language ?? "zh-CN", title: args.title ?? "", sections: lines, rhymeTargets: args.rhymeTargets ?? {} } }; await appendHistory("lyric-template", result.summary, result.data); return result; }
-    if (command === "list_lyric_projects") return (await list<Data>(projects)).slice(0, Number(args.limit ?? 50)).map(({ versions, candidateHistory, ...summary }) => summary);
-    if (command === "create_lyric_project" || command === "save_lyric_project") { const all = await list<Data>(projects); const index = command === "save_lyric_project" ? all.findIndex((project) => project.id === args.id) : -1; if (command === "save_lyric_project" && index < 0) throw new Error("Lyric project was not found."); const project = lyricProject(args, index < 0 ? undefined : all[index]); if (index < 0) all.unshift(project); else all[index] = project; await writeJson(projects, all); return project; }
-    if (command === "load_lyric_project") { const project = (await list<Data>(projects)).find((item) => item.id === args.id); if (!project) throw new Error("Lyric project was not found."); return project; }
-    if (command === "restore_lyric_project_version") { const all = await list<Data>(projects); const index = all.findIndex((item) => item.id === args.id); const version = (all[index]?.versions as Data[] | undefined)?.find((item) => item.revision === args.revision); if (index < 0 || !version) throw new Error("Lyric project version was not found."); const restored = lyricProject(version, all[index]); all[index] = restored; await writeJson(projects, all); return restored; }
-    if (command === "export_lyric_project_text") { const path = safe("lyrics", "exports", `${String(args.title ?? "lyrics").replaceAll(/[^a-z0-9_-]/giu, "_") || "lyrics"}.txt`); await mkdir(dirname(path), { recursive: true }); await writeFile(path, String(args.draft ?? ""), "utf8"); return { succeeded: true, summary: "Lyrics exported.", detail: path }; }
-    if (command === "list_tuning_profiles") return list<Data>(tuning);
-    if (command === "learn_tuning_profile" || command === "record_tuning_outcome") { const all = await list<Data>(tuning); const voiceName = String(args.voiceName ?? ""); const index = all.findIndex((item) => item.voiceName === voiceName); const profile = { ...(index < 0 ? { id: id(), voiceName, sourceSamples: 0, outcomeSamples: 0, parameters: args.candidate ?? {} } : all[index]), ...(command === "learn_tuning_profile" ? { sourceSamples: Number(all[index]?.sourceSamples ?? 0) + 1 } : { outcomeSamples: Number(all[index]?.outcomeSamples ?? 0) + 1, parameters: args.candidate ?? all[index]?.parameters }), updatedAt: now() }; if (index < 0) all.push(profile); else all[index] = profile; await writeJson(tuning, all); return profile; }
-    if (command === "create_project_checkpoint") { const source = resolve(String(args.projectPath ?? "")); if (!isAbsolute(source) || extname(source).toLowerCase() !== ".svp") throw new Error("A local SVP project path is required."); const checkpointId = id(); const directory = safe("project-checkpoints", checkpointId); await mkdir(directory, { recursive: true }); const snapshot = join(directory, basename(source)); await copyFile(source, snapshot); const entry = { id: checkpointId, label: String(args.label ?? "Checkpoint"), sourcePath: source, snapshotPath: snapshot, createdAt: now() }; const entries = await list<Data>(safe("project-checkpoints", "entries.json")); entries.unshift(entry); await writeJson(safe("project-checkpoints", "entries.json"), entries); return entry; }
-    if (command === "list_project_checkpoints") return (await list<Data>(safe("project-checkpoints", "entries.json"))).slice(0, Number(args.limit ?? 50));
-    if (command === "restore_project_checkpoint") { const entry = (await list<Data>(safe("project-checkpoints", "entries.json"))).find((item) => item.id === args.id); if (!entry) throw new Error("Checkpoint was not found."); const output = resolve(dirname(String(entry.sourcePath)), String(args.outputName ?? `restored-${basename(String(entry.sourcePath))}`)); if (relative(dirname(String(entry.sourcePath)), output).startsWith("..")) throw new Error("Restore output escapes the source directory."); await copyFile(String(entry.snapshotPath), output); return { succeeded: true, summary: "Checkpoint restored.", detail: output }; }
-    if (["media_tasks", "audio_tasks"].includes(command)) return list<Data>(tasks);
-    if (["cancel_media_task", "cancel_audio_task", "retry_media_task", "retry_audio_task"].includes(command)) { const all = await list<Data>(tasks); const task = all.find((item) => item.id === args.taskId); if (!task) throw new Error("Task was not found."); task.status = command.startsWith("cancel") ? "cancelled" : "queued"; task.updatedAt = now(); await writeJson(tasks, all); return task; }
-    if (command.startsWith("run_") || command.startsWith("start_") || command === "enqueue_media_task") { const task = { id: id(), kind: command, status: "queued", args, createdAt: now(), updatedAt: now() }; const all = await list<Data>(tasks); all.unshift(task); await writeJson(tasks, all); try { const result = await executeTask(command, args); if (result.succeeded === false) throw new Error(String(result.summary ?? "Component execution failed.")); task.status = "completed"; (task as Data).result = result; } catch (error) { task.status = "failed"; (task as Data).error = error instanceof Error ? error.message : String(error); } task.updatedAt = now(); await writeJson(tasks, all); return task; }
-    return executeTask(command, args);
+    if (command === "list_creative_history") return (await readList(await managed("creative-history", "entries.json"))).slice(0, limit(args.limit));
+    if (command === "get_project_backup_state") return { intervalSeconds: 60, projects: [...tracked.values()], lastError: null };
+    if (command === "create_project_checkpoint") return checkpoint(String(args.projectPath ?? ""), String(args.label ?? "Saved project snapshot"));
+    if (command === "list_project_checkpoints") return (await readList(await managed("project-checkpoints", "entries.json"))).slice(0, limit(args.limit));
+    if (command === "restore_project_checkpoint") {
+      const entry = (await readList(await managed("project-checkpoints", "entries.json"))).find(item => item.id === args.id);
+      if (!entry) throw new Error("Checkpoint was not found.");
+      const name = String(args.outputName ?? `restored-${randomUUID()}.svp`);
+      if (basename(name) !== name || name.includes("\\") || extname(name).toLowerCase() !== ".svp") throw new Error("A new SVP filename is required.");
+      const source = await managed("project-checkpoints", String(entry.id), basename(String(entry.snapshotPath)));
+      if (sha(await readFile(source)) !== entry.sourceSha256) throw new Error("Checkpoint integrity check failed.");
+      const output = join(dirname(String(entry.sourcePath)), name);
+      await copyFile(source, output, constants.COPYFILE_EXCL);
+      return { succeeded: true, summary: "Checkpoint restored to a new file.", detail: output };
+    }
+    if (command === "export_workflow_report") {
+      if (!["markdown", "json"].includes(args.format)) throw new Error("Choose Markdown or JSON.");
+      const path = await managed("reports", `${randomUUID()}.${args.format === "json" ? "json" : "md"}`);
+      await mkdir(dirname(path), { recursive: true });
+      const contents = args.format === "json" ? JSON.stringify(args, null, 2) : `# ${args.kind ?? "Workflow report"}\n\n${args.summary ?? ""}\n\n\`\`\`json\n${JSON.stringify(args.data ?? {}, null, 2)}\n\`\`\`\n`;
+      await writeFile(path, contents, { encoding: "utf8", flag: "wx" });
+      return { succeeded: true, summary: "Report exported.", detail: path };
+    }
+    if (command === "run_batch_workflow") {
+      const recipe = recipes.find(item => item.id === args.recipeId);
+      if (!recipe || !Array.isArray(args.inputPaths) || !args.inputPaths.length || args.inputPaths.length > 100) throw new Error("Choose a supported recipe and 1–100 local files.");
+      const operations: Data = { "project-doctor": "run_project_doctor", "pronunciation-check": "run_pronunciation_diagnostics", "project-probe": "run_project_probe", "project-no-params": "export_project_without_parameters", "render-review": "run_render_review" };
+      const items = [];
+      for (const inputPath of args.inputPaths) {
+        try { const result = await execute(operations[recipe.id], { ...args.options, ...(recipe.inputKind === "audio" ? { audioPath: inputPath } : { projectPath: inputPath }), outputName: `${basename(inputPath, extname(inputPath))}-${randomUUID()}.svp` }); items.push({ inputPath, status: "completed", result }); }
+        catch (error) { items.push({ inputPath, status: "failed", error: String(error) }); }
+      }
+      return { recipeId: recipe.id, completed: items.filter(item => item.status === "completed").length, failed: items.filter(item => item.status === "failed").length, items };
+    }
+    if (["media_tasks", "audio_tasks", "list_tuning_profiles"].includes(command)) return [];
+    if (["preview_media_source", "queue_media_import", "queue_media_separation", "queue_cover", "cancel_media_task", "retry_media_task", "learn_tuning_profile", "record_tuning_outcome", "apply_tuning_profile", "run_solo_tuning", "generate_lyric_candidates", "review_workflow"].includes(command)) throw new Error("This workflow is not available in this build. Use the local audio, score, lyric and project tools.");
+    return execute(command, args);
   } };
 }
+function sha(bytes: Buffer) { return createHash("sha256").update(bytes).digest("hex"); }
+function limit(value: unknown) { const result = value === undefined ? 50 : Number(value); if (!Number.isInteger(result) || result < 1 || result > 200) throw new Error("limit must be between 1 and 200."); return result; }
