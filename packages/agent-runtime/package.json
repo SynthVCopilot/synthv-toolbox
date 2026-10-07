@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.85.1",
-    "@model-auth/core": "https://github.com/lsy-404/platform-kit/releases/download/v0.6.1/model-auth-core-0.6.1.tgz",
+    "@model-auth/core": "https://github.com/lsy-404/platform-kit/releases/download/model-auth-core-v0.9.0/model-auth-core-0.9.0.tgz",
     "@synthv-toolbox/runtime-protocol": "file:../runtime-protocol",
     "typebox": "1.3.7"
   },

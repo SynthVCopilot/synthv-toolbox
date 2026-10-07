@@ -22,6 +22,7 @@ const { registerModelAuthElement, registerModelConnectionPanelElement } = await 
 registerModelAuthElement();
 registerModelConnectionPanelElement();
 const dialog = document.createElement("model-auth-dialog");
+dialog.separateAuthMethods = true;
 dialog.open = true;
 dialog.catalogStatus = { state: "ready", source: "models.dev" };
 dialog.providers = [{
@@ -48,12 +49,12 @@ await new Promise((resolve) => setTimeout(resolve, 0));
 stage("选择提供商", 1);
 dialog.shadowRoot.querySelector('[data-provider-id="anthropic"]').click();
 await new Promise((resolve) => setTimeout(resolve, 0));
-stage("完成授权", 2);
+stage("完成配置", 2);
 assert.equal(dialog.shadowRoot.querySelector('[part="model-search"]'), null);
 
 let authorization;
 dialog.addEventListener("authorize-oauth", (event) => { authorization = event.detail; });
-dialog.shadowRoot.querySelector('[data-part="oauth-config"] button').click();
+dialog.shadowRoot.querySelector('[data-part="authorize"]').click();
 assert.deepEqual(authorization, ["anthropic"]);
 assert.equal(dialog.shadowRoot.querySelector('[role="progressbar"]').getAttribute("aria-valuenow"), "2");
 assert.equal(dialog.shadowRoot.querySelector('[data-part="confirm"]'), null);
@@ -62,14 +63,6 @@ await new Promise((resolve) => setTimeout(resolve, 0));
 assert.equal(dialog.shadowRoot.querySelector('[role="progressbar"]').getAttribute("aria-valuenow"), "3");
 stage("确认", 3);
 assert.equal(dialog.shadowRoot.querySelector('[data-part="oauth-config"]'), null);
-assert.equal(dialog.shadowRoot.querySelector('[part="model-search"]'), null);
-assert.equal(dialog.shadowRoot.querySelector('[part="model-row"]'), null);
-dialog.shadowRoot.querySelector('[data-part="back"]').click();
-await new Promise((resolve) => setTimeout(resolve, 0));
-stage("完成授权", 2);
-dialog.shadowRoot.querySelector('[data-part="continue-confirmation"]').click();
-await new Promise((resolve) => setTimeout(resolve, 0));
-stage("确认", 3);
 assert.equal(dialog.shadowRoot.querySelector('[part="model-search"]'), null);
 assert.equal(dialog.shadowRoot.querySelector('[part="model-row"]'), null);
 let selection = 0;
@@ -99,6 +92,7 @@ panel.addEventListener("manage", (event) => { target = event.detail; });
 panel.shadowRoot.querySelector('[data-part="view-connection"]').click();
 assert.deepEqual(target, [{ providerId: "anthropic", method: "oauth" }]);
 
+dialog.providers = [{ ...dialog.providers[0], apiKeyCredentials: [{ id: "saved-key", label: "Saved key", enabled: true, healthy: true, models: ["claude"] }] }];
 const { mountModelAuthDialog } = await import("../src/PiDesktop.Tauri/src/modelAuthDialog.ts");
 const host = mountModelAuthDialog({
   execute: async () => {}, cancelAuthorization: async () => {},
@@ -115,7 +109,7 @@ for (const method of ["oauth", "api-key"]) {
   await new Promise(resolve => setTimeout(resolve, 250));
   host.update({ providers: dialog.providers, open: true, initialConnection: null });
   await new Promise(resolve => setTimeout(resolve, 0));
-  assert.equal(mounted.shadowRoot.querySelector("h2").textContent, "选择方式");
+  assert.equal(mounted.shadowRoot.querySelector("h2").textContent, "选择提供商");
   host.close();
   await new Promise(resolve => setTimeout(resolve, 250));
 }

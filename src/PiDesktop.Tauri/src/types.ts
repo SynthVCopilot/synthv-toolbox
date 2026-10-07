@@ -48,6 +48,7 @@ export interface AiApiKeySummary {
   healthy: boolean;
   enabled: boolean;
   weight: number;
+  extend?: Record<string, unknown>;
   cooldownUntilUtc: string | null;
   createdAtUtc: string;
 }
@@ -60,6 +61,7 @@ export interface AiProviderAccountSummary {
   healthy: boolean;
   enabled: boolean;
   weight: number;
+  extend?: Record<string, unknown>;
 }
 
 export interface AiProviderSummary {

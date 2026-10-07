@@ -70,6 +70,7 @@ export interface StoredCredential {
   createdAt: string;
   expiresAt?: number;
   sealed: string;
+  extend?: Record<string, unknown>;
 }
 
 export interface ProviderSettings {
@@ -209,8 +210,8 @@ export class AiService {
         connected: credentials.some((credential) => credential.enabled),
         healthyAccounts: oauth.filter((credential) => credential.enabled).length,
         totalAccounts: oauth.length,
-        accounts: oauth.map((credential) => ({ id: credential.id, label: credential.label, expiresAt: credential.expiresAt ?? 0, authorized: true, healthy: credential.enabled, enabled: credential.enabled, weight: credential.weight })),
-        apiKeys: apiKeys.map((credential) => ({ id: credential.id, label: credential.label, models: credential.models, healthy: credential.enabled, enabled: credential.enabled, weight: credential.weight, cooldownUntilUtc: null, createdAtUtc: credential.createdAt })),
+        accounts: oauth.map((credential) => ({ id: credential.id, label: credential.label, expiresAt: credential.expiresAt ?? 0, authorized: true, healthy: credential.enabled, enabled: credential.enabled, weight: credential.weight, extend: credential.extend })),
+        apiKeys: apiKeys.map((credential) => ({ id: credential.id, label: credential.label, models: credential.models, healthy: credential.enabled, enabled: credential.enabled, weight: credential.weight, extend: credential.extend, cooldownUntilUtc: null, createdAtUtc: credential.createdAt })),
         authMethods: ["oauth", "api-key"],
         available: true,
         unavailableReason: null,
@@ -316,13 +317,31 @@ export class AiService {
     return this.removeCredential(provider, credentialId, "oauth");
   }
 
-  async update_ai_credential(provider: AiProviderId, credentialId: string, enabled: boolean, weight: number): Promise<Record<string, unknown>> {
-    if (!Number.isInteger(weight) || weight < 1 || weight > 100) throw new Error("Credential weight must be between 1 and 100.");
+  async update_ai_credential(provider: AiProviderId, credentialId: string, enabled: boolean, weight?: number, label?: string, extend?: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (weight !== undefined && (!Number.isInteger(weight) || weight < 1 || weight > 100)) throw new Error("Credential weight must be between 1 and 100.");
     const metadata = await this.load();
     const credential = metadata.credentials.find((item) => item.provider === provider && item.id === credentialId);
     if (!credential) throw new Error("Credential was not found.");
     credential.enabled = enabled;
-    credential.weight = weight;
+    if (label !== undefined && (!label.trim() || label.trim().length > 80)) throw new Error("Credential label must contain 1 to 80 characters.");
+    if (extend && Object.values(extend).some(value => value !== null && !["string", "number", "boolean"].includes(typeof value))) throw new Error("Credential metadata must contain scalar values.");
+    if (weight !== undefined) credential.weight = weight;
+    if (label !== undefined) credential.label = label.trim();
+    if (extend !== undefined) credential.extend = extend;
+    await this.persist();
+    return this.ai_provider_state(false);
+  }
+
+  async reorder_ai_credentials(provider: AiProviderId, method: string, credentialIds: string[]): Promise<Record<string, unknown>> {
+    if (method !== "oauth" && method !== "api-key") throw new Error("Invalid authentication method.");
+    const metadata = await this.load();
+    const matches = (item: StoredCredential) => item.provider === provider && item.kind === method;
+    const group = metadata.credentials.filter(matches);
+    if (group.length !== credentialIds.length || new Set(credentialIds).size !== group.length || credentialIds.some(id => !group.some(item => item.id === id))) throw new Error("Credential order must include every credential exactly once.");
+    const ordered = new Map(credentialIds.map((id, index) => [id, index]));
+    group.sort((left, right) => ordered.get(left.id)! - ordered.get(right.id)!);
+    let index = 0;
+    metadata.credentials = metadata.credentials.map(item => matches(item) ? group[index++]! : item);
     await this.persist();
     return this.ai_provider_state(false);
   }
@@ -518,7 +537,6 @@ export class AiService {
       providerId: credential.provider,
       authMethod: credential.kind,
       enabled: credential.enabled,
-      weight: credential.weight,
       modelIds: credential.models,
       extend: { label: credential.label },
     })));
