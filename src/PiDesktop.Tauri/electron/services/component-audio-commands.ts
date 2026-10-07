@@ -45,6 +45,17 @@ export async function resolveFfmpegBinaries(options: FfmpegBinariesOptions): Pro
   return { ffmpeg: "ffmpeg", ffprobe: "ffprobe", source: "system" };
 }
 
+export async function queryFfmpegStatus(options: FfmpegBinariesOptions, run = runProcess) {
+  let runtime: FfmpegBinaries = { ffmpeg: "ffmpeg", ffprobe: "ffprobe", source: "system" };
+  try {
+    runtime = await resolveFfmpegBinaries(options);
+    const [ffmpeg] = await Promise.all([run(runtime.ffmpeg, ["-version"]), run(runtime.ffprobe, ["-version"])]);
+    return { available: true, source: runtime.source, ffmpegPath: runtime.ffmpeg, ffprobePath: runtime.ffprobe, version: ffmpeg.stdout.split(/\r?\n/)[0] ?? "", detail: "FFmpeg and FFprobe are ready." };
+  } catch (error) {
+    return { available: false, source: runtime.source, ffmpegPath: runtime.ffmpeg, ffprobePath: runtime.ffprobe, detail: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 export function registerComponentAudioCommands(registry: CommandRegistry, options: ComponentAudioOptions): void {
   const root = resolve(options.dataRoot); const outputRoot = join(root, "audio-output"); const configPath = join(root, "ffmpeg.json"); const run = options.run ?? runProcess;
   const plans = new Map<string, { plan: Plan; digest: string; expires: number }>(); const jobs = new Map<string, Job>(); const artifacts = new Map<string, Artifact>();
@@ -64,7 +75,7 @@ export function registerComponentAudioCommands(registry: CommandRegistry, option
     return { ...job };
   };
 
-  registry.register("ffmpeg_status", async () => { const runtime = await binaries(); try { await Promise.all([accessPath(runtime.ffmpeg), accessPath(runtime.ffprobe)]); const result = await run(runtime.ffmpeg, ["-version"]); return { available: true, source: runtime.source, ffmpegPath: runtime.ffmpeg, ffprobePath: runtime.ffprobe, version: result.stdout.split(/\r?\n/)[0] ?? "", detail: "FFmpeg and FFprobe are ready." }; } catch (error) { return { available: false, source: runtime.source, ffmpegPath: runtime.ffmpeg, ffprobePath: runtime.ffprobe, detail: error instanceof Error ? error.message : String(error) }; } });
+  registry.register("ffmpeg_status", async () => queryFfmpegStatus({ dataRoot: root, ffmpegPath: options.ffmpegPath }, run));
   registry.register("get_ffmpeg_configuration", readConfig);
   registry.register("set_ffmpeg_directory", async args => { const directory = args.directory === null ? null : resolve(text(args.directory, "directory")); if (directory) { const suffix = process.platform === "win32" ? ".exe" : ""; await Promise.all([access(join(directory, `ffmpeg${suffix}`)), access(join(directory, `ffprobe${suffix}`))]); } await writeComponentState(configPath, { directory }); return { succeeded: true, summary: "FFmpeg configuration saved.", detail: directory ?? "System PATH" }; });
   registry.register("open_ffmpeg_download_page", async () => { if (!options.openExternal) throw new Error("External URL handling is unavailable."); await options.openExternal("https://ffmpeg.org/download.html"); return { succeeded: true, summary: "Opened the FFmpeg download page.", detail: "" }; });

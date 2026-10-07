@@ -4,13 +4,14 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { createHash, randomUUID } from "node:crypto";
 import { createLyricService, LYRIC_COMMANDS } from "./lyric-service.js";
 import { createCreativeBridge, CREATIVE_BRIDGE_COMMANDS } from "./creative-bridge.js";
+import { COVER_COMMANDS } from "./cover-service.js";
 import type { EmbeddedBridge } from "./synthv-bridge.js";
 
 type Data = Record<string, any>;
 type TaskExecutor = (kind: string, args: Data) => Promise<Data>;
 export interface CreativeService { invoke(command: string, args: Data): Promise<unknown>; dispose?(): void; }
 
-export function createCreativeService(dataRoot: string, executeTask: TaskExecutor = async command => { throw new Error(`No component executor is configured for ${command}.`); }, bridge?: EmbeddedBridge): CreativeService {
+export function createCreativeService(dataRoot: string, executeTask: TaskExecutor = async command => { throw new Error(`No component executor is configured for ${command}.`); }, bridge?: EmbeddedBridge, cover?: { invoke(command: string, args: Data): Promise<unknown> }): CreativeService {
   const root = resolve(dataRoot), lyrics = createLyricService(root), connected = bridge ? createCreativeBridge(bridge) : undefined;
   let queue: Promise<unknown> = Promise.resolve();
   const serialize = <T>(fn: () => Promise<T>) => { const next = queue.then(fn, fn); queue = next.catch(() => undefined); return next; };
@@ -90,6 +91,7 @@ export function createCreativeService(dataRoot: string, executeTask: TaskExecuto
     await record(command, args, result); return result;
   };
   return { dispose() { clearInterval(timer); }, async invoke(command, args) {
+    if (cover && COVER_COMMANDS.includes(command)) return cover.invoke(command, args);
     if ((LYRIC_COMMANDS as readonly string[]).includes(command)) {
       const result = await lyrics.invoke(command, args);
       if (command === "build_lyric_template" || command === "export_lyric_project_text") await record(command, args, result as Data);

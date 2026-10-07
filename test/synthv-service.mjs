@@ -163,3 +163,22 @@ async function manifestFingerprint(path) {
     return null;
   }
 }
+
+test("save shortcut sends the platform save key and reports operating system failures", async () => {
+  const root = await mkdtemp(join(tmpdir(), "synthv-save-"));
+  const calls = []; let denied = false;
+  const runner = async (command, args) => {
+    calls.push([command, args]);
+    if (command === "ps") return { stdout: "42 /Applications/Synthesizer V Studio 2.app/Contents/MacOS/Synthesizer V Studio 2 --started\n", stderr: "", code: 0 };
+    if (args.some(value => value.includes("Get-CimInstance"))) return { stdout: JSON.stringify({ ProcessId: 42, Name: "synthv-studio.exe", CommandLine: "Synthesizer V Studio 2" }), stderr: "", code: 0 };
+    return { stdout: "", stderr: denied ? "Accessibility denied" : "", code: denied ? 1 : 0 };
+  };
+  try {
+    const service = new SynthVService(root, root, noBridge, root, runner);
+    const [target] = await service.listProcesses();
+    await service.sendShortcut(target.processId, target.processIdentity, "save");
+    assert.ok(calls.at(-1)[1].some(value => process.platform === "win32" ? value === "^s" : value.includes('keystroke "s" using command down')));
+    denied = true;
+    await assert.rejects(service.sendShortcut(target.processId, target.processIdentity, "save"), /Accessibility denied/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

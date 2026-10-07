@@ -44,8 +44,9 @@ export class SynthVService {
 
   async focusInstance(processId: number, processIdentity: string): Promise<OperationResult> {
     await this.assertProcess(processId, processIdentity);
-    if (platform() === "win32") await this.run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$p=[int]$args[0]; Add-Type -Name Win32 -Namespace Native -MemberDefinition '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr h);'; $x=Get-Process -Id $p -ErrorAction Stop; [Native.Win32]::SetForegroundWindow($x.MainWindowHandle) | Out-Null", String(processId)]);
-    else await this.run("osascript", ["-e", "on run argv\nset pidValue to item 1 of argv\ntell application \"System Events\" to set frontmost of first process whose unix id is (pidValue as integer) to true\nend run", String(processId)]);
+    const result = platform() === "win32" ? await this.run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$p=[int]$args[0]; Add-Type -Name Win32 -Namespace Native -MemberDefinition '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr h);'; $x=Get-Process -Id $p -ErrorAction Stop; [Native.Win32]::SetForegroundWindow($x.MainWindowHandle) | Out-Null", String(processId)])
+      : await this.run("osascript", ["-e", "on run argv\nset pidValue to item 1 of argv\ntell application \"System Events\" to set frontmost of first process whose unix id is (pidValue as integer) to true\nend run", String(processId)]);
+    if (result.code !== 0) throw new Error(result.stderr || "Unable to focus the selected SynthV instance.");
     return ok("SynthV instance focused.");
   }
 
@@ -59,8 +60,11 @@ export class SynthVService {
     if (!shortcutActions.has(action)) throw new Error("Unsupported SynthV shortcut action.");
     await this.focusInstance(processId, processIdentity);
     const key = ({ start: "{F13}", startLegacy: "{F13}", stop: "{F14}", save: "^s", undo: "^z", refresh: "{F5}" } as Record<string, string>)[action];
-    if (platform() === "win32") await this.run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait($args[0])", key]);
-    else await this.run("osascript", ["-e", "tell application \"System Events\" to key code 122", key]);
+    const macKey = ({ start: "key code 105", startLegacy: "key code 105", stop: "key code 107", save: 'keystroke "s" using command down', undo: 'keystroke "z" using command down', refresh: "key code 96" } as Record<string, string>)[action];
+    const result = platform() === "win32"
+      ? await this.run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait($args[0])", key])
+      : await this.run("osascript", ["-e", `tell application "System Events" to ${macKey}`]);
+    if (result.code !== 0) throw new Error(result.stderr || "The operating system did not send the SynthV shortcut.");
     return ok("SynthV shortcut sent.");
   }
 

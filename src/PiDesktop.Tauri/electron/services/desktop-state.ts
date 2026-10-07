@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { DEFAULT_AGENT_EFFORT, isAgentEffortLevel, type AgentEffortLevel } from "@synthv-toolbox/runtime-protocol";
+import { queryFfmpegStatus } from "./component-audio-commands.js";
 import type { AiService } from "./ai-service.js";
 import type { ElectronRuntimeHost } from "./runtime-host.js";
 import type { SynthVService } from "./synthv-service.js";
@@ -27,7 +28,7 @@ const defaults = (): DesktopSettings => ({ onboardingCompleted: false, mode: "to
 
 export class DesktopStateService {
   private settings = defaults();
-  constructor(private readonly root: string, private readonly appVersion: string, private readonly runtime: ElectronRuntimeHost, private readonly ai: AiService, private readonly synthv: SynthVService, private readonly applyUpdateChannel?: (channel: "stable" | "nightly") => void) {}
+  constructor(private readonly root: string, private readonly appVersion: string, private readonly runtime: ElectronRuntimeHost, private readonly ai: AiService, private readonly synthv: SynthVService, private readonly applyUpdateChannel?: (channel: "stable" | "nightly") => void, private readonly creativeRuntime?: { status(): Promise<{ready: boolean; detail: string}> }) {}
 
   async load(): Promise<void> {
     try {
@@ -44,8 +45,8 @@ export class DesktopStateService {
 
   async bootstrap(): Promise<Data> {
     const runtime = this.runtime.settingsSnapshot();
-    const [model, installations, profiles, autostart, agentBudgets, bridge] = await Promise.all([this.ai.ai_provider_state(false), this.synthv.scanInstallations(), this.synthv.profileState(), this.synthv.getAutostart(), this.ai.agent_budgets(), this.synthv.bridgeStatus()]);
-    return { ...this.settings, platform: process.platform, appVersion: this.appVersion, configPath: this.path(), settingsLoadError: null, model, bridgeBundled: true, bridgeConnected: bridge.connected === true, installations, components: componentCatalog(profiles), downloads: [], pluginInternalFunctionsEnabled: runtime.pluginInternalFunctionsEnabled, pluginAdvancedFunctionsEnabled: runtime.pluginAdvancedFunctionsEnabled, autostartEnabled: autostart.enabled, autostartError: autostart.error, svpAssociation: { supported: process.platform === "win32", registered: false, isDefault: false, detail: "Electron launch routing is available after the application is installed." }, sv2Profiles: profiles, agentBudgets };
+    const [model, installations, profiles, autostart, agentBudgets, bridge, creativeRuntime, ffmpeg] = await Promise.all([this.ai.ai_provider_state(false), this.synthv.scanInstallations(), this.synthv.profileState(), this.synthv.getAutostart(), this.ai.agent_budgets(), this.synthv.bridgeStatus(), this.creativeRuntime?.status() ?? Promise.resolve({ready:false,detail:"本地音频运行环境尚未配置。"}), queryFfmpegStatus({dataRoot:join(this.root,"components")})]);
+    return { ...this.settings, platform: process.platform, appVersion: this.appVersion, configPath: this.path(), settingsLoadError: null, model, bridgeBundled: true, bridgeConnected: bridge.connected === true, installations, components: componentCatalog(profiles, creativeRuntime, ffmpeg), downloads: [], pluginInternalFunctionsEnabled: runtime.pluginInternalFunctionsEnabled, pluginAdvancedFunctionsEnabled: runtime.pluginAdvancedFunctionsEnabled, autostartEnabled: autostart.enabled, autostartError: autostart.error, svpAssociation: { supported: process.platform === "win32", registered: false, isDefault: false, detail: "Electron launch routing is available after the application is installed." }, sv2Profiles: profiles, agentBudgets };
   }
 
   async update(values: Partial<DesktopSettings>): Promise<Data> { this.settings = { ...this.settings, ...values }; if (values.updateChannel) this.applyUpdateChannel?.(values.updateChannel); await this.persist(); return this.bootstrap(); }
@@ -56,13 +57,13 @@ export class DesktopStateService {
 }
 
 function requiredText(value: unknown, label: string): string { if (typeof value !== "string" || !value.trim()) throw new Error(`${label} must be a non-empty string.`); return value; }
-function componentCatalog(profiles: Data): Data[] {
+function componentCatalog(profiles: Data, runtime: {ready:boolean;detail:string}, ffmpeg: {available:boolean;detail:string}): Data[] {
   const sandbox = profiles.concurrentProvider as Data | undefined;
   return [
-    { id: "ffmpeg", displayName: "FFmpeg", description: "Audio and video conversion runtime.", audience: "AI and manual workflows", installed: false, downloaded: false, installable: true, removable: false, status: "Use a system installation or choose an FFmpeg directory." },
-    { id: "pi-audio", displayName: "pi-audio", description: "Audio feature and score analysis component.", audience: "AI and manual workflows", installed: true, downloaded: false, installable: true, removable: false, status: "Bundled with the application." },
-    { id: "cvrs", displayName: "CVRS", description: "SynthV project inspection and export component.", audience: "AI and manual workflows", installed: true, downloaded: false, installable: true, removable: false, status: "Bundled with the application." },
-    { id: "vocal-separation", displayName: "Vocal separation", description: "Local vocal and accompaniment separation component.", audience: "AI and manual workflows", installed: true, downloaded: false, installable: true, removable: false, status: "Bundled with the application." },
+    { id: "ffmpeg", displayName: "FFmpeg", description: "Audio and video conversion runtime.", audience: "AI and manual workflows", installed: ffmpeg.available, downloaded: false, installable: false, removable: false, status: ffmpeg.detail },
+    { id: "pi-audio", displayName: "pi-audio", description: "Audio feature and score analysis component.", audience: "AI and manual workflows", installed: runtime.ready, downloaded: false, installable: true, removable: false, status: runtime.detail },
+    { id: "cvrs", displayName: "CVRS", description: "SynthV project inspection and export component.", audience: "AI and manual workflows", installed: runtime.ready, downloaded: false, installable: true, removable: false, status: runtime.detail },
+    { id: "vocal-separation", displayName: "Vocal separation", description: "Local vocal and accompaniment separation component.", audience: "AI and manual workflows", installed: runtime.ready, downloaded: false, installable: true, removable: false, status: runtime.detail },
     { id: "sandboxie", displayName: "Sandboxie", description: "Windows isolation provider for concurrent SynthV profiles.", audience: "Windows concurrent profiles", installed: sandbox?.available === true, downloaded: false, installable: false, removable: false, status: String(sandbox?.detail ?? "Unavailable on this platform.") },
   ];
 }

@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { lstat, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-export interface CoverAudioOptions { dataRoot: string; componentsRoot: string; python?: string; }
+export interface CoverAudioOptions { dataRoot: string; componentsRoot: string; python?: string; ffmpegPath?: string; }
 export interface CoverAudioProgress { phase: "separating" | "transcribing-and-extracting"; percent: number; }
 export interface CoverAudioResult {
   vocalPath: string; instrumentalPath: string; model: string; device: string; separationId: string;
@@ -34,6 +34,7 @@ export function createCoverAudio(options: CoverAudioOptions) {
   const audioScript = join(componentsRoot, "pi-audio", "pi_audio.py");
   const runtimeEnv = (): NodeJS.ProcessEnv => ({
     ...process.env,
+    ...(options.ffmpegPath && isAbsolute(options.ffmpegPath) ? { PATH: `${dirname(options.ffmpegPath)}${delimiter}${process.env.PATH ?? ""}` } : {}),
     SYNTHV_TOOLBOX_DATA_ROOT: dataRoot,
     TORCH_HOME: join(dataRoot, "models", "torch"),
     HF_HOME: join(dataRoot, "models", "huggingface"),
