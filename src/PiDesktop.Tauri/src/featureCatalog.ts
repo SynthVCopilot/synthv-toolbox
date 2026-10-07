@@ -27,7 +27,7 @@ export interface ToolGroup {
 }
 
 const featureDefinitions: FeatureCatalogItem[] = [
-  { id: "cover", title: "一键 Cover", description: "从 BV 或 YouTube 来源完成 Cover，并导入当前 SynthV 工程。", icon: "sparkles", accent: "violet", homePriority: 1, base: ["来源音频处理", "旋律 MIDI 与歌词", "导入当前工程"], ai: ["快捷指令编排", "指定声库授权提示", "失败阶段解释与重试"], requirements: ["媒体导入器", "人声伴奏分离", "pi-audio", "SynthV Bridge"], componentIds: ["media-fetcher", "vocal-separation", "pi-audio", "ffmpeg"], requiresConnectedBridge: false },
+  { id: "cover", title: "一键 Cover", description: "下载整曲、分离人声、识别旋律、由 AI 修复数据与连续性并调教，最后保存到当前 SynthV 工程。", icon: "sparkles", accent: "violet", homePriority: 1, base: ["整曲下载与人声分离", "旋律识别与歌词识别", "保存到当前工程"], ai: ["AI 音符与连续性修复", "AI 调教复核", "解释失败并安全重试"], requirements: ["媒体导入器", "人声伴奏分离", "pi-audio", "SynthV Bridge"], componentIds: ["media-fetcher", "vocal-separation", "pi-audio", "ffmpeg"], requiresConnectedBridge: false },
   { id: "tuning-learning", title: "分声库调声学习", description: "从参考人声提取演唱特征，为每个声库独立学习并应用有边界的调声参数。", icon: "waveform", accent: "emerald", homePriority: 2, base: ["离线演唱特征", "分声库档案", "A/B 反馈更新"], ai: ["自动参数建议", "Bridge 安全应用", "Solo 迭代基础"], requirements: ["pi-audio", "SynthV Bridge（应用时）"], componentIds: ["pi-audio"] },
   { id: "media-import", title: "BV / YouTube 音频导入", description: "预览明确提供的 Bilibili 或 YouTube 来源，并在权利确认后下载为受管理 WAV。", icon: "download", accent: "blue", homePriority: 2, base: ["BV / URL 元数据预览", "受管 WAV 与 SHA-256", "来源与权利确认记录"], ai: ["后续自动分离与 Cover 编排", "来源结构说明", "失败原因归类"], requirements: ["media-fetcher", "FFmpeg", "Node.js 22+"], componentIds: ["media-fetcher", "ffmpeg"] },
   { id: "source-separation", title: "人声 / 伴奏分离", description: "将混合音频分离为人声和伴奏，便于后续编辑。", icon: "audio", accent: "violet", homePriority: 3, base: ["人声与伴奏双轨", "稳定的输出文件", "可用于后续处理"], ai: ["自动接入 Cover 工作流", "分离结果复检", "模型运行失败解释"], requirements: ["人声伴奏分离组件", "FFmpeg"], componentIds: ["vocal-separation", "ffmpeg"] },
@@ -52,7 +52,7 @@ const groupDefinitions: ToolGroup[] = [
     description: "从一个来源开始完成 Cover 工作流。",
     icon: "import",
     accent: "violet",
-    featureIds: ["score-to-synthv"],
+    featureIds: ["cover", "score-to-synthv"],
   },
   {
     id: "convert",
@@ -96,7 +96,7 @@ export const featureCatalog: FeatureCatalogItem[] = featureDefinitions.map((feat
 }));
 
 export const guiFeatureIds = new Set(groupDefinitions.flatMap((group) => group.featureIds));
-const pendingFeatures = new Set(["cover", "media-import", "source-separation", "tuning-learning", "ab-audition"]);
+const pendingFeatures = new Set(["media-import", "source-separation", "tuning-learning", "ab-audition"]);
 export const guiFeatureCatalog = featureCatalog.filter((feature) => guiFeatureIds.has(feature.id) && !pendingFeatures.has(feature.id));
 
 export const toolGroups: ToolGroup[] = groupDefinitions.map((group) => ({

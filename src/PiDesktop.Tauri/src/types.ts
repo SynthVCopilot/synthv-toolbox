@@ -715,6 +715,10 @@ export interface MediaTaskSnapshot {
   status: MediaTaskStatus;
   progress: number;
   detail: string;
+  stage?: string;
+  retryable?: boolean;
+  repairConversationId?: string | null;
+  tuningConversationId?: string | null;
   result?: Record<string, unknown> | null;
   error?: string | null;
   createdAt: string;

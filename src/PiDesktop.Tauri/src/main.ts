@@ -186,6 +186,7 @@ let audioToProjectRightsConfirmed = false;
 let audioToProjectTrackIndex = 1;
 let audioToProjectGroupName = "Toolbox Audio Import";
 let mediaTasks: MediaTaskSnapshot[] = [];
+let coverDraft = { source: "", voice: "", process: "", lyrics: "", track: "1", group: "Toolbox Cover", rights: false };
 let tuningProfiles: TuningProfile[] = [];
 let audioCaptureCapability: AudioCaptureCapability | undefined;
 let audioCaptureTargets: AudioCaptureTarget[] = [];
@@ -609,7 +610,7 @@ function scheduleAudioJobPoll(jobId: string): void {
       audioUiError = formatError(reason);
       audioJobPollTimer = window.setTimeout(() => { void poll(); }, 1000);
     }
-    if (page === "import" && activeWorkflow === "audio-preparation") render();
+    if (page === "convert" && activeWorkflow === "audio-preparation") render();
   };
   audioJobPollTimer = window.setTimeout(() => { void poll(); }, 800);
 }
@@ -619,16 +620,16 @@ function refreshAudioRuntimeStatus(): void {
   void audioApi.ffmpegStatus().then((status) => {
     if (generation !== audioRuntimeRequestGeneration) return;
     audioRuntime = status;
-    if (page === "import" && activeWorkflow === "audio-preparation") render();
+    if (page === "convert" && activeWorkflow === "audio-preparation") render();
   }).catch((reason) => {
     if (generation !== audioRuntimeRequestGeneration) return;
     audioRuntime = { available: false, detail: formatError(reason) };
-    if (page === "import" && activeWorkflow === "audio-preparation") render();
+    if (page === "convert" && activeWorkflow === "audio-preparation") render();
   });
 }
 
 function refreshAudioPreparationIfSelected(): void {
-  if (page === "import" && activeWorkflow === "audio-preparation") refreshAudioRuntimeStatus();
+  if (page === "convert" && activeWorkflow === "audio-preparation") refreshAudioRuntimeStatus();
 }
 
 function syncAudioPreparationFormsFromDom(): void {
@@ -1043,12 +1044,38 @@ function scheduleMediaTaskPoll(): void {
     mediaTaskPollTimer = undefined;
     try {
       mediaTasks = await api.mediaTasks();
-      render();
+      renderKeepingCoverDraft();
     } catch (reason) {
       error = formatError(reason);
-      render();
+      renderKeepingCoverDraft();
     }
   }, 700);
+}
+
+function syncCoverDraftFromDom(): { id?: string; selectionStart?: number | null; selectionEnd?: number | null } {
+  coverDraft = {
+    source: document.querySelector<HTMLInputElement>("#cover-source")?.value ?? coverDraft.source,
+    voice: document.querySelector<HTMLInputElement>("#cover-voice")?.value ?? coverDraft.voice,
+    process: document.querySelector<HTMLSelectElement>("#cover-process")?.value ?? coverDraft.process,
+    lyrics: document.querySelector<HTMLTextAreaElement>("#cover-lyrics")?.value ?? coverDraft.lyrics,
+    track: document.querySelector<HTMLInputElement>("#cover-track")?.value ?? coverDraft.track,
+    group: document.querySelector<HTMLInputElement>("#cover-group")?.value ?? coverDraft.group,
+    rights: document.querySelector<HTMLInputElement>("#cover-rights")?.checked ?? coverDraft.rights,
+  };
+  const active = document.activeElement as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+  if (!active?.id.startsWith("cover-")) return {};
+  return { id: active.id, selectionStart: "selectionStart" in active ? active.selectionStart : null, selectionEnd: "selectionEnd" in active ? active.selectionEnd : null };
+}
+
+function renderKeepingCoverDraft(): void {
+  const active = page === "import" && activeWorkflow === "cover" ? syncCoverDraftFromDom() : undefined;
+  render();
+  if (!active?.id) return;
+  const next = document.getElementById(active.id) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+  next?.focus();
+  if (next && "setSelectionRange" in next && active.selectionStart !== null && active.selectionStart !== undefined) {
+    next.setSelectionRange(active.selectionStart, active.selectionEnd ?? active.selectionStart);
+  }
 }
 
 function navItem(target: Page, label: string, glyph: IconName): string {
@@ -2100,6 +2127,7 @@ function featureAvailability(feature: Feature, current: BootstrapState): Feature
 
 function groupFeatures(group: ToolGroup): Feature[] {
   return group.featureIds.flatMap((id) => {
+    if (id === "cover" && app?.mode !== "ai") return [];
     const feature = features.find((item) => item.id === id);
     return feature ? [feature] : [];
   });
@@ -2398,24 +2426,38 @@ function renderWorkflowPanel(id: string): string {
       ${audioUiNotice ? `<div class="audio-inline-notice" role="status">${escapeHtml(audioUiNotice)}</div>` : ""}${audioUiError ? `<div class="audio-inline-error" role="alert">${escapeHtml(audioUiError)}</div>` : ""}${jobPanel}
     </div>`;
   } else if (id === "cover") {
-    const processOptions = [`<option value="">${t("workflowCopy.selectAutomatically")}${synthvProcesses.length > 1 ? t("workflowCopy.agentSelectsWhenMultipleInstancesAreRunning") : ""}</option>`, ...synthvProcesses.map((process) => `<option value="${process.processId}">PID ${process.processId} · ${escapeHtml(process.name)}</option>`)].join("");
     const taskCards = mediaTasks.filter((item) => item.kind === "cover").slice(-5).reverse().map((task) => {
       const result = asObject(task.result) ?? {};
-      const midi = asObject(result.midi) ?? {};
-      const assignment = asObject(result.voiceAssignment) ?? {};
       const action = ["queued", "running", "cancelling"].includes(task.status)
         ? `<button class="secondary compact" data-cancel-media-task="${escapeHtml(task.id)}" ${task.status === "cancelling" ? "disabled" : ""}>${task.status === "cancelling" ? t("workflowCopy.stopping") : t("workflowCopy.cancel")}</button>`
         : ["failed", "cancelled"].includes(task.status)
-          ? `<button class="secondary compact" data-retry-media-task="${escapeHtml(task.id)}">${t("workflowCopy.retry")}</button>`
+          ? task.retryable === false ? `<small>${t("workflowCopy.coverHostWriteMayNeedInspection")}</small>` : `<button class="secondary compact" data-retry-media-task="${escapeHtml(task.id)}">${t("workflowCopy.retry")}</button>`
           : "";
-      const outputPath = typeof midi.outputPath === "string" ? midi.outputPath : "";
-      const voiceBoundary = assignment.requiresHostSelection === true ? `<small>${t("workflowCopy.requestedVoice")}${escapeHtml(String(result.requestedVoice ?? ""))} ${t("workflowCopy.theHostApiCannotAssignVoiceIdentities")}</small>` : "";
-      const svpPath = typeof result.svpPath === "string" ? result.svpPath : "";
-      const saveState = svpPath ? `<small>SVP：${escapeHtml(svpPath)} · ${result.saveVerified === true ? t("workflowCopy.saveVerified") : t("workflowCopy.saveNotVerified")}</small>` : "";
-      return `<article class="download-item ${task.status}"><span class="component-status ${task.status === "completed" ? "ready" : ""}">${icon(task.status === "failed" ? "plug" : "sparkles", 17)}</span><div><div class="download-title"><strong>${t("workflowCopy.oneClickCover")}</strong><span>${escapeHtml(t(`workflowTaskStatus.${task.status}`))}</span></div><div class="progress-track"><span style="width:${Math.max(2, Math.min(100, task.progress))}%"></span></div><small>${escapeHtml(task.error || task.detail)}</small>${outputPath ? `<small>MIDI：${escapeHtml(outputPath)}</small>` : ""}${saveState}${voiceBoundary}</div>${action}</article>`;
+      const recognition = asObject(result.recognition) ?? {};
+      const repair = asObject(result.repair) ?? {};
+      const tuning = asObject(result.tuning) ?? {};
+      const outputPaths = [
+        ["coverSourceAudio", result.sourceAudioPath], ["coverVocalTrack", result.vocalPath],
+        ["coverInstrumentalTrack", result.instrumentalPath], ["coverLyricsFile", result.lyricsPath],
+        ["coverRepairedScore", result.repairedScorePath], ["coverReport", result.reportPath],
+        ["coverSynthvProject", result.svpPath],
+      ].filter((entry): entry is [string, string] => typeof entry[1] === "string" && Boolean(entry[1]));
+      const paths = outputPaths.map(([label, path]) => `<div class="audio-output-path"><span>${t(`workflowCopy.${label}`)}</span><code>${escapeHtml(path)}</code><button class="secondary compact" data-cover-copy-path="${escapeHtml(path)}">${t("workflowCopy.copyPath")}</button></div>`).join("");
+      const repairConversationId = typeof task.repairConversationId === "string" ? task.repairConversationId : typeof repair.conversationId === "string" ? repair.conversationId : "";
+      const tuningConversationId = typeof task.tuningConversationId === "string" ? task.tuningConversationId : typeof tuning.conversationId === "string" ? tuning.conversationId : "";
+      const conversations = `${repairConversationId ? `<button class="secondary compact" data-conversation="${escapeHtml(repairConversationId)}">${t("workflowCopy.openRepairConversation")}</button>` : ""}${tuningConversationId ? `<button class="secondary compact" data-conversation="${escapeHtml(tuningConversationId)}">${t("workflowCopy.openTuningConversation")}</button>` : ""}`;
+      const unresolved = Array.isArray(repair.unresolved) ? repair.unresolved.length : typeof repair.unresolved === "number" ? repair.unresolved : 0;
+      const repairSummary = Object.keys(repair).length ? `<small>${t("workflowCopy.coverRepairCoverage", { notes: Number(repair.noteCount ?? 0), changes: Number(repair.changeCount ?? 0), unresolved })}</small>` : "";
+      const recognitionSummary = Object.keys(recognition).length ? `<small>${t("workflowCopy.coverFullSongRecognition", { notes: Number(recognition.noteCount ?? 0), rawNotes: Number(recognition.rawNoteCount ?? 0), inference: String(recognition.inference ?? ""), device: String(recognition.separationDevice ?? "") })}</small>` : "";
+      const tuningSummary = Object.keys(tuning).length ? `<small>${t("workflowCopy.coverTuningWrites", { reviewed: Number(tuning.notesReviewed ?? 0), writes: Number(tuning.verifiedWrites ?? 0) })}</small>` : "";
+      const stage = typeof task.stage === "string" ? task.stage : "";
+      const saveState = result.svpPath ? `<small>${t("workflowCopy.coverSaveState")}: ${result.saveVerified === true ? t("workflowCopy.saveVerified") : t("workflowCopy.saveNotVerified")}</small>` : "";
+      const voiceBoundary = `<small>${t("workflowCopy.coverVoiceAssignmentLimit")}${escapeHtml(String(result.requestedVoice || t("workflowCopy.currentTrackVoice")))} · ${t("workflowCopy.theHostApiCannotAssignVoiceIdentities")}</small>`;
+      const renderStatus = result.renderStatus === "not_rendered" ? `<small>${t("workflowCopy.coverNotRendered")}</small>` : "";
+      return `<article class="download-item ${task.status}"><span class="component-status ${task.status === "completed" ? "ready" : ""}">${icon(task.status === "failed" ? "plug" : "sparkles", 17)}</span><div><div class="download-title"><strong>${t("workflowCopy.oneClickCover")}</strong><span>${escapeHtml(t(`workflowTaskStatus.${task.status}`))}</span></div>${stage ? `<small>${t("workflowCopy.coverStage")}: ${escapeHtml(stage)}</small>` : ""}<div class="progress-track"><span style="width:${Math.max(2, Math.min(100, task.progress))}%"></span></div><small>${escapeHtml(task.error || task.detail)}</small>${recognitionSummary}${repairSummary}${tuningSummary}${saveState}${voiceBoundary}${renderStatus}${paths}${conversations}</div>${action}</article>`;
     }).join("");
     const taskList = taskCards ? `<section class="download-queue"><div class="section-heading"><div><h3>${t("workflowCopy.coverTasks")}</h3><p>${t("workflowCopy.downloadSeparationAndMelodyExtractionCanBe")}</p></div></div><div class="download-list">${taskCards}</div></section>` : "";
-    form = `<div class="mode-limit"><strong>${t("workflowCopy.voiceAssignmentLimit")}</strong>${t("workflowCopy.toolboxRecordsTheRequestedVoiceAndConnects")}</div><form id="cover-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.bvOrYoutubeSource")}<input id="cover-source" required placeholder="${t("workflowCopy.bv1OrHttpsWwwYoutubeComWatch")}" /></label><div class="workflow-pair"><label>${t("workflowCopy.targetVoice")}<input id="cover-voice" required maxlength="200" placeholder="${t("workflowCopy.forExampleMai2")}" /></label><label>${t("workflowCopy.synthvProcess")}<select id="cover-process">${processOptions}</select></label></div><label>${t("workflowCopy.fullLyricsOptionalCjkCharactersAndLatin")}<textarea id="cover-lyrics" rows="7" placeholder="${t("workflowCopy.leaveBlankToUseDefaultMidiSynthv")}"></textarea></label><div class="workflow-pair"><label>${t("workflowCopy.targetTrackNumber")}<input id="cover-track" type="number" min="1" max="10000" value="1" required /></label><label>${t("workflowCopy.noteGroupName")}<input id="cover-group" value="Toolbox Cover" maxlength="200" required /></label></div><label class="checkbox workflow-check"><input id="cover-rights" type="checkbox" /> ${t("workflowCopy.iOwnTheSourceContentOrHave")}</label><button class="primary">${icon("sparkles", 16)} ${t("workflowCopy.startFullCover")}</button></form>${taskList}`;
+    form = `<div class="mode-limit"><strong>${t("workflowCopy.voiceAssignmentLimit")}</strong>${t("workflowCopy.toolboxRecordsTheRequestedVoiceAndConnects")}</div><form id="cover-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.bvOrYoutubeSource")}<input id="cover-source" required value="${escapeHtml(coverDraft.source)}" placeholder="${t("workflowCopy.bv1OrHttpsWwwYoutubeComWatch")}" /></label><div class="workflow-pair"><label>${t("workflowCopy.targetVoice")}<input id="cover-voice" maxlength="200" value="${escapeHtml(coverDraft.voice)}" placeholder="${t("workflowCopy.coverVoiceOptional")}" /></label><label>${t("workflowCopy.synthvProcess")}<select id="cover-process"><option value="">${t("workflowCopy.selectAutomatically")}${synthvProcesses.length > 1 ? t("workflowCopy.agentSelectsWhenMultipleInstancesAreRunning") : ""}</option>${synthvProcesses.map((process) => `<option value="${process.processId}" ${coverDraft.process === String(process.processId) ? "selected" : ""}>PID ${process.processId} · ${escapeHtml(process.name)}</option>`).join("")}</select></label></div><label>${t("workflowCopy.fullLyricsOptionalCjkCharactersAndLatin")}<textarea id="cover-lyrics" rows="7" placeholder="${t("workflowCopy.leaveBlankToUseDefaultMidiSynthv")}">${escapeHtml(coverDraft.lyrics)}</textarea></label><div class="workflow-pair"><label>${t("workflowCopy.targetTrackNumber")}<input id="cover-track" type="number" min="1" max="10000" value="${escapeHtml(coverDraft.track)}" required /></label><label>${t("workflowCopy.noteGroupName")}<input id="cover-group" value="${escapeHtml(coverDraft.group)}" maxlength="200" required /></label></div><label class="checkbox workflow-check"><input id="cover-rights" type="checkbox" ${coverDraft.rights ? "checked" : ""} /> ${t("workflowCopy.iOwnTheSourceContentOrHave")}</label><button class="primary">${icon("sparkles", 16)} ${t("workflowCopy.startFullCover")}</button></form>${taskList}`;
   } else if (id === "tuning-learning") {
     const profiles = tuningProfiles.length ? `<div class="download-list">${tuningProfiles.map((profile) => `<article class="download-item completed"><span class="component-status ready">${icon("waveform", 17)}</span><div><div class="download-title"><strong>${escapeHtml(profile.voiceName)}</strong><span>${t("workflowCopy.profileSamples", { references: profile.sourceSamples, feedback: profile.outcomeSamples })}</span></div><small>${t("workflowCopy.loudness")} ${profile.parameters.loudness.toFixed(2)} ${t("workflowCopy.tension")} ${profile.parameters.tension.toFixed(3)} ${t("workflowCopy.breathiness")} ${profile.parameters.breathiness.toFixed(3)} ${t("workflowCopy.vibrato")} ${profile.parameters.vibratoStrength.toFixed(3)}</small></div></article>`).join("")}</div>` : `<div class="mode-limit">${t("workflowCopy.noTuningProfilesYetEachExactVoice")}</div>`;
     form = `<div class="workflow-split"><form id="tuning-learn-form" class="workflow-form"><h3>${t("workflowCopy.learnFromReferenceVocals")}</h3><label>${t("workflowCopy.referenceVocalAudioPath")}<div class="path-picker-control"><input id="tuning-audio" required />${pathPickerButton("tuning-audio", "audio")}</div></label><label>${t("workflowCopy.exactVoiceName")}<input id="tuning-voice" required maxlength="200" /></label><button class="primary">${icon("waveform", 16)} ${t("workflowCopy.analyzeAndUpdateProfile")}</button></form><form id="tuning-apply-form" class="workflow-form"><h3>${t("workflowCopy.applyLearnedParameters")}</h3><label>${t("workflowCopy.voiceProfile")}<select id="tuning-profile" required>${tuningProfiles.map((profile) => `<option value="${escapeHtml(profile.voiceName)}">${escapeHtml(profile.voiceName)}</option>`).join("")}</select></label><div class="workflow-pair"><label>${t("workflowCopy.track")}<input id="tuning-track" type="number" min="1" value="1" required /></label><label>${t("workflowCopy.noteGroup")}<input id="tuning-group" type="number" min="1" value="1" required /></label></div><button class="primary" ${app.bridgeConnected && tuningProfiles.length ? "" : "disabled"}>${icon("sparkles", 16)} ${app.bridgeConnected ? t("workflowCopy.applyToSynthv") : t("workflowCopy.connectBridgeFirst")}</button></form></div>${profiles}`;
@@ -4040,6 +4082,7 @@ async function withAiProviderStateRefresh<T>(action: () => Promise<T>): Promise<
 
 document.addEventListener("input", (event) => {
   const target = event.target as HTMLElement;
+  if (target.id.startsWith("cover-")) { syncCoverDraftFromDom(); return; }
   if (target.id === "ffmpeg-directory") {
     ffmpegDirectoryDraft = (target as HTMLInputElement).value;
     return;
@@ -4064,6 +4107,7 @@ document.addEventListener("input", (event) => {
 });
 document.addEventListener("change", (event) => {
   const target = event.target as HTMLElement;
+  if (target.id.startsWith("cover-")) { syncCoverDraftFromDom(); return; }
   if (target.closest(".audio-preparation")) syncAudioPreparationFormsFromDom();
 });
 
@@ -5164,6 +5208,16 @@ document.addEventListener("click", (event) => {
     });
     return;
   }
+  if (target.dataset.coverCopyPath) {
+    void navigator.clipboard.writeText(target.dataset.coverCopyPath).then(() => {
+      notice = t("workflowCopy.copied");
+      renderKeepingCoverDraft();
+    }).catch((reason) => {
+      error = formatError(reason);
+      renderKeepingCoverDraft();
+    });
+    return;
+  }
   if (target.hasAttribute("data-new-conversation")) { if (agentRunInFlight) return; void run(async () => { conversation = await api.newConversation(); [conversations, approvalsSnapshot] = await Promise.all([api.listConversations(), api.agentApprovals()]); }); return; }
   if (target.dataset.conversation) { if (agentRunInFlight) return; void run(async () => { conversation = await api.openConversation(target.dataset.conversation ?? ""); approvalsSnapshot = await api.agentApprovals(); }); return; }
   if (target.hasAttribute("data-cancel-agent-run")) { void cancelAgentRun(); return; }
@@ -5217,7 +5271,7 @@ async function listenForSvpRouteRequests(): Promise<void> {
 async function listenForAudioPreparationDrops(): Promise<void> {
   if (!hasDesktopBridge()) return;
   await listenForDesktopFileDrops((drop) => {
-    if (page !== "import" || (activeWorkflow !== "audio-preparation" && activeWorkflow !== "audio-to-project")) return;
+    if (page !== "convert" || (activeWorkflow !== "audio-preparation" && activeWorkflow !== "audio-to-project")) return;
     if (activeWorkflow === "audio-preparation") {
       if (drop.paths.length !== 1) {
         audioUiError = t("workflowCopy.onlyOneAudioFileCanBeDropped");
