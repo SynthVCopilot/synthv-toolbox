@@ -147,11 +147,13 @@ def extract_notes(path: str):
     """basic-pitch 音符提取 → [{pitch,start,end,velocity}]，按 start 排序。"""
     import contextlib
 
-    from basic_pitch.inference import predict
+    from basic_pitch import FilenameSuffix, build_icassp_2022_model_path
+    from basic_pitch.inference import Model, predict
 
     # basic-pitch 会往 stdout 打印进度行，污染本工具的纯 JSON 输出——改道 stderr。
     with contextlib.redirect_stdout(sys.stderr):
-        _, _, note_events = predict(path)
+        model = basic_pitch_model(Model, build_icassp_2022_model_path(FilenameSuffix.onnx))
+        _, _, note_events = predict(path, model_or_model_path=model)
     notes = [
         {
             "pitch": int(p),
@@ -163,6 +165,11 @@ def extract_notes(path: str):
     ]
     notes.sort(key=lambda n: n["start"])
     return notes
+
+
+@lru_cache(maxsize=1)
+def basic_pitch_model(model_type, model_path):
+    return model_type(model_path)
 
 
 def cmd_probe(args) -> dict:

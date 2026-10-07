@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { access, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { projectDoctor, pronunciationDiagnostics } from "./component-diagnostics.js";
 
@@ -94,7 +94,6 @@ export function createComponentExecutor(
 }
 
 async function runJson(file: string, args: string[], env?: NodeJS.ProcessEnv): Promise<Data> {
-  await access(file);
   return new Promise((done, reject) => {
     const child = spawn(file, args, { shell: false, windowsHide: true, env });
     let stdout = "";
@@ -103,14 +102,11 @@ async function runJson(file: string, args: string[], env?: NodeJS.ProcessEnv): P
     child.stderr.on("data", chunk => { stderr += chunk; });
     child.once("error", reject);
     child.once("close", code => {
-      if (code !== 0) { reject(new Error(stderr || parseError(stdout) || `${file} exited with ${code}`)); return; }
-      try {
-        const value = JSON.parse(stdout) as Data;
-        if (typeof value.error === "string") { reject(new Error(value.error)); return; }
-        done(value);
-      } catch (error) {
-        reject(error instanceof Error ? error : new Error(`Component returned invalid JSON: ${stdout.slice(0, 500)}`));
-      }
+      const value = parseJsonOutput(stdout);
+      if (typeof value?.error === "string") { reject(new Error(value.error)); return; }
+      if (code !== 0) { reject(new Error(stderr || `${file} exited with ${code}`)); return; }
+      if (!value) { reject(new Error(`Component returned invalid JSON: ${stdout.slice(0, 500)}`)); return; }
+      done(value);
     });
   });
 }
@@ -138,7 +134,31 @@ function outputNameFor(value: unknown, name: string, directory: unknown, fallbac
   return resolve(root, output);
 }
 
-function parseError(value: string): string | undefined { try { const parsed = JSON.parse(value); return typeof parsed.error === "string" ? parsed.error : undefined; } catch { return undefined; } }
+function parseJsonOutput(output: string): Data | undefined {
+  for (let start = output.indexOf("{"); start !== -1; start = output.indexOf("{", start + 1)) {
+    let depth = 0;
+    let quoted = false;
+    let escaped = false;
+    for (let index = start; index < output.length; index += 1) {
+      const character = output[index];
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === '"') quoted = false;
+        continue;
+      }
+      if (character === '"') quoted = true;
+      else if (character === "{") depth += 1;
+      else if (character === "}" && --depth === 0) {
+        try {
+          const value = JSON.parse(output.slice(start, index + 1)) as Data;
+          if (typeof value.tool === "string" || typeof value.error === "string") return value;
+        } catch { break; }
+      }
+    }
+  }
+  return undefined;
+}
 function finiteDataNumber(value: unknown): number | undefined { return typeof value === "number" && Number.isFinite(value) ? value : undefined; }
 function text(value: unknown, name: string): string { if (typeof value !== "string" || !value.trim()) throw new Error(`${name} must be a non-empty string.`); return value; }
 function number(value: unknown, name: string): number { if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${name} must be a finite number.`); return value; }

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 const executorUrl = process.env.COMPONENT_EXECUTOR_MODULE ?? new URL("../src/PiDesktop.Tauri/dist/electron/services/component-executor.js", import.meta.url).href;
 const { createComponentExecutor } = await import(executorUrl);
 
@@ -32,4 +34,12 @@ assert.match(midi.summary, /Bridge import was not performed/u);
 assert.deepEqual(midi.data.bridgeImport, { status: "not-performed", requested: true });
 await assert.rejects(run("run_project_probe", { projectPath: "song.svp" }), /absolute path/u);
 await assert.rejects(run("unknown", {}), /No local component implements/u);
+const pathPython = process.platform === "win32" ? "python.exe" : "python3.11";
+if (spawnSync(pathPython, ["--version"], { encoding: "utf8" }).status === 0) {
+  const componentsRoot = fileURLToPath(new URL("../src/PiDesktop.Tauri/components/", import.meta.url));
+  const pathRun = createComponentExecutor(componentsRoot, pathPython, undefined, { dataRoot: path.join(directory, "path-data") });
+  const pathResult = await pathRun("run_project_probe", { projectPath: project });
+  assert.equal(pathResult.kind, "project-probe");
+  assert.equal(pathResult.data.trackCount, 0);
+}
 console.log("Component executor maps local component data and rejects relative input paths.");
