@@ -3217,8 +3217,8 @@ function modelAuthProviders() {
     authorizeLabel: t("accountUi.authorizeInBrowser"),
     usageEnabled: provider.id === "anthropic" || provider.id === "openai-codex",
     models: provider.models, oauthModels: provider.oauthModels, apiKeyModels: provider.apiKeyModels,
-    oauthCredentials: provider.accounts.map((account) => ({ id: account.id, label: account.label, account: account.label, healthy: account.healthy, enabled: account.enabled, weight: account.weight, models: provider.oauthModels, usage: usageByCredential.get(account.id) ?? null })),
-    apiKeyCredentials: provider.apiKeys.map((key) => ({ id: key.id, label: key.label, healthy: key.healthy, enabled: key.enabled, weight: key.weight, models: key.models, cooldownUntilUtc: key.cooldownUntilUtc })),
+    oauthCredentials: provider.accounts.map((account) => ({ id: account.id, label: account.label, account: account.label, healthy: account.healthy, enabled: account.enabled, extend: account.extend, models: provider.oauthModels, usage: usageByCredential.get(account.id) ?? null })),
+    apiKeyCredentials: provider.apiKeys.map((key) => ({ id: key.id, label: key.label, healthy: key.healthy, enabled: key.enabled, extend: key.extend, models: key.models, cooldownUntilUtc: key.cooldownUntilUtc })),
   }));
 }
 
@@ -3296,8 +3296,13 @@ async function executeModelAuthAction(action: ModelAuthAction, detail: unknown[]
       break;
     }
     case "update-credential": {
-      const [payload] = detail as [{ providerId: AiProviderId; credentialId: string; enabled: boolean; weight: number }];
-      app = await api.updateAiCredential(payload.providerId, payload.credentialId, payload.enabled, payload.weight);
+      const [payload] = detail as [{ providerId: AiProviderId; credentialId: string; enabled: boolean; label?: string; extend?: Record<string, unknown> }];
+      app = await api.updateAiCredential(payload.providerId, payload.credentialId, payload.enabled, undefined, payload.label, payload.extend);
+      break;
+    }
+    case "reorder-credentials": {
+      const [payload] = detail as [{ providerId: AiProviderId; method: "oauth" | "api-key"; credentialIds: string[] }];
+      app = await api.reorderAiCredentials(payload.providerId, payload.method, payload.credentialIds);
       break;
     }
     case "update-provider": {

@@ -5,15 +5,13 @@ import path from "node:path";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const packageRoot = path.join(root, "src/PiDesktop.Tauri");
-const release = "https://github.com/lsy-404/platform-kit/releases/download/v0.6.1";
+const release = "https://github.com/lsy-404/platform-kit/releases/download";
 const manifest = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8"));
-for (const name of ["core", "providers"]) {
-  assert.equal(
-    manifest.dependencies[`@model-auth/${name}`],
-    `${release}/model-auth-${name}-0.6.1.tgz`,
-  );
+for (const [name, version] of [["core", "0.9.0"], ["providers", "0.13.0"], ["vue", "0.10.3"]]) {
+  assert.equal(manifest.dependencies[`@model-auth/${name}`], `${release}/model-auth-${name}-v${version}/model-auth-${name}-${version}.tgz`);
+  const installed = JSON.parse(await readFile(path.join(packageRoot, `node_modules/@model-auth/${name}/package.json`), "utf8"));
+  assert.equal(installed.version, version);
 }
-assert.equal(manifest.dependencies["@model-auth/vue"], "https://github.com/lsy-404/platform-kit/releases/download/v0.6.1/model-auth-vue-0.6.1.tgz");
 const [lock, prepare, desktop, ffmpeg] = await Promise.all([
   readFile(path.join(packageRoot, "package-lock.json"), "utf8"),
   readFile(path.join(root, ".github/workflows/prepare-desktop.yml"), "utf8"),

@@ -682,14 +682,26 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     const provider = previewAiProvider(args?.provider);
     const credentialId = String(args?.credentialId ?? "");
     const enabled = Boolean(args?.enabled);
-    const weight = Number(args?.weight);
-    if (!provider || !credentialId || !Number.isInteger(weight) || weight < 1 || weight > 100) throw new Error("凭据设置无效。");
+    const weight = args?.weight === undefined ? undefined : Number(args.weight);
+    if (!provider || !credentialId || (weight !== undefined && (!Number.isInteger(weight) || weight < 1 || weight > 100))) throw new Error("凭据设置无效。");
     const account = provider.accounts.find((item) => item.id === credentialId);
     const key = provider.apiKeys.find((item) => item.id === credentialId);
     if (!account && !key) throw new Error("未找到凭据。");
-    if (account) { account.enabled = enabled; account.weight = weight; }
-    if (key) { key.enabled = enabled; key.weight = weight; }
+    const credential = account ?? key!;
+    credential.enabled = enabled;
+    if (weight !== undefined) credential.weight = weight;
+    if (typeof args?.label === "string") credential.label = args.label;
+    if (args?.extend && typeof args.extend === "object" && !Array.isArray(args.extend)) credential.extend = args.extend as Record<string, unknown>;
     refreshPreviewAiProvider(provider);
+    return previewState() as T;
+  }
+  if (command === "reorder_ai_credentials") {
+    const provider = previewAiProvider(args?.provider);
+    const ids = args?.credentialIds;
+    if (!provider || !Array.isArray(ids) || !["oauth", "api-key"].includes(String(args?.method))) throw new Error("凭据排序无效。");
+    const credentials = args?.method === "oauth" ? provider.accounts : provider.apiKeys;
+    if (ids.length !== credentials.length || new Set(ids).size !== ids.length || ids.some(id => !credentials.some(item => item.id === id))) throw new Error("凭据排序无效。");
+    credentials.sort((left, right) => ids.indexOf(left.id) - ids.indexOf(right.id));
     return previewState() as T;
   }
   if (command === "update_ai_provider") {
@@ -1492,8 +1504,10 @@ export const api = {
     call<OpenCodeCatalog>("opencode_provider_catalog", { force }),
   removeAiProviderAccount: (provider: AiProviderId, accountId: string) =>
     call<BootstrapState>("remove_ai_provider_account", { provider, accountId }),
-  updateAiCredential: (provider: AiProviderId, credentialId: string, enabled: boolean, weight: number) =>
-    call<BootstrapState>("update_ai_credential", { provider, credentialId, enabled, weight }),
+  updateAiCredential: (provider: AiProviderId, credentialId: string, enabled: boolean, weight?: number, label?: string, extend?: Record<string, unknown>) =>
+    call<BootstrapState>("update_ai_credential", { provider, credentialId, enabled, weight, label, extend }),
+  reorderAiCredentials: (provider: AiProviderId, method: "oauth" | "api-key", credentialIds: string[]) =>
+    call<BootstrapState>("reorder_ai_credentials", { provider, method, credentialIds }),
   updateAiProvider: (provider: AiProviderId, oauthEnabled: boolean) =>
     call<BootstrapState>("update_ai_provider", { provider, oauthEnabled }),
   updateAiProviderStrategy: (provider: AiProviderId, strategy: import("./types").AiLoadStrategy) =>
