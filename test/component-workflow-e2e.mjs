@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, realpath, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 const executorUrl = process.env.COMPONENT_EXECUTOR_MODULE ?? new URL("../src/PiDesktop.Tauri/dist/electron/services/component-executor.js", import.meta.url).href;
 const { createComponentExecutor } = await import(executorUrl);
 
@@ -30,12 +31,16 @@ wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
 wav.writeUInt32LE(22050, 24); wav.writeUInt32LE(44100, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
 wav.write("data", 36); wav.writeUInt32LE(samples.length, 40); samples.copy(wav, 44);
 await writeFile(audio, wav);
+const originalInferenceDevice = process.env.SYNTHV_TOOLBOX_INFERENCE_DEVICE;
+process.env.SYNTHV_TOOLBOX_INFERENCE_DEVICE = "cpu";
 const run = createComponentExecutor(
-  path.resolve("src/PiDesktop.Tauri/components"),
+  fileURLToPath(new URL("../src/PiDesktop.Tauri/components/", import.meta.url)),
   process.env.SYNTHV_TOOLBOX_PYTHON ?? "python3.11",
   undefined,
   { dataRoot },
 );
+if (originalInferenceDevice === undefined) delete process.env.SYNTHV_TOOLBOX_INFERENCE_DEVICE;
+else process.env.SYNTHV_TOOLBOX_INFERENCE_DEVICE = originalInferenceDevice;
 
 const probe = await run("run_project_probe", { projectPath: source });
 assert.equal(probe.kind, "project-probe");
@@ -98,10 +103,18 @@ const probeAudio = await attemptAudio("run_audio_probe", { audioPath: audio, adv
 if (probeAudio) assert.equal(probeAudio.kind, "audio-probe");
 const midiArgs = { vocalPath: audio, instrumentalPath: audio, tolerance: 0.08, advanced: false, outputName: "pair.mid" };
 const gameMidi = await attemptAudio("run_game_to_midi", midiArgs, audioDependencies);
-if (gameMidi) assert.equal(gameMidi.kind, "game-to-midi");
+if (gameMidi) {
+  assert.equal(gameMidi.kind, "game-to-midi");
+  assert.equal(gameMidi.data.inference.deviceMode, "cpu");
+  assert.equal(gameMidi.data.inference.hardwareEnabled, false);
+  assert.deepEqual(gameMidi.data.inference.actualProviders, ["CPUExecutionProvider"]);
+}
 const projectMidi = await attemptAudio("run_audio_to_project", { ...midiArgs, outputName: "project.mid", outputDirectory: path.join(root, "midi-output"), importToSynthv: false }, audioDependencies);
 if (projectMidi) {
   assert.equal(projectMidi.kind, "audio-to-project");
+  assert.equal(projectMidi.data.inference.deviceMode, "cpu");
+  assert.equal(projectMidi.data.inference.hardwareEnabled, false);
+  assert.deepEqual(projectMidi.data.inference.actualProviders, ["CPUExecutionProvider"]);
   assert.deepEqual(projectMidi.data.bridgeImport, { status: "not-performed", requested: false });
 }
 const renderReview = await attemptAudio("run_render_review", { audioPath: audio, expectedDurationSec: 1, expectedBpm: 120, requireNotes: false }, audioDependencies);

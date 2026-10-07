@@ -21,6 +21,7 @@ torch(CPU 即可) + panns-inference。Python ≤3.11（basic-pitch 生态限制�
 import argparse
 from functools import lru_cache
 import json
+import os
 import sys
 
 import numpy as np
@@ -164,12 +165,58 @@ def extract_notes(path: str):
         for (s, e, p, a, _bends) in note_events
     ]
     notes.sort(key=lambda n: n["start"])
-    return notes
+    return notes, model.inference_info
 
 
 @lru_cache(maxsize=1)
 def basic_pitch_model(model_type, model_path):
-    return model_type(model_path)
+    import onnxruntime as ort
+
+    class HardwareOnnxModel(model_type):
+        def __init__(self, path):
+            mode = os.environ.get("SYNTHV_TOOLBOX_INFERENCE_DEVICE", "auto").strip().lower() or "auto"
+            if mode not in {"auto", "cpu"}:
+                raise ValueError("SYNTHV_TOOLBOX_INFERENCE_DEVICE must be 'auto' or 'cpu'.")
+            available = ort.get_available_providers()
+            if "CPUExecutionProvider" not in available:
+                raise RuntimeError("ONNX Runtime does not provide CPUExecutionProvider.")
+            preferred = hardware_provider_priority()
+            hardware_available = [provider for provider in preferred if provider in available]
+            selected = [] if mode == "cpu" else hardware_available
+            requested = [*selected, "CPUExecutionProvider"]
+            options = ort.SessionOptions()
+            if "DmlExecutionProvider" in selected:
+                options.enable_mem_pattern = False
+                options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+            self.model_type = model_type.MODEL_TYPES.ONNX
+            self.model = ort.InferenceSession(
+                str(path),
+                sess_options=options,
+                providers=requested,
+                enable_fallback=0,
+            )
+            self.model.disable_fallback()
+            actual = self.model.get_providers()
+            self.inference_info = {
+                "deviceMode": mode,
+                "availableProviders": available,
+                "availableHardwareProviders": hardware_available,
+                "hardwareAvailable": bool(hardware_available),
+                "requestedProviders": requested,
+                "actualProviders": actual,
+                "hardwareProvider": next((provider for provider in actual if provider != "CPUExecutionProvider"), None),
+                "hardwareEnabled": any(provider != "CPUExecutionProvider" for provider in actual),
+            }
+
+    return HardwareOnnxModel(model_path)
+
+
+def hardware_provider_priority():
+    if sys.platform == "darwin":
+        return ["CoreMLExecutionProvider"]
+    if sys.platform == "win32":
+        return ["CUDAExecutionProvider", "DmlExecutionProvider"]
+    return ["CUDAExecutionProvider"]
 
 
 def cmd_probe(args) -> dict:
@@ -227,7 +274,7 @@ def cmd_probe(args) -> dict:
     }
 
     if args.notes:
-        notes = extract_notes(args.audio)
+        notes, inference_info = extract_notes(args.audio)
         pitches = [n["pitch"] for n in notes]
         octs: dict[int, int] = {}
         for p in pitches:
@@ -240,6 +287,7 @@ def cmd_probe(args) -> dict:
             "long_over_800ms": long_n,
             "octave_histogram": {f"O{o}": c for o, c in sorted(octs.items())},
         }
+        result["inference"] = inference_info
 
     if args.panns:
         import contextlib
@@ -778,8 +826,8 @@ def advanced_pair_diff(vnotes, inotes, requested_tol):
 
 
 def cmd_pair_diff(args) -> dict:
-    vnotes = extract_notes(args.vocal)
-    inotes = extract_notes(args.inst) if args.inst else []
+    vnotes, inference_info = extract_notes(args.vocal)
+    inotes = extract_notes(args.inst)[0] if args.inst else []
     advanced = None
     if args.advanced and args.inst:
         selected, confidence, trials = advanced_pair_diff(vnotes, inotes, args.tol)
@@ -839,6 +887,7 @@ def cmd_pair_diff(args) -> dict:
         "note": "歌词来自词级时间戳识别；词典音素不是声学对齐。未提供伴奏时直接提取演唱旋律。",
     }
     result.update(lyric_result)
+    result["inference"] = inference_info
     if args.lyrics_file:
         result["lyrics_file"] = args.lyrics_file
     if advanced is not None:
