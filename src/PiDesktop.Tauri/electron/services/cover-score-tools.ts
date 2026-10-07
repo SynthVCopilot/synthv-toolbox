@@ -33,6 +33,7 @@ export function createCoverScoreToolsExtension(options: CoverScoreToolsOptions):
     factory(pi: PiExtensionApi) {
       pi.on("before_agent_start", (event) => ({ systemPrompt: `${event.systemPrompt}\n\n${GUIDANCE}` }));
       let guardMessage: string | null = "Cover score review status is being loaded.";
+      let latestRead: { jobId: string; fingerprint: string; noteIds: Set<string>; startsAtBeginning: boolean } | null = null;
       const refreshGuard = async () => {
         const jobId = options.jobForSession();
         if (!jobId || options.phaseForSession?.() !== "repair") { guardMessage = null; return; }
@@ -60,7 +61,30 @@ export function createCoverScoreToolsExtension(options: CoverScoreToolsOptions):
             const jobId = options.jobForSession();
             if (!jobId) throw new Error("COVER_SCORE_UNBOUND: this session has no cover-score job.");
             if (options.phaseForSession?.() !== "repair") throw new Error("COVER_SCORE_PHASE: score tools are available only during the repair phase.");
-            const result = await run(jobId, objectParams(rawParams));
+            const params = objectParams(rawParams);
+            if (tool === "cover_score_review") {
+              const ids = Array.isArray(params.noteIds) ? params.noteIds : [];
+              if (!latestRead || latestRead.jobId !== jobId || latestRead.fingerprint !== params.fingerprint || ids.some((id: unknown) => typeof id !== "string" || !latestRead!.noteIds.has(id))) {
+                throw new Error("COVER_SCORE_NOT_READ: review may include only note ids read from this job at the current revision; read the latest revision first.");
+              }
+            }
+            if (tool === "cover_score_edit") {
+              const edits = Array.isArray(params.edits) ? params.edits : [];
+              const referenced = edits.flatMap((edit: any) => edit?.type === "insert" ? [edit.afterId ?? null] : [edit?.id]);
+              if (!latestRead || latestRead.jobId !== jobId || latestRead.fingerprint !== params.fingerprint || referenced.some((id: unknown) => id === null ? !latestRead!.startsAtBeginning : typeof id !== "string" || !latestRead!.noteIds.has(id))) {
+                throw new Error("COVER_SCORE_NOT_READ: edit targets must come from a read of this job at the current revision; read the score first.");
+              }
+            }
+            const result = await run(jobId, params);
+            if (tool === "cover_score_read") {
+              const page = result as { fingerprint?: unknown; notes?: Array<{ id?: unknown }> };
+              if (typeof page.fingerprint === "string" && Array.isArray(page.notes)) {
+                if (!latestRead || latestRead.jobId !== jobId || latestRead.fingerprint !== page.fingerprint) latestRead = { jobId, fingerprint: page.fingerprint, noteIds: new Set(), startsAtBeginning: false };
+                for (const note of page.notes) if (typeof note.id === "string") latestRead.noteIds.add(note.id);
+                if ((params.offset ?? 0) === 0) latestRead.startsAtBeginning = true;
+              }
+            }
+            if (tool === "cover_score_edit") latestRead = null;
             await refreshGuard();
             return jsonResult(result);
           },

@@ -65,6 +65,7 @@ test("rejects overlapping edits without changing revision and invalidates review
     await ctx.service.review("job-a", { fingerprint: before, noteIds: page.notes.map((note) => note.id), summary: "Reviewed the segment boundary.", unresolved: [] });
     assert.equal((await ctx.service.finalize("job-a")).reviewed, 2);
     await assert.rejects(ctx.service.edit("job-a", { fingerprint: before, reason: "Fix a boundary timing error.", edits: [{ type: "update", id: page.notes[1].id, changes: { startSeconds: page.notes[0].endSeconds - 0.01 } }] }), /overlap/);
+    await assert.rejects(ctx.service.edit("job-a", { fingerprint: before, reason: "Test an invalid zero-duration edit.", edits: [{ type: "update", id: page.notes[0].id, changes: { endSeconds: page.notes[0].startSeconds } }] }), /zero-duration/);
     assert.equal((await ctx.service.inspect("job-a", { offset: 59, limit: 2 })).fingerprint, before);
     const updated = await ctx.service.edit("job-a", { fingerprint: before, reason: "A supported pitch correction.", edits: [{ type: "update", id: page.notes[0].id, changes: { pitch: page.notes[0].pitch + 1 } }] });
     assert.equal((await ctx.service.finalize("job-a")).reviewed, 0, "an edit invalidates review of the changed note and its neighbor");
@@ -112,6 +113,75 @@ test("reports source overlaps and zero-duration notes, then accepts their explic
     await service.accept("job-a", { summary: "Explicit timing repair accepted.", unresolved: [] });
     assert.equal((await service.result("job-a")).noteCount, 2);
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("repairs more than 60 pre-existing overlaps in bounded passes and records before/after values", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "cover-score-many-overlaps-"));
+  try {
+    const notes = Array.from({ length: 130 }, (_, index) => ({ startSeconds: index * 0.1, endSeconds: index * 0.1 + 0.12, pitch: 60, lyric: `syllable-${index}` }));
+    const payload = Buffer.from(JSON.stringify({ timingBasis: "seconds", noteCount: notes.length, notes }));
+    const source = join(dir, "notes.json");
+    await writeFile(source, payload);
+    const service = createCoverScoreService(dir);
+    const prepared = await service.prepare("job-a", source, digest(payload));
+    const editsFor = (page) => page.notes.slice(0, 60).map((note) => ({ type: "update", id: note.id, changes: { endSeconds: note.startSeconds + 0.1 } }));
+    let page = await service.inspect("job-a", { offset: 0, limit: 60 });
+    const first = await service.edit("job-a", { fingerprint: page.fingerprint, reason: "Trim each detected overlap to the following recognized onset.", edits: editsFor(page) });
+    assert.equal(first.noteCount, 130);
+    page = await service.inspect("job-a", { offset: 60, limit: 60 });
+    const second = await service.edit("job-a", { fingerprint: page.fingerprint, reason: "Continue the overlap correction across the next segment.", edits: editsFor(page) });
+    assert.equal(second.noteCount, 130);
+    page = await service.inspect("job-a", { offset: 120, limit: 10 });
+    await service.edit("job-a", { fingerprint: page.fingerprint, reason: "Trim the remaining onset overlaps.", edits: page.notes.slice(0, -1).map((note, index) => ({ type: "update", id: note.id, changes: { endSeconds: note.startSeconds + 0.1 } })) });
+    const changed = await service.inspect("job-a", { offset: 0, limit: 1 });
+    await reviewAll(service, "job-a", 130);
+    await service.accept("job-a", { summary: "All timing overlaps corrected and reviewed.", unresolved: [] });
+    const result = await service.result("job-a");
+    assert.equal(result.noteCount, 130);
+    assert.equal(result.changes.length, 129);
+    assert.deepEqual(result.changes[0].before, { ...notes[0] });
+    assert.deepEqual(result.changes[0].after, { ...notes[0], endSeconds: notes[0].startSeconds + 0.1 });
+    assert.equal(changed.notes[0].id, "note-000001");
+    assert.equal((await service.finalize("job-a")).complete, true);
+    assert.equal(prepared.noteCount, 130);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("blocks empty lyrics and requires tool reads from the current revision before review", async () => {
+  const emptyDir = await mkdtemp(join(tmpdir(), "cover-score-empty-lyric-"));
+  try {
+    const payload = Buffer.from(JSON.stringify({ timingBasis: "seconds", noteCount: 1, notes: [{ startSeconds: 0, endSeconds: 0.4, pitch: 60, lyric: "" }] }));
+    const source = join(emptyDir, "notes.json");
+    await writeFile(source, payload);
+    const service = createCoverScoreService(emptyDir);
+    const prepared = await service.prepare("job-a", source, digest(payload));
+    const emptyPage = await service.inspect("job-a");
+    await service.review("job-a", { fingerprint: emptyPage.fingerprint, noteIds: [emptyPage.notes[0].id], summary: "Review the unresolved empty lyric.", unresolved: ["lyric needs acoustic evidence"] });
+    assert.equal((await service.finalize("job-a")).complete, false);
+    await assert.rejects(service.accept("job-a", { summary: "Accept", unresolved: [] }), /Empty lyrics/);
+    const filled = await service.edit("job-a", { fingerprint: prepared.fingerprint, reason: "Fill the note from its overlapping ASR word evidence.", edits: [{ type: "update", id: emptyPage.notes[0].id, changes: { lyric: "word" } }] });
+    await service.review("job-a", { fingerprint: filled.fingerprint, noteIds: [emptyPage.notes[0].id], summary: "Reviewed the evidence-backed lyric.", unresolved: [] });
+    assert.equal((await service.finalize("job-a")).complete, true);
+  } finally { await rm(emptyDir, { recursive: true, force: true }); }
+
+  const ctx = await setup(3);
+  try {
+    const job = "job-a";
+    const tools = new Map();
+    const extension = createCoverScoreToolsExtension({ service: ctx.service, jobForSession: () => job, phaseForSession: () => "repair", guards: { completion() {} } });
+    extension.factory({ registerTool(tool) { tools.set(tool.name, tool); }, on() {} });
+    const reviewTool = tools.get("cover_score_review");
+    const readTool = tools.get("cover_score_read");
+    const editTool = tools.get("cover_score_edit");
+    await assert.rejects(reviewTool.execute("call", { fingerprint: ctx.prepared.fingerprint, noteIds: ["note-000002"], summary: "Guess id", unresolved: [] }), /COVER_SCORE_NOT_READ/);
+    const read = JSON.parse((await readTool.execute("call", { limit: 3 })).content[0].text);
+    await editTool.execute("call", { fingerprint: read.fingerprint, reason: "Correct from current evidence.", edits: [{ type: "update", id: read.notes[1].id, changes: { pitch: read.notes[1].pitch + 1 } }] });
+    const latest = await ctx.service.inspect(job, { limit: 3 });
+    await assert.rejects(reviewTool.execute("call", { fingerprint: latest.fingerprint, noteIds: [latest.notes[1].id], summary: "Use an id read before the edit", unresolved: [] }), /COVER_SCORE_NOT_READ/);
+    const reread = JSON.parse((await readTool.execute("call", { limit: 3 })).content[0].text);
+    await reviewTool.execute("call", { fingerprint: reread.fingerprint, noteIds: reread.notes.map((note) => note.id), summary: "Reviewed live notes from this revision.", unresolved: [] });
+    assert.equal((await ctx.service.finalize(job)).reviewed, 3);
+  } finally { await rm(ctx.dir, { recursive: true, force: true }); }
 });
 
 test("rejects sources outside dataRoot and refuses tools without a repair-phase job binding", async () => {

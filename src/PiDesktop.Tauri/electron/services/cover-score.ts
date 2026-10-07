@@ -20,6 +20,14 @@ export interface CoverScoreIssue {
   readonly message: string;
 }
 
+export interface CoverScoreChange {
+  readonly type: "update" | "delete" | "insert";
+  readonly id: string;
+  readonly reason: string;
+  readonly before: Omit<CoverScoreNote, "id"> | null;
+  readonly after: Omit<CoverScoreNote, "id"> | null;
+}
+
 export interface CoverScoreService {
   prepare(jobId: string, sourcePath: string, expectedSha256: string, evidence?: { segmentsPath?: string; analysisPath?: string; rawNotesPath?: string }): Promise<{ fingerprint: string; noteCount: number; totalDuration: number }>;
   inspect(jobId: string, options?: { offset?: number; limit?: number }): Promise<{ fingerprint: string; notes: Array<CoverScoreNote & { previous: CoverScoreNote | null; next: CoverScoreNote | null }>; issues: CoverScoreIssue[]; noteCount: number; totalDuration: number; evidence: { words: unknown[]; rawPitchCandidates: unknown[]; analysisSummary: Record<string, unknown> | null } }>;
@@ -40,7 +48,7 @@ export interface CoverScoreResult {
   sha256: string;
   noteCount: number;
   issues: CoverScoreIssue[];
-  changes: Array<{ type: string; id: string; reason: string }>;
+  changes: CoverScoreChange[];
   accepted: true;
 }
 
@@ -51,7 +59,7 @@ interface JobState {
   originalNotes: CoverScoreNote[];
   notes: CoverScoreNote[];
   originalDuration: number;
-  changes: Array<{ type: string; id: string; reason: string }>;
+  changes: CoverScoreChange[];
   reviews: Record<string, ReviewState>;
   accepted?: CoverScoreResult;
   acceptanceSummary?: string;
@@ -69,6 +77,10 @@ function hash(data: string | Uint8Array): string { return createHash("sha256").u
 function fingerprint(notes: readonly CoverScoreNote[]): string { return hash(JSON.stringify(notes)); }
 function noteFingerprint(note: CoverScoreNote): string { return hash(JSON.stringify(note)); }
 function clone<T>(value: T): T { return structuredClone(value); }
+function noteValue(note: CoverScoreNote): Omit<CoverScoreNote, "id"> {
+  const { id: _id, ...value } = note;
+  return clone(value);
+}
 function validateJobId(jobId: string): void {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/.test(jobId)) throw new Error("Invalid job id.");
 }
@@ -96,12 +108,13 @@ function parseNotes(source: unknown): { notes: CoverScoreNote[]; duration: numbe
 }
 
 function validateNotes(notes: readonly CoverScoreNote[], duration: number, options: { allowZeroDuration?: boolean; allowOverlap?: boolean } = {}): void {
-  if (notes.length > MAX_NOTES) throw new Error("Score exceeds 20000 notes.");
+  if (notes.length === 0 || notes.length > MAX_NOTES) throw new Error("Score must contain 1..20000 notes.");
   let previous: CoverScoreNote | undefined;
   for (const note of notes) {
     if (!Number.isFinite(note.startSeconds) || !Number.isFinite(note.endSeconds) || note.startSeconds < 0 || note.endSeconds < note.startSeconds || (!options.allowZeroDuration && note.endSeconds === note.startSeconds) || note.endSeconds > duration + TAIL_SLACK_SECONDS) throw new Error(`Invalid timing for ${note.id}.`);
     if (!Number.isInteger(note.pitch) || note.pitch < 0 || note.pitch > 127) throw new Error(`Invalid pitch for ${note.id}.`);
     if (typeof note.lyric !== "string") throw new Error(`Invalid lyric for ${note.id}.`);
+    if (previous && note.startSeconds < previous.startSeconds) throw new Error(`Notes are not chronologically ordered at ${note.id}.`);
     if (!options.allowOverlap && previous && note.startSeconds < previous.endSeconds - 0.000001) throw new Error(`Monophonic overlap between ${previous.id} and ${note.id}.`);
     previous = note;
   }
@@ -110,10 +123,12 @@ function validateNotes(notes: readonly CoverScoreNote[], duration: number, optio
 function findIssues(notes: readonly CoverScoreNote[]): CoverScoreIssue[] {
   const issues: CoverScoreIssue[] = [];
   const add = (code: string, severity: CoverScoreIssue["severity"], noteIds: string[], message: string) => issues.push({ id: `${code}:${noteIds.join(":")}`, code, severity, noteIds, message });
+  let overlapAnchor: CoverScoreNote | undefined;
   for (let i = 0; i < notes.length; i++) {
     const note = notes[i]!;
     const duration = note.endSeconds - note.startSeconds;
-    if (i > 0 && note.startSeconds < notes[i - 1]!.endSeconds - 0.000001) add("overlap", "severe", [notes[i - 1]!.id, note.id], "Adjacent notes overlap and violate the monophonic score constraint.");
+    if (overlapAnchor && note.startSeconds < overlapAnchor.endSeconds - 0.000001) add("overlap", "severe", [overlapAnchor.id, note.id], "Adjacent notes overlap and violate the monophonic score constraint.");
+    if (!overlapAnchor || note.endSeconds > overlapAnchor.endSeconds) overlapAnchor = note;
     if (duration === 0) add("zero-duration-note", "warning", [note.id], "Note has zero duration and must be repaired before acceptance.");
     else if (duration < 0.025) add("very-short-note", "warning", [note.id], "Note is shorter than 25 ms.");
     else if (duration < 0.055) add("short-note", "info", [note.id], "Note is shorter than 55 ms.");
@@ -268,6 +283,9 @@ export function createCoverScoreService(dataRoot: string): CoverScoreService {
         assertFingerprint(state, input.fingerprint);
         if (state.accepted) throw new Error("Accepted score cannot be edited.");
         const candidate = clone(state.notes);
+        const previousOverlapPairs = new Set(findIssues(state.notes).filter((issue) => issue.code === "overlap").map((issue) => issue.noteIds.join("\0")));
+        const previousZeroNotes = new Set(state.notes.filter((note) => note.endSeconds === note.startSeconds).map((note) => note.id));
+        const previousEmptyLyrics = new Set(state.notes.filter((note) => !note.lyric.trim()).map((note) => note.id));
         const changedIds = new Set<string>();
         const invalidatedIds = new Set<string>();
         for (const edit of input.edits) {
@@ -275,17 +293,19 @@ export function createCoverScoreService(dataRoot: string): CoverScoreService {
             const i = candidate.findIndex((note) => note.id === edit.id);
             const changeKeys = Object.keys(edit.changes ?? {});
             if (i < 0 || changeKeys.length === 0 || changeKeys.some((key) => !["startSeconds", "endSeconds", "pitch", "lyric"].includes(key))) throw new Error(`Unknown note or invalid changes: ${edit.id}.`);
+            const before = noteValue(candidate[i]!);
             for (const neighbor of [candidate[i - 1], candidate[i], candidate[i + 1]]) if (neighbor) invalidatedIds.add(neighbor.id);
             candidate[i] = { ...candidate[i]!, ...edit.changes };
             changedIds.add(edit.id);
-            state.changes.push({ type: "update", id: edit.id, reason: input.reason });
+            state.changes.push({ type: "update", id: edit.id, before, after: noteValue(candidate[i]!), reason: input.reason });
           } else if (edit.type === "delete") {
             const i = candidate.findIndex((note) => note.id === edit.id);
             if (i < 0) throw new Error(`Unknown note: ${edit.id}.`);
+            const before = noteValue(candidate[i]!);
             for (const neighbor of [candidate[i - 1], candidate[i], candidate[i + 1]]) if (neighbor) invalidatedIds.add(neighbor.id);
             candidate.splice(i, 1);
             changedIds.add(edit.id);
-            state.changes.push({ type: "delete", id: edit.id, reason: input.reason });
+            state.changes.push({ type: "delete", id: edit.id, before, after: null, reason: input.reason });
           } else if (edit.type === "insert") {
             const i = edit.afterId === undefined ? -1 : candidate.findIndex((note) => note.id === edit.afterId);
             if (edit.afterId !== undefined && i < 0) throw new Error(`Unknown anchor note: ${edit.afterId}.`);
@@ -298,10 +318,14 @@ export function createCoverScoreService(dataRoot: string): CoverScoreService {
             for (const neighbor of [candidate[i], candidate[i + 1]]) if (neighbor) invalidatedIds.add(neighbor.id);
             candidate.splice(i + 1, 0, note);
             changedIds.add(id);
-            state.changes.push({ type: "insert", id, reason: input.reason });
+            state.changes.push({ type: "insert", id, before: null, after: noteValue(note), reason: input.reason });
           } else throw new Error("Unsupported score edit.");
         }
-        validateNotes(candidate, state.originalDuration);
+        validateNotes(candidate, state.originalDuration, { allowZeroDuration: true, allowOverlap: true });
+        const candidateOverlapPairs = findIssues(candidate).filter((issue) => issue.code === "overlap").map((issue) => issue.noteIds.join("\0"));
+        if (candidateOverlapPairs.some((pair) => !previousOverlapPairs.has(pair))) throw new Error("Edit introduces a new monophonic overlap.");
+        if (candidate.some((note) => note.endSeconds === note.startSeconds && !previousZeroNotes.has(note.id))) throw new Error("Edit introduces a zero-duration note.");
+        if (candidate.some((note) => !note.lyric.trim() && !previousEmptyLyrics.has(note.id))) throw new Error("Edit introduces an empty lyric.");
         for (const id of [...changedIds, ...invalidatedIds]) delete state.reviews[id];
         state.notes = candidate;
         await saveState(jobId, state);
@@ -322,7 +346,10 @@ export function createCoverScoreService(dataRoot: string): CoverScoreService {
         state.unresolved = [...new Set([...state.unresolved, ...input.unresolved])];
         await saveState(jobId, state);
         const reviewed = state.notes.filter((note) => state.reviews[note.id]?.fingerprint === noteFingerprint(note)).length;
-        return { reviewed, complete: reviewed === state.notes.length, liveNoteCount: state.notes.length };
+        let valid = state.notes.length > 0 && !state.notes.some((note) => !note.lyric.trim()) && findIssues(state.notes).every((issue) => issue.severity !== "severe");
+        try { validateNotes(state.notes, state.originalDuration); }
+        catch { valid = false; }
+        return { reviewed, complete: reviewed === state.notes.length && valid, liveNoteCount: state.notes.length };
       });
     },
     async accept(jobId, input) {
@@ -330,6 +357,7 @@ export function createCoverScoreService(dataRoot: string): CoverScoreService {
         const state = await readState(jobId);
         if (!input.summary.trim() || input.summary.length > 2000 || input.unresolved.length > 60 || input.unresolved.some((item) => typeof item !== "string" || item.length > 300)) throw new Error("Acceptance requires a bounded summary and at most 60 bounded uncertainty entries.");
         validateNotes(state.notes, state.originalDuration);
+        if (state.notes.some((note) => !note.lyric.trim())) throw new Error("Empty lyrics must be repaired or explicitly removed before acceptance.");
         const reviewed = state.notes.filter((note) => state.reviews[note.id]?.fingerprint === noteFingerprint(note));
         if (reviewed.length !== state.notes.length) throw new Error(`Full-song review incomplete: ${reviewed.length}/${state.notes.length}.`);
         const unresolved = [...new Set([...state.unresolved, ...input.unresolved])];
@@ -355,7 +383,10 @@ export function createCoverScoreService(dataRoot: string): CoverScoreService {
         const reviewed = state.notes.filter((note) => state.reviews[note.id]?.fingerprint === noteFingerprint(note)).length;
         const severe = findIssues(state.notes).filter((issue) => issue.severity === "severe");
         let structurallyValid = true;
-        try { validateNotes(state.notes, state.originalDuration); }
+        try {
+          validateNotes(state.notes, state.originalDuration);
+          if (state.notes.some((note) => !note.lyric.trim())) throw new Error("Empty lyric.");
+        }
         catch { structurallyValid = false; }
         return { complete: reviewed === state.notes.length && structurallyValid && severe.length === 0, reviewed, noteCount: state.notes.length, unresolved: [...state.unresolved] };
       });
