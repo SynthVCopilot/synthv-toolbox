@@ -102,6 +102,8 @@ test("reports source overlaps and zero-duration notes, then accepts their explic
     const prepared = await service.prepare("job-a", source, digest(payload));
     const page = await service.inspect("job-a");
     assert.deepEqual(new Set(page.issues.map((issue) => issue.code)), new Set(["overlap", "zero-duration-note"]));
+    await service.review("job-a", { fingerprint: page.fingerprint, noteIds: page.notes.map((note) => note.id), summary: "Original timing issues reviewed.", unresolved: [] });
+    assert.equal((await service.finalize("job-a")).complete, false, "invalid timing and overlap block completion even when notes were reviewed");
     const fixed = await service.edit("job-a", { fingerprint: prepared.fingerprint, reason: "Restore positive duration and monophonic order from the neighboring onset.", edits: [
       { type: "update", id: page.notes[1].id, changes: { startSeconds: 0.2, endSeconds: 0.3 } },
     ] });

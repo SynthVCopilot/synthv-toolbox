@@ -353,8 +353,11 @@ export function createCoverScoreService(dataRoot: string): CoverScoreService {
       return inJob(jobId, async () => {
         const state = await readState(jobId);
         const reviewed = state.notes.filter((note) => state.reviews[note.id]?.fingerprint === noteFingerprint(note)).length;
-        const severe = findIssues(state.notes).filter((issue) => issue.severity === "severe" && (state.unresolved.includes(issue.id) || state.unresolved.includes(issue.code)));
-        return { complete: reviewed === state.notes.length && severe.length === 0, reviewed, noteCount: state.notes.length, unresolved: [...state.unresolved] };
+        const severe = findIssues(state.notes).filter((issue) => issue.severity === "severe");
+        let structurallyValid = true;
+        try { validateNotes(state.notes, state.originalDuration); }
+        catch { structurallyValid = false; }
+        return { complete: reviewed === state.notes.length && structurallyValid && severe.length === 0, reviewed, noteCount: state.notes.length, unresolved: [...state.unresolved] };
       });
     },
   };

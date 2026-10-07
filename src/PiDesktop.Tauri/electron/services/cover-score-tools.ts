@@ -38,7 +38,7 @@ export function createCoverScoreToolsExtension(options: CoverScoreToolsOptions):
         if (!jobId || options.phaseForSession?.() !== "repair") { guardMessage = null; return; }
         try {
           const state = await options.service.finalize(jobId);
-          guardMessage = state.complete ? null : `Cover score review is incomplete: ${state.reviewed}/${state.noteCount} notes reviewed; resolve or record uncertainty and finish the full-song review.`;
+          guardMessage = state.complete ? null : `Cover score review is incomplete: ${state.reviewed}/${state.noteCount} notes reviewed; finish the full-song review and repair invalid timing or severe issues before finishing.`;
         } catch {
           guardMessage = "Cover score review status is unavailable; prepare the score and complete its review before finishing.";
         }
