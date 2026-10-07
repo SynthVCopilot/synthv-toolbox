@@ -36,7 +36,7 @@ export function createCoverService(options: CoverServiceOptions) {
   const controllers = new Map<string, AbortController>();
   let loaded: Promise<void> | undefined, pumping = false, disposed = false;
   let writeQueue = Promise.resolve();
-  const snapshot = (job: Job) => ({ id: job.id, kind: job.kind, status: job.status, stage: job.stage, progress: job.progress, detail: job.detail, error: job.error ?? null, result: job.result ?? null, createdAt: job.createdAt, updatedAt: job.updatedAt, retryable: !job.hostWriteStarted, parentConversationId: job.request.parentConversationId, parentRunId: job.request.parentRunId, repairConversationId: job.repairConversationId, tuningConversationId: job.tuningConversationId });
+  const snapshot = (job: Job) => ({ id: job.id, kind: job.kind, status: job.status, stage: job.stage, progress: job.progress, detail: job.detail, error: job.error ?? null, result: resultSnapshot(job.result), createdAt: job.createdAt, updatedAt: job.updatedAt, retryable: !job.hostWriteStarted, parentConversationId: job.request.parentConversationId, parentRunId: job.request.parentRunId, repairConversationId: job.repairConversationId, tuningConversationId: job.tuningConversationId });
   const save = (job: Job) => {
     job.updatedAt = new Date().toISOString();
     const bytes = JSON.stringify(job), file = join(jobsRoot, `${job.id}.json`);
@@ -225,6 +225,12 @@ export function createCoverService(options: CoverServiceOptions) {
       await save(job); jobs.set(job.id, job); const queued = snapshot(job); void pump(); return queued;
     },
   };
+}
+function resultSnapshot(result: Data | undefined): Data | null {
+  if (!result) return null;
+  if (!result.repair) return result;
+  const issues = result.repair.remainingIssues ?? [], unresolved = result.repair.unresolved ?? [];
+  return { ...result, repair: { ...result.repair, remainingIssueCount: issues.length, remainingIssues: issues.slice(0, 20), unresolvedCount: unresolved.length, unresolved: unresolved.slice(0, 20) } };
 }
 function required(value: unknown, field: string): string { if (typeof value !== "string" || !value.trim() || value.length > 4096) throw new Error(`${field} is required and must be bounded.`); return value.trim(); }
 function getJob(jobs: Map<string, Job>, id: unknown): Job { const job = typeof id === "string" ? jobs.get(id) : undefined; if (!job) throw new Error("任务不存在。"); return job; }

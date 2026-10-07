@@ -33,3 +33,22 @@ test('local failures can retry, but uncertain host writes never automatically re
 test('cancelling processing aborts its process signal and never starts host writes',async()=>{
  const f=await fixture();let observed=false;f.opts.runtime.ensure=({signal})=>new Promise((_,reject)=>{observed=true;signal.addEventListener('abort',()=>reject(Error('cancelled')),{once:true});});try{const job=await f.service.invoke('queue_cover',{request});for(let i=0;!observed&&i<100;i++)await new Promise(r=>setTimeout(r,5));await f.service.invoke('cancel_media_task',{id:job.id});assert.equal((await finish(f.service,job.id)).status,'cancelled');assert.equal(f.counts.imports,0);}finally{await f.service.dispose();await rm(f.root,{recursive:true,force:true});}
 });
+
+test('task snapshots bound repair details while the saved report retains full evidence',async()=>{
+ const f=await fixture();
+ try{
+  const repaired=await f.opts.score.result();
+  repaired.issues=Array.from({length:27},(_,id)=>({id,code:'pitch_jump',severity:'warning'}));
+  f.opts.score.finalize=async()=>({complete:true,reviewed:1,noteCount:1,unresolved:Array.from({length:33},(_,i)=>'Uncertainty '+i)});
+  const job=await f.service.invoke('queue_cover',{request});
+  const done=await finish(f.service,job.id);
+  assert.equal(done.status,'completed',done.error);
+  assert.equal(done.result.repair.remainingIssueCount,27);
+  assert.equal(done.result.repair.remainingIssues.length,20);
+  assert.equal(done.result.repair.unresolvedCount,33);
+  assert.equal(done.result.repair.unresolved.length,20);
+  const report=JSON.parse(await readFile(done.result.reportPath,'utf8'));
+  assert.equal(report.repair.remainingIssues.length,27);
+  assert.equal(report.repair.unresolved.length,33);
+ }finally{await f.service.dispose();await rm(f.root,{recursive:true,force:true});}
+});
