@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 const protocolVersion = "2025-06-18";
+const serverVersion = "0.2.0";
 const internalTool = "toolbox_internal";
 const advancedTool = "toolbox_advanced";
 const agentTaskTool = "toolbox_agent";
@@ -144,7 +145,7 @@ export class HttpMcpServer {
     try {
       switch (request.method) {
         case "initialize":
-          return rpcResult(id, { protocolVersion, capabilities: { tools: { listChanged: false } }, serverInfo: { name: "synthv-toolbox" } });
+          return rpcResult(id, { protocolVersion, capabilities: { tools: { listChanged: false } }, serverInfo: { name: "synthv-toolbox", version: serverVersion } });
         case "ping":
           return rpcResult(id, {});
         case "tools/list":
@@ -179,7 +180,10 @@ export class HttpMcpServer {
     const tool = tools.find((candidate) => candidate.name === params.name);
     if (!tool || !isToolPermitted(tool, authorization)) throw new Error("Tool is disabled or unavailable.");
     const arguments_ = isRecord(params.arguments) ? withoutPermission(params.arguments) : {};
-    if (tool.name === agentTaskTool) return { content: await this.host.agentTask!(arguments_), isError: false };
+    if (tool.name === agentTaskTool) {
+      const structuredContent = await this.host.agentTask!(arguments_);
+      return { content: normalizeStructuredContent(structuredContent), structuredContent, isError: false };
+    }
     const result = await this.host.callMcpTool(tool.name, arguments_, authorization);
     return { content: normalizeContent(result.content), isError: result.isError === true };
   }
@@ -256,7 +260,11 @@ function withoutPermission(arguments_: Record<string, unknown>): Record<string, 
 
 function normalizeContent(content: unknown): Array<{ type: "text"; text: string }> {
   if (Array.isArray(content)) return content as Array<{ type: "text"; text: string }>;
-  return [{ type: "text", text: typeof content === "string" ? content : JSON.stringify(content) }];
+  return [{ type: "text", text: typeof content === "string" ? content : JSON.stringify(content) ?? String(content) }];
+}
+
+function normalizeStructuredContent(content: unknown): Array<{ type: "text"; text: string }> {
+  return [{ type: "text", text: typeof content === "string" ? content : JSON.stringify(content) ?? String(content) }];
 }
 
 function rpcResult(id: unknown, result: Record<string, unknown>): Record<string, unknown> {

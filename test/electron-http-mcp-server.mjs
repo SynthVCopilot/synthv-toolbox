@@ -29,7 +29,7 @@ const host = {
   async agentChat(input, conversationId) {
     return [{ role: "assistant", content: `${conversationId}:${input}` }];
   },
-  async agentTask(args) { agentTasks.push(args); return { taskId: "task-1", status: "running", ...args }; },
+  async agentTask(args) { agentTasks.push(args); const task = { taskId: "task-1", status: "running", ...args }; return args.action === "list" ? [task] : task; },
 };
 const rpc = async (endpoint, id, method, params = {}) => {
   const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id, method, params }) });
@@ -44,6 +44,7 @@ assert.equal(status.agentEndpoint, undefined);
 
 let response = await rpc(status.endpoint, 1, "initialize");
 assert.equal(response.body.result.protocolVersion, "2025-06-18");
+assert.equal(response.body.result.serverInfo.version, "0.2.0");
 response = await rpc(status.endpoint, 2, "tools/list");
 assert.deepEqual(response.body.result.tools.map((tool) => tool.name), ["public_tool"]);
 response = await rpc(status.endpoint, 3, "tools/call", { name: "toolbox_advanced", arguments: { permission: "advanced" } });
@@ -67,6 +68,11 @@ assert.equal(agentSchema.oneOf.length, 5);
 response = await rpc(status.endpoint, 40, "tools/call", { name: "toolbox_agent", arguments: { action: "start", input: "do work", permission: "advanced" } });
 assert.equal(response.body.result.isError, false);
 assert.deepEqual(agentTasks.at(-1), { action: "start", input: "do work" });
+assert.deepEqual(response.body.result.content, [{ type: "text", text: JSON.stringify({ taskId: "task-1", status: "running", action: "start", input: "do work" }) }]);
+assert.deepEqual(response.body.result.structuredContent, { taskId: "task-1", status: "running", action: "start", input: "do work" });
+response = await rpc(status.endpoint, 41, "tools/call", { name: "toolbox_agent", arguments: { action: "list" } });
+assert.deepEqual(response.body.result.content, [{ type: "text", text: JSON.stringify([{ taskId: "task-1", status: "running", action: "list" }]) }]);
+assert.deepEqual(response.body.result.structuredContent, [{ taskId: "task-1", status: "running", action: "list" }]);
 response = await rpc(status.endpoint, 5, "tools/call", { name: "toolbox_internal", arguments: { capability: "host.internal", permission: "advanced" } });
 assert.equal(response.body.result.isError, false);
 assert.deepEqual(calls.at(-1), { name: "toolbox_internal", arguments_: { capability: "host.internal" }, authorization: { internalEnabled: true, advancedEnabled: false } });

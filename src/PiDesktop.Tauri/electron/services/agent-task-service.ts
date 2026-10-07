@@ -19,6 +19,7 @@ export interface AgentTaskSnapshot {
   outcome: AgentRunOutcome | null;
   error: string | null;
   missing: string[];
+  cancellationErrors: string[];
   pendingApprovals: unknown[];
   children: unknown[];
 }
@@ -28,6 +29,7 @@ export interface AgentTaskServiceOptions {
   ai: () => AiTaskPort;
   effort: () => AgentEffortLevel;
   children?: (conversationId: string) => Promise<unknown[]>;
+  cancelChildren?: (conversationId: string) => Promise<void> | void;
   approvals?: (conversationId: string) => unknown[];
   now?: () => Date;
   id?: () => string;
@@ -51,14 +53,16 @@ export function createAgentTaskService(options: AgentTaskServiceOptions) {
   const now = options.now ?? (() => new Date());
   const id = options.id ?? randomUUID;
   let progressFlush: ReturnType<typeof setTimeout> | undefined;
+  let writeQueue: Promise<void> = Promise.resolve();
   let ready = load();
 
   async function load(): Promise<void> {
     try {
       const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
       if (!Array.isArray(parsed)) return;
-      for (const item of parsed.slice(-100)) {
+      for (const item of parsed) {
         if (!isStoredTask(item)) continue;
+        item.cancellationErrors ??= [];
         if (item.status === "running" || item.status === "cancelling") {
           item.status = "interrupted";
           item.error = "The application exited before this agent run finished.";
@@ -73,11 +77,21 @@ export function createAgentTaskService(options: AgentTaskServiceOptions) {
   }
 
   async function persist(): Promise<void> {
-    await mkdir(options.dataRoot, { recursive: true });
-    const temporary = `${file}.${id()}.tmp`;
-    await writeFile(temporary, JSON.stringify(tasks.slice(-100)), { encoding: "utf8", mode: 0o600 });
-    await rename(temporary, file);
-    if (tasks.length > 100) tasks.splice(0, tasks.length - 100);
+    const operation = writeQueue.then(async () => {
+      await mkdir(options.dataRoot, { recursive: true });
+      const retained = retainHistory(tasks);
+      const temporary = `${file}.${id()}.tmp`;
+      const contents = JSON.stringify(retained);
+      await writeFile(temporary, contents, { encoding: "utf8", mode: 0o600 });
+      await rename(temporary, file);
+    });
+    const queued = operation.catch(() => undefined);
+    writeQueue = queued;
+    await operation;
+    if (writeQueue === queued) {
+      const retained = retainHistory(tasks);
+      tasks.splice(0, tasks.length, ...retained);
+    }
   }
 
   function snapshot(task: StoredTask): AgentTaskSnapshot {
@@ -85,6 +99,7 @@ export function createAgentTaskService(options: AgentTaskServiceOptions) {
     return {
       ...task,
       ageMs: elapsed,
+      cancellationErrors: task.cancellationErrors ?? [],
       pendingApprovals: options.approvals?.(task.conversationId) ?? [],
       children: [],
     };
@@ -103,13 +118,14 @@ export function createAgentTaskService(options: AgentTaskServiceOptions) {
     const current = now().toISOString();
     const task: StoredTask = {
       taskId: id(), conversationId: conversation.id, runId: id(), status: "running",
-      startedAt: current, updatedAt: current, progress: null, outcome: null, error: null, missing: [],
+      startedAt: current, updatedAt: current, progress: null, outcome: null, error: null, missing: [], cancellationErrors: [],
     };
     tasks.push(task);
     activeByConversation.set(conversation.id, task.taskId);
     await persist();
-    void run(task, input);
-    return enriched(task);
+    const result = await enriched(task);
+    setImmediate(() => launchRun(task, input));
+    return result;
   }
 
   async function continueTask(input: string, conversationId: string, taskId?: string): Promise<AgentTaskSnapshot> {
@@ -118,7 +134,6 @@ export function createAgentTaskService(options: AgentTaskServiceOptions) {
     const task = findTask(taskId, conversationId);
     if (!task || task.conversationId !== conversationId) throw new Error("Agent task was not found for this conversation.");
     if (activeByConversation.has(conversationId)) throw new Error("An agent task is already running for this conversation.");
-    if (task.status === "interrupted") throw new Error("Interrupted agent tasks cannot be continued automatically.");
     await options.ai().open_conversation(conversationId);
     task.runId = id();
     task.status = "running";
@@ -127,16 +142,32 @@ export function createAgentTaskService(options: AgentTaskServiceOptions) {
     task.outcome = null;
     task.error = null;
     task.missing = [];
+    task.cancellationErrors = [];
     delete task.cancelRequested;
     latestProgress.delete(conversationId);
     activeByConversation.set(conversationId, task.taskId);
     await persist();
-    void run(task, input);
-    return enriched(task);
+    const result = await enriched(task);
+    setImmediate(() => launchRun(task, input));
+    return result;
+  }
+
+  function launchRun(task: StoredTask, input: string): void {
+    void run(task, input).catch(async (error) => {
+      task.status = "failed";
+      task.error = errorMessage(error);
+      task.updatedAt = now().toISOString();
+      await persist().catch(() => undefined);
+    });
   }
 
   async function run(task: StoredTask, input: string): Promise<void> {
     try {
+      if (task.cancelRequested) {
+        task.status = "cancelled";
+        task.updatedAt = now().toISOString();
+        return;
+      }
       const messages = await options.ai().send_message(task.conversationId, input, { runId: task.runId, effort: options.effort() });
       const assistant = [...messages].reverse().find((message) => message.role === "assistant");
       task.outcome = assistant?.outcome ?? null;
@@ -144,10 +175,10 @@ export function createAgentTaskService(options: AgentTaskServiceOptions) {
       task.status = task.outcome?.status === "cancelled" ? "cancelled"
         : task.outcome?.status === "needs_input" ? "needs_input"
         : task.outcome?.status ?? "unknown";
-      task.error = null;
+      task.error = task.cancellationErrors.length ? task.cancellationErrors.join("; ") : null;
     } catch (error) {
       task.status = "failed";
-      task.error = errorMessage(error);
+      task.error = [errorMessage(error), ...task.cancellationErrors].join("; ");
     } finally {
       task.updatedAt = now().toISOString();
       activeByConversation.delete(task.conversationId);
@@ -162,7 +193,7 @@ export function createAgentTaskService(options: AgentTaskServiceOptions) {
     switch (args.action) {
       case "start": return begin(requiredInput(args.input));
       case "continue": return continueTask(requiredInput(args.input), requiredString(args.conversationId, "conversationId"), args.taskId);
-      case "list": return Promise.all(tasks.slice(-100).reverse().map(enriched));
+      case "list": return Promise.all(retainHistory(tasks).reverse().map(enriched));
       case "status": {
         const task = findTask(args.taskId, args.conversationId);
         if (!task) throw new Error("Agent task was not found.");
@@ -172,12 +203,19 @@ export function createAgentTaskService(options: AgentTaskServiceOptions) {
         const task = findTask(args.taskId, args.conversationId);
         if (!task) throw new Error("Agent task was not found.");
         if (task.status !== "running" && task.status !== "cancelling") return enriched(task);
+        if (task.status === "cancelling") return enriched(task);
         task.cancelRequested = true;
+        task.cancellationErrors = [];
         task.status = "cancelling";
         task.updatedAt = now().toISOString();
         await persist();
-        try { await options.ai().cancel_agent_run(task.conversationId); }
-        catch (error) { task.error = errorMessage(error); await persist(); }
+        const results = await Promise.allSettled([
+          Promise.resolve().then(() => options.ai().cancel_agent_run(task.conversationId)),
+          Promise.resolve().then(() => options.cancelChildren?.(task.conversationId)),
+        ]);
+        task.cancellationErrors = results.flatMap((result) => result.status === "rejected" ? [errorMessage(result.reason)] : []);
+        task.error = task.cancellationErrors.length ? task.cancellationErrors.join("; ") : null;
+        if (task.cancellationErrors.length) await persist();
         return enriched(task);
       }
     }
@@ -188,7 +226,9 @@ export function createAgentTaskService(options: AgentTaskServiceOptions) {
   }
 
   function recordProgress(progress: AgentRunProgress): void {
+    latestProgress.delete(progress.sessionId);
     latestProgress.set(progress.sessionId, progress);
+    while (latestProgress.size > 100) latestProgress.delete(latestProgress.keys().next().value!);
     const task = [...tasks].reverse().find((item) => item.conversationId === progress.sessionId && item.runId === progress.runId);
     if (!task) return;
     task.progress = progress;
@@ -214,6 +254,15 @@ export function createAgentTaskService(options: AgentTaskServiceOptions) {
       if (progressFlush) { clearTimeout(progressFlush); progressFlush = undefined; await persist(); }
     },
   };
+}
+
+function retainHistory(tasks: StoredTask[]): StoredTask[] {
+  const active = tasks.filter((task) => task.status === "running" || task.status === "cancelling");
+  const inactive = tasks.filter((task) => task.status !== "running" && task.status !== "cancelling");
+  const inactiveLimit = Math.max(0, 100 - active.length);
+  const retainedInactive = inactiveLimit ? inactive.slice(-inactiveLimit) : [];
+  const retainedSet = new Set([...active, ...retainedInactive]);
+  return tasks.filter((task) => retainedSet.has(task));
 }
 
 function requiredInput(value: string | undefined): string { if (typeof value !== "string") throw new Error("Agent task input is required."); return value; }
