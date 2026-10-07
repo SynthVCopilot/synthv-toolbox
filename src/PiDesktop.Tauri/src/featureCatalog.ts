@@ -52,7 +52,7 @@ const groupDefinitions: ToolGroup[] = [
     description: "从一个来源开始完成 Cover 工作流。",
     icon: "import",
     accent: "violet",
-    featureIds: ["cover", "score-to-synthv"],
+    featureIds: ["cover", "media-import", "score-to-synthv"],
   },
   {
     id: "convert",
@@ -60,7 +60,7 @@ const groupDefinitions: ToolGroup[] = [
     description: "处理音频、提取旋律，或准备可继续编辑的素材。",
     icon: "pipeline",
     accent: "violet",
-    featureIds: ["audio-to-project", "audio-preparation", "project-tools"],
+    featureIds: ["audio-to-project", "audio-preparation", "source-separation", "project-tools"],
   },
   {
     id: "analysis",
@@ -96,7 +96,7 @@ export const featureCatalog: FeatureCatalogItem[] = featureDefinitions.map((feat
 }));
 
 export const guiFeatureIds = new Set(groupDefinitions.flatMap((group) => group.featureIds));
-const pendingFeatures = new Set(["media-import", "source-separation", "tuning-learning", "ab-audition"]);
+const pendingFeatures = new Set(["tuning-learning", "ab-audition"]);
 export const guiFeatureCatalog = featureCatalog.filter((feature) => guiFeatureIds.has(feature.id) && !pendingFeatures.has(feature.id));
 
 export const toolGroups: ToolGroup[] = groupDefinitions.map((group) => ({

@@ -2157,6 +2157,51 @@ function asObject(value: unknown): JsonObject | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : undefined;
 }
 
+function coverInferenceLabel(value: unknown): string {
+  const inference = asObject(value);
+  if (!inference) return typeof value === "string" && value.trim() ? value : t("workflowCopy.coverInferenceUnknown");
+  const providerNames = (providers: unknown): string[] => {
+    if (!Array.isArray(providers)) return [];
+    return providers.flatMap((provider) => {
+      if (typeof provider === "string") return [provider];
+      const item = asObject(provider);
+      const name = item && [item.name, item.displayName, item.provider, item.id, item.backend].find((field) => typeof field === "string" && field.trim());
+      return typeof name === "string" ? [name] : [];
+    });
+  };
+  const actual = providerNames(inference.actualProviders);
+  const requested = providerNames(inference.requestedProviders);
+  const providerSummary = [
+    actual.length ? t("workflowCopy.coverInferenceActual", { providers: actual.join(", ") }) : "",
+    requested.length ? t("workflowCopy.coverInferenceRequested", { providers: requested.join(", ") }) : "",
+  ].filter(Boolean).join(" · ");
+  if (providerSummary) return providerSummary;
+  const backend = [inference.backend, inference.provider, inference.model, inference.name].find((field) => typeof field === "string" && field.trim());
+  return typeof backend === "string" ? backend : t("workflowCopy.coverInferenceUnknown");
+}
+
+function coverStageLabel(stage: string): string {
+  const stageKeys: Record<string, string> = {
+    download: "coverStageDownload", media_download: "coverStageDownload", downloading: "coverStageDownload",
+    separation: "coverStageSeparation", vocal_separation: "coverStageSeparation", separating: "coverStageSeparation",
+    recognition: "coverStageRecognition", melody_recognition: "coverStageRecognition", recognizing: "coverStageRecognition",
+    repair: "coverStageRepair", ai_repair: "coverStageRepair", repairing: "coverStageRepair",
+    tuning: "coverStageTuning", ai_tuning: "coverStageTuning", tuning_ai: "coverStageTuning",
+    save: "coverStageSave", saving: "coverStageSave", synthv_save: "coverStageSave",
+    completed: "coverStageCompleted",
+  };
+  const key = stageKeys[stage.trim().toLowerCase()];
+  return key ? t(`workflowCopy.${key}`) : stage.replaceAll(/[_-]+/g, " ");
+}
+
+function openCoverConversation(conversationId: string): void {
+  page = "copilot";
+  void run(async () => {
+    conversation = await api.openConversation(conversationId);
+    approvalsSnapshot = await api.agentApprovals();
+  });
+}
+
 function resultMetric(label: string, value: unknown, tone = ""): string {
   return `<div class="result-metric ${tone}"><small>${escapeHtml(label)}</small><strong>${escapeHtml(value)}</strong></div>`;
 }
@@ -2445,16 +2490,16 @@ function renderWorkflowPanel(id: string): string {
       const paths = outputPaths.map(([label, path]) => `<div class="audio-output-path"><span>${t(`workflowCopy.${label}`)}</span><code>${escapeHtml(path)}</code><button class="secondary compact" data-cover-copy-path="${escapeHtml(path)}">${t("workflowCopy.copyPath")}</button></div>`).join("");
       const repairConversationId = typeof task.repairConversationId === "string" ? task.repairConversationId : typeof repair.conversationId === "string" ? repair.conversationId : "";
       const tuningConversationId = typeof task.tuningConversationId === "string" ? task.tuningConversationId : typeof tuning.conversationId === "string" ? tuning.conversationId : "";
-      const conversations = `${repairConversationId ? `<button class="secondary compact" data-conversation="${escapeHtml(repairConversationId)}">${t("workflowCopy.openRepairConversation")}</button>` : ""}${tuningConversationId ? `<button class="secondary compact" data-conversation="${escapeHtml(tuningConversationId)}">${t("workflowCopy.openTuningConversation")}</button>` : ""}`;
+      const conversations = `${repairConversationId ? `<button class="secondary compact" data-cover-conversation="${escapeHtml(repairConversationId)}">${t("workflowCopy.openRepairConversation")}</button>` : ""}${tuningConversationId ? `<button class="secondary compact" data-cover-conversation="${escapeHtml(tuningConversationId)}">${t("workflowCopy.openTuningConversation")}</button>` : ""}`;
       const unresolved = Array.isArray(repair.unresolved) ? repair.unresolved.length : typeof repair.unresolved === "number" ? repair.unresolved : 0;
       const repairSummary = Object.keys(repair).length ? `<small>${t("workflowCopy.coverRepairCoverage", { notes: Number(repair.noteCount ?? 0), changes: Number(repair.changeCount ?? 0), unresolved })}</small>` : "";
-      const recognitionSummary = Object.keys(recognition).length ? `<small>${t("workflowCopy.coverFullSongRecognition", { notes: Number(recognition.noteCount ?? 0), rawNotes: Number(recognition.rawNoteCount ?? 0), inference: String(recognition.inference ?? ""), device: String(recognition.separationDevice ?? "") })}</small>` : "";
+      const recognitionSummary = Object.keys(recognition).length ? `<small>${escapeHtml(t("workflowCopy.coverFullSongRecognition", { notes: Number(recognition.noteCount ?? 0), rawNotes: Number(recognition.rawNoteCount ?? 0), inference: coverInferenceLabel(recognition.inference), device: typeof recognition.separationDevice === "string" ? recognition.separationDevice : t("workflowCopy.unknown") }))}</small>` : "";
       const tuningSummary = Object.keys(tuning).length ? `<small>${t("workflowCopy.coverTuningWrites", { reviewed: Number(tuning.notesReviewed ?? 0), writes: Number(tuning.verifiedWrites ?? 0) })}</small>` : "";
-      const stage = typeof task.stage === "string" ? task.stage : "";
+      const stage = typeof task.stage === "string" ? coverStageLabel(task.stage) : "";
       const saveState = result.svpPath ? `<small>${t("workflowCopy.coverSaveState")}: ${result.saveVerified === true ? t("workflowCopy.saveVerified") : t("workflowCopy.saveNotVerified")}</small>` : "";
       const voiceBoundary = `<small>${t("workflowCopy.coverVoiceAssignmentLimit")}${escapeHtml(String(result.requestedVoice || t("workflowCopy.currentTrackVoice")))} · ${t("workflowCopy.theHostApiCannotAssignVoiceIdentities")}</small>`;
       const renderStatus = result.renderStatus === "not_rendered" ? `<small>${t("workflowCopy.coverNotRendered")}</small>` : "";
-      return `<article class="download-item ${task.status}"><span class="component-status ${task.status === "completed" ? "ready" : ""}">${icon(task.status === "failed" ? "plug" : "sparkles", 17)}</span><div><div class="download-title"><strong>${t("workflowCopy.oneClickCover")}</strong><span>${escapeHtml(t(`workflowTaskStatus.${task.status}`))}</span></div>${stage ? `<small>${t("workflowCopy.coverStage")}: ${escapeHtml(stage)}</small>` : ""}<div class="progress-track"><span style="width:${Math.max(2, Math.min(100, task.progress))}%"></span></div><small>${escapeHtml(task.error || task.detail)}</small>${recognitionSummary}${repairSummary}${tuningSummary}${saveState}${voiceBoundary}${renderStatus}${paths}${conversations}</div>${action}</article>`;
+      return `<article class="download-item ${task.status}"><span class="component-status ${task.status === "completed" ? "ready" : ""}">${icon(task.status === "failed" ? "plug" : "sparkles", 17)}</span><div><div class="download-title"><strong>${t("workflowCopy.oneClickCover")}</strong><span>${escapeHtml(t(`workflowTaskStatus.${task.status}`))}</span></div>${stage ? `<small>${t("workflowCopy.coverStage")}${escapeHtml(stage)}</small>` : ""}<div class="progress-track"><span style="width:${Math.max(2, Math.min(100, task.progress))}%"></span></div><small>${escapeHtml(task.error || task.detail)}</small>${recognitionSummary}${repairSummary}${tuningSummary}${saveState}${voiceBoundary}${renderStatus}${paths}${conversations}</div>${action}</article>`;
     }).join("");
     const taskList = taskCards ? `<section class="download-queue"><div class="section-heading"><div><h3>${t("workflowCopy.coverTasks")}</h3><p>${t("workflowCopy.downloadSeparationAndMelodyExtractionCanBe")}</p></div></div><div class="download-list">${taskCards}</div></section>` : "";
     form = `<div class="mode-limit"><strong>${t("workflowCopy.voiceAssignmentLimit")}</strong>${t("workflowCopy.toolboxRecordsTheRequestedVoiceAndConnects")}</div><form id="cover-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.bvOrYoutubeSource")}<input id="cover-source" required value="${escapeHtml(coverDraft.source)}" placeholder="${t("workflowCopy.bv1OrHttpsWwwYoutubeComWatch")}" /></label><div class="workflow-pair"><label>${t("workflowCopy.targetVoice")}<input id="cover-voice" maxlength="200" value="${escapeHtml(coverDraft.voice)}" placeholder="${t("workflowCopy.coverVoiceOptional")}" /></label><label>${t("workflowCopy.synthvProcess")}<select id="cover-process"><option value="">${t("workflowCopy.selectAutomatically")}${synthvProcesses.length > 1 ? t("workflowCopy.agentSelectsWhenMultipleInstancesAreRunning") : ""}</option>${synthvProcesses.map((process) => `<option value="${process.processId}" ${coverDraft.process === String(process.processId) ? "selected" : ""}>PID ${process.processId} · ${escapeHtml(process.name)}</option>`).join("")}</select></label></div><label>${t("workflowCopy.fullLyricsOptionalCjkCharactersAndLatin")}<textarea id="cover-lyrics" rows="7" placeholder="${t("workflowCopy.leaveBlankToUseDefaultMidiSynthv")}">${escapeHtml(coverDraft.lyrics)}</textarea></label><div class="workflow-pair"><label>${t("workflowCopy.targetTrackNumber")}<input id="cover-track" type="number" min="1" max="10000" value="${escapeHtml(coverDraft.track)}" required /></label><label>${t("workflowCopy.noteGroupName")}<input id="cover-group" value="${escapeHtml(coverDraft.group)}" maxlength="200" required /></label></div><label class="checkbox workflow-check"><input id="cover-rights" type="checkbox" ${coverDraft.rights ? "checked" : ""} /> ${t("workflowCopy.iOwnTheSourceContentOrHave")}</label><button class="primary">${icon("sparkles", 16)} ${t("workflowCopy.startFullCover")}</button></form>${taskList}`;
@@ -5218,6 +5263,7 @@ document.addEventListener("click", (event) => {
     });
     return;
   }
+  if (target.dataset.coverConversation) { openCoverConversation(target.dataset.coverConversation); return; }
   if (target.hasAttribute("data-new-conversation")) { if (agentRunInFlight) return; void run(async () => { conversation = await api.newConversation(); [conversations, approvalsSnapshot] = await Promise.all([api.listConversations(), api.agentApprovals()]); }); return; }
   if (target.dataset.conversation) { if (agentRunInFlight) return; void run(async () => { conversation = await api.openConversation(target.dataset.conversation ?? ""); approvalsSnapshot = await api.agentApprovals(); }); return; }
   if (target.hasAttribute("data-cancel-agent-run")) { void cancelAgentRun(); return; }

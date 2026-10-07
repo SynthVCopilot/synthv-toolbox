@@ -11,17 +11,18 @@ const messages = read(join(root, "src", "PiDesktop.Tauri", "src", "featureMessag
 const i18n = read(join(root, "src", "PiDesktop.Tauri", "src", "i18n.ts"));
 
 for (const [group, ids] of Object.entries({
-  import: ["cover", "score-to-synthv"],
-  convert: ["audio-to-project", "audio-preparation", "project-tools"],
+  import: ["cover", "media-import", "score-to-synthv"],
+  convert: ["audio-to-project", "audio-preparation", "source-separation", "project-tools"],
   analysis: ["audio-insight"],
   quality: ["project-doctor", "pronunciation-doctor", "render-review", "batch-recipes"],
 })) {
   assert.match(catalog, new RegExp(`id: "${group}"[\\s\\S]*?featureIds: \\[${ids.map((id) => `"${id}"`).join(", ")}\\]`));
 }
 
-for (const hidden of ["media-import", "source-separation", "tuning-learning", "ab-audition", "retake-compare", "selective-sync"]) {
+for (const hidden of ["tuning-learning", "ab-audition", "retake-compare", "selective-sync"]) {
   assert.doesNotMatch(catalog.match(/const groupDefinitions:[\s\S]*?\n\];/)?.[0] ?? "", new RegExp(`"${hidden}"`));
 }
+assert.doesNotMatch(catalog.match(/const pendingFeatures = new Set\(\[[^\]]*\]\);/)?.[0] ?? "", /"(?:cover|media-import|source-separation)"/);
 
 assert.match(catalog, /export const guiFeatureIds = new Set\(groupDefinitions\.flatMap/);
 assert.match(catalog, /export const guiFeatureCatalog = featureCatalog\.filter/);
