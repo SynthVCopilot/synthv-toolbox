@@ -202,6 +202,19 @@ test("built Electron app boots, exposes the desktop bridge, and drives the Copil
       await screenshot(pageCdp, screenshotDir, "01-copilot");
     });
 
+    await t.test("AI usage refresh keeps the account connection dialog usable", async () => {
+      const usage = await evaluate(pageCdp, "window.toolboxDesktop.invoke('ai_provider_usage')", { awaitPromise: true });
+      assert.ok(Array.isArray(usage.accounts));
+      await evaluate(pageCdp, "document.querySelector('[data-page=\"ai\"]').click()");
+      await waitFor(() => evaluate(pageCdp, "!!document.querySelector('[data-refresh-ai-usage]:not(:disabled)')"), { label: "AI usage refresh to finish" });
+      await evaluate(pageCdp, "document.querySelector('model-connection-panel').shadowRoot.querySelector('[data-part=\"add-connection\"]').click()");
+      await waitFor(() => evaluate(pageCdp, "!!document.querySelector('model-auth-dialog')?.shadowRoot.querySelector('dialog')?.open"), { label: "account connection dialog" });
+      await evaluate(pageCdp, "document.querySelector('model-auth-dialog').shadowRoot.querySelector('[data-part=\"close\"]').click()");
+      await waitFor(() => evaluate(pageCdp, "!document.querySelector('model-auth-dialog')?.shadowRoot.querySelector('dialog')?.open"), { label: "account dialog closing" });
+      await evaluate(pageCdp, "document.querySelector('[data-page=\"copilot\"]').click()");
+      await waitFor(() => evaluate(pageCdp, "!!document.querySelector('.chat-effort-mode')"), { label: "Copilot restored" });
+    });
+
     let budgets;
     await t.test("the Low/Mid/High/Max group renders with Mid active and tooltips match agent_budgets", async () => {
       budgets = await evaluate(pageCdp, "window.toolboxDesktop.invoke('agent_budgets')", { awaitPromise: true });
