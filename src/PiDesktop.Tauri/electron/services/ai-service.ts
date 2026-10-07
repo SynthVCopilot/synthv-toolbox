@@ -185,11 +185,11 @@ export class AiService {
     this.files = options.files ?? nodeMetadataFiles;
     this.now = options.now ?? (() => new Date());
     this.id = options.id ?? (() => crypto.randomUUID());
-    if (!options.safeStorage.isEncryptionAvailable()) throw new Error("Electron safeStorage encryption is unavailable.");
   }
 
   async ai_provider_state(forceCatalog = false): Promise<Record<string, unknown>> {
     const metadata = await this.load();
+    const storageAvailable = this.options.safeStorage.isEncryptionAvailable();
     const providersState = await Promise.all(providers.map(async (provider) => {
       const settings = metadata.providers[provider];
       const credentials = metadata.credentials.filter((credential) => credential.provider === provider);
@@ -207,14 +207,14 @@ export class AiService {
         models,
         oauthModels: models,
         apiKeyModels: models,
-        connected: credentials.some((credential) => credential.enabled),
-        healthyAccounts: oauth.filter((credential) => credential.enabled).length,
+        connected: storageAvailable && credentials.some((credential) => credential.enabled),
+        healthyAccounts: storageAvailable ? oauth.filter((credential) => credential.enabled).length : 0,
         totalAccounts: oauth.length,
-        accounts: oauth.map((credential) => ({ id: credential.id, label: credential.label, expiresAt: credential.expiresAt ?? 0, authorized: true, healthy: credential.enabled, enabled: credential.enabled, weight: credential.weight, extend: credential.extend })),
-        apiKeys: apiKeys.map((credential) => ({ id: credential.id, label: credential.label, models: credential.models, healthy: credential.enabled, enabled: credential.enabled, weight: credential.weight, extend: credential.extend, cooldownUntilUtc: null, createdAtUtc: credential.createdAt })),
+        accounts: oauth.map((credential) => ({ id: credential.id, label: credential.label, expiresAt: credential.expiresAt ?? 0, authorized: true, healthy: storageAvailable && credential.enabled, enabled: credential.enabled, weight: credential.weight, extend: credential.extend })),
+        apiKeys: apiKeys.map((credential) => ({ id: credential.id, label: credential.label, models: credential.models, healthy: storageAvailable && credential.enabled, enabled: credential.enabled, weight: credential.weight, extend: credential.extend, cooldownUntilUtc: null, createdAtUtc: credential.createdAt })),
         authMethods: ["oauth", "api-key"],
         available: true,
-        unavailableReason: null,
+        unavailableReason: storageAvailable ? null : "系统钥匙串不可用；请允许 Toolbox 访问现有加密凭据后重试。",
       };
     }));
     this.createCredentialRouter(metadata);
@@ -222,6 +222,7 @@ export class AiService {
   }
 
   async resolveModelSelection(): Promise<{ providerId: string; modelId: string; credentials: HostModelCredential[] }> {
+    this.requireCredentialStorage();
     const metadata = await this.load();
     const providerId = metadata.activeProvider;
     const modelId = metadata.providers[providerId].model;
@@ -254,6 +255,7 @@ export class AiService {
   }
 
   async authorize_ai_provider(provider: AiProviderId, operationId = this.id()): Promise<Record<string, unknown>> {
+    this.requireCredentialStorage();
     if (!this.options.authorizer) throw new Error("OAuth authorization is not configured.");
     const controller = new AbortController();
     this.operations.set(operationId, controller);
@@ -303,12 +305,15 @@ export class AiService {
     const metadata = await this.load();
     const credential = metadata.credentials.find((item) => item.provider === provider && item.id === credentialId && item.kind === "api-key");
     if (!credential) throw new Error("API key credential was not found.");
-    if (input.label !== undefined) credential.label = sanitizeLabel(input.label, input.apiKey ?? "");
-    if (input.models !== undefined) credential.models = [...new Set(input.models)].sort();
+    let sealed: string | undefined;
     if (input.apiKey !== undefined) {
       if (!input.apiKey.trim()) throw new Error("API key is required.");
-      credential.sealed = this.options.safeStorage.encryptString(input.apiKey).toString("base64");
+      this.requireCredentialStorage();
+      sealed = this.options.safeStorage.encryptString(input.apiKey).toString("base64");
     }
+    if (input.label !== undefined) credential.label = sanitizeLabel(input.label, input.apiKey ?? "");
+    if (input.models !== undefined) credential.models = [...new Set(input.models)].sort();
+    if (sealed !== undefined) credential.sealed = sealed;
     await this.persist();
     return this.ai_provider_state(false);
   }
@@ -494,8 +499,13 @@ export class AiService {
     return this.ai_provider_state(false);
   }
 
+  private requireCredentialStorage(): void {
+    if (!this.options.safeStorage.isEncryptionAvailable()) throw new Error("系统钥匙串不可用，无法读取或保存 AI 登录凭据。请完成系统授权后重新启动 Toolbox；本地工具仍可使用。");
+  }
+
   private async storeCredential(input: Omit<StoredCredential, "enabled" | "weight" | "createdAt" | "sealed"> & { secret: string }): Promise<StoredCredential> {
     const metadata = await this.load();
+    this.requireCredentialStorage();
     const existing = metadata.credentials.findIndex((item) => item.id === input.id);
     const credential: StoredCredential = {
       id: input.id,

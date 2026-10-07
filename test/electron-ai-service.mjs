@@ -279,3 +279,13 @@ assert.equal(anthropic.accounts.length + anthropic.apiKeys.length, 0);
 }
 
 console.log("Electron AI service persists encrypted credentials and drives Agent Runtime sessions.");
+
+const lockedSnapshot = await readFile(metadataPath, "utf8");
+const locked = new AiService({ metadataPath, safeStorage: { isEncryptionAvailable: () => false, encryptString: () => { throw new Error("Unexpected encryption"); }, decryptString: () => { throw new Error("Unexpected decryption"); } }, runtime, catalog, approvals, usage });
+const lockedState = await locked.ai_provider_state(false);
+assert.ok(lockedState.providers.every(provider => provider.connected === false));
+assert.ok((await locked.list_conversations()).length >= 0);
+await assert.rejects(locked.resolveModelSelection(), /钥匙串不可用/);
+await assert.rejects(locked.add_ai_api_key("anthropic", "Unavailable storage", "must-not-persist"), /钥匙串不可用/);
+assert.equal(await readFile(metadataPath, "utf8"), lockedSnapshot, "Unavailable keychain must preserve existing encrypted credentials");
+console.log("Local AI metadata stays readable while an unavailable keychain blocks all secret operations.");
