@@ -7,7 +7,9 @@ import { readFile } from "node:fs/promises";
 
 const sourcePath = new URL("../src/PiDesktop.Tauri/electron/services/agent-task-service.ts", import.meta.url);
 const source = stripTypeScriptTypes(await readFile(sourcePath, "utf8"), { mode: "transform" });
-const { createAgentTaskService } = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+const { createAgentTaskService: createService } = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+const services = [];
+function createAgentTaskService(options) { const service = createService(options); services.push(service); return service; }
 const directory = await mkdtemp(join(tmpdir(), "agent-task-service-"));
 const deferred = () => {
   let resolve;
@@ -169,6 +171,7 @@ try {
   await trimService.dispose();
   await assert.rejects(() => service.invoke({ action: "status", taskId: "missing" }), /not found/);
 } finally {
+  await Promise.all(services.map(service => service.dispose()));
   await rm(directory, { recursive: true, force: true });
 }
 

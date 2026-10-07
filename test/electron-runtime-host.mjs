@@ -33,7 +33,8 @@ test("A real ElectronRuntimeHost resolves the model through AiService and drives
     let text = raw
       .replace('from "@synthv-toolbox/runtime-protocol";', `from "${runtimeProtocolUrl}";`)
       .replace('from "@synthv-toolbox/agent-runtime";', `from "${agentRuntimeUrl}";`)
-      .replace('from "@model-auth/core";', `from "${modelAuthCoreUrl}";`);
+      .replace('from "@model-auth/core";', `from "${modelAuthCoreUrl}";`)
+    .replace('from "./local-credential-store.js";', `from "${pathToFileURL(join(tauriRoot, "dist/electron/services/local-credential-store.js")).href}";`);
     for (const [search, replace] of extraReplacements) text = text.replace(search, replace);
     const executable = stripTypeScriptTypes(text, { mode: "transform" });
     return import(`data:text/javascript;base64,${Buffer.from(executable).toString("base64")}`);
@@ -44,20 +45,6 @@ test("A real ElectronRuntimeHost resolves the model through AiService and drives
 
   const directory = await mkdtemp(join(tmpdir(), "electron-runtime-host-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const secrets = new Map();
-  const safeStorage = {
-    isEncryptionAvailable: () => true,
-    encryptString(value) {
-      const token = Buffer.from(`sealed:${secrets.size}`);
-      secrets.set(token.toString("base64"), value);
-      return token;
-    },
-    decryptString(value) {
-      const found = secrets.get(value.toString("base64"));
-      if (found === undefined) throw new Error("Unknown sealed credential in test stub.");
-      return found;
-    },
-  };
   const catalog = {
     async models() { return [["cla", "ude-opus-4-8"].join("")]; },
     async opencode() { return {}; },
@@ -89,7 +76,6 @@ test("A real ElectronRuntimeHost resolves the model through AiService and drives
   );
   const ai = new AiService({
     metadataPath: join(directory, "ai.json"),
-    safeStorage,
     runtime: agentRuntimePort(runtimeHost.runtime),
     catalog,
     approvals: { cancelConversation() {} },
@@ -118,7 +104,8 @@ test("onAgentProgress receives session.progress views carrying the sessionId and
     let text = raw
       .replace('from "@synthv-toolbox/runtime-protocol";', `from "${runtimeProtocolUrl}";`)
       .replace('from "@synthv-toolbox/agent-runtime";', `from "${agentRuntimeUrl}";`)
-      .replace('from "@model-auth/core";', `from "${modelAuthCoreUrl}";`);
+      .replace('from "@model-auth/core";', `from "${modelAuthCoreUrl}";`)
+    .replace('from "./local-credential-store.js";', `from "${pathToFileURL(join(tauriRoot, "dist/electron/services/local-credential-store.js")).href}";`);
     for (const [search, replace] of extraReplacements) text = text.replace(search, replace);
     const executable = stripTypeScriptTypes(text, { mode: "transform" });
     return import(`data:text/javascript;base64,${Buffer.from(executable).toString("base64")}`);
@@ -129,20 +116,6 @@ test("onAgentProgress receives session.progress views carrying the sessionId and
 
   const directory = await mkdtemp(join(tmpdir(), "electron-runtime-host-progress-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const secrets = new Map();
-  const safeStorage = {
-    isEncryptionAvailable: () => true,
-    encryptString(value) {
-      const token = Buffer.from(`sealed:${secrets.size}`);
-      secrets.set(token.toString("base64"), value);
-      return token;
-    },
-    decryptString(value) {
-      const found = secrets.get(value.toString("base64"));
-      if (found === undefined) throw new Error("Unknown sealed credential in test stub.");
-      return found;
-    },
-  };
   const catalog = {
     async models() { return [["cla", "ude-opus-4-8"].join("")]; },
     async opencode() { return {}; },
@@ -181,7 +154,6 @@ test("onAgentProgress receives session.progress views carrying the sessionId and
   );
   const ai = new AiService({
     metadataPath: join(directory, "ai.json"),
-    safeStorage,
     runtime: agentRuntimePort(runtimeHost.runtime),
     catalog,
     approvals: { cancelConversation() {} },

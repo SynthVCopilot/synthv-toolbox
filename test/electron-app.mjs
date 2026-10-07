@@ -135,13 +135,6 @@ test("built Electron app boots, exposes the desktop bridge, and drives the Copil
   const stdoutChunks = [];
   // HOME/APPDATA/TMPDIR are redirected to temp dirs so SynthVService.scanInstallations() (run at startup)
   // never touches the real ~/Library or %APPDATA%; --user-data-dir already isolates app storage.
-  // --use-mock-keychain/--password-store=basic avoid macOS Keychain access under the foreign HOME, which
-  // otherwise hangs this Electron build's DevTools HTTP server in this sandbox (it logs "DevTools
-  // listening" but /json/list never responds). SYNTHV_AGENT_BRIDGE_DIR is a temp dir too, so the live-run
-  // subtest's fake host never touches a real SynthV installation.
-  // PI_CODING_AGENT_DIR/PI_OFFLINE/PI_SKIP_VERSION_CHECK and clearing provider keys mirror agent-e2e.mjs's
-  // isolation: the Pi SDK's getAgentDir() reads PI_CODING_AGENT_DIR before HOME, so a developer's own shell
-  // exporting it would otherwise point this run at the real Pi agent directory and a live provider.
   const spawnEnv = { ...process.env };
   delete spawnEnv.ANTHROPIC_API_KEY;
   delete spawnEnv.OPENAI_API_KEY;
@@ -157,7 +150,7 @@ test("built Electron app boots, exposes the desktop bridge, and drives the Copil
     PI_OFFLINE: "1",
     PI_SKIP_VERSION_CHECK: "1",
   });
-  const child = spawn(electronBinary, [`--inspect=${inspectorPort}`, "--use-mock-keychain", "--password-store=basic", mainScript, `--user-data-dir=${profileDir}`, `--remote-debugging-port=${port}`], {
+  const child = spawn(electronBinary, [`--inspect=${inspectorPort}`, mainScript, `--user-data-dir=${profileDir}`, `--remote-debugging-port=${port}`], {
     cwd: desktopRoot,
     stdio: ["ignore", "pipe", "pipe"],
     env: spawnEnv,

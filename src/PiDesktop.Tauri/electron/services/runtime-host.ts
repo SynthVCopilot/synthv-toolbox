@@ -108,7 +108,7 @@ export class ElectronRuntimeHost {
   settingsSnapshot(): RuntimeHostSettings { return { ...this.settings }; }
 
   async httpMcpStatus(): Promise<JsonValue> {
-    const tools = await this.mcpTools();
+    const tools = [...await this.mcpTools(), ...(this.settings.httpApiEnabled && this.settings.httpAgentEnabled ? ["toolbox_agent"] : [])];
     const server = this.httpServer?.status();
     return {
       enabled: this.settings.httpApiEnabled,

@@ -36,7 +36,7 @@ export function createCoverService(options: CoverServiceOptions) {
   const controllers = new Map<string, AbortController>();
   let loaded: Promise<void> | undefined, pumping = false, disposed = false;
   let writeQueue = Promise.resolve();
-  const snapshot = (job: Job) => ({ id: job.id, kind: job.kind, status: job.status, stage: job.stage, progress: job.progress, detail: job.detail, error: job.error ?? null, result: job.result ?? null, createdAt: job.createdAt, updatedAt: job.updatedAt, retryable: !job.hostWriteStarted, repairConversationId: job.repairConversationId, tuningConversationId: job.tuningConversationId });
+  const snapshot = (job: Job) => ({ id: job.id, kind: job.kind, status: job.status, stage: job.stage, progress: job.progress, detail: job.detail, error: job.error ?? null, result: job.result ?? null, createdAt: job.createdAt, updatedAt: job.updatedAt, retryable: !job.hostWriteStarted, parentConversationId: job.request.parentConversationId, parentRunId: job.request.parentRunId, repairConversationId: job.repairConversationId, tuningConversationId: job.tuningConversationId });
   const save = (job: Job) => {
     job.updatedAt = new Date().toISOString();
     const bytes = JSON.stringify(job), file = join(jobsRoot, `${job.id}.json`);
@@ -207,7 +207,7 @@ export function createCoverService(options: CoverServiceOptions) {
         const job = getJob(jobs, args.id ?? args.taskId);
         if (!["failed", "cancelled"].includes(job.status)) throw new Error("Only failed or cancelled tasks can be retried.");
         if (job.hostWriteStarted) throw new Error("已有宿主写入，不能自动重试；请先检查并保留 SynthV 中的结果。 ");
-        if (job.kind === "cover") { job.aiSelection = await aiReady(); job.target = await options.host.prepare(job.request.trackIndex, job.request.groupName, job.id); }
+        if (job.kind === "cover") { job.aiSelection = await aiReady(); job.target = await options.host.prepare(Number(job.request.trackIndex), String(job.request.groupName ?? "Toolbox Cover"), job.id); }
         job.status = "queued"; delete job.error; await save(job); void pump(); return snapshot(job);
       }
       const kind: Kind | undefined = ({ queue_cover: "cover", queue_media_import: "media-import", queue_media_separation: "source-separation" } as Record<string, Kind>)[command];

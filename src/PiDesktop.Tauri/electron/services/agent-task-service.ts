@@ -252,6 +252,7 @@ export function createAgentTaskService(options: AgentTaskServiceOptions) {
     dispose: async () => {
       await ready;
       if (progressFlush) { clearTimeout(progressFlush); progressFlush = undefined; await persist(); }
+      await writeQueue;
     },
   };
 }

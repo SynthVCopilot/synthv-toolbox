@@ -25,7 +25,8 @@ async function loadElectronModule(relativePath) {
   const text = raw
     .replace('from "@synthv-toolbox/runtime-protocol";', `from "${runtimeProtocolUrl}";`)
     .replace('from "@synthv-toolbox/agent-runtime";', `from "${agentRuntimeUrl}";`)
-    .replace('from "@model-auth/core";', `from "${modelAuthCoreUrl}";`);
+    .replace('from "@model-auth/core";', `from "${modelAuthCoreUrl}";`)
+    .replace('from "./local-credential-store.js";', `from "${pathToFileURL(join(tauriRoot, "dist/electron/services/local-credential-store.js")).href}";`);
   const executable = stripTypeScriptTypes(text, { mode: "transform" });
   return import(`data:text/javascript;base64,${Buffer.from(executable).toString("base64")}`);
 }
@@ -73,20 +74,6 @@ test("Real Pi SDK drives the full Electron host chain against a scripted local m
   const { AiService, agentRuntimePort } = await loadElectronModule("electron/services/ai-service.ts");
   const { ElectronRuntimeHost } = await loadElectronModule("electron/services/runtime-host.ts");
 
-  const secrets = new Map();
-  const safeStorage = {
-    isEncryptionAvailable: () => true,
-    encryptString(value) {
-      const token = Buffer.from(`sealed:${secrets.size}`);
-      secrets.set(token.toString("base64"), value);
-      return token;
-    },
-    decryptString(value) {
-      const found = secrets.get(value.toString("base64"));
-      if (found === undefined) throw new Error("Unknown sealed credential in test stub.");
-      return found;
-    },
-  };
   const catalog = {
     async models(provider) { return provider === PROVIDER_ID ? [MODEL_ID] : []; },
     async opencode() { return {}; },
@@ -97,7 +84,7 @@ test("Real Pi SDK drives the full Electron host chain against a scripted local m
     join(tempRoot, "runtime"),
     { invoke: () => { throw new Error("Plugin capabilities are not used in this e2e test."); }, resolveModel: () => ai.resolveModelSelection() },
   );
-  ai = new AiService({ metadataPath, safeStorage, runtime: agentRuntimePort(runtimeHost.runtime), catalog, approvals: { cancelConversation() {} }, id: () => `id-${Math.random().toString(36).slice(2)}` });
+  ai = new AiService({ metadataPath, runtime: agentRuntimePort(runtimeHost.runtime), catalog, approvals: { cancelConversation() {} }, id: () => `id-${Math.random().toString(36).slice(2)}` });
 
   await ai.add_ai_api_key(PROVIDER_ID, "Test key", TEST_API_KEY, [MODEL_ID]);
   await ai.select_ai_provider(PROVIDER_ID, MODEL_ID);
@@ -105,7 +92,7 @@ test("Real Pi SDK drives the full Electron host chain against a scripted local m
   const noRuntime = { request: async () => { throw new Error("This AiService instance is read-only in this test."); } };
   // Loads metadata.json from disk into a brand-new instance, proving state survived persist() rather than just the live cache.
   async function reopenFresh(conversationId) {
-    const fresh = new AiService({ metadataPath, safeStorage, runtime: noRuntime, catalog });
+    const fresh = new AiService({ metadataPath, runtime: noRuntime, catalog });
     return fresh.open_conversation(conversationId);
   }
 
@@ -207,7 +194,7 @@ test("Real Pi SDK drives the full Electron host chain against a scripted local m
       join(tempRoot, "runtime"),
       { invoke: () => { throw new Error("Plugin capabilities are not used in this e2e test."); }, resolveModel: () => ai2.resolveModelSelection() },
     );
-    ai2 = new AiService({ metadataPath, safeStorage, runtime: agentRuntimePort(runtimeHost2.runtime), catalog, approvals: { cancelConversation() {} }, id: () => `id-${Math.random().toString(36).slice(2)}` });
+    ai2 = new AiService({ metadataPath, runtime: agentRuntimePort(runtimeHost2.runtime), catalog, approvals: { cancelConversation() {} }, id: () => `id-${Math.random().toString(36).slice(2)}` });
 
     mock.reset();
     mock.push({ content: [{ type: "tool_use", id: "toolu_7", name: "complete_task", input: { summary: "Imported the file.", evidence: ["Imported the provided file."] } }], stopReason: "tool_use", usage: { input: 50, output: 10, cacheWrite: 0 } });
@@ -324,7 +311,7 @@ test("Real Pi SDK drives the full Electron host chain against a scripted local m
           }),
         },
       );
-      synthVAi = new AiService({ metadataPath, safeStorage, runtime: agentRuntimePort(synthVRuntimeHost.runtime), catalog, approvals, id: () => `id-${Math.random().toString(36).slice(2)}` });
+      synthVAi = new AiService({ metadataPath, runtime: agentRuntimePort(synthVRuntimeHost.runtime), catalog, approvals, id: () => `id-${Math.random().toString(36).slice(2)}` });
       try {
         await run({ ai: synthVAi, approvals, receivedActions });
       } finally {

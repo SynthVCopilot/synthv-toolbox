@@ -1,7 +1,9 @@
 import { CredentialRouter, createCredentialMetadata } from "@model-auth/core";
+import { createLocalCredentialStore, type CredentialStore } from "./local-credential-store.js";
 import { dirname } from "node:path";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { AgentRuntimeWorker } from "@synthv-toolbox/agent-runtime";
+import type { PiCredential, PiCredentialStore, PiModelSelection } from "@synthv-toolbox/agent-runtime";
 import {
   AGENT_EFFORT_LEVELS,
   DEFAULT_AGENT_EFFORT,
@@ -16,12 +18,6 @@ import {
 export type AiProviderId = "anthropic" | "openai-codex" | "workbuddy" | "traecode";
 export type AiLoadStrategy = "round-robin" | "weighted-round-robin" | "failover";
 export type CredentialKind = "api-key" | "oauth";
-
-export interface SafeStoragePort {
-  isEncryptionAvailable(): boolean;
-  encryptString(value: string): Buffer;
-  decryptString(value: Buffer): string;
-}
 
 export interface MetadataFilePort {
   read(path: string): Promise<string | undefined>;
@@ -44,7 +40,7 @@ export interface ProviderCatalogPort {
 }
 
 export interface ProviderUsagePort {
-  query(provider: AiProviderId, credentialIds: readonly string[]): Promise<Record<string, unknown>>;
+  query(provider: AiProviderId, credentialIds: readonly string[]): Promise<{ accounts: Array<{ credentialId: string; [key: string]: unknown }> }>;
 }
 
 export interface AuthorizationResult {
@@ -112,7 +108,7 @@ interface AiServiceMetadata {
 
 export interface AiServiceOptions {
   metadataPath: string;
-  safeStorage: SafeStoragePort;
+  credentials?: CredentialStore;
   runtime: AgentRuntimePort;
   catalog: ProviderCatalogPort;
   approvals: AgentApprovalCancellationPort;
@@ -175,6 +171,9 @@ interface ActiveRun {
 /** Stores encrypted credential material locally and delegates model requests to the shared Agent Runtime. */
 export class AiService {
   private readonly files: MetadataFilePort;
+  private readonly credentials: CredentialStore;
+  private persistence: Promise<void> = Promise.resolve();
+  private readonly credentialWrites = new Map<string, Promise<unknown>>();
   private readonly now: () => Date;
   private readonly id: () => string;
   private readonly operations = new Map<string, AbortController>();
@@ -183,13 +182,17 @@ export class AiService {
 
   constructor(private readonly options: AiServiceOptions) {
     this.files = options.files ?? nodeMetadataFiles;
+    this.credentials = options.credentials ?? createLocalCredentialStore(dirname(options.metadataPath));
     this.now = options.now ?? (() => new Date());
     this.id = options.id ?? (() => crypto.randomUUID());
   }
 
   async ai_provider_state(forceCatalog = false): Promise<Record<string, unknown>> {
     const metadata = await this.load();
-    const storageAvailable = this.options.safeStorage.isEncryptionAvailable();
+    const readable = new Set<string>();
+    await Promise.all(metadata.credentials.map(async credential => {
+      try { await this.credentials.unseal(credential.sealed); readable.add(credential.id); } catch {}
+    }));
     const providersState = await Promise.all(providers.map(async (provider) => {
       const settings = metadata.providers[provider];
       const credentials = metadata.credentials.filter((credential) => credential.provider === provider);
@@ -207,14 +210,14 @@ export class AiService {
         models,
         oauthModels: models,
         apiKeyModels: models,
-        connected: storageAvailable && credentials.some((credential) => credential.enabled),
-        healthyAccounts: storageAvailable ? oauth.filter((credential) => credential.enabled).length : 0,
+        connected: credentials.some(credential => credential.enabled && readable.has(credential.id)),
+        healthyAccounts: oauth.filter(credential => credential.enabled && readable.has(credential.id)).length,
         totalAccounts: oauth.length,
-        accounts: oauth.map((credential) => ({ id: credential.id, label: credential.label, expiresAt: credential.expiresAt ?? 0, authorized: true, healthy: storageAvailable && credential.enabled, enabled: credential.enabled, weight: credential.weight, extend: credential.extend })),
-        apiKeys: apiKeys.map((credential) => ({ id: credential.id, label: credential.label, models: credential.models, healthy: storageAvailable && credential.enabled, enabled: credential.enabled, weight: credential.weight, extend: credential.extend, cooldownUntilUtc: null, createdAtUtc: credential.createdAt })),
+        accounts: oauth.map((credential) => ({ id: credential.id, label: credential.label, expiresAt: credential.expiresAt ?? 0, authorized: readable.has(credential.id), healthy: readable.has(credential.id) && credential.enabled, enabled: credential.enabled, weight: credential.weight, extend: credential.extend })),
+        apiKeys: apiKeys.map((credential) => ({ id: credential.id, label: credential.label, models: credential.models, healthy: readable.has(credential.id) && credential.enabled, enabled: credential.enabled, weight: credential.weight, extend: credential.extend, cooldownUntilUtc: null, createdAtUtc: credential.createdAt })),
         authMethods: ["oauth", "api-key"],
         available: true,
-        unavailableReason: storageAvailable ? null : "系统钥匙串不可用；请允许 Toolbox 访问现有加密凭据后重试。",
+        unavailableReason: credentials.some(credential => credential.enabled && !readable.has(credential.id)) ? "Local login data cannot be read. Sign in again to replace this credential." : null,
       };
     }));
     this.createCredentialRouter(metadata);
@@ -222,7 +225,6 @@ export class AiService {
   }
 
   async resolveModelSelection(): Promise<{ providerId: string; modelId: string; credentials: HostModelCredential[] }> {
-    this.requireCredentialStorage();
     const metadata = await this.load();
     const providerId = metadata.activeProvider;
     const modelId = metadata.providers[providerId].model;
@@ -236,7 +238,7 @@ export class AiService {
       if (!stored) continue;
       let apiKey: string;
       try {
-        const decrypted = this.options.safeStorage.decryptString(Buffer.from(stored.sealed, "base64"));
+        const decrypted = await this.credentials.unseal(stored.sealed);
         if (stored.kind === "oauth") {
           const credential = JSON.parse(decrypted) as { access?: unknown; accessToken?: unknown };
           const access = credential.access ?? credential.accessToken;
@@ -250,12 +252,54 @@ export class AiService {
       }
       credentials.push({ id: stored.id, providerId, modelId, authMethod: stored.kind, apiKey });
     }
-    if (!credentials.length) throw new Error(`No eligible credential is configured for ${providerId}/${modelId}.`);
+    if (!credentials.length) throw new Error(`No readable local credential is configured for ${providerId}/${modelId}. Sign in again.`);
     return { providerId, modelId, credentials };
   }
 
+  modelCredentialStore(model: PiModelSelection): PiCredentialStore {
+    if (!model.credentialId) throw new Error("A host-selected credential is required.");
+    const id = model.credentialId, provider = model.providerId;
+    const stored = async () => {
+      const metadata = await this.load();
+      const credential = metadata.credentials.find(item => item.id === id && item.provider === provider && item.enabled);
+      if (!credential) throw new Error("The selected account was removed or disabled.");
+      return credential;
+    };
+    const read = async (): Promise<PiCredential> => {
+      const credential = await stored(), secret = await this.credentials.unseal(credential.sealed);
+      if (credential.kind === "api-key") return { type: "api_key", key: secret };
+      const oauth = JSON.parse(secret);
+      if (!oauth || typeof oauth.access !== "string" || typeof oauth.refresh !== "string" || typeof oauth.expires !== "number") throw new Error("The OAuth login is incomplete. Sign in again.");
+      return { ...oauth, type: "oauth" };
+    };
+    return {
+      read: async (providerId, options) => { options?.signal?.throwIfAborted(); return providerId === provider ? read() : undefined; },
+      list: async options => { options?.signal?.throwIfAborted(); return [{ providerId: provider, type: (await stored()).kind === "oauth" ? "oauth" : "api_key" }]; },
+      modify: async (providerId, update, options) => {
+        if (providerId !== provider) throw new Error("Cannot update another provider's credentials.");
+        const operation = (this.credentialWrites.get(id) ?? Promise.resolve()).catch(() => {}).then(async () => {
+          options?.signal?.throwIfAborted();
+          const before = (await stored()).sealed, current = await read(), next = await update(current);
+          options?.signal?.throwIfAborted();
+          if (!next || JSON.stringify(next) === JSON.stringify(current)) return current;
+          const sealed = await this.credentials.seal(next.type === "oauth" ? JSON.stringify(next) : next.key);
+          const credential = await stored();
+          if (credential.sealed !== before) throw new Error("The account changed during token refresh; retry with the current login.");
+          if (next.type !== current.type) throw new Error("Credential refresh cannot change authentication method.");
+          credential.sealed = sealed;
+          if (next.type === "oauth") credential.expiresAt = next.expires;
+          await this.persist();
+          return next;
+        });
+        const tail = operation.catch(() => {}); this.credentialWrites.set(id, tail);
+        void tail.then(() => { if (this.credentialWrites.get(id) === tail) this.credentialWrites.delete(id); });
+        return operation;
+      },
+      delete: async () => { throw new Error("Remove accounts through Toolbox settings."); },
+    };
+  }
+
   async authorize_ai_provider(provider: AiProviderId, operationId = this.id()): Promise<Record<string, unknown>> {
-    this.requireCredentialStorage();
     if (!this.options.authorizer) throw new Error("OAuth authorization is not configured.");
     const controller = new AbortController();
     this.operations.set(operationId, controller);
@@ -308,8 +352,7 @@ export class AiService {
     let sealed: string | undefined;
     if (input.apiKey !== undefined) {
       if (!input.apiKey.trim()) throw new Error("API key is required.");
-      this.requireCredentialStorage();
-      sealed = this.options.safeStorage.encryptString(input.apiKey).toString("base64");
+      sealed = await this.credentials.seal(input.apiKey);
     }
     if (input.label !== undefined) credential.label = sanitizeLabel(input.label, input.apiKey ?? "");
     if (input.models !== undefined) credential.models = [...new Set(input.models)].sort();
@@ -380,13 +423,15 @@ export class AiService {
 
   async ai_provider_usage(): Promise<Record<string, unknown>> {
     const metadata = await this.load();
-    const result: Record<string, unknown> = { queriedAt: this.now().toISOString(), providers: {} };
-    if (!this.options.usage) return result;
+    const accounts: Array<Record<string, unknown>> = [];
     for (const provider of providers) {
-      const ids = metadata.credentials.filter((item) => item.provider === provider && item.enabled).map((item) => item.id);
-      result.providers = { ...(result.providers as Record<string, unknown>), [provider]: await this.options.usage.query(provider, ids) };
+      const credentials = metadata.credentials.filter(item => item.provider === provider && item.kind === "oauth");
+      const queried = this.options.usage ? await this.options.usage.query(provider, credentials.filter(item => item.enabled).map(item => item.id)) : { accounts: [] };
+      for (const credential of credentials) {
+        accounts.push({ provider, channel: "oauth", credentialId: credential.id, label: credential.label, usage: queried.accounts.find(item => item.credentialId === credential.id) ?? null });
+      }
     }
-    return result;
+    return { queriedAt: this.now().toISOString(), accounts };
   }
 
   async opencode_provider_catalog(force = false): Promise<Record<string, unknown>> {
@@ -499,13 +544,8 @@ export class AiService {
     return this.ai_provider_state(false);
   }
 
-  private requireCredentialStorage(): void {
-    if (!this.options.safeStorage.isEncryptionAvailable()) throw new Error("系统钥匙串不可用，无法读取或保存 AI 登录凭据。请完成系统授权后重新启动 Toolbox；本地工具仍可使用。");
-  }
-
   private async storeCredential(input: Omit<StoredCredential, "enabled" | "weight" | "createdAt" | "sealed"> & { secret: string }): Promise<StoredCredential> {
     const metadata = await this.load();
-    this.requireCredentialStorage();
     const existing = metadata.credentials.findIndex((item) => item.id === input.id);
     const credential: StoredCredential = {
       id: input.id,
@@ -517,7 +557,7 @@ export class AiService {
       weight: 1,
       createdAt: this.now().toISOString(),
       ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
-      sealed: this.options.safeStorage.encryptString(input.secret).toString("base64"),
+      sealed: await this.credentials.seal(input.secret),
     };
     if (existing >= 0) metadata.credentials.splice(existing, 1, credential);
     else metadata.credentials.push(credential);
@@ -532,13 +572,18 @@ export class AiService {
     return this.metadata;
   }
 
-  private async persist(): Promise<void> {
-    const metadata = await this.load();
-    const target = this.options.metadataPath;
-    const temporary = `${target}.${this.id()}.tmp`;
-    await this.files.mkdir(dirname(target));
-    await this.files.write(temporary, `${JSON.stringify(metadata)}\n`);
-    await this.files.rename(temporary, target);
+  private persist(): Promise<void> {
+    const write = async () => {
+      const metadata = await this.load();
+      const target = this.options.metadataPath;
+      const temporary = `${target}.${this.id()}.tmp`;
+      await this.files.mkdir(dirname(target));
+      await this.files.write(temporary, `${JSON.stringify(metadata)}\n`);
+      await this.files.rename(temporary, target);
+    };
+    const pending = this.persistence.then(write, write);
+    this.persistence = pending.catch(() => {});
+    return pending;
   }
 
   private createCredentialRouter(metadata: AiServiceMetadata): CredentialRouter {
