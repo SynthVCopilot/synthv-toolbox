@@ -12,6 +12,15 @@ type LyricProjectVersion = { revision: number; title: string; draft: string; rhy
 type LyricProject = { schemaVersion: number; id: string; title: string; draft: string; rhymeTargets: Record<string, string>; sections: LyricSectionRequest[]; candidateHistory: LyricCandidateSet[]; versions: LyricProjectVersion[]; revision: number; createdAtUtc: string; updatedAtUtc: string };
 type LyricProjectSummary = { id: string; title: string; revision: number; lineCount: number; updatedAtUtc: string };
 type ChineseRhymeLookup = { language: "zh-CN"; query: string; queryPinyin: string[]; matchMode: RhymeMatchMode; rhymeKeys: string[]; total: number; characters: Array<{ character: string; pinyin: string[] }>; coverageNote: string };
+type StoredLyricProjectVersion = Omit<LyricProjectVersion, "savedAtUtc"> & { savedAt: string };
+type StoredLyricProject = Omit<LyricProject, "schemaVersion" | "createdAtUtc" | "updatedAtUtc" | "versions"> & {
+  createdAt: string;
+  updatedAt: string;
+  versions: StoredLyricProjectVersion[];
+};
+
+const MAX_PROJECT_BYTES = 16 * 1024 * 1024;
+const MAX_PROJECTS_FILE_BYTES = 64 * 1024 * 1024;
 
 export const LYRIC_COMMANDS = [
   "create_lyric_project",
@@ -75,11 +84,11 @@ export function createLyricService(dataRoot: string): LyricService {
     return { root, path: projectsPath };
   };
 
-  const writeAtomic = async (path: string, value: unknown) => {
+  const writeAtomic = async (path: string, contents: string) => {
     const temporary = `${path}.${randomUUID()}.tmp`;
     const handle = await open(temporary, "wx", 0o600);
     try {
-      await handle.writeFile(JSON.stringify(value, null, 2), "utf8");
+      await handle.writeFile(contents, "utf8");
       await handle.sync();
     } finally {
       await handle.close();
@@ -103,13 +112,24 @@ export function createLyricService(dataRoot: string): LyricService {
     }
     const projects: unknown = JSON.parse(source);
     if (!Array.isArray(projects)) throw new Error("Lyric project storage must contain an array.");
-    return projects.map(validateStoredProject);
+    return projects.map(readStoredProject);
   };
 
-  const saveProjects = async (projects: LyricProject[]) => {
+  const saveProjects = async (projects: LyricProject[], changedProjectId: string) => {
+    const changed = projects.find((project) => project.id === changedProjectId);
+    if (!changed) throw new Error("Lyric project was not found.");
+    const changedSize = () => Buffer.byteLength(JSON.stringify(toStoredProject(changed), null, 4), "utf8") + 4;
+    while (changedSize() > MAX_PROJECT_BYTES && changed.versions.length) {
+      const oldestIndex = changed.versions.reduce((oldest, version, index, all) =>
+        Date.parse(version.savedAtUtc) < Date.parse(all[oldest].savedAtUtc) ? index : oldest, 0);
+      changed.versions.splice(oldestIndex, 1);
+    }
+    const contents = JSON.stringify(projects.map(toStoredProject), null, 2);
+    if (Buffer.byteLength(contents, "utf8") > MAX_PROJECTS_FILE_BYTES) throw new Error("Lyric project library exceeds its size limit.");
+    if (changedSize() > MAX_PROJECT_BYTES) throw new Error("Lyric project exceeds its size limit.");
     const { root, path } = await projectFile();
     await assertNoEscapingSymlink(path, root, true);
-    await writeAtomic(path, projects);
+    await writeAtomic(path, contents);
   };
 
   const now = () => new Date().toISOString();
@@ -120,6 +140,10 @@ export function createLyricService(dataRoot: string): LyricService {
   };
   const bounded = (value: string, maxLength: number, field: string) => {
     if (value.length > maxLength) throw new Error(`${field} must contain at most ${maxLength} characters.`);
+    return value;
+  };
+  const boundedBytes = (value: string, maxBytes: number, field: string) => {
+    if (Buffer.byteLength(value, "utf8") > maxBytes) throw new Error(`${field} must contain at most ${maxBytes} UTF-8 bytes.`);
     return value;
   };
   const clone = <T>(value: T): T => structuredClone(value);
@@ -135,11 +159,11 @@ export function createLyricService(dataRoot: string): LyricService {
       const kind = asString(section.kind, `sections[${index}].kind`);
       if (!["intro", "verse", "preChorus", "chorus", "bridge", "instrumental", "outro", "custom"].includes(kind)) throw new Error(`sections[${index}].kind is invalid.`);
       return {
-        id: asString(section.id, `sections[${index}].id`),
+        id: bounded(asString(section.id, `sections[${index}].id`), 128, `sections[${index}].id`),
         kind: kind as LyricSectionRequest["kind"],
-        label: asString(section.label, `sections[${index}].label`),
+        label: bounded(asString(section.label, `sections[${index}].label`), 128, `sections[${index}].label`),
         lineCount,
-        rhymeScheme: section.rhymeScheme,
+        rhymeScheme: bounded(section.rhymeScheme, 256, `sections[${index}].rhymeScheme`),
       };
     });
   };
@@ -151,19 +175,25 @@ export function createLyricService(dataRoot: string): LyricService {
   };
   const cleanCandidateHistory = (value: unknown) => {
     if (!Array.isArray(value)) throw new Error("candidateHistory must be an array.");
+    if (value.length > 20) throw new Error("candidateHistory must contain at most 20 sets.");
     if (value.some((item) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return true;
       const set = item as Record<string, unknown>;
       if (set.language !== "zh-CN" || typeof set.brief !== "string" || typeof set.imagery !== "string" || typeof set.sectionLabel !== "string" || !Array.isArray(set.candidates)) return true;
       if (set.targetRhyme !== undefined && set.targetRhyme !== null && typeof set.targetRhyme !== "string") return true;
-      return set.candidates.some((candidate) => !candidate || typeof candidate !== "object" || Array.isArray(candidate) || typeof (candidate as Record<string, unknown>).text !== "string" || typeof (candidate as Record<string, unknown>).note !== "string");
+      if ([set.brief, set.imagery, set.sectionLabel, typeof set.targetRhyme === "string" ? set.targetRhyme : ""].some((item) => Buffer.byteLength(item as string, "utf8") > 512)) return true;
+      if (set.candidates.length > 20) return true;
+      return set.candidates.some((candidate) => {
+        if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return true;
+        const entry = candidate as Record<string, unknown>;
+        return typeof entry.text !== "string" || Buffer.byteLength(entry.text, "utf8") > 512 || typeof entry.note !== "string" || Buffer.byteLength(entry.note, "utf8") > 256 || (entry.rhymeFoot !== undefined && entry.rhymeFoot !== null && (typeof entry.rhymeFoot !== "string" || Buffer.byteLength(entry.rhymeFoot, "utf8") > 128)) || (entry.rhymeMatched !== undefined && entry.rhymeMatched !== null && typeof entry.rhymeMatched !== "boolean");
+      });
     })) throw new Error("candidateHistory contains an invalid candidate set.");
-    return clone(value.slice(-20)) as LyricCandidateSet[];
+    return clone(value) as LyricCandidateSet[];
   };
-  const validateStoredProject = (value: unknown): LyricProject => {
+  const readStoredProject = (value: unknown): LyricProject => {
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Stored lyric project must be an object.");
     const project = value as Record<string, unknown>;
-    if (project.schemaVersion !== 1) throw new Error("Unsupported lyric project schema version.");
     const revision = Number(project.revision);
     if (!Number.isSafeInteger(revision) || revision < 1) throw new Error("Stored lyric project has an invalid revision.");
     if (!Array.isArray(project.versions) || project.versions.some((item) => !item || typeof item !== "object")) throw new Error("Stored lyric project versions are invalid.");
@@ -178,7 +208,7 @@ export function createLyricService(dataRoot: string): LyricService {
         rhymeTargets: cleanStringRecord(version.rhymeTargets, "version.rhymeTargets"),
         sections: cleanSections(version.sections),
         candidateHistory: cleanCandidateHistory(version.candidateHistory),
-        savedAtUtc: asString(version.savedAtUtc, "version.savedAtUtc"),
+        savedAtUtc: asString(version.savedAt, "version.savedAt"),
       } satisfies LyricProjectVersion;
     }).slice(-30);
     return {
@@ -191,10 +221,23 @@ export function createLyricService(dataRoot: string): LyricService {
       candidateHistory: cleanCandidateHistory(project.candidateHistory),
       versions: validVersions,
       revision,
-      createdAtUtc: asString(project.createdAtUtc, "createdAtUtc"),
-      updatedAtUtc: asString(project.updatedAtUtc, "updatedAtUtc"),
+      createdAtUtc: asString(project.createdAt, "createdAt"),
+      updatedAtUtc: asString(project.updatedAt, "updatedAt"),
     };
   };
+
+  const toStoredProject = (project: LyricProject): StoredLyricProject => ({
+    id: project.id,
+    title: project.title,
+    draft: project.draft,
+    sections: clone(project.sections),
+    rhymeTargets: clone(project.rhymeTargets),
+    candidateHistory: clone(project.candidateHistory),
+    revision: project.revision,
+    versions: project.versions.map(({ savedAtUtc, ...version }) => ({ ...clone(version), savedAt: savedAtUtc })),
+    createdAt: project.createdAtUtc,
+    updatedAt: project.updatedAtUtc,
+  });
 
   const projectVersion = (project: LyricProject): LyricProjectVersion => ({
     revision: project.revision,
@@ -212,7 +255,7 @@ export function createLyricService(dataRoot: string): LyricService {
       schemaVersion: 1,
       id: randomUUID(),
       title: bounded(asString(args.title, "title", "未命名歌曲"), 256, "title").trim() || "未命名歌曲",
-      draft: bounded(asString(args.draft, "draft", ""), 1_000_000, "draft"),
+      draft: boundedBytes(asString(args.draft, "draft", ""), 1_000_000, "draft"),
       rhymeTargets: args.rhymeTargets === undefined ? {} : cleanStringRecord(args.rhymeTargets, "rhymeTargets"),
       sections: args.sections === undefined ? [] : cleanSections(args.sections),
       candidateHistory: args.candidateHistory === undefined ? [] : cleanCandidateHistory(args.candidateHistory),
@@ -226,7 +269,7 @@ export function createLyricService(dataRoot: string): LyricService {
   const updateProject = (existing: LyricProject, args: Args, restoredVersion?: LyricProjectVersion): LyricProject => {
     const source = restoredVersion ?? {
       title: bounded(asString(args.title, "title", existing.title), 256, "title").trim() || "未命名歌曲",
-      draft: bounded(asString(args.draft, "draft", existing.draft), 1_000_000, "draft"),
+      draft: boundedBytes(asString(args.draft, "draft", existing.draft), 1_000_000, "draft"),
       rhymeTargets: args.rhymeTargets === undefined ? existing.rhymeTargets : cleanStringRecord(args.rhymeTargets, "rhymeTargets"),
       sections: args.sections === undefined ? existing.sections : cleanSections(args.sections),
       candidateHistory: args.candidateHistory === undefined ? existing.candidateHistory : cleanCandidateHistory(args.candidateHistory),
@@ -387,7 +430,7 @@ export function createLyricService(dataRoot: string): LyricService {
           return serializeMutation(async () => {
             const projects = await readProjects();
             const project = makeProject(args);
-            await saveProjects([project, ...projects]);
+            await saveProjects([project, ...projects], project.id);
             return clone(project);
           });
         case "save_lyric_project":
@@ -398,7 +441,7 @@ export function createLyricService(dataRoot: string): LyricService {
             if (index < 0) throw new Error("Lyric project was not found.");
             const project = updateProject(projects[index], args);
             projects[index] = project;
-            await saveProjects(projects);
+            await saveProjects(projects, project.id);
             return clone(project);
           });
         case "load_lyric_project": {
@@ -421,7 +464,7 @@ export function createLyricService(dataRoot: string): LyricService {
             if (index < 0 || !existing || !version) throw new Error("Lyric project version was not found.");
             const restored = updateProject(existing, {}, version);
             projects[index] = restored;
-            await saveProjects(projects);
+            await saveProjects(projects, restored.id);
             return clone(restored);
           });
         case "export_lyric_project_text":

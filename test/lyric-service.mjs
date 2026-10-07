@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLyricService, LYRIC_COMMANDS } from "../src/PiDesktop.Tauri/electron/services/lyric-service.ts";
@@ -24,6 +24,10 @@ try {
   assert.equal(created.schemaVersion, 1);
   assert.equal(created.revision, 1);
   assert.match(created.createdAtUtc, /^\d{4}-\d\d-\d\dT.*Z$/u);
+  const createdStorage = JSON.parse(await readFile(join(root, "lyrics", "projects.json"), "utf8"))[0];
+  assert.equal(createdStorage.schemaVersion, undefined);
+  assert.equal(createdStorage.createdAt, created.createdAtUtc);
+  assert.equal(createdStorage.createdAtUtc, undefined);
 
   const saved = await service.invoke("save_lyric_project", {
     id: created.id,
@@ -31,13 +35,17 @@ try {
     draft: "新的歌词",
     sections: [section],
     rhymeTargets: { A: "ing" },
-    candidateHistory: Array.from({ length: 25 }, (_, index) => ({
+    candidateHistory: Array.from({ length: 20 }, (_, index) => ({
       language: "zh-CN", brief: `brief-${index}`, imagery: "", sectionLabel: "副歌", targetRhyme: null, candidates: [],
     })),
   });
   assert.equal(saved.revision, 2);
   assert.equal(saved.versions.length, 1);
   assert.equal(saved.candidateHistory.length, 20);
+  const savedStorage = JSON.parse(await readFile(join(root, "lyrics", "projects.json"), "utf8"))[0];
+  assert.equal(savedStorage.updatedAt, saved.updatedAtUtc);
+  assert.equal(savedStorage.versions[0].savedAt, saved.versions[0].savedAtUtc);
+  assert.equal(savedStorage.versions[0].savedAtUtc, undefined);
 
   const restarted = createLyricService(root);
   assert.equal((await restarted.invoke("load_lyric_project", { id: created.id })).draft, "新的歌词");
@@ -54,6 +62,72 @@ try {
   assert.equal(restored.draft, "第一句\n第二句");
   assert.equal(restored.versions.length, 2);
   assert.equal((await createLyricService(root).invoke("load_lyric_project", { id: created.id })).draft, "第一句\n第二句");
+
+  const legacyRoot = await mkdtemp(join(tmpdir(), "lyric-legacy-"));
+  await mkdir(join(legacyRoot, "lyrics"), { recursive: true });
+  const legacyProject = {
+    id: "legacy-project",
+    title: "旧格式项目",
+    draft: "旧格式正文",
+    rhymeTargets: { A: "ang" },
+    sections: [section],
+    candidateHistory: [],
+    versions: [{ revision: 1, title: "旧版", draft: "旧稿", rhymeTargets: {}, sections: [], candidateHistory: [], savedAt: "2025-01-02T03:04:05.000Z" }],
+    revision: 2,
+    createdAt: "2025-01-01T03:04:05.000Z",
+    updatedAt: "2025-01-02T03:04:05.000Z",
+  };
+  const legacyPath = join(legacyRoot, "lyrics", "projects.json");
+  await writeFile(legacyPath, JSON.stringify([legacyProject]));
+  const legacyService = createLyricService(legacyRoot);
+  const legacyLoaded = await legacyService.invoke("load_lyric_project", { id: legacyProject.id });
+  assert.equal(legacyLoaded.schemaVersion, 1);
+  assert.equal(legacyLoaded.createdAtUtc, legacyProject.createdAt);
+  assert.equal(legacyLoaded.updatedAtUtc, legacyProject.updatedAt);
+  assert.equal(legacyLoaded.versions[0].savedAtUtc, legacyProject.versions[0].savedAt);
+  await legacyService.invoke("save_lyric_project", { id: legacyProject.id, draft: "保存后的旧格式" });
+  const legacySavedOnDisk = JSON.parse(await readFile(legacyPath, "utf8"))[0];
+  assert.equal(legacySavedOnDisk.createdAt, legacyProject.createdAt);
+  assert.equal(legacySavedOnDisk.createdAtUtc, undefined);
+  assert.equal(legacySavedOnDisk.versions.some((version) => "savedAt" in version && !("savedAtUtc" in version)), true);
+  assert.equal((await createLyricService(legacyRoot).invoke("load_lyric_project", { id: legacyProject.id })).draft, "保存后的旧格式");
+  await rm(legacyRoot, { recursive: true, force: true });
+
+  const sizeRoot = await mkdtemp(join(tmpdir(), "lyric-size-"));
+  await mkdir(join(sizeRoot, "lyrics"), { recursive: true });
+  const fullCandidateHistory = Array.from({ length: 20 }, (_, setIndex) => ({
+    language: "zh-CN",
+    brief: `b${setIndex}`.padEnd(512, "b"),
+    imagery: "i".repeat(512),
+    sectionLabel: "s".repeat(512),
+    targetRhyme: null,
+    candidates: Array.from({ length: 20 }, (_, candidateIndex) => ({ text: `t${candidateIndex}`.padEnd(512, "t"), note: "n".repeat(256) })),
+  }));
+  const largeLegacy = {
+    ...legacyProject,
+    id: "large-legacy-project",
+    revision: 31,
+    draft: "active",
+    candidateHistory: fullCandidateHistory,
+    versions: Array.from({ length: 30 }, (_, index) => ({
+      revision: index + 1,
+      title: `旧版 ${index + 1}`,
+      draft: String(index + 1).padEnd(700_000, "x"),
+      rhymeTargets: {},
+      sections: [],
+      candidateHistory: fullCandidateHistory,
+      savedAt: new Date(Date.UTC(2020, 0, index + 1)).toISOString(),
+    })),
+  };
+  const largePath = join(sizeRoot, "lyrics", "projects.json");
+  await writeFile(largePath, JSON.stringify([largeLegacy]));
+  const sizeService = createLyricService(sizeRoot);
+  await sizeService.invoke("save_lyric_project", { id: largeLegacy.id, draft: "短正文" });
+  const boundedStorage = JSON.parse(await readFile(largePath, "utf8"))[0];
+  assert.ok(boundedStorage.versions.length < 30);
+  assert.ok(boundedStorage.versions.some((version) => version.revision === 31));
+  assert.ok((await stat(largePath)).size <= 16 * 1024 * 1024);
+  await rm(sizeRoot, { recursive: true, force: true });
 
   await Promise.all([
     restarted.invoke("save_lyric_project", { id: created.id, draft: "并发写入 A" }),
@@ -101,6 +175,7 @@ try {
   await assert.rejects(service.invoke("lookup_chinese_rhyme", { query: "abc", matchMode: "near" }), /matchMode/u);
   await assert.rejects(service.invoke("build_lyric_template", { language: "en-US", sections: [] }), /zh-CN/u);
   await assert.rejects(service.invoke("create_lyric_project", { title: "bad", candidateHistory: [{ brief: "malformed" }] }), /candidateHistory/u);
+  await assert.rejects(service.invoke("create_lyric_project", { title: "bad", candidateHistory: Array.from({ length: 21 }, () => ({ language: "zh-CN", brief: "", imagery: "", sectionLabel: "", candidates: [] })) }), /at most 20/u);
   await assert.rejects(service.invoke("create_lyric_project", { title: "bad", draft: "x".repeat(1_000_001) }), /draft/u);
   await assert.rejects(service.invoke("not_a_lyric_command", {}), /Unsupported lyric command/u);
 
