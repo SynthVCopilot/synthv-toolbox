@@ -86,12 +86,12 @@ export function registerComponentAudioCommands(registry: CommandRegistry, option
   const generations = new Map<string, number>();
   const supportedComponents = new Set(["pi-audio", "cvrs", "vocal-separation"]);
   const runtimeStatus = async (): Promise<CreativeRuntimeStatus> => {
-    if (!options.creativeRuntime) return { ready: false, detail: "The local creative Python runtime is not configured." };
+    if (!options.creativeRuntime) return { ready: false, missing: ["creative runtime"], detail: "The local creative Python runtime is not configured." };
     try {
       const status = await options.creativeRuntime.status();
       return { ...status, ready: status.ready === true, detail: typeof status.detail === "string" ? status.detail : "Runtime status was returned without details." };
     } catch (error) {
-      return { ready: false, detail: error instanceof Error ? error.message : String(error) };
+      return { ready: false, missing: ["runtime status"], detail: error instanceof Error ? error.message : String(error) };
     }
   };
   const beginInstall = (task: Args) => {
@@ -129,11 +129,13 @@ export function registerComponentAudioCommands(registry: CommandRegistry, option
       });
       if (controller.signal.aborted || generations.get(id) !== generation) return;
       if (typeof pythonPath !== "string" || !pythonPath.trim()) throw new Error("The runtime completed without returning its Python executable path.");
+      const finalStatus = await runtimeStatus();
+      task.runtimeStatus = finalStatus;
+      if (!finalStatus.ready) throw new Error(finalStatus.detail || "The creative runtime is not ready after installation.");
       task.pythonPath = pythonPath;
       task.progress = 100; task.status = "completed"; task.error = null;
       task.detail = "The local Python runtime is ready for component workflows.";
       task.completedAt = new Date().toISOString(); task.updatedAt = task.completedAt;
-      task.runtimeStatus = await runtimeStatus();
     } catch (error) {
       if (generations.get(id) !== generation) return;
       const cancelled = controller.signal.aborted;

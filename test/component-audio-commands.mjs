@@ -60,7 +60,7 @@ const noRuntimeTask = noRuntimeTaskList[0];
 await waitFor(() => noRuntimeTask.status === "failed", "missing runtime must not report a successful install");
 assert.match(noRuntimeTask.detail, /runtime is not configured/u);
 assert.deepEqual(await handlers.get("component_runtime_status")({}), {
-  ready: false, detail: "The local creative Python runtime is not configured.",
+  ready: false, missing: ["creative runtime"], detail: "The local creative Python runtime is not configured.",
 });
 const unknownTaskList = await handlers.get("queue_component_install")({ id: "unknown-component" });
 await waitFor(() => unknownTaskList[0].status === "failed", "unsupported components must fail explicitly");
@@ -114,4 +114,29 @@ for (const [index, componentId] of componentIds.entries()) {
 const readyStatus = await runtimeHandlers.get("component_runtime_status")({});
 assert.equal(readyStatus.ready, true);
 assert.equal(readyStatus.pythonPath, "/managed/python");
+
+const notReadyHandlers = new Map();
+module.registerComponentAudioCommands({ register: (name, handler) => notReadyHandlers.set(name, handler) }, {
+  dataRoot: mkdtempSync(join(tmpdir(), "toolbox-runtime-not-ready-")),
+  creativeRuntime: {
+    status: async () => ({ ready: false, missing: ["module import check"], detail: "A required runtime module is still unavailable." }),
+    ensure: async () => "/managed/python",
+  },
+});
+const notReadyTasks = await notReadyHandlers.get("queue_component_install")({ id: "pi-audio" });
+await waitFor(() => notReadyTasks[0].status === "failed", "ensure must not report completion if final runtime status is not ready");
+assert.equal(notReadyTasks[0].runtimeStatus.ready, false);
+assert.deepEqual(notReadyTasks[0].runtimeStatus.missing, ["module import check"]);
+assert.match(notReadyTasks[0].error, /required runtime module/u);
+const statusErrorHandlers = new Map();
+module.registerComponentAudioCommands({ register: (name, handler) => statusErrorHandlers.set(name, handler) }, {
+  dataRoot: mkdtempSync(join(tmpdir(), "toolbox-runtime-status-error-")),
+  creativeRuntime: {
+    status: async () => { throw new Error("runtime status unavailable"); },
+    ensure: async () => "/managed/python",
+  },
+});
+assert.deepEqual(await statusErrorHandlers.get("component_runtime_status")({}), {
+  ready: false, missing: ["runtime status"], detail: "runtime status unavailable",
+});
 console.log("Component and audio command behavior passed.");
