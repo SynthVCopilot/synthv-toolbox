@@ -996,8 +996,8 @@ def _note_seconds(note, marker=None):
         "pitch": int(note["pitch"]),
         "velocity": int(note.get("velocity", 90)),
     }
-    if marker and marker.get("lyric") is not None:
-        value["lyric"] = marker["lyric"]
+    if marker is not None:
+        value["lyric"] = marker.get("lyric") or ""
     if marker and marker.get("phoneme"):
         value["phoneme"] = marker["phoneme"]
         value["phoneset"] = marker["phoneset"]

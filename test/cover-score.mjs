@@ -199,3 +199,35 @@ test("rejects sources outside dataRoot and refuses tools without a repair-phase 
     await assert.rejects(registered.get("cover_score_read").execute("call", {}, undefined, () => {}), /COVER_SCORE_UNBOUND/);
   } finally { await rm(ctx.dir, { recursive: true, force: true }); }
 });
+
+test("recognition with a missing lyric enters repair and cannot be accepted without correction", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "cover-missing-lyric-"));
+  try {
+    const source = join(dir, "notes.json");
+    const bytes = JSON.stringify({ timingBasis: "seconds", noteCount: 1, notes: [{startSeconds:0,endSeconds:1,pitch:60,velocity:40}] });
+    await writeFile(source, bytes);
+    const service = createCoverScoreService(dir);
+    await service.prepare("missing", source, digest(bytes));
+    const page = await service.inspect("missing");
+    assert.equal(page.notes[0].lyric, "");
+    assert.ok(page.issues.some(issue => issue.code === "empty-lyric"));
+    await service.review("missing", {fingerprint:page.fingerprint,noteIds:[page.notes[0].id],summary:"Missing word requires evidence.",unresolved:["empty-lyric"]});
+    assert.equal((await service.finalize("missing")).complete, false);
+    await assert.rejects(service.accept("missing", {summary:"Cannot guess a word.",unresolved:[]}), /lyric/);
+    assert.equal(await readFile(source, "utf8"), bytes);
+  } finally { await rm(dir, {recursive:true,force:true}); }
+});
+
+test("correcting a recognized word clears the previous word's dictionary phonemes", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "cover-phoneme-repair-"));
+  try {
+    const source = join(dir, "notes.json");
+    const bytes = JSON.stringify({timingBasis:"seconds",notes:[{startSeconds:0,endSeconds:1,pitch:60,lyric:"hello",phoneme:"h @ l @U",phoneset:"xsampa"}]});
+    await writeFile(source,bytes);const service=createCoverScoreService(dir);
+    await service.prepare("phonemes",source,digest(bytes));const before=await service.inspect("phonemes");
+    await service.edit("phonemes",{fingerprint:before.fingerprint,reason:"Correct the recognition from aligned text evidence.",edits:[{type:"update",id:before.notes[0].id,changes:{lyric:"world"}}]});
+    const after=await service.inspect("phonemes");
+    assert.equal(after.notes[0].lyric,"world");assert.equal(after.notes[0].phoneme,undefined);assert.equal(after.notes[0].phoneset,undefined);
+    assert.equal(await readFile(source,"utf8"),bytes);
+  }finally{await rm(dir,{recursive:true,force:true});}
+});

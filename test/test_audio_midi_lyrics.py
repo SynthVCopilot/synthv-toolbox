@@ -53,6 +53,11 @@ class AudioMidiLyricsTests(unittest.TestCase):
         self.assertEqual(evidence["droppedShortFragments"], 1)
         self.assertEqual([note["pitch"] for note in processed], [29, 90])
 
+    def test_unrecognized_lyrics_are_explicit_repair_items(self):
+        note = {"pitch": 60, "start": 0.0, "end": 0.5}
+        self.assertEqual(pi_audio._note_seconds(note, {"lyric": None})["lyric"], "")
+        self.assertNotIn("lyric", pi_audio._note_seconds(note))
+
     def test_midi_writer_keeps_complete_scores_over_512_notes(self):
         import mido
         notes = [{"pitch": 60 + index % 12, "start": index * 0.1, "end": index * 0.1 + 0.08} for index in range(600)]

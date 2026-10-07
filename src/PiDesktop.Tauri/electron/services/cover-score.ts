@@ -95,7 +95,7 @@ function parseNotes(source: unknown): { notes: CoverScoreNote[]; duration: numbe
     const startSeconds = item.startSeconds;
     const endSeconds = item.endSeconds;
     const pitch = item.pitch;
-    const lyric = item.lyric;
+    const lyric = item.lyric ?? "";
     if (typeof startSeconds !== "number" || !Number.isFinite(startSeconds) || typeof endSeconds !== "number" || !Number.isFinite(endSeconds) ||
       typeof pitch !== "number" || !Number.isInteger(pitch) || pitch < 0 || pitch > 127 || typeof lyric !== "string") throw new Error(`Invalid note fields at index ${index}.`);
     const note: CoverScoreNote = { id: `note-${String(index + 1).padStart(6, "0")}`, startSeconds, endSeconds, pitch, lyric };
@@ -295,7 +295,12 @@ export function createCoverScoreService(dataRoot: string): CoverScoreService {
             if (i < 0 || changeKeys.length === 0 || changeKeys.some((key) => !["startSeconds", "endSeconds", "pitch", "lyric"].includes(key))) throw new Error(`Unknown note or invalid changes: ${edit.id}.`);
             const before = noteValue(candidate[i]!);
             for (const neighbor of [candidate[i - 1], candidate[i], candidate[i + 1]]) if (neighbor) invalidatedIds.add(neighbor.id);
-            candidate[i] = { ...candidate[i]!, ...edit.changes };
+            const updated = { ...candidate[i]!, ...edit.changes };
+            if (edit.changes.lyric !== undefined && edit.changes.lyric !== candidate[i]!.lyric) {
+              delete updated.phoneme;
+              delete updated.phoneset;
+            }
+            candidate[i] = updated;
             changedIds.add(edit.id);
             state.changes.push({ type: "update", id: edit.id, before, after: noteValue(candidate[i]!), reason: input.reason });
           } else if (edit.type === "delete") {
