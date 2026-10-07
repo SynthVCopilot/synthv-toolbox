@@ -2,9 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { lstat, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
 
-export interface CoverAudioOptions { dataRoot: string; python?: string; ffmpegPath?: string; }
+export interface CoverAudioOptions { dataRoot: string; componentsRoot: string; python?: string; }
 export interface CoverAudioProgress { phase: "separating" | "transcribing-and-extracting"; percent: number; }
 export interface CoverAudioResult {
   vocalPath: string; instrumentalPath: string; model: string; device: string; separationId: string;
@@ -25,15 +24,14 @@ interface ExtractionJson {
   inference: Record<string, unknown>; transformations: Record<string, unknown>; timingBasis: "seconds";
 }
 
-const here = dirname(fileURLToPath(import.meta.url));
-const componentRoot = resolve(here, "../../components");
-
 export function createCoverAudio(options: CoverAudioOptions) {
   if (!isAbsolute(options.dataRoot)) throw new Error("dataRoot must be an absolute path.");
+  if (!isAbsolute(options.componentsRoot)) throw new Error("componentsRoot must be an absolute path.");
   const dataRoot = resolve(options.dataRoot);
+  const componentsRoot = resolve(options.componentsRoot);
   const python = options.python ?? process.env.SYNTHV_TOOLBOX_PYTHON ?? (process.platform === "win32" ? "python.exe" : process.platform === "darwin" ? "python3.11" : "python3");
-  const separationScript = join(componentRoot, "vocal-separation", "separate.py");
-  const audioScript = join(componentRoot, "pi-audio", "pi_audio.py");
+  const separationScript = join(componentsRoot, "vocal-separation", "separate.py");
+  const audioScript = join(componentsRoot, "pi-audio", "pi_audio.py");
   const runtimeEnv = (): NodeJS.ProcessEnv => ({
     ...process.env,
     SYNTHV_TOOLBOX_DATA_ROOT: dataRoot,
@@ -46,14 +44,19 @@ export function createCoverAudio(options: CoverAudioOptions) {
     await validateInput(audioPath);
     const separationId = randomUUID();
     runOptions.onProgress?.({ phase: "separating", percent: 0 });
-    const result = await runJson<SeparationJson>(
-      python, [separationScript, audioPath, "--output-id", separationId], runtimeEnv(), runOptions.signal,
-      () => cleanupRun(dataRoot, "separations", separationId),
-    );
-    await Promise.all([validateOwnedFile(dataRoot, result.vocalPath), validateOwnedFile(dataRoot, result.instrumentalPath)]);
-    if (!result.model || !result.device || result.separationId !== separationId) throw new Error("Separation result metadata is incomplete.");
-    runOptions.onProgress?.({ phase: "separating", percent: 100 });
-    return { separationId, vocalPath: result.vocalPath, instrumentalPath: result.instrumentalPath, model: result.model, device: result.device };
+    try {
+      const result = await runJson<SeparationJson>(
+        python, [separationScript, audioPath, "--output-id", separationId], runtimeEnv(), runOptions.signal,
+        () => cleanupRun(dataRoot, "separations", separationId),
+      );
+      await Promise.all([validateOwnedFile(dataRoot, result.vocalPath), validateOwnedFile(dataRoot, result.instrumentalPath)]);
+      if (!result.model || !result.device || result.separationId !== separationId) throw new Error("Separation result metadata is incomplete.");
+      runOptions.onProgress?.({ phase: "separating", percent: 100 });
+      return { separationId, vocalPath: result.vocalPath, instrumentalPath: result.instrumentalPath, model: result.model, device: result.device };
+    } catch (error) {
+      await cleanupRun(dataRoot, "separations", separationId);
+      throw error;
+    }
   };
 
   const transcribeAndExtract = async (vocalPath: string, runOptions: RunOptions & { lyrics?: string } = {}): Promise<CoverExtractResult> => {
@@ -123,7 +126,8 @@ async function runJson<T>(file: string, args: string[], env: NodeJS.ProcessEnv, 
     let stdout = "";
     let stderr = "";
     let settled = false;
-    const abort = () => {
+    let failure: Error | undefined;
+    const terminate = () => {
       if (process.platform === "win32" && child.pid) {
         const killer = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
         killer.unref();
@@ -133,6 +137,7 @@ async function runJson<T>(file: string, args: string[], env: NodeJS.ProcessEnv, 
         timer.unref();
       }
     };
+    const abort = () => { terminate(); };
     const rejectAfterCleanup = (error: Error) => {
       if (settled) return;
       settled = true;
@@ -140,11 +145,20 @@ async function runJson<T>(file: string, args: string[], env: NodeJS.ProcessEnv, 
       void cleanup().finally(() => reject(error));
     };
     signal?.addEventListener("abort", abort, { once: true });
-    child.stdout.setEncoding("utf8").on("data", chunk => { stdout += chunk; });
+    child.stdout.setEncoding("utf8").on("data", chunk => {
+      if (failure) return;
+      if (Buffer.byteLength(stdout) + Buffer.byteLength(chunk) > 2 * 1024 * 1024) {
+        failure = new Error("Python component exceeded the 2 MiB JSON output limit.");
+        terminate();
+        return;
+      }
+      stdout += chunk;
+    });
     child.stderr.setEncoding("utf8").on("data", chunk => { stderr = (stderr + chunk).slice(-16_000); });
     child.once("error", error => rejectAfterCleanup(error));
     child.once("close", code => {
       if (settled) return;
+      if (failure) return rejectAfterCleanup(failure);
       if (signal?.aborted) return rejectAfterCleanup(abortError());
       if (code !== 0) {
         let detail = stderr.trim() || "Python component exited with " + code + ".";

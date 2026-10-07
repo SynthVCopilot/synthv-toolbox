@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const python = process.env.SYNTHV_TOOLBOX_AUDIO_TEST_PYTHON;
 assert.ok(python, "Set SYNTHV_TOOLBOX_AUDIO_TEST_PYTHON to an installed pi-audio runtime.");
@@ -29,7 +30,8 @@ wav.write("data", 36); wav.writeUInt32LE(pcm.length, 40); pcm.copy(wav, 44);
 await writeFile(audioPath, wav);
 
 const original = await readFile(audioPath);
-const workflow = createCoverAudio({ dataRoot: managedDataRoot, python });
+const componentsRoot = fileURLToPath(new URL("../src/PiDesktop.Tauri/components/", import.meta.url));
+const workflow = createCoverAudio({ dataRoot: managedDataRoot, componentsRoot, python });
 const separation = await workflow.separate(audioPath);
 assert.equal(separation.model, "htdemucs");
 assert.ok(["mps", "cuda", "cpu"].includes(separation.device));
@@ -54,4 +56,44 @@ assert.ok(JSON.parse(await readFile(extraction.segmentsPath, "utf8")).alignmentD
 assert.ok((await stat(extraction.midiPath)).size > 0);
 assert.ok((await stat(extraction.lyricsPath)).size > 0);
 assert.ok((await stat(extraction.analysisPath)).size > 0);
+
+const packagedComponents = path.join(root, "packaged", "components");
+const separationScript = path.join(packagedComponents, "vocal-separation", "separate.py");
+const fakeDataRoot = path.join(root, "fake-data");
+const markerPath = path.join(root, "fake-runtime.json");
+await mkdir(path.dirname(separationScript), { recursive: true });
+await writeFile(separationScript, [
+  "import json, os, pathlib, sys",
+  "output_id = sys.argv[sys.argv.index('--output-id') + 1]",
+  "base = pathlib.Path(os.environ['SYNTHV_TOOLBOX_DATA_ROOT']) / 'output' / 'separations' / output_id",
+  "base.mkdir(parents=True)",
+  "pathlib.Path(os.environ['COVER_AUDIO_FAKE_MARKER']).write_text(json.dumps({'script': sys.argv[0], 'output': str(base)}))",
+  "if os.environ.get('COVER_AUDIO_FAKE_OVERFLOW'):",
+  "    sys.stdout.write('x' * (3 * 1024 * 1024)); sys.stdout.flush(); sys.exit(0)",
+  "if os.environ.get('COVER_AUDIO_FAKE_ESCAPE'):",
+  "    vocal = instrumental = os.environ['COVER_AUDIO_FAKE_INPUT']",
+  "else:",
+  "    vocal = str(base / 'vocals.wav'); instrumental = str(base / 'instrumental.wav')",
+  "    pathlib.Path(vocal).write_bytes(b'vocal'); pathlib.Path(instrumental).write_bytes(b'instrumental')",
+  "print(json.dumps({'separationId': output_id, 'vocalPath': vocal, 'instrumentalPath': instrumental, 'model': 'test-model', 'device': 'test-device'}))",
+].join("\n"), "utf8");
+process.env.COVER_AUDIO_FAKE_MARKER = markerPath;
+process.env.COVER_AUDIO_FAKE_INPUT = audioPath;
+const packagedWorkflow = createCoverAudio({ dataRoot: fakeDataRoot, componentsRoot: packagedComponents, python });
+const packagedResult = await packagedWorkflow.separate(audioPath);
+const called = JSON.parse(await readFile(markerPath, "utf8"));
+assert.equal(called.script, separationScript, "the compiled/packaged component root must be injected explicitly");
+assert.equal(packagedResult.device, "test-device");
+
+process.env.COVER_AUDIO_FAKE_ESCAPE = "1";
+await assert.rejects(packagedWorkflow.separate(audioPath), /escaped dataRoot/u);
+const escapedCall = JSON.parse(await readFile(markerPath, "utf8"));
+await assert.rejects(stat(escapedCall.output), { code: "ENOENT" }, "failed output validation must clean only this run");
+delete process.env.COVER_AUDIO_FAKE_ESCAPE;
+
+process.env.COVER_AUDIO_FAKE_OVERFLOW = "1";
+await assert.rejects(packagedWorkflow.separate(audioPath), /2 MiB JSON output limit/u);
+delete process.env.COVER_AUDIO_FAKE_OVERFLOW;
+delete process.env.COVER_AUDIO_FAKE_MARKER;
+delete process.env.COVER_AUDIO_FAKE_INPUT;
 console.log(JSON.stringify({ model: separation.model, device: separation.device, noteCount: extraction.noteCount, rawNoteCount: extraction.rawNoteCount }));
