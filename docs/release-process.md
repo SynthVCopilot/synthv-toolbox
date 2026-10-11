@@ -23,7 +23,7 @@ Repository settings:
 
 - The center provisions the repository secret `SIGNING_API_KEY`; its GitHub credential needs access to this organization's repository, Actions secrets/variables and webhooks. The `macos-source` job also needs `id-token: write`: submit and every upload call fetch a fresh GitHub Actions OIDC token for the fixed signing origin.
 - Restrict creation, update and deletion of stable tags and writes to `main` to the authorized release owner before enabling the project. The center checks that the tag commit is on `main` and that the run and identity belong to that owner.
-- The signing center address is fixed in `.github/scripts/macos-signing-shared.mjs`; there is no `SIGNING_URL` variable.
+- The signing center address is fixed in `.github/scripts/macos-signing-shared.mjs`; the client does not read the center-provisioned `SIGNING_URL` variable.
 - The center must accept tag runs of this repository's `Desktop Release` workflow.
 
 Notes:
@@ -55,7 +55,7 @@ Notes:
 
 - 中心自动配发仓库密钥 `SIGNING_API_KEY`，中心的 GitHub 凭据需要访问组织仓库并管理 Actions 密钥、变量和 webhook。`macos-source` 需要 `id-token: write`：提交和每次上传请求都会重新取得面向固定签名地址的 GitHub Actions OIDC 令牌。
 - 启用项目前，将正式标签的创建、修改、删除以及 `main` 写入权限限定给获授权的发布者。中心核对标签提交位于 `main`，运行和身份令牌属于获授权账号。
-- 签名中心地址固定在 `.github/scripts/macos-signing-shared.mjs` 中，不再有 `SIGNING_URL` 变量。
+- 签名中心地址固定在 `.github/scripts/macos-signing-shared.mjs` 中，客户端不读取中心配发的 `SIGNING_URL` 变量。
 - 签名中心必须接受本仓库 `Desktop Release` 工作流的标签运行。
 
 说明：
