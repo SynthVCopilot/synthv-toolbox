@@ -194,7 +194,7 @@ const functionNames = new Set([
   "tickApprovalCountdowns", "patchSlot", "applyLiveRunPatch", "patchLiveRun", "toastHtml", "scheduleToastDismiss", "patchToast",
   "renderCopilot", "agentBudgetUsageText", "renderMessage",
   "listenForAgentRunProgress", "listenForAgentApprovals", "decideApproval", "cancelAgentRun", "steerAgentRun",
-  "sendPrompt", "withAiProviderStateRefresh",
+  "sendPrompt", "withAiProviderStateRefresh", "withComposerDraft",
 ]);
 const constNames = new Set(["AGENT_EFFORT_ORDER", "AGENT_EFFORT_COVERAGE", "AGENT_TOOL_DISPLAY_NAME_KEYS", "AGENT_RUN_PHASE_KEYS"]);
 const ast = parse(main, { sourceType: "module", plugins: ["typescript"] });
@@ -853,3 +853,21 @@ test("steer messages shown during a run are replaced by the run's persisted mess
 });
 
 console.log("Agent goal UI contracts passed.");
+
+test("a re-render keeps the composer draft, selection and focus (run end or steer resolving while the user types)", () => {
+  const dom = new JSDOM("<div id=\"root\"></div>");
+  const state = freshState({ document: dom.window.document });
+  state.conversation = { id: "c", title: "Chat", messages: [] };
+  const doc = dom.window.document;
+  doc.getElementById("root").innerHTML = state.renderCopilot();
+  const before = doc.querySelector("#chat-input");
+  before.value = "a follow-up I am typing";
+  before.focus();
+  before.setSelectionRange(2, 8);
+  state.withComposerDraft(() => { doc.getElementById("root").innerHTML = state.renderCopilot(); });
+  const after = doc.querySelector("#chat-input");
+  assert.notEqual(after, before, "the composer element was rebuilt");
+  assert.equal(after.value, "a follow-up I am typing");
+  assert.equal(doc.activeElement, after);
+  assert.deepEqual([after.selectionStart, after.selectionEnd], [2, 8]);
+});

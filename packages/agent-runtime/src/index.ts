@@ -39,6 +39,7 @@ import {
   createCompletionGuardRegistry,
   createTaskLoopExtension,
   createTaskLoopState,
+  isBudgetExhausted,
   effortProfileFor,
   resetRun,
   runTaskLoop,
@@ -318,6 +319,8 @@ export function createPiSessionFactory(options: PiSessionFactoryOptions = {}): P
             return { message, outcome: validated };
           } finally {
             projector.end();
+            // A steer accepted during wind-down must not leak into the next run's first request.
+            result.session.clearQueue();
             currentProjector = null;
             running = false;
             currentRunId = null;
@@ -333,7 +336,7 @@ export function createPiSessionFactory(options: PiSessionFactoryOptions = {}): P
           return true;
         },
         steer: async (text, runId) => {
-          if (!running || state.cancelled) return "no-active-run";
+          if (!running || state.cancelled || state.signal || isBudgetExhausted(state)) return "no-active-run";
           if (runId !== currentRunId) return "run-mismatch";
           await result.session.steer(text);
           // A user message is progress, so the idle streak cannot end the run right after it.

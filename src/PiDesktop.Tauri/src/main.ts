@@ -1116,7 +1116,23 @@ function renderSidebar(): string {
     </div>`;
 }
 
+/** Runs a re-render while keeping the composer draft, selection and focus, since the Copilot page is rebuilt wholesale. */
+function withComposerDraft(rerender: () => void): void {
+  const input = document.querySelector<HTMLTextAreaElement>("#chat-input");
+  const draft = input ? { value: input.value, start: input.selectionStart, end: input.selectionEnd, focused: document.activeElement === input } : undefined;
+  rerender();
+  const restored = document.querySelector<HTMLTextAreaElement>("#chat-input");
+  if (!draft?.value || !restored) return;
+  restored.value = draft.value;
+  restored.setSelectionRange(draft.start, draft.end);
+  if (draft.focused) restored.focus();
+}
+
 function render(): void {
+  withComposerDraft(renderApp);
+}
+
+function renderApp(): void {
   if (!app) return;
   if (app.settingsLoadError) {
     root.innerHTML = `<main class="fatal settings-recovery" role="alert">

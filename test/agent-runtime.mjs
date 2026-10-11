@@ -1548,6 +1548,22 @@ test("a steer counts as progress, so the idle-continuation streak does not end t
   assert.equal(fake.remainingRounds, 0, "the steered round resets the idle streak, so two more idle rounds run before the limit");
 });
 
+test("a steer arriving after complete_task in the final round is rejected rather than queued for the next run", async () => {
+  let session;
+  let late;
+  const fake = createFakeSdk([
+    { toolCalls: [
+      { name: "update_plan", args: { goal: "G", doneCriteria: ["C"], todos: [{ id: "t1", title: "Step", status: "completed" }] } },
+      { name: "complete_task", args: { summary: "Done", evidence: ["done"] } },
+    ], after: async () => { late = await session.steer("too late", "run-late"); } },
+  ]);
+  session = await createSession(fake);
+  const { outcome } = await session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-late");
+  assert.equal(outcome.status, "completed");
+  assert.equal(late, "no-active-run");
+  assert.deepEqual(fake.steered, []);
+});
+
 test("stdio worker answers session.steer immediately while an earlier request is still blocking the queue", async () => {
   const pluginRoot = join(root, "test", ".tmp", "agent-runtime-steer-plugins");
   rmSync(pluginRoot, { recursive: true, force: true });
