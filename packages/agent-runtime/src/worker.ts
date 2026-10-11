@@ -146,8 +146,8 @@ export async function runStdioWorker(): Promise<void> {
       // Let the worker report malformed input on stderr.
     }
     if (message && hostTransport.accept(message)) return;
-    // session.cancel must reach an in-flight run immediately, not wait behind the serialized request queue.
-    if (message?.kind === "request" && message.method === "session.cancel") {
+    // session.cancel and session.steer must reach an in-flight run immediately, not wait behind the serialized request queue.
+    if (message?.kind === "request" && (message.method === "session.cancel" || message.method === "session.steer")) {
       void dispatch(line);
       return;
     }

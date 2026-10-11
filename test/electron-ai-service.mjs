@@ -232,10 +232,12 @@ assert.equal(anthropic.accounts.length + anthropic.apiKeys.length, 0);
   const activeRunRequests = [];
   let releaseInitialize;
   let blockNextInitialize = true;
+  let holdSend;
   const activeRunRuntime = {
     async request(method, params) {
       activeRunRequests.push({ method, params });
       if (method === "session.initialize" && blockNextInitialize) { blockNextInitialize = false; await new Promise((resolve) => { releaseInitialize = resolve; }); }
+      if (holdSend && method === "session.send") await holdSend;
       if (method === "session.send") return { message: "Handled.", outcome: { status: "completed", summary: "Handled.", evidence: ["e"], missing: [], plan: { goal: "G", doneCriteria: ["e"], todos: [{ id: "t1", title: "T", status: "completed" }] }, budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 1, tokens: 10 } } };
       return {};
     },
@@ -269,6 +271,26 @@ assert.equal(anthropic.accounts.length + anthropic.apiKeys.length, 0);
   assert.equal(thirdSend[1].outcome.status, "completed", "the active-run slot is released after the cancelled run finishes");
   const sendRequest = activeRunRequests.filter((request) => request.method === "session.send").at(-1);
   assert.match(sendRequest.params.runId, /^active-\d+$/, "a runId is generated when the caller omits one");
+
+  // Steering: accepted only once session.send is issued, forwarded with the run's id, and persisted between the user message and the reply.
+  await assert.rejects(() => activeRunService.steer_agent_run(conversation.id, "too early"), /No agent run is in progress/, "no steer without an active run");
+  let releaseSend;
+  holdSend = new Promise((resolve) => { releaseSend = resolve; });
+  const steeredSend = activeRunService.send_message(conversation.id, "Original", { runId: "steer-run" });
+  while (!activeRunRequests.some((request) => request.method === "session.send" && request.params.runId === "steer-run")) await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(() => activeRunService.steer_agent_run(conversation.id, "   "), /Message is required/);
+  await assert.rejects(() => activeRunService.steer_agent_run(conversation.id, "x".repeat(32_001)), /32,000 character limit/);
+  const steerMessage = await activeRunService.steer_agent_run(conversation.id, "  use track 2, not 1  ");
+  assert.equal(steerMessage.role, "user");
+  assert.equal(steerMessage.content, "use track 2, not 1");
+  const steerRequest = activeRunRequests.filter((request) => request.method === "session.steer").at(-1);
+  assert.deepEqual(steerRequest.params, { sessionId: conversation.id, runId: "steer-run", input: "use track 2, not 1" });
+  releaseSend();
+  const steeredMessages = await steeredSend;
+  assert.deepEqual(steeredMessages.map((message) => [message.role, message.content]), [["user", "Original"], ["user", "use track 2, not 1"], ["assistant", "Handled."]]);
+  const reopened = await activeRunService.open_conversation(conversation.id);
+  assert.deepEqual(reopened.messages.slice(-3).map((message) => message.content), ["Original", "use track 2, not 1", "Handled."], "the steer text is persisted in order");
+  await assert.rejects(() => activeRunService.steer_agent_run(conversation.id, "too late"), /No agent run is in progress/, "the run slot is released after the run ends");
 }
 
 console.log("Electron AI service persists encrypted credentials and drives Agent Runtime sessions.");

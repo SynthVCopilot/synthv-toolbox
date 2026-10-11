@@ -1,6 +1,7 @@
 import { CredentialRouter, createCredentialMetadata, type CredentialMetadata, type ProviderAdapterHost, type ProviderRequest, type ProviderRequestContext, type ProviderResponse, type ProviderStreamEvent } from "@model-auth/core";
 import { fileURLToPath } from "node:url";
 import {
+  AGENT_INPUT_MAX_LENGTH,
   AGENT_RUN_ID_MAX_LENGTH,
   AGENT_RUN_PROGRESS_EVENT,
   DEFAULT_AGENT_EFFORT,
@@ -14,6 +15,7 @@ import {
   parseJsonl,
   validateAgentRunBudget,
   validateAgentRunOutcome,
+  validateAgentSessionSteerParams,
   type AgentEffortProfile,
   type AgentRunBudget,
   type AgentRunOutcome,
@@ -56,7 +58,7 @@ export { TASK_LOOP_TOOL_NAMES };
 export const AGENT_RUNTIME_ID = "synthv-toolbox.agent-runtime";
 
 export const AGENT_RUNTIME_CAPABILITIES: CapabilityDescriptor[] = [
-  { id: "agent.sessions", version: "1.0", operations: ["initialize", "send", "close", "cancel"] },
+  { id: "agent.sessions", version: "1.0", operations: ["initialize", "send", "close", "cancel", "steer"] },
   { id: "host.capabilities", version: "1.0", operations: ["invoke"] },
   { id: "runtime.plugins", version: "1.0", operations: ["discover", "invoke"] },
   { id: "agent.progress", version: "1.0", operations: ["session.progress"] },
@@ -66,9 +68,13 @@ export interface PiSession {
   /** runId is stamped on every progress notification for this run; runState() exposes the same value. */
   prompt(input: string, budget: AgentRunBudget, report: (view: AgentRunView) => void, runId: string): Promise<{ message: string; outcome: AgentRunOutcome }>;
   cancel(): Promise<boolean>;
+  /** Queues a message for the in-flight run `runId`; the model sees it before its next request. */
+  steer(input: string, runId: string): Promise<AgentSteerResult>;
   dispose(): void | Promise<void>;
   readonly running: boolean;
 }
+
+export type AgentSteerResult = "steered" | "no-active-run" | "run-mismatch";
 
 export interface PiSessionFactory {
   create(input: { sessionId: string; cwd?: string; systemPrompt?: string; model?: PiModelSelection; outcome?: AgentRunOutcome }): Promise<PiSession>;
@@ -155,6 +161,8 @@ export interface PiInlineExtension {
 
 export interface PiAgentSession {
   prompt(input: string): Promise<void>;
+  /** Queues a message delivered after the current turn's tool calls, before the next model request. */
+  steer(input: string): Promise<void>;
   abort(): Promise<void>;
   dispose(): void | Promise<void>;
   setThinkingLevel(level: string): void;
@@ -324,6 +332,14 @@ export function createPiSessionFactory(options: PiSessionFactoryOptions = {}): P
           await result.session.abort();
           return true;
         },
+        steer: async (text, runId) => {
+          if (!running || state.cancelled) return "no-active-run";
+          if (runId !== currentRunId) return "run-mismatch";
+          await result.session.steer(text);
+          // A user message is progress, so the idle streak cannot end the run right after it.
+          state.roundProgress += 1;
+          return "steered";
+        },
         dispose: () => { unsubscribe(); return result.session.dispose(); },
         get running() { return running; },
       };
@@ -385,6 +401,7 @@ export class AgentRuntimeWorker {
       if (request.method === "session.initialize") return await this.initializeSession(request);
       if (request.method === "session.send") return await this.sendToSession(request);
       if (request.method === "session.cancel") return await this.cancelSession(request);
+      if (request.method === "session.steer") return await this.steerSession(request);
       if (request.method === "session.close") return await this.closeSession(request);
       if (request.method === "runtime.plugins.discover") return await this.discoverPlugins(request);
       if (request.method === "runtime.plugin.invoke") return await this.invokePlugin(request);
@@ -468,6 +485,17 @@ export class AgentRuntimeWorker {
     if (!record) return this.success(request, { sessionId: params.sessionId, cancelled: false });
     const cancelled = await record.session.cancel();
     return this.success(request, { sessionId: params.sessionId, cancelled });
+  }
+
+  private async steerSession(request: RpcRequest): Promise<RpcResponseSuccess | RpcResponseFailure> {
+    const params = validateAgentSessionSteerParams(request.params);
+    if (!params) return this.failure(request, "session.invalid", `session.steer requires sessionId, runId and a non-empty input of at most ${AGENT_INPUT_MAX_LENGTH} characters.`);
+    const record = this.sessions.get(params.sessionId);
+    if (!record) return this.failure(request, "session.not-found", "The session is not initialized.");
+    const steered = await record.session.steer(params.input, params.runId);
+    if (steered === "no-active-run") return this.failure(request, "session.no-active-run", "The session has no run in progress.");
+    if (steered === "run-mismatch") return this.failure(request, "session.run-mismatch", "The run id does not match the session's active run.");
+    return this.success(request, { sessionId: params.sessionId, runId: params.runId, steered: true });
   }
 
   private async hostModelSelection(): Promise<PiModelSelection> {

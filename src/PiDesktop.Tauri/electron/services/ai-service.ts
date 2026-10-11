@@ -6,6 +6,7 @@ import { AgentRuntimeWorker } from "@synthv-toolbox/agent-runtime";
 import type { PiCredential, PiCredentialStore, PiModelSelection } from "@synthv-toolbox/agent-runtime";
 import {
   AGENT_EFFORT_LEVELS,
+  AGENT_INPUT_MAX_LENGTH,
   DEFAULT_AGENT_EFFORT,
   estimateAgentRunBudget,
   validateAgentRunOutcome,
@@ -166,6 +167,8 @@ interface ActiveRun {
   runId: string;
   cancelRequested: boolean;
   sendIssued: boolean;
+  /** User messages accepted into the run through steer_agent_run, in order. */
+  steers: ConversationMessage[];
 }
 
 /** Stores encrypted credential material locally and delegates model requests to the shared Agent Runtime. */
@@ -463,10 +466,10 @@ export class AiService {
   async send_message(conversationId: string, input: string, options: { cwd?: string; effort?: AgentEffortLevel; runId?: string } = {}): Promise<ConversationMessage[]> {
     const text = input.trim();
     if (!text) throw new Error("Message is required.");
-    if (text.length > 32_000) throw new Error("Message exceeds the 32,000 character limit.");
+    if (text.length > AGENT_INPUT_MAX_LENGTH) throw new Error("Message exceeds the 32,000 character limit.");
     if (this.activeRuns.has(conversationId)) throw new Error("A run is already in progress.");
     const effort = options.effort ?? DEFAULT_AGENT_EFFORT;
-    const active: ActiveRun = { runId: options.runId ?? this.id(), cancelRequested: false, sendIssued: false };
+    const active: ActiveRun = { runId: options.runId ?? this.id(), cancelRequested: false, sendIssued: false, steers: [] };
     this.activeRuns.set(conversationId, active);
     try {
       const metadata = await this.load();
@@ -480,6 +483,7 @@ export class AiService {
       const now = this.now().toISOString();
       const messages: ConversationMessage[] = [
         { role: "user", content: text, createdAt: now },
+        ...active.steers,
         { role: "assistant", content: assistant, createdAt: now, outcome },
       ];
       conversation.messages.push(...messages);
@@ -500,6 +504,19 @@ export class AiService {
     if (!outcome) throw new Error("Agent Runtime returned an invalid run outcome.");
     const assistant = (typeof response.message === "string" ? response.message.trim() : "") || outcome.summary;
     return { assistant, outcome };
+  }
+
+  /** Delivers a message to the conversation's in-flight run; rejects when no run has reached the runtime. */
+  async steer_agent_run(conversationId: string, input: string): Promise<ConversationMessage> {
+    const text = input.trim();
+    if (!text) throw new Error("Message is required.");
+    if (text.length > AGENT_INPUT_MAX_LENGTH) throw new Error("Message exceeds the 32,000 character limit.");
+    const active = this.activeRuns.get(conversationId);
+    if (!active?.sendIssued || active.cancelRequested) throw new Error("No agent run is in progress.");
+    await this.options.runtime.request("session.steer", { sessionId: conversationId, runId: active.runId, input: text });
+    const message: ConversationMessage = { role: "user", content: text, createdAt: this.now().toISOString() };
+    active.steers.push(message);
+    return { ...message };
   }
 
   async cancel_agent_run(conversationId: string): Promise<void> {

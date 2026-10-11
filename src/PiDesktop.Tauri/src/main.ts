@@ -163,6 +163,8 @@ let conversation: ConversationSnapshot | undefined;
 let approvalsSnapshot: AgentApprovalsSnapshot = { pending: [], recent: [] };
 let agentRunInFlight = false;
 let agentRunCancelling = false;
+/** Steer messages shown in the transcript during the current run; the run's persisted messages replace them when it ends. */
+let agentRunSteers: ChatMessage[] = [];
 let liveRunId: string | undefined;
 let liveRunLastSeq = 0;
 let liveRun: AgentRunProgress | undefined;
@@ -2823,11 +2825,12 @@ function renderLiveRunSlot(): string {
   return `${liveHtml}${renderApprovalResolutionsSlot()}`;
 }
 
-/** The composer's single action button (send while idle, Stop/Stopping during a run): patched on its own so Stop never triggers a full page render. */
+/** The composer's action buttons: send (a steer message during a run), plus Stop/Stopping while a run is in flight; patched on its own so Stop never triggers a full page render. */
 function renderComposerAction(): string {
+  const sendButton = `<button class="primary icon-button" type="submit" title="${t("copilot.send")}" aria-label="${t("copilot.send")}" ${agentRunCancelling ? "disabled" : ""}>${icon("send", 19)}</button>`;
   return agentRunInFlight
-    ? `<button class="secondary icon-button${agentRunCancelling ? " stopping" : ""}" type="button" data-cancel-agent-run title="${escapeHtml(agentRunCancelling ? t("copilot.stopping") : t("copilot.stop"))}" aria-label="${escapeHtml(agentRunCancelling ? t("copilot.stopping") : t("copilot.stop"))}" ${agentRunCancelling ? "disabled" : ""}>${agentRunCancelling ? escapeHtml(t("copilot.stopping")) : icon("stop", 19)}</button>`
-    : `<button class="primary icon-button" type="submit" title="${t("copilot.send")}" aria-label="${t("copilot.send")}">${icon("send", 19)}</button>`;
+    ? `${sendButton}<button class="secondary icon-button${agentRunCancelling ? " stopping" : ""}" type="button" data-cancel-agent-run title="${escapeHtml(agentRunCancelling ? t("copilot.stopping") : t("copilot.stop"))}" aria-label="${escapeHtml(agentRunCancelling ? t("copilot.stopping") : t("copilot.stop"))}" ${agentRunCancelling ? "disabled" : ""}>${agentRunCancelling ? escapeHtml(t("copilot.stopping")) : icon("stop", 19)}</button>`
+    : sendButton;
 }
 
 function approvalConversationTitle(approval: AgentApproval): string | undefined {
@@ -2960,7 +2963,7 @@ function renderCopilot(): string {
       <div class="chat-header"><div class="chat-title"><strong>${escapeHtml(conversation?.title ?? t("copilot.newChat"))}</strong><small>${escapeHtml(t("copilot.enabledToolsOnly"))}</small></div><div class="chat-header-actions" aria-label="${escapeHtml(t("copilot.toolbar"))}"><button type="button" class="chat-model-button" data-open-ai-provider-picker aria-label="${escapeHtml(t("copilot.chooseProviderModel", { provider: providerName, model: providerModel }))}"><span class="chat-model-mark">${icon("sparkles", 14)}</span><span><strong>${escapeHtml(providerName)}</strong><small>${escapeHtml(providerModel)} · ${providerStatus}</small></span>${icon("arrow", 14)}</button><div class="chat-work-mode" role="group" aria-label="${escapeHtml(t("copilot.workMode"))}"><button type="button" class="${app?.agentWorkMode === "edit" ? "active" : ""}" data-agent-work-mode="edit" aria-pressed="${app?.agentWorkMode === "edit"}">Edit</button><button type="button" class="${app?.agentWorkMode === "solo" ? "active" : ""}" data-agent-work-mode="solo" aria-pressed="${app?.agentWorkMode === "solo"}">Solo</button></div>${renderAgentEffortGroup()}</div></div>
       <div id="agent-approvals-slot" class="agent-approvals-slot">${approvalsSlotHtml}</div>
       <div class="messages"><div id="agent-goal-slot">${goalSlotHtml}</div>${messages.length ? messages.map(renderMessage).join("") : `<div class="empty-chat"><span class="mode-icon purple">${icon("bot", 30)}</span><h2>${escapeHtml(t("copilot.emptyTitle"))}</h2><p>${escapeHtml(t("copilot.emptyDescription"))}</p><div class="prompt-chips"><button data-prompt="${escapeHtml(t("copilot.audioPrompt"))}">${escapeHtml(t("copilot.audioAction"))}</button><button data-prompt="${escapeHtml(t("copilot.projectPrompt"))}">${escapeHtml(t("copilot.projectAction"))}</button><button data-prompt="${escapeHtml(t("copilot.planPrompt"))}">${escapeHtml(t("copilot.planAction"))}</button></div></div>`}<div id="agent-live-run">${liveRunSlotHtml}</div></div>
-      <form id="chat-form" class="composer"><div class="composer-shell"><textarea id="chat-input" rows="1" placeholder="${t("copilot.placeholder")}" ${agentRunInFlight ? "disabled" : ""}></textarea><span id="agent-composer-action">${composerActionHtml}</span></div><span>${t("copilot.review")}</span></form>
+      <form id="chat-form" class="composer"><div class="composer-shell"><textarea id="chat-input" rows="1" placeholder="${t("copilot.placeholder")}"></textarea><span id="agent-composer-action">${composerActionHtml}</span></div><span>${t("copilot.review")}</span></form>
     </section>
   </div>`;
 }
@@ -3862,13 +3865,13 @@ function wireForms(): void {
     event.preventDefault();
     const input = document.querySelector<HTMLTextAreaElement>("#chat-input")?.value.trim();
     if (!input) return;
-    void sendPrompt(input);
+    void (agentRunInFlight ? steerAgentRun(input) : sendPrompt(input));
   });
   document.querySelector<HTMLTextAreaElement>("#chat-input")?.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
       const input = (event.currentTarget as HTMLTextAreaElement).value.trim();
-      if (input) void sendPrompt(input);
+      if (input) void (agentRunInFlight ? steerAgentRun(input) : sendPrompt(input));
     }
   });
   document.querySelector<HTMLInputElement>("#svp-routing-enabled")?.addEventListener("change", (event) => {
@@ -4013,6 +4016,7 @@ async function sendPrompt(input: string): Promise<void> {
   if (agentRunInFlight) return;
   agentRunInFlight = true;
   agentRunCancelling = false;
+  agentRunSteers = [];
   notice = "";
   error = "";
   const optimistic: ChatMessage = { role: "user", content: input };
@@ -4025,7 +4029,7 @@ async function sendPrompt(input: string): Promise<void> {
     conversation.messages.push(optimistic);
     render();
     const added = await withAiProviderStateRefresh(() => api.sendMessage(conversation!.id, input, runId));
-    conversation.messages = conversation.messages.filter((message) => message !== optimistic);
+    conversation.messages = conversation.messages.filter((message) => message !== optimistic && !agentRunSteers.includes(message));
     conversation.messages.push(...added);
     let budgets: Record<AgentEffortLevel, AgentRunBudget> | undefined;
     [conversations, approvalsSnapshot, budgets] = await Promise.all([
@@ -4035,11 +4039,12 @@ async function sendPrompt(input: string): Promise<void> {
     ]);
     if (app) app.agentBudgets = budgets;
   } catch (reason) {
-    if (conversation) conversation.messages = conversation.messages.filter((message) => message !== optimistic);
+    if (conversation) conversation.messages = conversation.messages.filter((message) => message !== optimistic && !agentRunSteers.includes(message));
     error = formatError(reason);
   } finally {
     agentRunInFlight = false;
     agentRunCancelling = false;
+    agentRunSteers = [];
     liveRunId = undefined;
     liveRun = undefined;
     render();
@@ -4062,6 +4067,24 @@ async function decideApproval(id: string, approve: boolean, trigger?: HTMLElemen
     patchToast();
     // The snapshot did not change, so the approvals slot's diff key skips a re-render; re-enable directly.
     actions?.querySelectorAll<HTMLButtonElement>("button").forEach((button) => { button.disabled = false; });
+  }
+}
+
+/** Sends the composer text to the in-flight run as a steer message; it joins the transcript once the runtime accepts it. */
+async function steerAgentRun(input: string): Promise<void> {
+  const target = conversation;
+  if (!target || !agentRunInFlight || agentRunCancelling) return;
+  const textarea = document.querySelector<HTMLTextAreaElement>("#chat-input");
+  if (textarea) textarea.value = "";
+  try {
+    const message = await api.steerAgentRun(target.id, input);
+    target.messages.push(message);
+    if (agentRunInFlight) agentRunSteers.push(message);
+    render();
+  } catch (reason) {
+    if (textarea && !textarea.value) textarea.value = input;
+    error = formatError(reason);
+    patchToast();
   }
 }
 
