@@ -193,8 +193,8 @@ const functionNames = new Set([
   "renderAgentGoalSlot", "renderLiveRunSlot", "renderComposerAction", "approvalConversationTitle", "renderApprovalCard", "renderApprovalsSlot", "renderApprovalsSlotDiffKey",
   "tickApprovalCountdowns", "patchSlot", "applyLiveRunPatch", "patchLiveRun", "toastHtml", "scheduleToastDismiss", "patchToast",
   "renderCopilot", "agentBudgetUsageText", "renderMessage",
-  "listenForAgentRunProgress", "listenForAgentApprovals", "decideApproval", "cancelAgentRun",
-  "sendPrompt", "withAiProviderStateRefresh",
+  "listenForAgentRunProgress", "listenForAgentApprovals", "decideApproval", "cancelAgentRun", "steerAgentRun",
+  "sendPrompt", "withAiProviderStateRefresh", "withComposerDraft",
 ]);
 const constNames = new Set(["AGENT_EFFORT_ORDER", "AGENT_EFFORT_COVERAGE", "AGENT_TOOL_DISPLAY_NAME_KEYS", "AGENT_RUN_PHASE_KEYS"]);
 const ast = parse(main, { sourceType: "module", plugins: ["typescript"] });
@@ -225,7 +225,7 @@ function freshState(overrides = {}) {
     t, locale: () => i18n.global.locale.value, icon: () => "",
     page: "copilot", busy: false,
     conversation: undefined, conversations: [], approvalsSnapshot: { pending: [], recent: [] }, notice: "", error: "",
-    agentRunInFlight: false, agentRunCancelling: false,
+    agentRunInFlight: false, agentRunCancelling: false, agentRunSteers: [],
     liveRunId: undefined, liveRun: undefined, liveRunLastSeq: 0,
     patchRafHandle: undefined, lastSlotHtml: new Map(),
     toastSignature: "", toastDismissTimer: undefined,
@@ -768,4 +768,106 @@ test("sendPrompt keeps agentRunInFlight true while api.sendMessage is pending, a
   assert.equal(state.liveRunId, undefined, "the live run id must clear once the run ends");
 });
 
+test("the composer stays enabled during a run: it offers send next to a separate Stop, and submitting steers instead of starting a run", () => {
+  const dom = new JSDOM("<div id=\"root\"></div>");
+  const state = freshState({ document: dom.window.document });
+  state.conversation = { id: "c", title: "Chat", messages: [] };
+  state.agentRunInFlight = true;
+  dom.window.document.getElementById("root").innerHTML = state.renderCopilot();
+  assert.equal(dom.window.document.querySelector("#chat-input").disabled, false, "the textarea is not disabled while a run is in flight");
+  const actions = dom.window.document.getElementById("agent-composer-action");
+  assert.ok(actions.querySelector('button[type="submit"]:not([disabled])'), "a send button stays available during a run");
+  assert.ok(actions.querySelector("[data-cancel-agent-run]"), "Stop is a separate button");
+  assert.match(main, /agentRunInFlight \? steerAgentRun\(input\) : sendPrompt\(input\)/);
+});
+
+test("steerAgentRun sends the composer text to the run, clears the composer and adds the message to the transcript", async () => {
+  const dom = new JSDOM("<div id=\"root\"></div>");
+  const state = freshState({ document: dom.window.document });
+  state.conversation = { id: "c", title: "Chat", messages: [{ role: "user", content: "Original" }] };
+  state.agentRunInFlight = true;
+  dom.window.document.getElementById("root").innerHTML = state.renderCopilot();
+  const textarea = dom.window.document.querySelector("#chat-input");
+  textarea.value = "use track 2";
+  const calls = [];
+  state.api = { steerAgentRun: async (conversationId, input) => { calls.push([conversationId, input]); return { role: "user", content: input, createdAt: "2026-01-01T00:00:00Z" }; } };
+  await state.steerAgentRun("use track 2");
+  assert.deepEqual(calls, [["c", "use track 2"]]);
+  assert.equal(textarea.value, "", "the composer is cleared once the steer is sent");
+  assert.deepEqual(state.conversation.messages.map((message) => message.content), ["Original", "use track 2"]);
+  assert.match(dom.window.document.querySelector(".messages").textContent, /use track 2/, "the steer text is shown in the transcript as a user message");
+});
+
+test("a rejected steer keeps the text in the composer and reports the error without touching the transcript", async () => {
+  const dom = new JSDOM("<div id=\"root\"></div>");
+  const state = freshState({ document: dom.window.document });
+  state.conversation = { id: "c", title: "Chat", messages: [] };
+  state.agentRunInFlight = true;
+  dom.window.document.getElementById("root").innerHTML = state.renderCopilot();
+  const textarea = dom.window.document.querySelector("#chat-input");
+  textarea.value = "use track 2";
+  const rejection = vm.runInContext('new Error("No agent run is in progress.")', state);
+  state.api = { steerAgentRun: async () => { throw rejection; } };
+  await state.steerAgentRun("use track 2");
+  assert.equal(textarea.value, "use track 2");
+  assert.match(state.error, /No agent run is in progress/);
+  assert.equal(state.conversation.messages.length, 0);
+});
+
+test("steerAgentRun does nothing when no run is in flight or the run is being cancelled", async () => {
+  const state = freshState();
+  state.conversation = { id: "c", title: "Chat", messages: [] };
+  let calls = 0;
+  state.api = { steerAgentRun: async () => { calls += 1; return { role: "user", content: "x" }; } };
+  await state.steerAgentRun("idle");
+  state.agentRunInFlight = true;
+  state.agentRunCancelling = true;
+  await state.steerAgentRun("cancelling");
+  assert.equal(calls, 0);
+});
+
+test("steer messages shown during a run are replaced by the run's persisted messages when it ends", async () => {
+  const dom = new JSDOM("<div id=\"root\"></div>");
+  const state = freshState({ document: dom.window.document });
+  state.conversation = { id: "c", title: "Chat", messages: [] };
+  state.activeAiProvider = () => ({ connected: true, accounts: [], apiKeys: [], model: "test-model" });
+  let resolveSend;
+  state.api = {
+    sendMessage: () => new Promise((resolve) => { resolveSend = resolve; }),
+    steerAgentRun: async (conversationId, input) => ({ role: "user", content: input, createdAt: "t1" }),
+    listConversations: async () => [],
+    agentApprovals: async () => ({ pending: [], recent: [] }),
+    agentBudgets: async () => ({}),
+  };
+  const promptPromise = state.sendPrompt("Original");
+  await flushMicrotasks();
+  await state.steerAgentRun("use track 2");
+  assert.deepEqual(state.conversation.messages.map((message) => message.content), ["Original", "use track 2"]);
+  resolveSend([
+    { role: "user", content: "Original", createdAt: "t0" },
+    { role: "user", content: "use track 2", createdAt: "t1" },
+    { role: "assistant", content: "Done", createdAt: "t2" },
+  ]);
+  await promptPromise;
+  assert.deepEqual(state.conversation.messages.map((message) => message.content), ["Original", "use track 2", "Done"], "no duplicate steer after the run ends");
+});
+
 console.log("Agent goal UI contracts passed.");
+
+test("a re-render keeps the composer draft, selection and focus (run end or steer resolving while the user types)", () => {
+  const dom = new JSDOM("<div id=\"root\"></div>");
+  const state = freshState({ document: dom.window.document });
+  state.conversation = { id: "c", title: "Chat", messages: [] };
+  const doc = dom.window.document;
+  doc.getElementById("root").innerHTML = state.renderCopilot();
+  const before = doc.querySelector("#chat-input");
+  before.value = "a follow-up I am typing";
+  before.focus();
+  before.setSelectionRange(2, 8);
+  state.withComposerDraft(() => { doc.getElementById("root").innerHTML = state.renderCopilot(); });
+  const after = doc.querySelector("#chat-input");
+  assert.notEqual(after, before, "the composer element was rebuilt");
+  assert.equal(after.value, "a follow-up I am typing");
+  assert.equal(doc.activeElement, after);
+  assert.deepEqual([after.selectionStart, after.selectionEnd], [2, 8]);
+});

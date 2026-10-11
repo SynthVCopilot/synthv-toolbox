@@ -50,6 +50,7 @@ function createFakeSdk(rounds) {
   const handlers = { before_agent_start: [], turn_end: [], tool_call: [], tool_execution_end: [], session_compact: [] };
   const subscribers = [];
   const messages = [];
+  const steered = [];
   const settingsOverrides = [];
   const promptCalls = [];
   const runtimeApiKeys = [];
@@ -101,6 +102,7 @@ function createFakeSdk(rounds) {
       if (holdRelease) { const release = holdRelease; holdRelease = undefined; release(); }
     },
     clearQueue() { return { steering: [], followUp: [] }; },
+    async steer(text) { steered.push(text); },
     async prompt(text, options) {
       promptCalls.push({ text, options });
       inFlight = true;
@@ -225,6 +227,7 @@ function createFakeSdk(rounds) {
     sdk,
     tools,
     messages,
+    steered,
     settingsOverrides,
     promptCalls,
     loaderOptions,
@@ -261,7 +264,7 @@ test("JSONL worker negotiates before creating, sending to and closing a Pi sessi
   })))[0]);
   assert.equal(hello.ok, true);
   assert.equal(hello.result.runtimeId, runtime.AGENT_RUNTIME_ID);
-  assert.deepEqual(hello.result.capabilities.find((c) => c.id === "agent.sessions").operations, ["initialize", "send", "close", "cancel"]);
+  assert.deepEqual(hello.result.capabilities.find((c) => c.id === "agent.sessions").operations, ["initialize", "send", "close", "cancel", "steer"]);
   assert.deepEqual(hello.result.capabilities.find((c) => c.id === "agent.progress"), { id: "agent.progress", version: "1.0", operations: ["session.progress"] });
 
   assert.equal(JSON.parse((await worker.handleJsonl(request("3", "session.initialize", { sessionId: "s1" })))[0]).ok, true);
@@ -1572,4 +1575,162 @@ test("a rotating OAuth access token behind a credential store keeps the session"
   accessToken = "token-2";
   const second = JSON.parse((await worker.handleJsonl(request("i2", "session.initialize", { sessionId: "s1" })))[0]);
   assert.equal(second.result.reused, true);
+});
+
+const steerHost = { request: async () => ({ providerId: "openai", modelId: "gpt-4.1", credentials: [{ id: "c1", providerId: "openai", modelId: "gpt-4.1", authMethod: "api-key", apiKey: "k" }] }) };
+
+async function createSteerWorker(fake) {
+  const worker = new runtime.AgentRuntimeWorker(runtime.createPiSessionFactory({ extensionPaths: () => [], loadSdk: async () => fake.sdk }), steerHost);
+  await worker.handleJsonl(request("hello", "host.hello", { hostId: "host", protocol: { min: "1.0", max: "1.0" }, capabilities: [] }));
+  await worker.handleJsonl(request("init", "session.initialize", { sessionId: "s1" }));
+  return worker;
+}
+
+const steerRequest = async (worker, params) => JSON.parse((await worker.handleJsonl(request("steer", "session.steer", params)))[0]);
+
+test("session.steer reaches the Pi session of the matching in-flight run with trimmed input", async () => {
+  const fake = createFakeSdk([{ hold: true, text: "working" }]);
+  const worker = await createSteerWorker(fake);
+  const sendPromise = worker.handleJsonl(request("send", "session.send", { sessionId: "s1", input: "hi", runId: "run-1" }));
+  await waitFor(() => fake.messages.length > 0);
+
+  const response = await steerRequest(worker, { sessionId: "s1", runId: "run-1", input: "  use track 2, not 1  " });
+  assert.equal(response.ok, true);
+  assert.equal(response.result.steered, true);
+  assert.deepEqual(fake.steered, ["use track 2, not 1"]);
+
+  await worker.handleJsonl(request("cancel", "session.cancel", { sessionId: "s1" }));
+  await sendPromise;
+});
+
+test("session.steer is rejected without an active run, for a different runId, after cancel, and for an unknown session", async () => {
+  const fake = createFakeSdk([{ hold: true, text: "working" }]);
+  const worker = await createSteerWorker(fake);
+
+  const idle = await steerRequest(worker, { sessionId: "s1", runId: "run-1", input: "go left" });
+  assert.equal(idle.ok, false);
+  assert.equal(idle.error.code, "session.no-active-run");
+
+  const unknown = await steerRequest(worker, { sessionId: "nope", runId: "run-1", input: "go left" });
+  assert.equal(unknown.error.code, "session.not-found");
+
+  const sendPromise = worker.handleJsonl(request("send", "session.send", { sessionId: "s1", input: "hi", runId: "run-1" }));
+  await waitFor(() => fake.messages.length > 0);
+  const mismatch = await steerRequest(worker, { sessionId: "s1", runId: "other-run", input: "go left" });
+  assert.equal(mismatch.ok, false);
+  assert.equal(mismatch.error.code, "session.run-mismatch");
+
+  await worker.handleJsonl(request("cancel", "session.cancel", { sessionId: "s1" }));
+  const afterCancel = await steerRequest(worker, { sessionId: "s1", runId: "run-1", input: "go left" });
+  assert.equal(afterCancel.error.code, "session.no-active-run");
+  await sendPromise;
+  assert.deepEqual(fake.steered, []);
+});
+
+test("session.steer validates its params before touching the session", async () => {
+  const fake = createFakeSdk([{ hold: true, text: "working" }]);
+  const worker = await createSteerWorker(fake);
+  const sendPromise = worker.handleJsonl(request("send", "session.send", { sessionId: "s1", input: "hi", runId: "run-1" }));
+  await waitFor(() => fake.messages.length > 0);
+
+  for (const params of [
+    { sessionId: "s1", runId: "run-1", input: "   " },
+    { sessionId: "s1", runId: "run-1", input: "x".repeat(32_001) },
+    { sessionId: "s1", input: "go left" },
+    { sessionId: "s1", runId: "r".repeat(65), input: "go left" },
+    { runId: "run-1", input: "go left" },
+  ]) {
+    const response = await steerRequest(worker, params);
+    assert.equal(response.ok, false);
+    assert.equal(response.error.code, "session.invalid");
+  }
+  assert.equal((await steerRequest(worker, { sessionId: "s1", runId: "run-1", input: "x".repeat(32_000) })).ok, true);
+  assert.equal(fake.steered.length, 1);
+
+  await worker.handleJsonl(request("cancel", "session.cancel", { sessionId: "s1" }));
+  await sendPromise;
+});
+
+test("a steer counts as progress, so the idle-continuation streak does not end the run right after it", async () => {
+  let session;
+  const fake = createFakeSdk([
+    { text: "thinking" },
+    { text: "thinking more", after: async () => { assert.equal(await session.steer("also check the tempo", "run-steer"), "steered"); } },
+    { text: "still nothing" },
+    { text: "nothing again" },
+  ]);
+  session = await createSession(fake);
+  const { outcome } = await session.prompt("Go", budgetFor("low", 16, 300_000), undefined, "run-steer");
+  assert.equal(outcome.status, "incomplete");
+  assert.deepEqual(fake.steered, ["also check the tempo"]);
+  assert.equal(fake.remainingRounds, 0, "the steered round resets the idle streak, so two more idle rounds run before the limit");
+});
+
+test("a steer arriving after complete_task in the final round is rejected rather than queued for the next run", async () => {
+  let session;
+  let late;
+  const fake = createFakeSdk([
+    { toolCalls: [
+      { name: "update_plan", args: { goal: "G", doneCriteria: ["C"], todos: [{ id: "t1", title: "Step", status: "completed" }] } },
+      { name: "complete_task", args: { summary: "Done", evidence: ["done"] } },
+    ], after: async () => { late = await session.steer("too late", "run-late"); } },
+  ]);
+  session = await createSession(fake);
+  const { outcome } = await session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-late");
+  assert.equal(outcome.status, "completed");
+  assert.equal(late, "no-active-run");
+  assert.deepEqual(fake.steered, []);
+});
+
+test("stdio worker answers session.steer immediately while an earlier request is still blocking the queue", async () => {
+  const pluginRoot = join(root, "test", ".tmp", "agent-runtime-steer-plugins");
+  rmSync(pluginRoot, { recursive: true, force: true });
+  mkdirSync(join(pluginRoot, "com.example.slow", "backend"), { recursive: true });
+  writeFileSync(join(pluginRoot, "com.example.slow", "package.json"), '{"type":"module"}\n');
+  writeFileSync(join(pluginRoot, "com.example.slow", "manifest.json"), JSON.stringify({
+    schemaVersion: 1,
+    id: "com.example.slow",
+    name: "Slow plugin",
+    version: "1.0.0",
+    hostApi: { min: "1.0", max: "1.0" },
+    backend: { entry: "backend/index.js" },
+    permissions: { "project.read": "optional" },
+  }));
+  writeFileSync(
+    join(pluginRoot, "com.example.slow", "backend", "index.js"),
+    "export async function activate(context) { await context.invokeHost('project.read', 'project', 'read', { id: 'project-1' }); }\n",
+  );
+
+  const child = spawn(process.execPath, [join(packageRoot, "dist", "worker.js")], { stdio: ["pipe", "pipe", "pipe"] });
+  child.stdout.setEncoding("utf8");
+  let stdoutBuffer = "";
+  const messages = [];
+  let hostRequest;
+  child.stdout.on("data", (chunk) => {
+    stdoutBuffer += chunk;
+    const lines = stdoutBuffer.split("\n");
+    stdoutBuffer = lines.pop();
+    for (const line of lines) {
+      if (!line) continue;
+      const message = JSON.parse(line);
+      messages.push(message);
+      if (message.kind === "request" && message.method === "host.capability.invoke") hostRequest = message;
+    }
+  });
+  try {
+    child.stdin.write(`${request("hello", "host.hello", { hostId: "host", protocol: { min: "1.0", max: "1.0" }, capabilities: [] })}\n`);
+    child.stdin.write(`${request("plugins", "runtime.plugins.discover", { root: pluginRoot, enabledPluginIds: ["com.example.slow"] })}\n`);
+    await waitFor(() => hostRequest !== undefined, 20_000);
+
+    child.stdin.write(`${request("steer", "session.steer", { sessionId: "s1", runId: "run-1", input: "go left" })}\n`);
+    await waitFor(() => messages.some((message) => message.kind === "response" && message.id === "steer"), 20_000);
+    assert.equal(messages.some((message) => message.kind === "response" && message.id === "plugins"), false, "discovery is still blocked on the host when the steer answers");
+    assert.equal(messages.find((message) => message.id === "steer").error.code, "session.not-found");
+
+    child.stdin.write(`${JSON.stringify({ kind: "response", id: hostRequest.id, protocolVersion: hostRequest.protocolVersion, ok: true, result: { granted: true } })}\n`);
+    await waitFor(() => messages.some((message) => message.kind === "response" && message.id === "plugins"), 20_000);
+  } finally {
+    child.kill("SIGTERM");
+    await new Promise((resolve) => child.once("exit", resolve));
+  }
 });

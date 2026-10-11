@@ -1410,6 +1410,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "decide_agent_approval") return undefined as T;
   if (command === "send_message") return [{ role: "assistant", content: previewAgentOutcome.summary, outcome: previewAgentOutcome }] as T;
   if (command === "cancel_agent_run") return null as T;
+  if (command === "steer_agent_run") return { role: "user", content: String(args?.input ?? "") } as T;
   if (command === "agent_budgets") return previewAgentBudgets as T;
   if (command.startsWith("run_") || ["add_project_reference", "export_project_without_parameters", "export_project_lyrics"].includes(command)) return {
     kind: command.replace(/^run_/, "").replaceAll("_", "-"),
@@ -1712,6 +1713,7 @@ export const api = {
   openConversation: (id: string) => call<ConversationSnapshot>("open_conversation", { id }),
   sendMessage: (conversationId: string, input: string, runId: string) => call<ChatMessage[]>("send_message", { conversationId, input, runId }),
   cancelAgentRun: (conversationId: string) => call<void>("cancel_agent_run", { conversationId }),
+  steerAgentRun: (conversationId: string, input: string) => call<ChatMessage>("steer_agent_run", { conversationId, input }),
   agentBudgets: () => call<Record<AgentEffortLevel, AgentRunBudget>>("agent_budgets"),
   agentApprovals: () => call<AgentApprovalsSnapshot>("agent_approvals"),
   decideAgentApproval: (id: string, approve: boolean) => call<void>("decide_agent_approval", { id, approve }),

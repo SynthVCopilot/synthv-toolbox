@@ -322,6 +322,21 @@ test("an AgentRunProgress notification round-trips through encodeJsonl/parseJson
   assert.deepEqual(protocol.validateRpcMessage(notification), notification);
 });
 
+test("session.steer params require a session, a bounded run id and a non-empty input of at most the shared limit, and return the trimmed input", () => {
+  const valid = { sessionId: "s1", runId: "run-1", input: "  use track 2  " };
+  assert.deepEqual(protocol.validateAgentSessionSteerParams(valid), { sessionId: "s1", runId: "run-1", input: "use track 2" });
+  assert.equal(protocol.AGENT_INPUT_MAX_LENGTH, 32_000);
+  assert.ok(protocol.validateAgentSessionSteerParams({ ...valid, input: "x".repeat(protocol.AGENT_INPUT_MAX_LENGTH) }));
+  assert.equal(protocol.validateAgentSessionSteerParams({ ...valid, input: "x".repeat(protocol.AGENT_INPUT_MAX_LENGTH + 1) }), undefined);
+  assert.equal(protocol.validateAgentSessionSteerParams({ ...valid, input: " \n " }), undefined);
+  assert.equal(protocol.validateAgentSessionSteerParams({ ...valid, input: 7 }), undefined);
+  assert.equal(protocol.validateAgentSessionSteerParams({ ...valid, runId: "" }), undefined);
+  assert.equal(protocol.validateAgentSessionSteerParams({ ...valid, runId: "r".repeat(protocol.AGENT_RUN_ID_MAX_LENGTH + 1) }), undefined);
+  assert.equal(protocol.validateAgentSessionSteerParams({ ...valid, sessionId: "" }), undefined);
+  assert.equal(protocol.validateAgentSessionSteerParams({ runId: "run-1", input: "x" }), undefined);
+  assert.equal(protocol.validateAgentSessionSteerParams(null), undefined);
+});
+
 test("zero-usage samples keep budgets finite", () => {
   const samples = [...Array.from({ length: 10 }, () => ({ level: "low", turns: 3, tokens: 30_000, censored: false })), { level: "low", turns: 0, tokens: 0, censored: false }];
   const budget = protocol.estimateAgentRunBudget("low", samples);

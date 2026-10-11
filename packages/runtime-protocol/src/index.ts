@@ -183,6 +183,16 @@ export interface AgentSessionSendParams {
 
 export const AGENT_RUN_ID_MAX_LENGTH = 64;
 
+/** Longest user message `session.send` or `session.steer` accepts, after trimming. */
+export const AGENT_INPUT_MAX_LENGTH = 32_000;
+
+/** Delivered to the run `runId` names while it is in flight; rejected when that run is not the session's active one. */
+export interface AgentSessionSteerParams {
+  sessionId: string;
+  runId: string;
+  input: string;
+}
+
 export const AGENT_RUN_PROGRESS_EVENT = "session.progress";
 
 export type AgentRunPhase =
@@ -570,6 +580,15 @@ export function validateAgentRunOutcome(value: unknown): AgentRunOutcome | undef
   if (value.status === "error" && (!summary || evidence.length || missing.length)) return undefined;
   if ((value.status === "budget_exhausted" || value.status === "incomplete" || value.status === "cancelled") && (summary || evidence.length || missing.length)) return undefined;
   return { status: value.status, summary, evidence, missing, plan, budget };
+}
+
+export function validateAgentSessionSteerParams(value: unknown): AgentSessionSteerParams | undefined {
+  if (!isRecord(value) || typeof value.sessionId !== "string" || !value.sessionId) return undefined;
+  if (typeof value.runId !== "string" || !value.runId || value.runId.length > AGENT_RUN_ID_MAX_LENGTH) return undefined;
+  if (typeof value.input !== "string") return undefined;
+  const input = value.input.trim();
+  if (!input || input.length > AGENT_INPUT_MAX_LENGTH) return undefined;
+  return { sessionId: value.sessionId, runId: value.runId, input };
 }
 
 export function validateAgentRunBudget(value: unknown): AgentRunBudget | undefined {
