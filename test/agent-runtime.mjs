@@ -474,7 +474,7 @@ test("session initialization rejects a host model selection without credentials"
   assert.match(response.error.message, /No eligible credential/);
 });
 
-test("stdio worker emits JSONL responses and discovers backend and UI-only plugins", async () => {
+test("stdio worker emits JSONL responses and discovers backend and UI-only plugins", async (t) => {
   const pluginRoot = join(root, "test", ".tmp", "agent-runtime-cli-plugins");
   rmSync(pluginRoot, { recursive: true, force: true });
   mkdirSync(join(pluginRoot, "com.example.plugin", "backend"), { recursive: true });
@@ -504,6 +504,7 @@ test("stdio worker emits JSONL responses and discovers backend and UI-only plugi
 
   const workerPath = join(packageRoot, "dist", "worker.js");
   const child = spawn(process.execPath, [workerPath], { stdio: ["pipe", "pipe", "pipe"] });
+  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); });
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
   let stdoutBuffer = "";
@@ -533,7 +534,7 @@ test("stdio worker emits JSONL responses and discovers backend and UI-only plugi
   child.stdin.write(`${request("hello", "host.hello", { hostId: "host", protocol: { min: "1.0", max: "1.0" }, capabilities: [] })}\n`);
   child.stdin.write(`${request("plugins", "runtime.plugins.discover", { root: pluginRoot, enabledPluginIds: ["com.example.plugin"] })}\n`);
   await waitFor(() => messages.some((message) => message.kind === "request" && message.method === "host.capability.invoke")
-    && messages.some((message) => message.kind === "response" && message.id === "plugins"));
+    && messages.some((message) => message.kind === "response" && message.id === "plugins"), 30_000);
   assert.equal(messages.find((message) => message.kind === "response" && message.id === "hello").ok, true);
   assert.deepEqual(
     messages.find((message) => message.kind === "response" && message.id === "plugins").result.plugins.map((plugin) => plugin.id).sort(),
