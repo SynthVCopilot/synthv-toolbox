@@ -1062,6 +1062,16 @@ test("a provider error with no message ends with a generic failure text", async 
   assert.equal(outcome.summary, "Model request failed.");
 });
 
+test("an oversized or blank provider error still yields a valid error outcome", async () => {
+  for (const [message, expected] of [["x".repeat(9000), "x".repeat(4000)], ["   ", "Model request failed."]]) {
+    const fake = createFakeSdk([{ stopReason: "error", errorMessage: message }]);
+    const session = await createSession(fake);
+    const { outcome } = await session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-32b");
+    assert.equal(outcome.status, "error");
+    assert.equal(outcome.summary, expected);
+  }
+});
+
 test("an error turn adds its tokens but is not counted as a turn", async () => {
   const fake = createFakeSdk([
     { turns: [

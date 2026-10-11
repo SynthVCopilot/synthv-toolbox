@@ -497,7 +497,10 @@ export function buildOutcome(state: TaskLoopState, status: AgentRunOutcome["stat
   if (status === "needs_input" && state.signal?.kind === "needs_input") {
     return { status, summary: state.signal.question, evidence: [], missing: state.signal.missing, plan: state.plan, budget };
   }
-  if (status === "error") return { status, summary: state.roundError?.message ?? "Model request failed.", evidence: [], missing: [], plan: state.plan, budget };
+  if (status === "error") {
+    const summary = (state.roundError?.message.trim() || "Model request failed.").slice(0, AGENT_PLAN_LIMITS.summaryLength);
+    return { status, summary, evidence: [], missing: [], plan: state.plan, budget };
+  }
   return { status, summary: "", evidence: [], missing: [], plan: state.plan, budget };
 }
 
