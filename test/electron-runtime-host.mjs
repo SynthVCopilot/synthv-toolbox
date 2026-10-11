@@ -34,7 +34,8 @@ test("A real ElectronRuntimeHost resolves the model through AiService and drives
       .replace('from "@synthv-toolbox/runtime-protocol";', `from "${runtimeProtocolUrl}";`)
       .replace('from "@synthv-toolbox/agent-runtime";', `from "${agentRuntimeUrl}";`)
       .replace('from "@model-auth/core";', `from "${modelAuthCoreUrl}";`)
-    .replace('from "./local-credential-store.js";', `from "${pathToFileURL(join(tauriRoot, "dist/electron/services/local-credential-store.js")).href}";`);
+      .replace('from "./local-credential-store.js";', `from "${pathToFileURL(join(tauriRoot, "dist/electron/services/local-credential-store.js")).href}";`)
+      .replace('from "./http-mcp-server.js";', `from "${pathToFileURL(join(tauriRoot, "dist/electron/services/http-mcp-server.js")).href}";`);
     for (const [search, replace] of extraReplacements) text = text.replace(search, replace);
     const executable = stripTypeScriptTypes(text, { mode: "transform" });
     return import(`data:text/javascript;base64,${Buffer.from(executable).toString("base64")}`);
@@ -105,7 +106,8 @@ test("onAgentProgress receives session.progress views carrying the sessionId and
       .replace('from "@synthv-toolbox/runtime-protocol";', `from "${runtimeProtocolUrl}";`)
       .replace('from "@synthv-toolbox/agent-runtime";', `from "${agentRuntimeUrl}";`)
       .replace('from "@model-auth/core";', `from "${modelAuthCoreUrl}";`)
-    .replace('from "./local-credential-store.js";', `from "${pathToFileURL(join(tauriRoot, "dist/electron/services/local-credential-store.js")).href}";`);
+      .replace('from "./local-credential-store.js";', `from "${pathToFileURL(join(tauriRoot, "dist/electron/services/local-credential-store.js")).href}";`)
+      .replace('from "./http-mcp-server.js";', `from "${pathToFileURL(join(tauriRoot, "dist/electron/services/http-mcp-server.js")).href}";`);
     for (const [search, replace] of extraReplacements) text = text.replace(search, replace);
     const executable = stripTypeScriptTypes(text, { mode: "transform" });
     return import(`data:text/javascript;base64,${Buffer.from(executable).toString("base64")}`);
@@ -182,7 +184,8 @@ test("ElectronRuntimeHost enables long Pi prompt caching unless the user already
   const raw = await readFile(join(root, "src/PiDesktop.Tauri/electron/services/runtime-host.ts"), "utf8");
   const text = raw
     .replace('from "@synthv-toolbox/runtime-protocol";', `from "${runtimeProtocolUrl}";`)
-    .replace('from "@synthv-toolbox/agent-runtime";', `from "${agentRuntimeUrl}";`);
+    .replace('from "@synthv-toolbox/agent-runtime";', `from "${agentRuntimeUrl}";`)
+    .replace('from "./http-mcp-server.js";', `from "${pathToFileURL(join(root, "src/PiDesktop.Tauri/dist/electron/services/http-mcp-server.js")).href}";`);
   const { ElectronRuntimeHost } = await import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(text, { mode: "transform" })).toString("base64")}`);
   const previous = process.env.PI_CACHE_RETENTION;
   t.after(() => { if (previous === undefined) delete process.env.PI_CACHE_RETENTION; else process.env.PI_CACHE_RETENTION = previous; });

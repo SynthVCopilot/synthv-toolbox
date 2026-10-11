@@ -4,6 +4,7 @@ import { stripTypeScriptTypes } from "node:module";
 import { request as httpRequest } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import test from "node:test";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const source = await readFile(join(root, "src/PiDesktop.Tauri/electron/services/http-mcp-server.ts"), "utf8");
@@ -122,11 +123,6 @@ assert.equal(agentFailure.status, 500);
 assert.equal((await agentFailure.text()).includes(secret), false);
 host.mcpTools = originalTools;
 const originalTask = host.agentTask;
-let serializations = 0;
-host.agentTask = async () => ({ toJSON() { if (++serializations > 1) throw new Error(secret); return "ok"; } });
-const outerFailure = await rawPost({ host: `127.0.0.1:${occupiedPort}` }, JSON.stringify({ jsonrpc: "2.0", id: 46, method: "tools/call", params: { name: "toolbox_agent", arguments: { action: "list" } } }));
-assert.equal(outerFailure.status, 500);
-assert.equal(outerFailure.text.includes(secret), false);
 host.agentTask = async () => { throw new ClientError("Agent task was not found."); };
 const staleTask = await rawPost({ host: `127.0.0.1:${occupiedPort}` }, JSON.stringify({ jsonrpc: "2.0", id: 47, method: "tools/call", params: { name: "toolbox_agent", arguments: { action: "status", taskId: "stale" } } }));
 const staleBody = JSON.parse(staleTask.text);
@@ -134,8 +130,6 @@ assert.equal(staleBody.error, undefined);
 assert.equal(staleBody.result.isError, true);
 assert.deepEqual(staleBody.result.content, [{ type: "text", text: "Agent task was not found." }]);
 host.agentTask = originalTask;
-assert.equal(server.server.requestTimeout, 30_000);
-assert.ok(server.server.headersTimeout > 0 && server.server.headersTimeout <= 30_000);
 host.agentChat = originalChat;
 console.error = originalError;
 
@@ -144,3 +138,30 @@ assert.equal(stopped.running, false);
 assert.equal(stopped.endpoint, undefined);
 
 console.log("Electron HTTP MCP server binds loopback and enforces runtime host authorization.");
+
+test("response serialization failures preserve the JSON-RPC request id and hide internal details", async (t) => {
+  let serializations = 0;
+  t.mock.method(console, "error", () => {});
+  const server = new HttpMcpServer({ ...host, async agentTask() { return { toJSON() { if (++serializations > 1) throw new Error(secret); return "ok"; } }; } });
+  t.after(() => server.stop());
+  const status = await server.start({ enabled: true, agentEnabled: true, internalEnabled: false, advancedEnabled: false, port: 0 });
+  const response = await rpc(status.endpoint, 46, "tools/call", { name: "toolbox_agent", arguments: { action: "list" } });
+  assert.equal(response.status, 500);
+  assert.deepEqual(response.body, { jsonrpc: "2.0", id: 46, error: { code: -32603, message: "Internal error." } });
+  assert.equal(JSON.stringify(response.body).includes(secret), false);
+});
+
+test("an unfinished request body times out before it can invoke a tool", { timeout: 70_000 }, async (t) => {
+  let calls = 0;
+  const server = new HttpMcpServer({ async mcpTools() { calls++; return []; }, async callMcpTool() { throw new Error("must not run"); } });
+  const status = await server.start({ enabled: true, agentEnabled: false, internalEnabled: false, advancedEnabled: false, port: 0 });
+  let request;
+  t.after(async () => { request?.destroy(); await server.stop(); });
+  const response = await new Promise((resolve, reject) => {
+    request = httpRequest(status.endpoint, { method: "POST", headers: { "content-type": "application/json", "content-length": 100 } }, (response) => { response.resume(); response.on("end", () => resolve(response.statusCode)); });
+    request.on("error", reject);
+    request.write("{");
+  });
+  assert.equal(response, 408);
+  assert.equal(calls, 0);
+});

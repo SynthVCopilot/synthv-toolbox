@@ -167,8 +167,8 @@ interface ActiveRun {
   runId: string;
   cancelRequested: boolean;
   sendIssued: boolean;
-  /** User messages accepted into the run through steer_agent_run, in order. */
-  steers: ConversationMessage[];
+  /** Await acknowledgements before persisting so accepted steers retain their submission order. */
+  steers: Array<Promise<ConversationMessage>>;
 }
 
 /** Stores encrypted credential material locally and delegates model requests to the shared Agent Runtime. */
@@ -480,10 +480,11 @@ export class AiService {
       const { assistant, outcome } = active.cancelRequested
         ? { assistant: "", outcome: cancelledOutcome(effort, this.agentUsageSamples()) }
         : await this.runSend(conversation.id, text, effort, active);
+      const steers = await Promise.allSettled(active.steers);
       const now = this.now().toISOString();
       const messages: ConversationMessage[] = [
         { role: "user", content: text, createdAt: now },
-        ...active.steers,
+        ...steers.flatMap((result) => result.status === "fulfilled" ? [result.value] : []),
         { role: "assistant", content: assistant, createdAt: now, outcome },
       ];
       conversation.messages.push(...messages);
@@ -513,10 +514,10 @@ export class AiService {
     if (text.length > AGENT_INPUT_MAX_LENGTH) throw new Error("Message exceeds the 32,000 character limit.");
     const active = this.activeRuns.get(conversationId);
     if (!active?.sendIssued || active.cancelRequested) throw new Error("No agent run is in progress.");
-    await this.options.runtime.request("session.steer", { sessionId: conversationId, runId: active.runId, input: text });
-    const message: ConversationMessage = { role: "user", content: text, createdAt: this.now().toISOString() };
-    active.steers.push(message);
-    return { ...message };
+    const pending: Promise<ConversationMessage> = this.options.runtime.request("session.steer", { sessionId: conversationId, runId: active.runId, input: text })
+      .then(() => ({ role: "user", content: text, createdAt: this.now().toISOString() }));
+    active.steers.push(pending);
+    return { ...await pending };
   }
 
   async cancel_agent_run(conversationId: string): Promise<void> {

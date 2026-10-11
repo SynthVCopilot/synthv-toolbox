@@ -798,7 +798,7 @@ test("steerAgentRun sends the composer text to the run, clears the composer and 
   assert.match(dom.window.document.querySelector(".messages").textContent, /use track 2/, "the steer text is shown in the transcript as a user message");
 });
 
-test("a rejected steer keeps the text in the composer and reports the error without touching the transcript", async () => {
+test("a rejected steer restores the current composer after a re-render without touching the transcript", async () => {
   const dom = new JSDOM("<div id=\"root\"></div>");
   const state = freshState({ document: dom.window.document });
   state.conversation = { id: "c", title: "Chat", messages: [] };
@@ -807,9 +807,13 @@ test("a rejected steer keeps the text in the composer and reports the error with
   const textarea = dom.window.document.querySelector("#chat-input");
   textarea.value = "use track 2";
   const rejection = vm.runInContext('new Error("No agent run is in progress.")', state);
-  state.api = { steerAgentRun: async () => { throw rejection; } };
-  await state.steerAgentRun("use track 2");
-  assert.equal(textarea.value, "use track 2");
+  let rejectSteer;
+  state.api = { steerAgentRun: () => new Promise((_, reject) => { rejectSteer = reject; }) };
+  const steer = state.steerAgentRun("use track 2");
+  state.render();
+  rejectSteer(rejection);
+  await steer;
+  assert.equal(dom.window.document.querySelector("#chat-input").value, "use track 2");
   assert.match(state.error, /No agent run is in progress/);
   assert.equal(state.conversation.messages.length, 0);
 });
@@ -853,6 +857,39 @@ test("steer messages shown during a run are replaced by the run's persisted mess
 });
 
 console.log("Agent goal UI contracts passed.");
+
+test("a steer acknowledgement after the run result never duplicates the persisted transcript", async () => {
+  const state = freshState();
+  state.conversation = { id: "c", title: "Chat", messages: [] };
+  state.activeAiProvider = () => ({ connected: true, accounts: [], apiKeys: [], model: "test-model" });
+  let resolveSend;
+  let resolveSteer;
+  state.api = {
+    sendMessage: () => new Promise((resolve) => { resolveSend = resolve; }),
+    steerAgentRun: () => new Promise((resolve) => { resolveSteer = resolve; }),
+    listConversations: async () => [],
+    agentApprovals: async () => ({ pending: [], recent: [] }),
+    agentBudgets: async () => ({}),
+  };
+  const prompt = state.sendPrompt("Original");
+  await flushMicrotasks();
+  const steer = state.steerAgentRun("use track 2");
+  const accepted = { role: "user", content: "use track 2", createdAt: "t1" };
+  resolveSend([{ role: "user", content: "Original", createdAt: "t0" }, accepted, { role: "assistant", content: "Done", createdAt: "t2" }]);
+  await prompt;
+  resolveSteer({ ...accepted });
+  await steer;
+  assert.deepEqual(state.conversation.messages.map((message) => message.content), ["Original", "use track 2", "Done"]);
+});
+
+test("cache hit rates use measured input and remain hidden when no cache measurement exists", () => {
+  const state = freshState();
+  const budget = { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 2, tokens: 500 };
+  assert.doesNotMatch(state.renderAgentBudgetMeter(budget), /agent-cache-hit|NaN/);
+  const html = state.renderAgentBudgetMeter({ ...budget, uncachedInputTokens: 25, cacheReadTokens: 75 });
+  assert.match(html, /agent-cache-hit/);
+  assert.ok(html.includes(t("copilot.cacheHit", { percent: 75 })));
+});
 
 test("a re-render keeps the composer draft, selection and focus (run end or steer resolving while the user types)", () => {
   const dom = new JSDOM("<div id=\"root\"></div>");

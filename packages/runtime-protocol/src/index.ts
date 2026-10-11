@@ -137,8 +137,8 @@ export interface AgentRunBudget {
 export interface AgentBudgetUsage extends AgentRunBudget {
   turns: number;
   tokens: number;
-  uncachedInputTokens: number;
-  cacheReadTokens: number;
+  uncachedInputTokens?: number;
+  cacheReadTokens?: number;
 }
 
 /**
@@ -677,9 +677,11 @@ function standardNormalUpperTail(x: number): number {
 
 function validateAgentBudgetUsage(value: unknown): AgentBudgetUsage | undefined {
   const budget = validateAgentRunBudget(value);
-  if (!budget || !isRecord(value) || !isCount(value.turns) || !isCount(value.tokens)
-    || !isCount(value.uncachedInputTokens) || !isCount(value.cacheReadTokens)) return undefined;
-  return { ...budget, turns: value.turns, tokens: value.tokens, uncachedInputTokens: value.uncachedInputTokens, cacheReadTokens: value.cacheReadTokens };
+  if (!budget || !isRecord(value) || !isCount(value.turns) || !isCount(value.tokens)) return undefined;
+  const usage = { ...budget, turns: value.turns, tokens: value.tokens };
+  if (value.uncachedInputTokens === undefined && value.cacheReadTokens === undefined) return usage;
+  if (!isCount(value.uncachedInputTokens) || !isCount(value.cacheReadTokens)) return undefined;
+  return { ...usage, uncachedInputTokens: value.uncachedInputTokens, cacheReadTokens: value.cacheReadTokens };
 }
 
 function isCount(value: unknown): value is number {

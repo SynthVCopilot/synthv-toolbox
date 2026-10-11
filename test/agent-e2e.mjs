@@ -26,7 +26,8 @@ async function loadElectronModule(relativePath) {
     .replace('from "@synthv-toolbox/runtime-protocol";', `from "${runtimeProtocolUrl}";`)
     .replace('from "@synthv-toolbox/agent-runtime";', `from "${agentRuntimeUrl}";`)
     .replace('from "@model-auth/core";', `from "${modelAuthCoreUrl}";`)
-    .replace('from "./local-credential-store.js";', `from "${pathToFileURL(join(tauriRoot, "dist/electron/services/local-credential-store.js")).href}";`);
+    .replace('from "./local-credential-store.js";', `from "${pathToFileURL(join(tauriRoot, "dist/electron/services/local-credential-store.js")).href}";`)
+    .replace('from "./http-mcp-server.js";', `from "${pathToFileURL(join(tauriRoot, "dist/electron/services/http-mcp-server.js")).href}";`);
   const executable = stripTypeScriptTypes(text, { mode: "transform" });
   return import(`data:text/javascript;base64,${Buffer.from(executable).toString("base64")}`);
 }
@@ -246,6 +247,26 @@ test("Real Pi SDK drives the full Electron host chain against a scripted local m
     assert.equal(mock.requests.length, 1, "the 401 is not retried");
     const reopened = await reopenFresh(conversation.id);
     assert.equal(reopened.messages[1].outcome.status, "error", "the error outcome round-trips through metadata.json");
+  });
+
+  await t.test("a running agent receives a steer through the real Pi SDK and persists it", async () => {
+    mock.reset();
+    const conversation = await ai.new_conversation();
+    let started;
+    const startedPromise = new Promise((resolve) => { started = resolve; });
+    mock.push({ kind: "slow", onStarted: () => started() });
+    mock.push({ content: [{ type: "tool_use", id: "toolu_steer_plan", name: "update_plan", input: { goal: "Use track 2", doneCriteria: ["Track 2 selected"], todos: [{ id: "track", title: "Select track 2", status: "completed" }] } }], stopReason: "tool_use", usage: { input: 100, output: 20, cacheWrite: 0 } });
+    mock.push({ content: [{ type: "tool_use", id: "toolu_steer_complete", name: "complete_task", input: { summary: "Used track 2", evidence: ["Track 2 selected"] } }], stopReason: "tool_use", usage: { input: 100, output: 20, cacheWrite: 0 } });
+    const send = ai.send_message(conversation.id, "Original", { cwd, effort: "mid", runId: "e2e-steer" });
+    await startedPromise;
+    await ai.steer_agent_run(conversation.id, "Use track 2");
+    const messages = await send;
+    assert.equal(mock.requests.length, 3);
+    assert.ok(mock.requests[1].messages.some((message) => message.role === "user" && messageText(message).includes("Use track 2")));
+    assert.equal(messages[1].content, "Use track 2");
+    assert.equal(messages[2].outcome.status, "completed");
+    const reopened = await reopenFresh(conversation.id);
+    assert.deepEqual(reopened.messages.map((message) => message.content), messages.map((message) => message.content));
   });
 
   await t.test("cancelling a slow streamed turn produces a cancelled outcome", async () => {

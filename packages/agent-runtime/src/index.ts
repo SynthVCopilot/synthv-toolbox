@@ -80,7 +80,7 @@ export type AgentSteerResult = "steered" | "no-active-run" | "run-mismatch";
 
 export interface PiSessionFactory {
   create(input: { sessionId: string; cwd?: string; systemPrompt?: string; model?: PiModelSelection; outcome?: AgentRunOutcome }): Promise<PiSession>;
-  /** Changes when the credential the session was created with can no longer be used by it; sessions with a live credential store never change. */
+  /** API key changes rebuild a session; live OAuth token rotation keeps it. */
   credentialFingerprint?(model: PiModelSelection): string;
 }
 
@@ -105,6 +105,7 @@ export interface PiModelSelection {
   modelId: string;
   apiKey: string;
   credentialId?: string;
+  authMethod?: "api-key" | "oauth";
 }
 
 interface HostModelCredential extends PiModelSelection { id: string; authMethod: "api-key" | "oauth"; }
@@ -261,7 +262,7 @@ export interface PiSessionFactoryOptions {
 export function createPiSessionFactory(options: PiSessionFactoryOptions = {}): PiSessionFactory {
   const loadSdk = options.loadSdk ?? loadPiSdk;
   return {
-    credentialFingerprint: (model) => (options.credentialStore ? "" : createHash("sha256").update(model.apiKey).digest("hex")),
+    credentialFingerprint: (model) => (options.credentialStore && model.authMethod === "oauth" ? "" : createHash("sha256").update(model.apiKey).digest("hex")),
     async create(input) {
       const sdk = await loadSdk();
       const cwd = input.cwd ?? process.cwd();
@@ -545,7 +546,7 @@ export class AgentRuntimeWorker {
     const routed = await gateway.request(value.providerId, { modelId: value.modelId, input: null });
     if (routed.kind !== "ok" || !isHostModelCredential(routed.value.output)) throw new Error("The selected model is unsupported.");
     const selected = routed.value.output;
-    return { providerId: selected.providerId, modelId: selected.modelId, apiKey: selected.apiKey, credentialId: selected.id };
+    return { providerId: selected.providerId, modelId: selected.modelId, apiKey: selected.apiKey, credentialId: selected.id, authMethod: selected.authMethod };
   }
 
   private async closeSession(request: RpcRequest): Promise<RpcResponseSuccess | RpcResponseFailure> {

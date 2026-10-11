@@ -1563,6 +1563,23 @@ test("re-initializing with the same credential id but a different API key recrea
   assert.deepEqual(fake.runtimeApiKeys.map((entry) => entry.apiKey), ["key-old", "key-new"]);
 });
 
+test("an API key change behind a credential store recreates the session", async () => {
+  const fake = createFakeSdk([]);
+  let apiKey = "key-old";
+  const worker = new runtime.AgentRuntimeWorker(
+    runtime.createPiSessionFactory({ extensionPaths: () => [], loadSdk: async () => fake.sdk, credentialStore: () => ({}) }),
+    { request: async () => ({ providerId: "example", modelId: "model-1", credentials: [{ id: "c1", providerId: "example", modelId: "model-1", authMethod: "api-key", apiKey }] }) },
+  );
+  await worker.handleJsonl(request("hello", "host.hello", { hostId: "host", protocol: { min: "1.0", max: "1.0" }, capabilities: [] }));
+  await worker.handleJsonl(request("i1", "session.initialize", { sessionId: "s1" }));
+  const same = JSON.parse((await worker.handleJsonl(request("i2", "session.initialize", { sessionId: "s1" })))[0]);
+  assert.equal(same.result.reused, true);
+  apiKey = "key-new";
+  const rotated = JSON.parse((await worker.handleJsonl(request("i3", "session.initialize", { sessionId: "s1" })))[0]);
+  assert.equal(rotated.ok, true);
+  assert.notEqual(rotated.result.reused, true);
+});
+
 test("a rotating OAuth access token behind a credential store keeps the session", async () => {
   const fake = createFakeSdk([]);
   let accessToken = "token-1";

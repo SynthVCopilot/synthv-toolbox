@@ -2699,8 +2699,11 @@ function renderAgentBudgetMeter(budget: AgentRunOutcome["budget"]): string {
     { label: t("copilot.budgetTurns"), used: budget.turns, limit: budget.maxTurns },
     { label: t("copilot.budgetTokens"), used: budget.tokens, limit: budget.maxTokens },
   ];
-  const cacheTotal = budget.uncachedInputTokens + budget.cacheReadTokens;
-  const cacheHtml = cacheTotal > 0 ? `<small class="agent-cache-hit">${escapeHtml(t("copilot.cacheHit", { percent: Math.round((budget.cacheReadTokens / cacheTotal) * 100) }))}</small>` : "";
+  let cacheHtml = "";
+  if (budget.uncachedInputTokens !== undefined && budget.cacheReadTokens !== undefined) {
+    const cacheTotal = budget.uncachedInputTokens + budget.cacheReadTokens;
+    if (cacheTotal > 0) cacheHtml = `<small class="agent-cache-hit">${escapeHtml(t("copilot.cacheHit", { percent: Math.round((budget.cacheReadTokens / cacheTotal) * 100) }))}</small>`;
+  }
   return `<div class="agent-budget-meter">${cacheHtml}${rows.map((row) => {
     const percent = row.limit ? Math.min(100, Math.round((row.used / row.limit) * 100)) : 0;
     const text = row.limit === null
@@ -3925,6 +3928,7 @@ async function sendPrompt(input: string): Promise<void> {
     render();
     const added = await withAiProviderStateRefresh(() => api.sendMessage(conversation!.id, input, runId));
     conversation.messages = conversation.messages.filter((message) => message !== optimistic && !agentRunSteers.includes(message));
+    agentRunSteers = [];
     conversation.messages.push(...added);
     let budgets: Record<AgentEffortLevel, AgentRunBudget> | undefined;
     [conversations, approvalsSnapshot, budgets] = await Promise.all([
@@ -3969,15 +3973,18 @@ async function decideApproval(id: string, approve: boolean, trigger?: HTMLElemen
 async function steerAgentRun(input: string): Promise<void> {
   const target = conversation;
   if (!target || !agentRunInFlight || agentRunCancelling) return;
+  const steers = agentRunSteers;
   const textarea = document.querySelector<HTMLTextAreaElement>("#chat-input");
   if (textarea) textarea.value = "";
   try {
     const message = await api.steerAgentRun(target.id, input);
+    if (!agentRunInFlight || target !== conversation || steers !== agentRunSteers) return;
     target.messages.push(message);
-    if (agentRunInFlight) agentRunSteers.push(message);
+    steers.push(message);
     render();
   } catch (reason) {
-    if (textarea && !textarea.value) textarea.value = input;
+    const currentInput = document.querySelector<HTMLTextAreaElement>("#chat-input");
+    if (target === conversation && currentInput && !currentInput.value) currentInput.value = input;
     error = formatError(reason);
     patchToast();
   }

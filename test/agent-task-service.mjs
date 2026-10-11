@@ -4,6 +4,7 @@ import { stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
+import test from "node:test";
 
 const sourcePath = new URL("../src/PiDesktop.Tauri/electron/services/agent-task-service.ts", import.meta.url);
 const source = stripTypeScriptTypes(await readFile(sourcePath, "utf8"), { mode: "transform" });
@@ -176,3 +177,22 @@ try {
 }
 
 console.log("Agent task snapshots remain queryable across progress, completion, failure, cancellation, and restart.");
+
+test("provider errors retain their summary, plan and usage across task restart", async (t) => {
+  const taskRoot = await mkdtemp(join(tmpdir(), "agent-task-error-"));
+  t.after(() => rm(taskRoot, { recursive: true, force: true }));
+  const outcome = { status: "error", summary: "Provider overloaded", missing: [], evidence: [], plan: { goal: "Review the song", doneCriteria: ["Review complete"], todos: [{ id: "review", title: "Review", status: "in_progress" }] }, budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 2, tokens: 500, uncachedInputTokens: 400, cacheReadTokens: 300 } };
+  const service = createService({ dataRoot: taskRoot, ai: () => ({ async new_conversation() { return { id: "conv-error" }; }, async send_message() { return [{ role: "assistant", content: "", outcome }]; } }), effort: () => "mid" });
+  t.after(() => service.dispose());
+  const task = await service.invoke({ action: "start", input: "Run" });
+  const result = await waitForStatus(service, task.taskId, "error");
+  assert.equal(result.error, "Provider overloaded");
+  assert.deepEqual(result.outcome.plan, outcome.plan);
+  assert.deepEqual(result.outcome.budget, outcome.budget);
+  await waitForFileStatus(join(taskRoot, "agent-tasks.json"), task.taskId, "error");
+  const reopened = createService({ dataRoot: taskRoot, ai: () => { throw new Error("must not replay"); }, effort: () => "mid" });
+  t.after(() => reopened.dispose());
+  const persisted = await reopened.invoke({ action: "status", taskId: task.taskId });
+  assert.equal(persisted.error, "Provider overloaded");
+  assert.deepEqual(persisted.outcome, outcome);
+});

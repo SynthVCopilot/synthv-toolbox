@@ -12,7 +12,7 @@ import { PUBLIC_MCP_TOOL_NAMES } from "./build-info.js";
 import type { BridgeConfig } from "./config.js";
 import { loadConfig } from "./config.js";
 import type { BridgeStatusSnapshot } from "./ipc/file-ipc-client.js";
-import { commandPolicyFor } from "./v3-command-policy.js";
+import { optionalCommandPolicy } from "./v3-command-policy.js";
 
 export type EmbeddedBridgeCategory =
   | "read"
@@ -135,16 +135,16 @@ function classifyFromCore(
     let risk: EmbeddedBridgeRisk = "normal";
     if (action !== undefined) {
       try {
-        const policy = commandPolicyFor(action);
+        const policy = optionalCommandPolicy(action);
         if (
-          policy.category === "delete" ||
+          policy && (policy.category === "delete" ||
           policy.category === "transaction" ||
-          commandArgs.sharedGroupPolicy === "allowAllReferences"
+          commandArgs.sharedGroupPolicy === "allowAllReferences")
         ) {
           risk = "high";
         }
       } catch {
-        risk = "normal";
+        risk = "high";
       }
     }
     return { category: "projectWrite", risk };

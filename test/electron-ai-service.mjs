@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import test from "node:test";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const runtimeProtocolUrl = pathToFileURL(join(root, "packages/runtime-protocol/dist/index.js")).href;
@@ -319,3 +320,53 @@ assert.equal((await foreign.list_conversations()).length, foreignData.conversati
 await assert.rejects(foreign.resolveModelSelection(), /readable local credential|No eligible credential/);
 assert.equal(await readFile(foreignPath, "utf8"), foreignBytes);
 console.log("Unreadable local credentials preserve history and require a new login.");
+
+test("an accepted steer is persisted when its acknowledgement arrives after the run result", async (t) => {
+  const taskRoot = await mkdtemp(join(tmpdir(), "agent-steer-race-"));
+  t.after(() => rm(taskRoot, { recursive: true, force: true }));
+  const gate = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
+  const sendStarted = gate();
+  const steerStarted = gate();
+  const finishSend = gate();
+  const finishSteer = gate();
+  const taskPath = join(taskRoot, "ai.json");
+  const runtime = { async request(method) {
+    if (method === "session.send") {
+      sendStarted.resolve();
+      await finishSend.promise;
+      return { message: "Done", outcome: { status: "completed", summary: "Done", evidence: ["Verified"], missing: [], plan: { goal: "Edit the song", doneCriteria: ["Verified"], todos: [{ id: "edit", title: "Edit", status: "completed" }] }, budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 1, tokens: 10, uncachedInputTokens: 10, cacheReadTokens: 0 } } };
+    }
+    if (method === "session.steer") { steerStarted.resolve(); await finishSteer.promise; }
+    return {};
+  } };
+  const ai = new AiService({ metadataPath: taskPath, runtime, catalog, approvals });
+  const conversation = await ai.new_conversation();
+  const send = ai.send_message(conversation.id, "Original", { runId: "race-run" });
+  await sendStarted.promise;
+  const steer = ai.steer_agent_run(conversation.id, "Use track 2");
+  await steerStarted.promise;
+  finishSend.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  finishSteer.resolve();
+  await steer;
+  assert.deepEqual((await send).map((message) => message.content), ["Original", "Use track 2", "Done"]);
+  const reopened = new AiService({ metadataPath: taskPath, runtime, catalog, approvals });
+  assert.deepEqual((await reopened.open_conversation(conversation.id)).messages.map((message) => message.content), ["Original", "Use track 2", "Done"]);
+});
+
+test("persisted run results retain their plan and usage when no cache measurement was recorded", async (t) => {
+  const taskRoot = await mkdtemp(join(tmpdir(), "agent-usage-record-"));
+  t.after(() => rm(taskRoot, { recursive: true, force: true }));
+  const taskPath = join(taskRoot, "ai.json");
+  const ai = new AiService({ metadataPath: taskPath, runtime, catalog, approvals });
+  const conversation = await ai.new_conversation();
+  const outcome = { status: "needs_input", summary: "Which file?", missing: ["file path"], evidence: [], plan: { goal: "Review the song", doneCriteria: ["Review complete"], todos: [{ id: "review", title: "Review", status: "in_progress" }] }, budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 2, tokens: 500 } };
+  const metadata = JSON.parse(await readFile(taskPath, "utf8"));
+  metadata.conversations[0].messages = [{ role: "assistant", content: "Which file?", createdAt: "2026-01-01T00:00:00Z", outcome }];
+  await writeFile(taskPath, JSON.stringify(metadata));
+  const reopened = new AiService({ metadataPath: taskPath, runtime, catalog, approvals });
+  assert.deepEqual((await reopened.open_conversation(conversation.id)).messages[0].outcome, outcome);
+  assert.deepEqual(reopened.agentUsageSamples(), [{ level: "mid", turns: 2, tokens: 500, censored: false }]);
+  await reopened.new_conversation();
+  assert.deepEqual(JSON.parse(await readFile(taskPath, "utf8")).conversations[0].messages[0].outcome, outcome);
+});

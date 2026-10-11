@@ -178,7 +178,8 @@ export function createAgentTaskService(options: AgentTaskServiceOptions) {
       task.status = task.outcome?.status === "cancelled" ? "cancelled"
         : task.outcome?.status === "needs_input" ? "needs_input"
         : task.outcome?.status ?? "unknown";
-      task.error = task.cancellationErrors.length ? task.cancellationErrors.join("; ") : null;
+      const errors = [...(task.outcome?.status === "error" ? [task.outcome.summary] : []), ...task.cancellationErrors];
+      task.error = errors.length ? errors.join("; ") : null;
     } catch (error) {
       task.status = "failed";
       task.error = [errorMessage(error), ...task.cancellationErrors].join("; ");

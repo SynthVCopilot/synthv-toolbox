@@ -134,9 +134,14 @@ export class HttpMcpServer {
       if (!isJsonRequest(request)) return send(response, 415, { error: "Content-Type must be application/json." });
       const body = await readJson(request);
       if (body instanceof Error) return send(response, 400, { error: body.message });
-      const result = await this.handleRpc(body);
-      if (result === undefined) return send(response, 202, undefined);
-      return send(response, 200, result);
+      try {
+        const result = await this.handleRpc(body);
+        if (result === undefined) return send(response, 202, undefined);
+        return send(response, 200, result);
+      } catch (error) {
+        console.error("MCP response failed:", error);
+        return send(response, 500, rpcError(isRecord(body) ? body.id ?? null : null, -32603, "Internal error."));
+      }
     }
     if (path === "/agent") {
       if (request.method !== "POST") return send(response, 405, { error: "Method not allowed." }, { Allow: "POST" });
