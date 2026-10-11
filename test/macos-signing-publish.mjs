@@ -228,6 +228,7 @@ describe("verification report", () => {
     ["an intermediate stage", { stage: "dmg_sign" }],
     ["an unnotarized image", { notarization_status: "Submitted" }],
     ["a missing staple", { staple_verified: false }],
+    ["an unchecked Electron archive", { asar_integrity_verified: false }],
     ["a missing gatekeeper pass", { gatekeeper_verified: false }],
     ["an unexpected field", { extra: true }],
     ["a different file", {}, { sha256: "0".repeat(64) }],

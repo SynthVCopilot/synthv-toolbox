@@ -161,6 +161,31 @@ async function checkedWorkDir(value, runId, env) {
   return workDir;
 }
 
+export async function runIdentity(env, fetchImpl, audience) {
+  const credential = env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+  if (!env.ACTIONS_ID_TOKEN_REQUEST_URL || !credential) throw new ToolError('RUN_IDENTITY_UNAVAILABLE');
+  let url;
+  try {
+    url = new URL(env.ACTIONS_ID_TOKEN_REQUEST_URL);
+    if (url.protocol !== 'https:' || url.username || url.password || url.hash) throw new Error();
+    url.searchParams.set('audience', audience);
+  } catch { throw new ToolError('RUN_IDENTITY_UNAVAILABLE'); }
+  let response;
+  try {
+    response = await fetchImpl(url.href, {
+      redirect: 'error', headers: { authorization: `Bearer ${credential}`, accept: 'application/json' },
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch { throw new ToolError('RUN_IDENTITY_FAILED', { transient: true }); }
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new ToolError('RUN_IDENTITY_FAILED', { transient: isTransientStatus(response.status) });
+  }
+  const body = await readJsonBody(response, 'RUN_IDENTITY_FAILED');
+  if (typeof body.value !== 'string' || !body.value || body.value.length > 4096 || /[\r\n]/.test(body.value)) throw new ToolError('RUN_IDENTITY_FAILED');
+  return body.value;
+}
+
 async function centerJson(fetchImpl, url, apiKey, body, extraHeaders = {}, timeoutMs = 30_000) {
   let response;
   try {
@@ -197,11 +222,11 @@ function validateUploadPlan(plan, bundle) {
   return plan;
 }
 
-async function putPart(fetchImpl, url, apiKey, file, start, length) {
+async function putPart(fetchImpl, url, apiKey, identity, file, start, length) {
   const response = await fetchImpl(url, {
     method: 'PUT',
     redirect: 'error',
-    headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/octet-stream', 'content-length': String(length) },
+    headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/octet-stream', 'content-length': String(length), 'x-run-identity': identity },
     body: createReadStream(file, { start, end: start + length - 1 }),
     duplex: 'half',
     signal: AbortSignal.timeout(300_000),
@@ -210,8 +235,8 @@ async function putPart(fetchImpl, url, apiKey, file, start, length) {
   return response.status;
 }
 
-async function uploadParts(fetchImpl, sleep, base, apiKey, file, bundle) {
-  const fetchPlan = async () => validateUploadPlan(await centerRetry(sleep, () => centerJson(fetchImpl, `${base}/source`, apiKey, {})), bundle);
+async function uploadParts(fetchImpl, sleep, base, apiKey, identityHeaders, file, bundle) {
+  const fetchPlan = async () => validateUploadPlan(await centerRetry(sleep, async () => centerJson(fetchImpl, `${base}/source`, apiKey, {}, await identityHeaders())), bundle);
   let plan = await fetchPlan();
   for (let part = 1; part <= plan.part_count; part += 1) {
     if (plan.received_parts.includes(part)) continue;
@@ -219,7 +244,8 @@ async function uploadParts(fetchImpl, sleep, base, apiKey, file, bundle) {
     const length = Math.min(plan.part_size, bundle.size - start);
     for (let attempt = 1; ; attempt += 1) {
       let status = 0;
-      try { status = await putPart(fetchImpl, `${base}/source/parts/${part}`, apiKey, file, start, length); } catch { status = 0; }
+      const headers = await centerRetry(sleep, identityHeaders);
+      try { status = await putPart(fetchImpl, `${base}/source/parts/${part}`, apiKey, headers['x-run-identity'], file, start, length); } catch { status = 0; }
       if (status === 200) break;
       if (!(status === 0 || isTransientStatus(status)) || attempt >= PART_ATTEMPTS) throw new ToolError('SOURCE_UPLOAD_FAILED');
       await sleep(2000 * 2 ** (attempt - 1));
@@ -256,14 +282,15 @@ export async function submitSource({ env = process.env, fetchImpl = fetch, sleep
     version,
     source_sha: sourceSha,
   };
+  const identityHeaders = async () => ({ 'x-run-identity': await runIdentity(env, fetchImpl, new URL(endpoint).origin) });
   const idempotencyKey = { 'idempotency-key': `${PROJECT_ID}-${runId}-1` };
-  const created = await centerRetry(sleep, () => centerJson(fetchImpl, endpoint, apiKey, body, idempotencyKey));
+  const created = await centerRetry(sleep, async () => centerJson(fetchImpl, endpoint, apiKey, body, { ...idempotencyKey, ...await identityHeaders() }));
   if (typeof created.request_id !== 'string' || !UUID.test(created.request_id)) throw new ToolError('SIGNING_REQUEST_FAILED');
   if (created.state !== 'accepted_waiting_source') {
     if (created.state !== 'awaiting_upload') throw new ToolError('SIGNING_REQUEST_FAILED');
     const base = `${endpoint}/${created.request_id}`;
-    await uploadParts(fetchImpl, sleep, base, apiKey, file, bundle);
-    const completed = await centerRetry(sleep, () => centerJson(fetchImpl, `${base}/source/complete`, apiKey, {}, {}, 300_000));
+    await uploadParts(fetchImpl, sleep, base, apiKey, identityHeaders, file, bundle);
+    const completed = await centerRetry(sleep, async () => centerJson(fetchImpl, `${base}/source/complete`, apiKey, {}, await identityHeaders(), 300_000));
     if (completed.state !== 'accepted_waiting_source') throw new ToolError('SIGNING_REQUEST_FAILED');
   }
   return { request_id: created.request_id, input_digest: bundle.digest, input_size: bundle.size, version, source_sha: sourceSha, build_run_id: Number(runId) };

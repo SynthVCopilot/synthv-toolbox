@@ -167,7 +167,7 @@ export function validateVerification(report, { requestId, version, inputDigest, 
     && report.gatekeeper_verified === true && report.staple_verified === true
     && report.notarization_status === 'Accepted'
     && Number.isSafeInteger(report.generation) && report.generation > 0
-    && typeof report.asar_integrity_verified === 'boolean'
+    && report.asar_integrity_verified === true
     && SHA.test(report.recipe_sha) && ARCHIVE_DIGEST.test(report.policy_digest)
     && UUID.test(report.notarization_id) && /^[a-f0-9]{64}$/.test(report.notary_archive_sha256)
     && Array.isArray(report.files) && report.files.length === 1

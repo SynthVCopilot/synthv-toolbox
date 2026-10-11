@@ -318,7 +318,9 @@ export async function installSynthvBridge({
   }
 }
 
-if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
+let invokedDirectly = false;
+try { invokedDirectly = Boolean(process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)); } catch {}
+if (invokedDirectly) {
   const argumentsList = process.argv.slice(2);
   const targetFlagIndex = argumentsList.indexOf("--target");
   if (targetFlagIndex >= 0 && !argumentsList[targetFlagIndex + 1]) {

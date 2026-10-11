@@ -21,7 +21,8 @@ Recovery:
 
 Repository settings:
 
-- Create the environment `macos-signing` and keep `SIGNING_API_KEY` there as an environment secret, not a repository secret. Limit deployments to the `v*` tags and the `main` branch, and require a repository admin as reviewer; each of the three jobs that use the key (`macos-source`, `await-signing`, `publish`) then waits for one approval.
+- The center provisions the repository secret `SIGNING_API_KEY`; its GitHub credential needs access to this organization's repository, Actions secrets/variables and webhooks. The `macos-source` job also needs `id-token: write`: submit and every upload call fetch a fresh GitHub Actions OIDC token for the fixed signing origin.
+- Restrict creation, update and deletion of stable tags and writes to `main` to the authorized release owner before enabling the project. The center checks that the tag commit is on `main` and that the run and identity belong to that owner.
 - The signing center address is fixed in `.github/scripts/macos-signing-shared.mjs`; there is no `SIGNING_URL` variable.
 - The center must accept tag runs of this repository's `Desktop Release` workflow.
 
@@ -52,7 +53,8 @@ Notes:
 
 仓库设置：
 
-- 创建环境 `macos-signing`，把 `SIGNING_API_KEY` 作为环境密钥存放在其中，而不是仓库密钥。部署范围限定为 `v*` 标签和 `main` 分支，并要求仓库管理员审批；使用密钥的三个任务（`macos-source`、`await-signing`、`publish`）各需要一次审批。
+- 中心自动配发仓库密钥 `SIGNING_API_KEY`，中心的 GitHub 凭据需要访问组织仓库并管理 Actions 密钥、变量和 webhook。`macos-source` 需要 `id-token: write`：提交和每次上传请求都会重新取得面向固定签名地址的 GitHub Actions OIDC 令牌。
+- 启用项目前，将正式标签的创建、修改、删除以及 `main` 写入权限限定给获授权的发布者。中心核对标签提交位于 `main`，运行和身份令牌属于获授权账号。
 - 签名中心地址固定在 `.github/scripts/macos-signing-shared.mjs` 中，不再有 `SIGNING_URL` 变量。
 - 签名中心必须接受本仓库 `Desktop Release` 工作流的标签运行。
 

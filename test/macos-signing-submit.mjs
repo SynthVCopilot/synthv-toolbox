@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scripts = path.join(root, ".github", "scripts");
-const { main, prepare, submitSource, assertTemplateLayout } = await import(path.join(scripts, "submit-macos.mjs"));
+const { main, prepare, submitSource, assertTemplateLayout, runIdentity } = await import(path.join(scripts, "submit-macos.mjs"));
 
 const PROJECT = "synthv-toolbox-arm64";
 const BUNDLE_ID = "com.synthvcopilot.toolbox";
@@ -28,6 +28,7 @@ const noSleep = async () => {};
 // A signing center that follows the request and push-upload contract of the center README.
 async function startCenter({ partSize = 4, received = [], createState = "awaiting_upload", partFailures = [], createFailures = [] } = {}) {
   const log = { createCalls: 0, create: null, createHeaders: null, plans: 0, parts: new Map(), partHeaders: [], complete: 0, completeBody: null };
+  log.identities = [];
   const failures = [...partFailures];
   const createErrors = [...createFailures];
   const server = createServer(async (req, res) => {
@@ -35,6 +36,7 @@ async function startCenter({ partSize = 4, received = [], createState = "awaitin
     for await (const chunk of req) chunks.push(chunk);
     const body = Buffer.concat(chunks);
     const json = (status, value) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(value)); };
+    log.identities.push(req.headers["x-run-identity"]);
     if (req.headers.authorization !== "Bearer test-key") return json(401, { error: "invalid_api_key" });
     if (req.method === "POST" && req.url === "/v1/requests") {
       log.createCalls += 1;
@@ -77,7 +79,15 @@ async function submitFixture(content = Buffer.from("0123456789")) {
   return { runnerTemp, workDir, content };
 }
 
+async function identityFetch(url, options) {
+  if (String(url).startsWith("https://oidc.actions.githubusercontent.com/token")) {
+    return Response.json({ value: "test-run-identity" });
+  }
+  return fetch(url, options);
+}
 const submitEnv = (fixture, center, extra = {}) => ({
+  ACTIONS_ID_TOKEN_REQUEST_URL: "https://oidc.actions.githubusercontent.com/token?existing=1",
+  ACTIONS_ID_TOKEN_REQUEST_TOKEN: "oidc-request-credential",
   SIGNING_API_KEY: "test-key",
   GITHUB_RUN_ID: "42",
   GITHUB_RUN_ATTEMPT: "1",
@@ -88,12 +98,53 @@ const submitEnv = (fixture, center, extra = {}) => ({
   ...extra,
 });
 
+describe("GitHub Actions run identity", () => {
+  test("requests a fresh token with the center audience and preserves the runner URL query", async () => {
+    const calls = [];
+    const fixture = await submitFixture();
+    const env = submitEnv(fixture, {});
+    const fetchImpl = async (url, options) => {
+      calls.push([String(url), options]);
+      return Response.json({ value: `token-${calls.length}` });
+    };
+    assert.equal(await runIdentity(env, fetchImpl, "https://sign.voidcarve.com"), "token-1");
+    assert.equal(await runIdentity(env, fetchImpl, "https://sign.voidcarve.com"), "token-2");
+    const url = new URL(calls[0][0]);
+    assert.equal(url.searchParams.get("existing"), "1");
+    assert.equal(url.searchParams.get("audience"), "https://sign.voidcarve.com");
+    assert.equal(calls[0][1].headers.authorization, "Bearer oidc-request-credential");
+    assert.equal(calls[0][1].redirect, "error");
+  });
+
+  test("fails closed when runner identity is unavailable or the provider returns an invalid token", async () => {
+    const fixture = await submitFixture();
+    const env = submitEnv(fixture, {});
+    await assert.rejects(runIdentity({ ...env, ACTIONS_ID_TOKEN_REQUEST_TOKEN: "" }, fetch, "https://sign.voidcarve.com"), { code: "RUN_IDENTITY_UNAVAILABLE" });
+    for (const value of ["", 42, "x".repeat(4097)]) {
+      await assert.rejects(runIdentity(env, async () => Response.json({ value }), "https://sign.voidcarve.com"), { code: "RUN_IDENTITY_FAILED" });
+    }
+  });
+
+  test("obtains a fresh identity for every submit, begin, part, retry and complete call", async () => {
+    const center = await startCenter({ partFailures: [503] });
+    const fixture = await submitFixture();
+    let requested = 0;
+    const fetchImpl = async (url, options) => String(url).startsWith("https://oidc.actions.githubusercontent.com/token")
+      ? Response.json({ value: `proof-${++requested}` }) : fetch(url, options);
+    try {
+      await submitSource({ env: submitEnv(fixture, center), signingOrigin: center.url, fetchImpl, sleep: noSleep });
+      assert.equal(requested, 8);
+      assert.deepEqual(center.log.identities, Array.from({ length: 8 }, (_, i) => `proof-${i + 1}`));
+    } finally { await center.close(); }
+  });
+});
+
 describe("push request to the signing center", () => {
   test("creates the request, uploads every part and completes", async () => {
     const center = await startCenter();
     const fixture = await submitFixture();
     try {
-      const result = await submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center), sleep: noSleep });
+      const result = await submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center), sleep: noSleep });
       assert.deepEqual(center.log.create, {
         project_id: PROJECT,
         platform: "macos",
@@ -111,6 +162,7 @@ describe("push request to the signing center", () => {
       assert.equal(Buffer.concat([1, 2, 3].map((n) => center.log.parts.get(n))).toString("utf8"), "0123456789");
       assert.equal(center.log.complete, 1);
       assert.equal(center.log.completeBody, "{}");
+      assert.deepEqual(center.log.identities, Array(6).fill("test-run-identity"));
       assert.equal(result.request_id, REQUEST_ID);
       assert.equal(result.input_digest, sha256(fixture.content));
     } finally { await center.close(); }
@@ -120,7 +172,7 @@ describe("push request to the signing center", () => {
     const center = await startCenter({ createState: "accepted_waiting_source" });
     const fixture = await submitFixture();
     try {
-      const result = await submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center), sleep: noSleep });
+      const result = await submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center), sleep: noSleep });
       assert.equal(result.request_id, REQUEST_ID);
       assert.equal(center.log.parts.size, 0);
       assert.equal(center.log.complete, 0);
@@ -131,7 +183,7 @@ describe("push request to the signing center", () => {
     const center = await startCenter({ received: [1, 2] });
     const fixture = await submitFixture();
     try {
-      await submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center), sleep: noSleep });
+      await submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center), sleep: noSleep });
       assert.deepEqual([...center.log.parts.keys()], [3]);
       assert.equal(center.log.complete, 1);
     } finally { await center.close(); }
@@ -142,7 +194,7 @@ describe("push request to the signing center", () => {
     const fixture = await submitFixture();
     const sleeps = [];
     try {
-      await submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center), sleep: async (ms) => { sleeps.push(ms); } });
+      await submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center), sleep: async (ms) => { sleeps.push(ms); } });
       assert.deepEqual([...center.log.parts.keys()].sort(), [1, 2, 3]);
       assert.ok(sleeps.length >= 2);
     } finally { await center.close(); }
@@ -153,7 +205,7 @@ describe("push request to the signing center", () => {
     const fixture = await submitFixture();
     const sleeps = [];
     try {
-      const result = await submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center), sleep: async (ms) => { sleeps.push(ms); } });
+      const result = await submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center), sleep: async (ms) => { sleeps.push(ms); } });
       assert.equal(center.log.createCalls, 2);
       assert.equal(center.log.createHeaders["idempotency-key"], `${PROJECT}-42-1`);
       assert.equal(result.request_id, REQUEST_ID);
@@ -165,7 +217,7 @@ describe("push request to the signing center", () => {
     const center = await startCenter({ createFailures: [403] });
     const fixture = await submitFixture();
     try {
-      await assert.rejects(submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center), sleep: noSleep }), { code: "SIGNING_REQUEST_FAILED" });
+      await assert.rejects(submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center), sleep: noSleep }), { code: "SIGNING_REQUEST_FAILED" });
       assert.equal(center.log.createCalls, 1);
     } finally { await center.close(); }
   });
@@ -173,7 +225,10 @@ describe("push request to the signing center", () => {
   test("the signing center address is fixed in code and cannot be redirected by the environment", async () => {
     const fixture = await submitFixture();
     const urls = [];
-    const fetchImpl = async (url) => { urls.push(url); return new Response("{}", { status: 401 }); };
+    const fetchImpl = async (url, options) => {
+      if (String(url).startsWith("https://oidc.actions.githubusercontent.com/token")) return identityFetch(url, options);
+      urls.push(url); return new Response("{}", { status: 401 });
+    };
     await assert.rejects(submitSource({ env: { ...submitEnv(fixture, { url: "" }), SIGNING_URL: "https://attacker.example" }, fetchImpl, sleep: noSleep }), { code: "SIGNING_REQUEST_FAILED" });
     assert.deepEqual(urls, ["https://sign.voidcarve.com/v1/requests"]);
   });
@@ -182,7 +237,7 @@ describe("push request to the signing center", () => {
     const center = await startCenter({ partFailures: [400] });
     const fixture = await submitFixture();
     try {
-      await assert.rejects(submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center), sleep: noSleep }), { code: "SOURCE_UPLOAD_FAILED" });
+      await assert.rejects(submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center), sleep: noSleep }), { code: "SOURCE_UPLOAD_FAILED" });
       assert.equal(center.log.complete, 0);
     } finally { await center.close(); }
   });
@@ -191,12 +246,12 @@ describe("push request to the signing center", () => {
     const center = await startCenter();
     const fixture = await submitFixture();
     try {
-      await assert.rejects(submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center, { INPUT_TAG: "v1.2.3-rc.1" }), sleep: noSleep }), { code: "TAG_NOT_STABLE" });
-      await assert.rejects(submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center, { INPUT_TAG: "refs/heads/main" }), sleep: noSleep }), { code: "TAG_NOT_STABLE" });
-      await assert.rejects(submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center, { GITHUB_RUN_ATTEMPT: "2" }), sleep: noSleep }), { code: "INVALID_RUN_ATTEMPT" });
-      await assert.rejects(submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center, { SIGNING_API_KEY: "" }), sleep: noSleep }), { code: "SIGNING_API_KEY_UNAVAILABLE" });
-      await assert.rejects(submitSource({ signingOrigin: "http://sign.example.com", env: submitEnv(fixture, center), sleep: noSleep }), { code: "SIGNING_URL_INVALID" });
-      await assert.rejects(submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center, { INPUT_WORK_DIR: path.join(fixture.runnerTemp, "elsewhere") }), sleep: noSleep }), { code: "INVALID_TEMP_DIR" });
+      await assert.rejects(submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center, { INPUT_TAG: "v1.2.3-rc.1" }), sleep: noSleep }), { code: "TAG_NOT_STABLE" });
+      await assert.rejects(submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center, { INPUT_TAG: "refs/heads/main" }), sleep: noSleep }), { code: "TAG_NOT_STABLE" });
+      await assert.rejects(submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center, { GITHUB_RUN_ATTEMPT: "2" }), sleep: noSleep }), { code: "INVALID_RUN_ATTEMPT" });
+      await assert.rejects(submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center, { SIGNING_API_KEY: "" }), sleep: noSleep }), { code: "SIGNING_API_KEY_UNAVAILABLE" });
+      await assert.rejects(submitSource({ fetchImpl: identityFetch, signingOrigin: "http://sign.example.com", env: submitEnv(fixture, center), sleep: noSleep }), { code: "SIGNING_URL_INVALID" });
+      await assert.rejects(submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center, { INPUT_WORK_DIR: path.join(fixture.runnerTemp, "elsewhere") }), sleep: noSleep }), { code: "INVALID_TEMP_DIR" });
       assert.equal(center.log.create, null);
     } finally { await center.close(); }
   });
@@ -205,7 +260,7 @@ describe("push request to the signing center", () => {
     const center = await startCenter();
     const fixture = await submitFixture();
     try {
-      await assert.rejects(submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center, { SIGNING_API_KEY: "wrong" }), sleep: noSleep }), { code: "SIGNING_REQUEST_FAILED" });
+      await assert.rejects(submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center, { SIGNING_API_KEY: "wrong" }), sleep: noSleep }), { code: "SIGNING_REQUEST_FAILED" });
     } finally { await center.close(); }
   });
 
@@ -215,7 +270,7 @@ describe("push request to the signing center", () => {
     const output = path.join(fixture.runnerTemp, "output.txt");
     try {
       const errors = [];
-      const code = await main(["submit"], { signingOrigin: center.url, env: submitEnv(fixture, center, { GITHUB_OUTPUT: output }), stderr: { write: (text) => errors.push(text) }, sleep: noSleep });
+      const code = await main(["submit"], { fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center, { GITHUB_OUTPUT: output }), stderr: { write: (text) => errors.push(text) }, sleep: noSleep });
       assert.equal(code, 0, errors.join(""));
       const context = JSON.parse(await readFile(path.join(fixture.runnerTemp, "signing-request", "request.json"), "utf8"));
       assert.deepEqual(context, {

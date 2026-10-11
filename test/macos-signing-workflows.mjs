@@ -49,12 +49,13 @@ describe("Desktop Release workflow", () => {
     assert.equal(source.name, "macos-source");
     assert.match(source.name, REQUIRED_JOB);
     assert.equal(source.strategy, undefined);
-    assert.deepEqual(source.permissions, { contents: "read" });
+    assert.deepEqual(source.permissions, { contents: "read", "id-token": "write" });
     assert.deepEqual(source.needs, "macos-build");
   });
 
-  test("the signing key is gated by the macos-signing environment and never meets build scripts", () => {
-    assert.equal(source.environment, "macos-signing");
+  test("the signing key and run identity never meet build scripts", () => {
+    assert.equal(source.permissions["id-token"], "write");
+    assert.equal(build.permissions["id-token"], undefined);
     assert.equal(build.environment, undefined);
     assert.doesNotMatch(JSON.stringify(build), /secrets\./);
     assert.equal((releaseText.match(/secrets\./g) ?? []).length, 1);
@@ -247,12 +248,6 @@ describe("Desktop macOS Publish workflow", () => {
     }
     assert.deepEqual(withKey.sort(), ["await-signing:await", "publish:fetch"]);
     assert.equal((publishText.match(/secrets\./g) ?? []).length, 2);
-  });
-
-  test("the key-bearing jobs are gated by the macos-signing environment", () => {
-    assert.equal(publish.jobs["await-signing"].environment, "macos-signing");
-    assert.equal(publish.jobs.publish.environment, "macos-signing");
-    assert.equal(publish.jobs.resolve.environment, undefined);
   });
 
   test("the draft exists before the upload and is published only after the upload is verified", () => {

@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { lstat, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import test from "node:test";
+import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
 
 const servicePath = new URL("../src/PiDesktop.Tauri/electron/services/synthv-service.ts", import.meta.url);
 const { SynthVService, dataRootFor, canonicalPathFor } = await import(servicePath.href);
@@ -154,6 +156,32 @@ test("installBridge runs the real installers in-process, always through the expl
     await rm(root, { recursive: true, force: true });
     await rm(bridgeDir, { recursive: true, force: true });
   }
+});
+
+test("Bridge installers import when an app launch has flags rather than a script as argv[1]", () => {
+  for (const name of ["install-synthv-bridge.mjs", "install-sv1-legacy-bridge.mjs"]) {
+    const url = new URL(`../src/PiDesktop.Tauri/components/synthv-agent-bridge/scripts/${name}`, import.meta.url).href;
+    const loaded = spawnSync(process.execPath, ["--input-type=module", "-e", `process.argv[1] = '--hidden'; await import(${JSON.stringify(url)});`], { encoding: "utf8" });
+    assert.equal(loaded.status, 0, loaded.stderr);
+  }
+});
+
+test("packaged resources install modern and legacy Bridge without starting Electron as Node", async () => {
+  const root = await mkdtemp(join(tmpdir(), "synthv-packaged-bridge-"));
+  try {
+    const yaml = createRequire(new URL("../src/PiDesktop.Tauri/node_modules/electron-updater/package.json", import.meta.url))("js-yaml");
+    const config = yaml.load(await readFile(new URL("../electron-builder.yml", import.meta.url), "utf8"));
+    for (const resource of config.extraResources.filter(value => value.from.includes("components/synthv-agent-bridge/") && !value.from.endsWith("/dist"))) {
+      await cp(fileURLToPath(new URL(`../${resource.from}`, import.meta.url)), join(root, "resources", resource.to), { recursive: true });
+    }
+    const service = new SynthVService(root, join(root, "resources/components/synthv-agent-bridge"), noBridge, join(root, "ipc"), async () => { throw new Error("The signed Electron binary cannot run as Node"); }, undefined, root);
+    for (const bridgeProfile of ["sv2", "sv1"]) {
+      const target = { scriptsPath: join(root, "scripts"), bridgeProfile };
+      const [result] = await service.installBridge([target]);
+      assert.equal(result.result.succeeded, true, result.result.detail);
+      assert.equal((await service.diagnoseBridge([target]))[0].result.succeeded, true);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("installBridge reports a failed installation instead of throwing", async () => {

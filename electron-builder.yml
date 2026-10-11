@@ -14,6 +14,8 @@ asarUnpack:
 extraResources:
   - from: LICENSE
     to: LICENSE
+  - from: src/PiDesktop.Tauri/components/synthv-agent-bridge/package.json
+    to: components/synthv-agent-bridge/package.json
   - from: src/PiDesktop.Tauri/components/synthv-agent-bridge/dist
     to: components/synthv-agent-bridge/dist
   - from: src/PiDesktop.Tauri/components/synthv-agent-bridge/scripts

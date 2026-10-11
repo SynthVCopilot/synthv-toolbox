@@ -20,7 +20,9 @@ export async function installSv1LegacyBridge({ target, log = console.log }) {
   log(`Installed SV1 legacy Bridge at ${output}`);
 }
 
-if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
+let invokedDirectly = false;
+try { invokedDirectly = Boolean(process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)); } catch {}
+if (invokedDirectly) {
   const args = process.argv.slice(2);
   const targetIndex = args.indexOf("--target");
   const target = targetIndex >= 0 ? args[targetIndex + 1] : process.env.SYNTHV_SV1_SCRIPTS_DIR;
