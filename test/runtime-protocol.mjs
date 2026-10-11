@@ -127,7 +127,7 @@ const coverPlan = {
     { id: "3", title: "Tune parameters", status: "pending" },
   ],
 };
-const budget = { level: "mid", turns: 3, tokens: 12000, maxTurns: 19, maxTokens: 325_542 };
+const budget = { level: "mid", turns: 3, tokens: 12000, uncachedInputTokens: 4000, cacheReadTokens: 8000, maxTurns: 19, maxTokens: 325_542 };
 
 test("accepts a trimmed agent plan and reports why an invalid plan is rejected", () => {
   const checked = protocol.checkAgentPlan(coverPlan);
@@ -290,7 +290,12 @@ test("run outcomes carry the evidence, missing information and budget their stat
   assert.equal(protocol.validateAgentRunOutcome({ ...exhausted, status: "incomplete" }).status, "incomplete");
   assert.equal(protocol.validateAgentRunOutcome({ ...exhausted, budget: { ...budget, level: "medium" } }), undefined);
   assert.equal(protocol.validateAgentRunOutcome({ ...exhausted, budget: { ...budget, turns: -1 } }), undefined);
-  const unlimited = { level: "max", maxTurns: null, maxTokens: null, turns: 250, tokens: 9_000_000 };
+  const errored = { status: "error", summary: "401 invalid api key", evidence: [], missing: [], plan, budget };
+  assert.deepEqual(protocol.validateAgentRunOutcome(errored), errored);
+  assert.equal(protocol.validateAgentRunOutcome({ ...errored, summary: "" }), undefined);
+  assert.equal(protocol.validateAgentRunOutcome({ ...errored, evidence: ["x"] }), undefined);
+  assert.equal(protocol.validateAgentRunOutcome({ ...completed, budget: { ...budget, cacheReadTokens: undefined } }), undefined);
+  const unlimited = { level: "max", maxTurns: null, maxTokens: null, turns: 250, tokens: 9_000_000, uncachedInputTokens: 0, cacheReadTokens: 0 };
   assert.deepEqual(protocol.validateAgentRunOutcome({ ...completed, budget: unlimited }).budget, unlimited);
 });
 
@@ -306,7 +311,7 @@ test("an AgentRunProgress notification round-trips through encodeJsonl/parseJson
     plan: null,
     tools: [{ id: "call-1", name: "sv_query", status: "running", round: 1, summary: "get_selection" }],
     toolCount: 1,
-    budget: { level: "mid", maxTurns: 16, maxTokens: 300_000, turns: 1, tokens: 500 },
+    budget: { level: "mid", maxTurns: 16, maxTokens: 300_000, turns: 1, tokens: 500, uncachedInputTokens: 0, cacheReadTokens: 0 },
     retry: null,
     pendingInput: null,
   };

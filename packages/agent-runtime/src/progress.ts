@@ -51,7 +51,7 @@ export function createRunProgress(state: TaskLoopState, report: (view: AgentRunV
   }
 
   function currentBudget(): AgentBudgetUsage {
-    return { ...state.budget, turns: state.turns, tokens: state.tokens };
+    return { ...state.budget, turns: state.turns, tokens: state.tokens, uncachedInputTokens: state.uncachedInputTokens, cacheReadTokens: state.cacheReadTokens };
   }
 
   function pendingInputView(): AgentRunView["pendingInput"] {

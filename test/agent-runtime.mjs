@@ -30,7 +30,7 @@ function placeholderOutcome() {
     evidence: [],
     missing: [],
     plan: null,
-    budget: { level: "mid", maxTurns: 10, maxTokens: 100_000, turns: 0, tokens: 0 },
+    budget: { level: "mid", maxTurns: 10, maxTokens: 100_000, turns: 0, tokens: 0, uncachedInputTokens: 0, cacheReadTokens: 0 },
   };
 }
 
@@ -570,10 +570,12 @@ function makeTaskLoopState(overrides = {}) {
     budget: budgetFor("mid", 16, 300_000),
     turns: 0,
     tokens: 0,
+    uncachedInputTokens: 0,
+    cacheReadTokens: 0,
     signal: null,
     roundProgress: 0,
     roundError: null,
-    finishAttemptUsed: false,
+    finishAttempts: 0,
     cancelled: false,
     lastAssistantText: "",
     firstRound: true,
@@ -762,10 +764,11 @@ test("a failing complete_task call counts as idle, not progress", async () => {
   assert.equal(fake.remainingRounds, 0);
 });
 
-test("budget exhaustion by turns allows exactly one finish attempt then blocks everything", async () => {
+test("budget exhaustion by turns allows exactly two finish attempts then blocks everything", async () => {
   const fake = createFakeSdk([
     { turns: [
       { text: "warm up" },
+      { toolCalls: [{ name: "complete_task", args: { summary: "Bad", evidence: ["a"] } }] },
       { toolCalls: [{ name: "complete_task", args: { summary: "Bad", evidence: ["a"] } }] },
       { toolCalls: [{ name: "complete_task", args: { summary: "Bad", evidence: ["a"] } }] },
     ] },
@@ -774,11 +777,39 @@ test("budget exhaustion by turns allows exactly one finish attempt then blocks e
   const { outcome } = await session.prompt("Go", budgetFor("mid", 1, 300_000), undefined, "run-14");
   assert.equal(outcome.status, "budget_exhausted");
   const completeTaskResults = fake.messages.filter((m) => m.role === "toolResult" && m.toolName === "complete_task");
-  assert.equal(completeTaskResults.length, 2);
-  assert.equal(completeTaskResults[0].isError, true);
+  assert.equal(completeTaskResults.length, 3);
   assert.match(completeTaskResults[0].content[0].text, /update_plan/);
-  assert.equal(completeTaskResults[1].isError, true);
-  assert.match(completeTaskResults[1].content[0].text, /Run budget exhausted/);
+  assert.match(completeTaskResults[1].content[0].text, /update_plan/);
+  assert.equal(completeTaskResults[2].isError, true);
+  assert.match(completeTaskResults[2].content[0].text, /Run budget exhausted/);
+});
+
+test("a rejected finish attempt after budget exhaustion does not prevent a valid completion", async () => {
+  const fake = createFakeSdk([
+    { turns: [
+      { toolCalls: [{ name: "update_plan", args: { goal: "G", doneCriteria: ["C"], todos: [{ id: "t1", title: "Step", status: "completed" }] } }] },
+      { toolCalls: [{ name: "complete_task", args: { summary: "Bad", evidence: [] } }] },
+      { toolCalls: [{ name: "complete_task", args: { summary: "Done", evidence: ["done"] } }] },
+    ] },
+  ]);
+  const session = await createSession(fake);
+  const { outcome } = await session.prompt("Go", budgetFor("mid", 1, 300_000), undefined, "run-14b");
+  assert.equal(outcome.status, "completed");
+  assert.equal(outcome.summary, "Done");
+});
+
+test("cache reads are tracked separately and never count against the token budget", async () => {
+  const fake = createFakeSdk([
+    { turns: [
+      { text: "a", usage: { input: 10, output: 5, cacheRead: 100, cacheWrite: 20 } },
+      { toolCalls: [{ name: "update_plan", args: { goal: "G", doneCriteria: ["C"], todos: [{ id: "t1", title: "Step", status: "completed" }] } }, { name: "complete_task", args: { summary: "Done", evidence: ["done"] } }], usage: { input: 1, output: 1, cacheRead: 50, cacheWrite: 0 } },
+    ] },
+  ]);
+  const session = await createSession(fake);
+  const { outcome } = await session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-cache");
+  assert.equal(outcome.budget.tokens, 37);
+  assert.equal(outcome.budget.cacheReadTokens, 150);
+  assert.equal(outcome.budget.uncachedInputTokens, 31);
 });
 
 test("budget exhaustion by turns blocks non-terminating tools with terminate and ends budget_exhausted", async () => {
@@ -896,7 +927,7 @@ test("a seeded outcome restores the plan via the first-round message; an invalid
     evidence: [],
     missing: [],
     plan: { goal: "Seeded goal", doneCriteria: ["Criterion"], todos: [{ id: "t1", title: "Step", status: "pending" }] },
-    budget: { level: "mid", maxTurns: 16, maxTokens: 300_000, turns: 4, tokens: 1000 },
+    budget: { level: "mid", maxTurns: 16, maxTokens: 300_000, turns: 4, tokens: 1000, uncachedInputTokens: 0, cacheReadTokens: 0 },
   };
   const session = await createSession(fake, { outcome: seededOutcome });
   await session.prompt("Continue", budgetFor("mid", 16, 300_000), undefined, "run-22");
@@ -914,7 +945,7 @@ test("a completed seeded outcome does not restore its plan", async () => {
     evidence: ["cover.wav written"],
     missing: [],
     plan: { goal: "Make the cover", doneCriteria: ["Cover exported"], todos: [{ id: "t1", title: "Export", status: "completed" }] },
-    budget: { level: "mid", maxTurns: 16, maxTokens: 300_000, turns: 8, tokens: 4000 },
+    budget: { level: "mid", maxTurns: 16, maxTokens: 300_000, turns: 8, tokens: 4000, uncachedInputTokens: 0, cacheReadTokens: 0 },
   };
   const session = await createSession(fake, { outcome: seededOutcome });
   const { outcome } = await session.prompt("What tempo is this song?", budgetFor("mid", 1, 300_000), undefined, "run-23");
@@ -933,7 +964,7 @@ test("a needs_input seeded outcome delivers the question once, then clears it", 
     evidence: [],
     missing: ["target song"],
     plan: { goal: "G", doneCriteria: ["C"], todos: [{ id: "t1", title: "Step", status: "pending" }] },
-    budget: { level: "mid", maxTurns: 16, maxTokens: 300_000, turns: 2, tokens: 500 },
+    budget: { level: "mid", maxTurns: 16, maxTokens: 300_000, turns: 2, tokens: 500, uncachedInputTokens: 0, cacheReadTokens: 0 },
   };
   const session = await createSession(fake, { outcome: seededOutcome });
   await session.prompt("The second one", budgetFor("mid", 16, 300_000), undefined, "run-24");
@@ -996,27 +1027,50 @@ test("the system prompt is byte-identical across rounds and runs, regardless of 
   assert.doesNotMatch(fake.systemPrompts[0], /\d+ of \d+ turns/);
 });
 
-test("a provider error stops the loop immediately and rejects with the provider's message", async () => {
+test("a provider error stops the loop immediately and ends with an error outcome carrying the provider's message", async () => {
   const fake = createFakeSdk([
     { stopReason: "error", errorMessage: "401 invalid api key" },
   ]);
   const session = await createSession(fake);
-  await assert.rejects(
-    () => session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-31"),
-    /401 invalid api key/,
-  );
+  const { outcome } = await session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-31");
+  assert.equal(outcome.status, "error");
+  assert.equal(outcome.summary, "401 invalid api key");
   assert.equal(fake.remainingRounds, 0);
 });
 
-test("a provider error with no message rejects with a generic failure text", async () => {
+test("an error outcome keeps the plan and the budget used so far", async () => {
+  const fake = createFakeSdk([
+    { turns: [
+      { toolCalls: [{ name: "update_plan", args: { goal: "G", doneCriteria: ["C"], todos: [{ id: "t1", title: "Step", status: "in_progress" }] } }], usage: { input: 10, output: 10, cacheWrite: 0 } },
+      { stopReason: "error", errorMessage: "overloaded", usage: { input: 5, output: 0, cacheWrite: 0 } },
+    ] },
+  ]);
+  const session = await createSession(fake);
+  const { outcome } = await session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-31b");
+  assert.equal(outcome.status, "error");
+  assert.equal(outcome.plan.goal, "G");
+  assert.equal(outcome.budget.turns, 1);
+  assert.equal(outcome.budget.tokens, 25);
+});
+
+test("a provider error with no message ends with a generic failure text", async () => {
   const fake = createFakeSdk([
     { stopReason: "error" },
   ]);
   const session = await createSession(fake);
-  await assert.rejects(
-    () => session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-32"),
-    /Model request failed\./,
-  );
+  const { outcome } = await session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-32");
+  assert.equal(outcome.status, "error");
+  assert.equal(outcome.summary, "Model request failed.");
+});
+
+test("an oversized or blank provider error still yields a valid error outcome", async () => {
+  for (const [message, expected] of [["x".repeat(9000), "x".repeat(4000)], ["   ", "Model request failed."]]) {
+    const fake = createFakeSdk([{ stopReason: "error", errorMessage: message }]);
+    const session = await createSession(fake);
+    const { outcome } = await session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-32b");
+    assert.equal(outcome.status, "error");
+    assert.equal(outcome.summary, expected);
+  }
 });
 
 test("an error turn adds its tokens but is not counted as a turn", async () => {
@@ -1027,7 +1081,10 @@ test("an error turn adds its tokens but is not counted as a turn", async () => {
     ] },
   ]);
   const session = await createSession(fake);
-  await assert.rejects(() => session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-33"), /overloaded/);
+  const { outcome } = await session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-33");
+  assert.equal(outcome.status, "error");
+  assert.equal(outcome.budget.turns, 1);
+  assert.equal(outcome.budget.tokens, 25);
 });
 
 test("session.cancel aborts an in-flight run and the outcome is cancelled with the plan kept", async () => {
@@ -1133,7 +1190,7 @@ test("the projector reports seq 1 starting with the seeded plan, the plan only a
   assert.equal(views[0].seq, 1);
   assert.equal(views[0].phase, "starting");
   assert.equal(views[0].plan, null);
-  assert.deepEqual(views[0].budget, { level: "mid", maxTurns: 16, maxTokens: 300_000, turns: 0, tokens: 0 });
+  assert.deepEqual(views[0].budget, { level: "mid", maxTurns: 16, maxTokens: 300_000, turns: 0, tokens: 0, uncachedInputTokens: 0, cacheReadTokens: 0 });
   for (let i = 1; i < views.length; i++) assert.ok(views[i].seq > views[i - 1].seq, `seq must strictly increase at index ${i}`);
 
   const firstPlanIndex = views.findIndex((v) => v.plan !== null);
@@ -1168,16 +1225,14 @@ test("the ended view falls back to the last non-empty assistant text when the fi
   assert.equal(views.at(-1).text, message);
 });
 
-test("a provider error still emits an ended progress snapshot before prompt() rejects", async () => {
+test("a provider error still emits an ended progress snapshot", async () => {
   const fake = createFakeSdk([
     { stopReason: "error", errorMessage: "401 invalid api key" },
   ]);
   const session = await createSession(fake);
   const views = [];
-  await assert.rejects(
-    () => session.prompt("Go", budgetFor("mid", 16, 300_000), (view) => views.push(view), "run-42"),
-    /401 invalid api key/,
-  );
+  const { outcome } = await session.prompt("Go", budgetFor("mid", 16, 300_000), (view) => views.push(view), "run-42");
+  assert.equal(outcome.status, "error");
   assert.equal(views.at(-1).phase, "ended");
 });
 
@@ -1335,8 +1390,8 @@ test("round() increments are reported in order, and a throwing handle() never pr
 test("session.send rejects a missing runId, and accepted sends stream progress notifications before resolving", async () => {
   const notifications = [];
   const sentViews = [
-    { seq: 1, phase: "starting", round: 0, text: "", plan: null, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: null, maxTokens: null, turns: 0, tokens: 0 }, retry: null, pendingInput: null },
-    { seq: 2, phase: "ended", round: 0, text: "done", plan: null, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: null, maxTokens: null, turns: 0, tokens: 0 }, retry: null, pendingInput: null },
+    { seq: 1, phase: "starting", round: 0, text: "", plan: null, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: null, maxTokens: null, turns: 0, tokens: 0, uncachedInputTokens: 0, cacheReadTokens: 0 }, retry: null, pendingInput: null },
+    { seq: 2, phase: "ended", round: 0, text: "done", plan: null, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: null, maxTokens: null, turns: 0, tokens: 0, uncachedInputTokens: 0, cacheReadTokens: 0 }, retry: null, pendingInput: null },
   ];
   const worker = new runtime.AgentRuntimeWorker(
     {
@@ -1376,7 +1431,7 @@ test("a throwing notify sink does not fail the run", async () => {
     {
       create: async () => ({
         prompt: async (_input, _budget, report) => {
-          report({ seq: 1, phase: "starting", round: 0, text: "", plan: null, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: null, maxTokens: null, turns: 0, tokens: 0 }, retry: null, pendingInput: null });
+          report({ seq: 1, phase: "starting", round: 0, text: "", plan: null, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: null, maxTokens: null, turns: 0, tokens: 0, uncachedInputTokens: 0, cacheReadTokens: 0 }, retry: null, pendingInput: null });
           return { message: "ok", outcome: placeholderOutcome() };
         },
         cancel: async () => false,

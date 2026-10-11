@@ -523,7 +523,7 @@ export class AiService {
     const samples: AgentUsageSample[] = [];
     for (const message of finished) {
       const { status, budget } = message.outcome;
-      if (status === "incomplete" || status === "cancelled") continue;
+      if (status === "incomplete" || status === "cancelled" || status === "error") continue;
       samples.push({ level: budget.level, turns: budget.turns, tokens: budget.tokens, censored: status === "budget_exhausted" });
     }
     return samples;
@@ -623,7 +623,7 @@ function parseMetadata(raw: string): AiServiceMetadata {
 
 function cancelledOutcome(effort: AgentEffortLevel, samples: AgentUsageSample[]): AgentRunOutcome {
   const budget = estimateAgentRunBudget(effort, samples);
-  return { status: "cancelled", summary: "", evidence: [], missing: [], plan: null, budget: { ...budget, turns: 0, tokens: 0 } };
+  return { status: "cancelled", summary: "", evidence: [], missing: [], plan: null, budget: { ...budget, turns: 0, tokens: 0, uncachedInputTokens: 0, cacheReadTokens: 0 } };
 }
 
 function latestOutcome(conversation: ConversationSnapshot): AgentRunOutcome | undefined {

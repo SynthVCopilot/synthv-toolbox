@@ -108,7 +108,7 @@ const outcomeA = {
   evidence: ["evidence1"],
   missing: [],
   plan: planA,
-  budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 3, tokens: 500 },
+  budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 3, tokens: 500, uncachedInputTokens: 0, cacheReadTokens: 0 },
 };
 nextSendResult = { message: "Assistant reply one", outcome: outcomeA };
 const messages = await service.send_message(conversation.id, "Explain this score", { cwd: directory, effort: "mid" });
@@ -130,7 +130,7 @@ const outcomeB = {
   evidence: [],
   missing: ["missing-item"],
   plan: null,
-  budget: { level: "mid", maxTurns: 5, maxTokens: 1200, turns: 4, tokens: 800 },
+  budget: { level: "mid", maxTurns: 5, maxTokens: 1200, turns: 4, tokens: 800, uncachedInputTokens: 0, cacheReadTokens: 0 },
 };
 nextSendResult = { message: "", outcome: outcomeB };
 const secondTurn = await service.send_message(conversation.id, "Second turn", { effort: "mid" });
@@ -144,7 +144,7 @@ const outcomeC = {
   evidence: [],
   missing: [],
   plan: null,
-  budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 5, tokens: 1000 },
+  budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 5, tokens: 1000, uncachedInputTokens: 0, cacheReadTokens: 0 },
 };
 nextSendResult = { message: "", outcome: outcomeC };
 const thirdTurn = await service.send_message(conversation.id, "Third turn", { effort: "mid" });
@@ -157,11 +157,23 @@ const outcomeD = {
   evidence: [],
   missing: [],
   plan: null,
-  budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 2, tokens: 300 },
+  budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 2, tokens: 300, uncachedInputTokens: 0, cacheReadTokens: 0 },
 };
 nextSendResult = { message: "", outcome: outcomeD };
 const fourthTurn = await service.send_message(conversation.id, "Fourth turn", { effort: "mid" });
 assert.equal(fourthTurn[1].content, "", "a cancelled outcome is persisted like any other outcome");
+
+const outcomeE = {
+  status: "error",
+  summary: "provider failed",
+  evidence: [],
+  missing: [],
+  plan: null,
+  budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 1, tokens: 100, uncachedInputTokens: 0, cacheReadTokens: 0 },
+};
+nextSendResult = { message: "", outcome: outcomeE };
+const fifthTurn = await service.send_message(conversation.id, "Fifth turn", { effort: "mid" });
+assert.equal(fifthTurn[1].content, "provider failed", "an error outcome surfaces its summary as the reply and is persisted");
 
 assert.deepEqual(service.agentUsageSamples(), [
   { level: "mid", turns: 3, tokens: 500, censored: false },
@@ -236,7 +248,7 @@ assert.equal(anthropic.accounts.length + anthropic.apiKeys.length, 0);
     async request(method, params) {
       activeRunRequests.push({ method, params });
       if (method === "session.initialize" && blockNextInitialize) { blockNextInitialize = false; await new Promise((resolve) => { releaseInitialize = resolve; }); }
-      if (method === "session.send") return { message: "Handled.", outcome: { status: "completed", summary: "Handled.", evidence: ["e"], missing: [], plan: { goal: "G", doneCriteria: ["e"], todos: [{ id: "t1", title: "T", status: "completed" }] }, budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 1, tokens: 10 } } };
+      if (method === "session.send") return { message: "Handled.", outcome: { status: "completed", summary: "Handled.", evidence: ["e"], missing: [], plan: { goal: "G", doneCriteria: ["e"], todos: [{ id: "t1", title: "T", status: "completed" }] }, budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 1, tokens: 10, uncachedInputTokens: 0, cacheReadTokens: 0 } } };
       return {};
     },
   };
