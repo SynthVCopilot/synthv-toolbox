@@ -8,8 +8,12 @@ const agentTaskTool = "toolbox_agent";
 const requestTimeoutMs = 30_000;
 const headersTimeoutMs = 10_000;
 
-/** Error whose message is safe to return to the client. */
-class ClientError extends Error {}
+/** Error whose message is safe to return to the client; the marker lets other modules raise it without importing this one. */
+export class ClientError extends Error { readonly clientSafe = true; }
+
+function isClientError(error: unknown): error is Error {
+  return error instanceof Error && (error as { clientSafe?: unknown }).clientSafe === true;
+}
 
 export interface McpAuthorization {
   internalEnabled: boolean;
@@ -170,7 +174,7 @@ export class HttpMcpServer {
           return rpcError(id, -32601, "Method not found.");
       }
     } catch (error) {
-      if (error instanceof ClientError) return rpcError(id, -32602, error.message);
+      if (isClientError(error)) return rpcError(id, -32602, error.message);
       console.error("MCP request failed:", error);
       return rpcError(id, -32603, "Internal error.");
     }
@@ -196,12 +200,17 @@ export class HttpMcpServer {
     const tool = tools.find((candidate) => candidate.name === params.name);
     if (!tool || !isToolPermitted(tool, authorization)) throw new ClientError("Tool is disabled or unavailable.");
     const arguments_ = isRecord(params.arguments) ? withoutPermission(params.arguments) : {};
-    if (tool.name === agentTaskTool) {
-      const structuredContent = await this.host.agentTask!(arguments_);
-      return { content: normalizeStructuredContent(structuredContent), structuredContent, isError: false };
+    try {
+      if (tool.name === agentTaskTool) {
+        const structuredContent = await this.host.agentTask!(arguments_);
+        return { content: normalizeStructuredContent(structuredContent), structuredContent, isError: false };
+      }
+      const result = await this.host.callMcpTool(tool.name, arguments_, authorization);
+      return { content: normalizeContent(result.content), isError: result.isError === true };
+    } catch (error) {
+      if (isClientError(error)) return { content: [{ type: "text", text: error.message }], isError: true };
+      throw error;
     }
-    const result = await this.host.callMcpTool(tool.name, arguments_, authorization);
-    return { content: normalizeContent(result.content), isError: result.isError === true };
   }
 }
 

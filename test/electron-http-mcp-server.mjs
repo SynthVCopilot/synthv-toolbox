@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const source = await readFile(join(root, "src/PiDesktop.Tauri/electron/services/http-mcp-server.ts"), "utf8");
 const executable = stripTypeScriptTypes(source, { mode: "transform" });
-const { HttpMcpServer } = await import(`data:text/javascript;base64,${Buffer.from(executable).toString("base64")}`);
+const { HttpMcpServer, ClientError } = await import(`data:text/javascript;base64,${Buffer.from(executable).toString("base64")}`);
 
 const authorizations = [];
 const calls = [];
@@ -127,6 +127,12 @@ host.agentTask = async () => ({ toJSON() { if (++serializations > 1) throw new E
 const outerFailure = await rawPost({ host: `127.0.0.1:${occupiedPort}` }, JSON.stringify({ jsonrpc: "2.0", id: 46, method: "tools/call", params: { name: "toolbox_agent", arguments: { action: "list" } } }));
 assert.equal(outerFailure.status, 500);
 assert.equal(outerFailure.text.includes(secret), false);
+host.agentTask = async () => { throw new ClientError("Agent task was not found."); };
+const staleTask = await rawPost({ host: `127.0.0.1:${occupiedPort}` }, JSON.stringify({ jsonrpc: "2.0", id: 47, method: "tools/call", params: { name: "toolbox_agent", arguments: { action: "status", taskId: "stale" } } }));
+const staleBody = JSON.parse(staleTask.text);
+assert.equal(staleBody.error, undefined);
+assert.equal(staleBody.result.isError, true);
+assert.deepEqual(staleBody.result.content, [{ type: "text", text: "Agent task was not found." }]);
 host.agentTask = originalTask;
 assert.equal(server.server.requestTimeout, 30_000);
 assert.ok(server.server.headersTimeout > 0 && server.server.headersTimeout <= 30_000);

@@ -4,6 +4,9 @@ import { join } from "node:path";
 import type { AgentEffortLevel, AgentRunOutcome, AgentRunProgress } from "@synthv-toolbox/runtime-protocol";
 import type { AiService } from "./ai-service.js";
 
+/** Caller-correctable failure whose message is safe to show to MCP clients. */
+class ClientError extends Error { readonly clientSafe = true; }
+
 type AiTaskPort = Pick<AiService, "new_conversation" | "open_conversation" | "send_message" | "cancel_agent_run">;
 export type AgentTaskStatus = "running" | "cancelling" | "completed" | "needs_input" | "budget_exhausted" | "incomplete" | "cancelled" | "failed" | "interrupted" | "unknown";
 
@@ -112,8 +115,8 @@ export function createAgentTaskService(options: AgentTaskServiceOptions) {
   }
 
   async function begin(input: string): Promise<AgentTaskSnapshot> {
-    if (typeof input !== "string" || !input.trim()) throw new Error("Agent task input is required.");
-    if (input.length > 32_000) throw new Error("Agent task input exceeds the 32,000 character limit.");
+    if (typeof input !== "string" || !input.trim()) throw new ClientError("Agent task input is required.");
+    if (input.length > 32_000) throw new ClientError("Agent task input exceeds the 32,000 character limit.");
     const conversation = await options.ai().new_conversation();
     const current = now().toISOString();
     const task: StoredTask = {
@@ -129,11 +132,11 @@ export function createAgentTaskService(options: AgentTaskServiceOptions) {
   }
 
   async function continueTask(input: string, conversationId: string, taskId?: string): Promise<AgentTaskSnapshot> {
-    if (typeof input !== "string" || !input.trim()) throw new Error("Agent task input is required.");
-    if (input.length > 32_000) throw new Error("Agent task input exceeds the 32,000 character limit.");
+    if (typeof input !== "string" || !input.trim()) throw new ClientError("Agent task input is required.");
+    if (input.length > 32_000) throw new ClientError("Agent task input exceeds the 32,000 character limit.");
     const task = findTask(taskId, conversationId);
-    if (!task || task.conversationId !== conversationId) throw new Error("Agent task was not found for this conversation.");
-    if (activeByConversation.has(conversationId)) throw new Error("An agent task is already running for this conversation.");
+    if (!task || task.conversationId !== conversationId) throw new ClientError("Agent task was not found for this conversation.");
+    if (activeByConversation.has(conversationId)) throw new ClientError("An agent task is already running for this conversation.");
     await options.ai().open_conversation(conversationId);
     task.runId = id();
     task.status = "running";
@@ -196,12 +199,12 @@ export function createAgentTaskService(options: AgentTaskServiceOptions) {
       case "list": return Promise.all(retainHistory(tasks).reverse().map(enriched));
       case "status": {
         const task = findTask(args.taskId, args.conversationId);
-        if (!task) throw new Error("Agent task was not found.");
+        if (!task) throw new ClientError("Agent task was not found.");
         return enriched(task);
       }
       case "cancel": {
         const task = findTask(args.taskId, args.conversationId);
-        if (!task) throw new Error("Agent task was not found.");
+        if (!task) throw new ClientError("Agent task was not found.");
         if (task.status !== "running" && task.status !== "cancelling") return enriched(task);
         if (task.status === "cancelling") return enriched(task);
         task.cancelRequested = true;
@@ -266,23 +269,23 @@ function retainHistory(tasks: StoredTask[]): StoredTask[] {
   return tasks.filter((task) => retainedSet.has(task));
 }
 
-function requiredInput(value: string | undefined): string { if (typeof value !== "string") throw new Error("Agent task input is required."); return value; }
-function requiredString(value: string | undefined, name: string): string { if (typeof value !== "string" || !value) throw new Error(`${name} is required.`); return value; }
+function requiredInput(value: string | undefined): string { if (typeof value !== "string") throw new ClientError("Agent task input is required."); return value; }
+function requiredString(value: string | undefined, name: string): string { if (typeof value !== "string" || !value) throw new ClientError(`${name} is required.`); return value; }
 function validateRequest(value: unknown): AgentTaskRequest {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Agent task request must be an object.");
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new ClientError("Agent task request must be an object.");
   const request = value as Record<string, unknown>;
   const action = request.action;
   const allowed = action === "start" ? ["action", "input"]
     : action === "continue" ? ["action", "input", "conversationId", "taskId"]
     : action === "status" || action === "cancel" ? ["action", "taskId", "conversationId"]
     : action === "list" ? ["action"] : [];
-  if (allowed.length === 0) throw new Error("Agent task action is invalid.");
-  if (Object.keys(request).some((key) => !allowed.includes(key))) throw new Error("Agent task request contains an unsupported field.");
-  if (action === "start" && typeof request.input !== "string") throw new Error("Agent task input is required.");
-  if (action === "continue" && (typeof request.input !== "string" || typeof request.conversationId !== "string" || (request.taskId !== undefined && typeof request.taskId !== "string"))) throw new Error("Continue requires input and conversationId.");
-  if ((action === "status" || action === "cancel") && request.taskId !== undefined && typeof request.taskId !== "string") throw new Error("taskId must be a string.");
-  if ((action === "status" || action === "cancel") && request.conversationId !== undefined && typeof request.conversationId !== "string") throw new Error("conversationId must be a string.");
-  if ((action === "status" || action === "cancel") && !request.taskId && !request.conversationId) throw new Error("taskId or conversationId is required.");
+  if (allowed.length === 0) throw new ClientError("Agent task action is invalid.");
+  if (Object.keys(request).some((key) => !allowed.includes(key))) throw new ClientError("Agent task request contains an unsupported field.");
+  if (action === "start" && typeof request.input !== "string") throw new ClientError("Agent task input is required.");
+  if (action === "continue" && (typeof request.input !== "string" || typeof request.conversationId !== "string" || (request.taskId !== undefined && typeof request.taskId !== "string"))) throw new ClientError("Continue requires input and conversationId.");
+  if ((action === "status" || action === "cancel") && request.taskId !== undefined && typeof request.taskId !== "string") throw new ClientError("taskId must be a string.");
+  if ((action === "status" || action === "cancel") && request.conversationId !== undefined && typeof request.conversationId !== "string") throw new ClientError("conversationId must be a string.");
+  if ((action === "status" || action === "cancel") && !request.taskId && !request.conversationId) throw new ClientError("taskId or conversationId is required.");
   return request as AgentTaskRequest;
 }
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
