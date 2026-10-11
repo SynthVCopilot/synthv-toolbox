@@ -73,7 +73,7 @@ test("#agent-live-run is the last child of .messages, after the conversation his
     messages: [{ role: "user", content: "first" }, { role: "assistant", content: "second" }, { role: "user", content: "third" }],
   };
   state.liveRunId = "run-1";
-  state.liveRun = { sessionId: "c", runId: "run-1", seq: 1, phase: "writing", round: 1, text: "streaming", plan: null, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: 10, maxTokens: 1000, turns: 1, tokens: 5 }, retry: null, pendingInput: null };
+  state.liveRun = { sessionId: "c", runId: "run-1", seq: 1, phase: "writing", round: 1, text: "streaming", plan: null, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: 10, maxTokens: 1000, turns: 1, tokens: 5, uncachedInputTokens: 0, cacheReadTokens: 0 }, retry: null, pendingInput: null };
   dom.window.document.getElementById("root").innerHTML = state.renderCopilot();
   const messagesEl = dom.window.document.querySelector(".messages");
   assert.equal(messagesEl.lastElementChild.id, "agent-live-run", "the live-run slot must be the last child of .messages, after every earlier turn");
@@ -273,12 +273,12 @@ test("the goal slot shows the live plan while in flight and the persisted plan a
   const state = freshState();
   const plan = { goal: "Live goal", doneCriteria: ["a"], todos: [{ id: "1", title: "Step", status: "in_progress" }] };
   state.liveRunId = "run-1";
-  state.liveRun = { sessionId: "s", runId: "run-1", seq: 1, phase: "writing", round: 1, text: "", plan, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: 10, maxTokens: 1000, turns: 1, tokens: 10 }, retry: null, pendingInput: null };
+  state.liveRun = { sessionId: "s", runId: "run-1", seq: 1, phase: "writing", round: 1, text: "", plan, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: 10, maxTokens: 1000, turns: 1, tokens: 10, uncachedInputTokens: 0, cacheReadTokens: 0 }, retry: null, pendingInput: null };
   const inFlightHtml = state.renderAgentGoalSlot();
   assert.match(inFlightHtml, /Live goal/);
   state.liveRunId = undefined;
   state.liveRun = undefined;
-  state.conversation = { id: "c", title: "Chat", messages: [{ role: "assistant", content: "done", outcome: { status: "completed", summary: "done", evidence: [], missing: [], plan: { goal: "Persisted goal", doneCriteria: [], todos: [] }, budget: { level: "mid", maxTurns: 10, maxTokens: 1000, turns: 2, tokens: 20 } } }] };
+  state.conversation = { id: "c", title: "Chat", messages: [{ role: "assistant", content: "done", outcome: { status: "completed", summary: "done", evidence: [], missing: [], plan: { goal: "Persisted goal", doneCriteria: [], todos: [] }, budget: { level: "mid", maxTurns: 10, maxTokens: 1000, turns: 2, tokens: 20, uncachedInputTokens: 0, cacheReadTokens: 0 } } }] };
   const persistedHtml = state.renderAgentGoalSlot();
   assert.match(persistedHtml, /Persisted goal/);
   assert.doesNotMatch(persistedHtml, /Live goal/);
@@ -292,7 +292,7 @@ test("renderLiveRunPanel escapes text, tool summaries and tool names, and render
     plan: null,
     tools: [{ id: "call-1", name: "sv_command", status: "running", round: 2, summary: "<b>evil</b>" }],
     toolCount: 5,
-    budget: { level: "mid", maxTurns: 10, maxTokens: 1000, turns: 3, tokens: 300 },
+    budget: { level: "mid", maxTurns: 10, maxTokens: 1000, turns: 3, tokens: 300, uncachedInputTokens: 0, cacheReadTokens: 0 },
     retry: null, pendingInput: null,
   };
   const html = state.renderLiveRunPanel(view);
@@ -316,7 +316,7 @@ test("a pushed agent.run.progress event for the current runId patches #agent-liv
   await state.listenForAgentRunProgress();
   const push = (overrides) => state.listeners["agent.run.progress"]({
     sessionId: "c", runId: "run-1", seq: 1, phase: "writing", round: 1, text: "hello",
-    plan: null, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: 10, maxTokens: 1000, turns: 1, tokens: 5 },
+    plan: null, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: 10, maxTokens: 1000, turns: 1, tokens: 5, uncachedInputTokens: 0, cacheReadTokens: 0 },
     retry: null, pendingInput: null, ...overrides,
   });
   push({});
@@ -409,7 +409,7 @@ test("a patch leaves nodes outside the three slots untouched", async () => {
   const state = freshState({ document: dom.window.document });
   state.conversation = {
     id: "c", title: "Chat",
-    messages: [{ role: "user", content: "hi" }, { role: "assistant", content: "done", outcome: { status: "completed", summary: "done", evidence: ["proof"], missing: [], plan: { goal: "g", doneCriteria: ["c1"], todos: [] }, budget: { level: "mid", maxTurns: 10, maxTokens: 1000, turns: 1, tokens: 5 } } }],
+    messages: [{ role: "user", content: "hi" }, { role: "assistant", content: "done", outcome: { status: "completed", summary: "done", evidence: ["proof"], missing: [], plan: { goal: "g", doneCriteria: ["c1"], todos: [] }, budget: { level: "mid", maxTurns: 10, maxTokens: 1000, turns: 1, tokens: 5, uncachedInputTokens: 0, cacheReadTokens: 0 } } }],
   };
   dom.window.document.getElementById("root").innerHTML = state.renderCopilot();
   const details = dom.window.document.querySelector(".agent-outcome-evidence");
@@ -425,7 +425,7 @@ test("a patch leaves nodes outside the three slots untouched", async () => {
   selection.removeAllRanges();
   selection.addRange(range);
   state.liveRunId = "run-1";
-  state.liveRun = { sessionId: "c", runId: "run-1", seq: 1, phase: "writing", round: 1, text: "streaming", plan: null, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: 10, maxTokens: 1000, turns: 1, tokens: 5 }, retry: null, pendingInput: null };
+  state.liveRun = { sessionId: "c", runId: "run-1", seq: 1, phase: "writing", round: 1, text: "streaming", plan: null, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: 10, maxTokens: 1000, turns: 1, tokens: 5, uncachedInputTokens: 0, cacheReadTokens: 0 }, retry: null, pendingInput: null };
   state.applyLiveRunPatch();
   assert.equal(dom.window.document.querySelector(".agent-outcome-evidence"), details, "the details node identity is preserved");
   assert.equal(details.open, true, "the open <details> stays open across a patch");
@@ -587,7 +587,7 @@ test("an agent.approvals.changed push renders during an in-flight run, with cate
   await state.listenForAgentApprovals();
   state.agentRunInFlight = true;
   state.liveRunId = "run-1";
-  state.liveRun = { sessionId: "c", runId: "run-1", seq: 1, phase: "running_tools", round: 1, text: "", plan: null, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: 10, maxTokens: 1000, turns: 0, tokens: 0 }, retry: null, pendingInput: null };
+  state.liveRun = { sessionId: "c", runId: "run-1", seq: 1, phase: "running_tools", round: 1, text: "", plan: null, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: 10, maxTokens: 1000, turns: 0, tokens: 0, uncachedInputTokens: 0, cacheReadTokens: 0 }, retry: null, pendingInput: null };
   const approval = { id: "a1", conversationId: "c", runId: "run-1", toolCallId: "tc1", tool: "sv_command", action: "delete_notes", category: "projectWrite", risk: "high", preview: "{\"action\":\"delete_notes\"}", createdAtUtc: "2026-01-01T00:00:00Z", expiresAtUtc: "2026-01-01T00:02:00Z" };
   state.listeners["agent.approvals.changed"]({ pending: [approval], recent: [] });
   await flushMicrotasks();
@@ -608,7 +608,7 @@ test("a resolved approval's tool row shows the outcome directly, instead of a se
     plan: null,
     tools: [{ id: "tc1", name: "sv_command", status: "awaiting_approval", round: 1, summary: "delete_notes" }],
     toolCount: 1,
-    budget: { level: "mid", maxTurns: 10, maxTokens: 1000, turns: 1, tokens: 5 },
+    budget: { level: "mid", maxTurns: 10, maxTokens: 1000, turns: 1, tokens: 5, uncachedInputTokens: 0, cacheReadTokens: 0 },
     retry: null, pendingInput: null,
   };
   state.approvalsSnapshot = {
@@ -720,7 +720,7 @@ test("a full render resyncs the goal-slot cache so run 2's blank plan is not ski
   const state = freshState({ document: dom.window.document });
   state.conversation = { id: "c", title: "Chat", messages: [] };
   dom.window.document.getElementById("root").innerHTML = state.renderCopilot();
-  const runningView = (runId) => ({ sessionId: "c", runId, seq: 1, phase: "starting", round: 1, text: "", plan: null, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: 10, maxTokens: 1000, turns: 0, tokens: 0 }, retry: null, pendingInput: null });
+  const runningView = (runId) => ({ sessionId: "c", runId, seq: 1, phase: "starting", round: 1, text: "", plan: null, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: 10, maxTokens: 1000, turns: 0, tokens: 0, uncachedInputTokens: 0, cacheReadTokens: 0 }, retry: null, pendingInput: null });
   // Run 1 starts with no plan yet; the patch caches the blank slot.
   state.liveRunId = "run-1";
   state.liveRun = runningView("run-1");
@@ -729,7 +729,7 @@ test("a full render resyncs the goal-slot cache so run 2's blank plan is not ski
   // Run 1 ends and persists a plan; a full render (e.g. re-entering the page) embeds it directly.
   state.liveRunId = undefined;
   state.liveRun = undefined;
-  state.conversation.messages = [{ role: "assistant", content: "done", outcome: { status: "completed", summary: "done", evidence: [], missing: [], plan: { goal: "Run 1 goal", doneCriteria: [], todos: [] }, budget: { level: "mid", maxTurns: 10, maxTokens: 1000, turns: 1, tokens: 5 } } }];
+  state.conversation.messages = [{ role: "assistant", content: "done", outcome: { status: "completed", summary: "done", evidence: [], missing: [], plan: { goal: "Run 1 goal", doneCriteria: [], todos: [] }, budget: { level: "mid", maxTurns: 10, maxTokens: 1000, turns: 1, tokens: 5, uncachedInputTokens: 0, cacheReadTokens: 0 } } }];
   dom.window.document.getElementById("root").innerHTML = state.renderCopilot();
   assert.match(dom.window.document.getElementById("agent-goal-slot").innerHTML, /Run 1 goal/);
   // Run 2 starts before its own update_plan call; the goal slot must blank out rather than keep

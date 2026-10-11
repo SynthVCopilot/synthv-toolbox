@@ -5,7 +5,7 @@ import type { AgentEffortLevel, AgentRunOutcome, AgentRunProgress } from "@synth
 import type { AiService } from "./ai-service.js";
 
 type AiTaskPort = Pick<AiService, "new_conversation" | "open_conversation" | "send_message" | "cancel_agent_run">;
-export type AgentTaskStatus = "running" | "cancelling" | "completed" | "needs_input" | "budget_exhausted" | "incomplete" | "cancelled" | "failed" | "interrupted" | "unknown";
+export type AgentTaskStatus = "running" | "cancelling" | "completed" | "needs_input" | "budget_exhausted" | "incomplete" | "cancelled" | "error" | "failed" | "interrupted" | "unknown";
 
 export interface AgentTaskSnapshot {
   taskId: string;

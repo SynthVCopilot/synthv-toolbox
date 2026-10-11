@@ -2660,6 +2660,7 @@ function renderAgentStatusChip(status: AgentRunOutcome["status"]): string {
     : status === "needs_input" ? t("copilot.statusNeedsInput")
     : status === "budget_exhausted" ? t("copilot.statusBudgetExhausted")
     : status === "cancelled" ? t("copilot.statusCancelled")
+    : status === "error" ? t("copilot.statusError")
     : t("copilot.statusIncomplete");
   return `<span class="agent-status-chip agent-status-${status}">${escapeHtml(label)}</span>`;
 }
@@ -2791,7 +2792,9 @@ function renderAgentBudgetMeter(budget: AgentRunOutcome["budget"]): string {
     { label: t("copilot.budgetTurns"), used: budget.turns, limit: budget.maxTurns },
     { label: t("copilot.budgetTokens"), used: budget.tokens, limit: budget.maxTokens },
   ];
-  return `<div class="agent-budget-meter">${rows.map((row) => {
+  const cacheTotal = budget.uncachedInputTokens + budget.cacheReadTokens;
+  const cacheHtml = cacheTotal > 0 ? `<small class="agent-cache-hit">${escapeHtml(t("copilot.cacheHit", { percent: Math.round((budget.cacheReadTokens / cacheTotal) * 100) }))}</small>` : "";
+  return `<div class="agent-budget-meter">${cacheHtml}${rows.map((row) => {
     const percent = row.limit ? Math.min(100, Math.round((row.used / row.limit) * 100)) : 0;
     const text = row.limit === null
       ? t("copilot.usedNoLimit", { used: row.used.toLocaleString(locale()) })

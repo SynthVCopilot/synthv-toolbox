@@ -139,6 +139,8 @@ test("Real Pi SDK drives the full Electron host chain against a scripted local m
     assert.equal(outcome.plan.goal, "Summarize the score", "the completed outcome still carries the final plan");
     assert.equal(outcome.budget.turns, 2, "one turn per provider request");
     assert.equal(outcome.budget.tokens, 500 + 60 + 20 + 520 + 40 + 10, "tokens are input + output + cache writes summed across every request, excluding cache reads");
+    assert.equal(outcome.budget.cacheReadTokens, 15 + 5, "cache reads are summed separately from the token budget");
+    assert.equal(outcome.budget.uncachedInputTokens, 500 + 20 + 520 + 10);
     assert.equal(messages[1].content, "Done.", "the assistant's accompanying text is returned");
 
     const persisted = await reopenFresh(conversation.id);
@@ -233,18 +235,17 @@ test("Real Pi SDK drives the full Electron host chain against a scripted local m
     assert.equal(persisted.messages[1].outcome.status, "budget_exhausted", "the budget_exhausted outcome round-trips through metadata.json");
   });
 
-  await t.test("a provider HTTP 401 rejects send_message and persists nothing", async () => {
+  await t.test("a provider HTTP 401 ends with an error outcome that is persisted", async () => {
     mock.reset();
     const conversation = await ai.new_conversation();
     mock.push({ kind: "error", status: 401, errorType: "authentication_error", message: "e2e-401-marker" });
 
-    await assert.rejects(
-      () => ai.send_message(conversation.id, "Hello?", { cwd, effort: "mid" }),
-      (error) => { assert.match(error.message, /e2e-401-marker/); return true; },
-    );
+    const messages = await ai.send_message(conversation.id, "Hello?", { cwd, effort: "mid" });
+    assert.equal(messages[1].outcome.status, "error");
+    assert.match(messages[1].outcome.summary, /e2e-401-marker/);
     assert.equal(mock.requests.length, 1, "the 401 is not retried");
     const reopened = await reopenFresh(conversation.id);
-    assert.equal(reopened.messages.length, 0, "no assistant message is persisted when the provider call fails, read from a fresh AiService");
+    assert.equal(reopened.messages[1].outcome.status, "error", "the error outcome round-trips through metadata.json");
   });
 
   await t.test("cancelling a slow streamed turn produces a cancelled outcome", async () => {

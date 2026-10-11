@@ -1271,6 +1271,7 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .agent-status-completed { color: var(--success); background: color-mix(in srgb,var(--success) 14%,transparent); }
 .agent-status-needs_input { color: var(--warning); background: color-mix(in srgb,var(--warning) 14%,transparent); }
 .agent-status-budget_exhausted { color: var(--danger); background: color-mix(in srgb,var(--danger) 14%,transparent); }
+.agent-status-error { color: var(--danger); background: color-mix(in srgb,var(--danger) 14%,transparent); }
 .agent-status-incomplete { color: var(--muted); background: var(--surface-subtle); }
 .agent-status-cancelled { color: var(--muted); background: var(--surface-subtle); }
 .agent-outcome { display: grid; gap: 6px; margin-top: 8px; }
@@ -1303,6 +1304,7 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .agent-pending-input strong { display: block; margin-bottom: 3px; font-size: 11px; font-weight: 600; }
 .agent-pending-input p { margin: 0; font-size: 12px; color: var(--muted); }
 .agent-budget-meter { display: grid; gap: 6px; }
+.agent-cache-hit { color: var(--muted); font-size: 10px; }
 .agent-budget-row { display: grid; grid-template-columns: 48px minmax(0,1fr) auto; align-items: center; gap: 8px; font-size: 10px; color: var(--muted); }
 .agent-budget-bar { height: 4px; overflow: hidden; border-radius: 999px; background: var(--surface-subtle); }
 .agent-budget-fill { display: block; height: 100%; background: var(--primary); }

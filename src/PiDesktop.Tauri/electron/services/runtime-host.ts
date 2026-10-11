@@ -61,6 +61,8 @@ export class ElectronRuntimeHost {
     private readonly hostCapabilities: HostCapabilityInvoker,
     options: ElectronRuntimeHostOptions = {},
   ) {
+    // The Pi SDK reads this at request time; the default 5-minute TTL expires between editing turns.
+    process.env.PI_CACHE_RETENTION ??= "long";
     this.runtime = new AgentRuntimeWorker(
       options.sessionFactory,
       {

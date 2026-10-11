@@ -449,7 +449,7 @@ const previewAgentOutcome: import("./types").AgentRunOutcome = {
       { id: "tune", title: "多轮参数微调", status: "completed", note: "已完成 3 轮微调。" },
     ],
   },
-  budget: { ...previewAgentBudgets[previewAgentEffort], turns: 6, tokens: 42_000 },
+  budget: { ...previewAgentBudgets[previewAgentEffort], turns: 6, tokens: 42_000, uncachedInputTokens: 9_000, cacheReadTokens: 30_000 },
 };
 
 const previewSv2VoiceCatalog = [

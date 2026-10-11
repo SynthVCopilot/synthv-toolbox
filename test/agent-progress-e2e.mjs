@@ -161,8 +161,9 @@ test("progress e2e: real Pi SDK against the shared mock server, driven through A
     t.after(() => worker.dispose());
 
     const sent = await send(worker, "send", "session.send", { sessionId: "s1", input: "Hello?", runId: "run-3", budget: budgetFor("mid", 16, 300_000) });
-    assert.equal(sent.ok, false);
-    assert.match(sent.error.message, /progress-e2e-401-marker/);
+    assert.equal(sent.ok, true);
+    assert.equal(sent.result.outcome.status, "error");
+    assert.match(sent.result.outcome.summary, /progress-e2e-401-marker/);
 
     const views = progressViews(notifications, "run-3");
     assert.ok(views.length > 0);

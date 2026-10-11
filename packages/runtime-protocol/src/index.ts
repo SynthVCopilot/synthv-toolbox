@@ -133,9 +133,12 @@ export interface AgentRunBudget {
   maxTokens: number | null;
 }
 
+/** `uncachedInputTokens` (input + cache writes) and `cacheReadTokens` are informational and never count against `maxTokens`. */
 export interface AgentBudgetUsage extends AgentRunBudget {
   turns: number;
   tokens: number;
+  uncachedInputTokens: number;
+  cacheReadTokens: number;
 }
 
 /**
@@ -145,8 +148,9 @@ export interface AgentBudgetUsage extends AgentRunBudget {
  * - `budget_exhausted`: the effort budget ran out before either signal.
  * - `incomplete`: the agent stopped advancing without a signal while budget remained.
  * - `cancelled`: the user stopped the run.
+ * - `error`: a model request failed; `summary` holds the error text and the plan is kept.
  */
-export type AgentRunStatus = "completed" | "needs_input" | "budget_exhausted" | "incomplete" | "cancelled";
+export type AgentRunStatus = "completed" | "needs_input" | "budget_exhausted" | "incomplete" | "cancelled" | "error";
 
 export interface AgentRunOutcome {
   status: AgentRunStatus;
@@ -563,6 +567,7 @@ export function validateAgentRunOutcome(value: unknown): AgentRunOutcome | undef
   if (!evidence || !missing || missing.length > AGENT_PLAN_LIMITS.missing) return undefined;
   if (value.status === "completed" && (!summary || !plan || evidence.length !== plan.doneCriteria.length || missing.length)) return undefined;
   if (value.status === "needs_input" && (!summary || !missing.length || evidence.length)) return undefined;
+  if (value.status === "error" && (!summary || evidence.length || missing.length)) return undefined;
   if ((value.status === "budget_exhausted" || value.status === "incomplete" || value.status === "cancelled") && (summary || evidence.length || missing.length)) return undefined;
   return { status: value.status, summary, evidence, missing, plan, budget };
 }
@@ -653,8 +658,9 @@ function standardNormalUpperTail(x: number): number {
 
 function validateAgentBudgetUsage(value: unknown): AgentBudgetUsage | undefined {
   const budget = validateAgentRunBudget(value);
-  if (!budget || !isRecord(value) || !isCount(value.turns) || !isCount(value.tokens)) return undefined;
-  return { ...budget, turns: value.turns, tokens: value.tokens };
+  if (!budget || !isRecord(value) || !isCount(value.turns) || !isCount(value.tokens)
+    || !isCount(value.uncachedInputTokens) || !isCount(value.cacheReadTokens)) return undefined;
+  return { ...budget, turns: value.turns, tokens: value.tokens, uncachedInputTokens: value.uncachedInputTokens, cacheReadTokens: value.cacheReadTokens };
 }
 
 function isCount(value: unknown): value is number {
@@ -728,7 +734,7 @@ function isAgentTodoStatus(value: unknown): value is AgentTodoStatus {
 }
 
 function isAgentRunStatus(value: unknown): value is AgentRunStatus {
-  return value === "completed" || value === "needs_input" || value === "budget_exhausted" || value === "incomplete" || value === "cancelled";
+  return value === "completed" || value === "needs_input" || value === "budget_exhausted" || value === "incomplete" || value === "cancelled" || value === "error";
 }
 
 function boundedText(value: unknown, maxLength: number): string | undefined {
