@@ -1,4 +1,5 @@
 import { CredentialRouter, createCredentialMetadata, type CredentialMetadata, type ProviderAdapterHost, type ProviderRequest, type ProviderRequestContext, type ProviderResponse, type ProviderStreamEvent } from "@model-auth/core";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
   AGENT_RUN_ID_MAX_LENGTH,
@@ -72,6 +73,8 @@ export interface PiSession {
 
 export interface PiSessionFactory {
   create(input: { sessionId: string; cwd?: string; systemPrompt?: string; model?: PiModelSelection; outcome?: AgentRunOutcome }): Promise<PiSession>;
+  /** Changes when the credential the session was created with can no longer be used by it; sessions with a live credential store never change. */
+  credentialFingerprint?(model: PiModelSelection): string;
 }
 
 /** Registers a check the completion tool consults; a non-null return is the reason it fails. */
@@ -154,7 +157,7 @@ export interface PiInlineExtension {
 }
 
 export interface PiAgentSession {
-  prompt(input: string): Promise<void>;
+  prompt(input: string, options?: { expandPromptTemplates?: boolean }): Promise<void>;
   abort(): Promise<void>;
   dispose(): void | Promise<void>;
   setThinkingLevel(level: string): void;
@@ -173,6 +176,11 @@ export interface PiSdk {
     extensionFactories?: PiInlineExtension[];
     settingsManager?: PiSettingsManager;
     systemPrompt?: string;
+    noExtensions?: boolean;
+    noSkills?: boolean;
+    noPromptTemplates?: boolean;
+    noThemes?: boolean;
+    noContextFiles?: boolean;
   }) => PiResourceLoader;
   ModelRuntime: { create(options: { refreshOnCreate: boolean; credentials?: PiCredentialStore }): Promise<{ setRuntimeApiKey(providerId: string, apiKey: string): Promise<void>; getModel(providerId: string, modelId: string): unknown }> };
   SettingsManager: { create(cwd: string, agentDir?: string): PiSettingsManager };
@@ -244,6 +252,7 @@ export interface PiSessionFactoryOptions {
 export function createPiSessionFactory(options: PiSessionFactoryOptions = {}): PiSessionFactory {
   const loadSdk = options.loadSdk ?? loadPiSdk;
   return {
+    credentialFingerprint: (model) => (options.credentialStore ? "" : createHash("sha256").update(model.apiKey).digest("hex")),
     async create(input) {
       const sdk = await loadSdk();
       const cwd = input.cwd ?? process.cwd();
@@ -264,6 +273,11 @@ export function createPiSessionFactory(options: PiSessionFactoryOptions = {}): P
         additionalExtensionPaths: [...(options.extensionPaths?.() ?? [])],
         extensionFactories: [createTaskLoopExtension(state, completionGuards.run), ...(options.extensions?.({ sessionId: input.sessionId, guards, runState }) ?? [])],
         settingsManager,
+        noExtensions: true,
+        noSkills: true,
+        noPromptTemplates: true,
+        noThemes: true,
+        noContextFiles: true,
         ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
       });
       await resourceLoader.reload();
@@ -300,7 +314,7 @@ export function createPiSessionFactory(options: PiSessionFactoryOptions = {}): P
             applyEffortProfile(result.session, settingsManager, effortProfileFor(budget.level), contextWindow);
             const { status } = await runTaskLoop(state, effortProfileFor(budget.level), text, (round) => {
               projector.round();
-              return result.session.prompt(round);
+              return result.session.prompt(round, { expandPromptTemplates: false });
             });
             const outcome = buildOutcome(state, status);
             if (status === "completed") state.plan = null;
@@ -417,7 +431,7 @@ export class AgentRuntimeWorker {
       if (!outcome) return this.failure(request, "session.invalid", "session.initialize outcome is invalid.");
     }
     const model = await this.hostModelSelection();
-    const signature = JSON.stringify([params.cwd ?? "", params.systemPrompt ?? "", model.providerId, model.modelId, model.credentialId ?? ""]);
+    const signature = JSON.stringify([params.cwd ?? "", params.systemPrompt ?? "", model.providerId, model.modelId, model.credentialId ?? "", this.sessionsFactory.credentialFingerprint?.(model) ?? ""]);
     const existing = this.sessions.get(params.sessionId);
     if (existing?.signature === signature) return this.success(request, { sessionId: params.sessionId, reused: true });
     if (existing?.session.running) return this.failure(request, "session.busy", "The session has a run in progress; wait for it to finish or cancel it first.");

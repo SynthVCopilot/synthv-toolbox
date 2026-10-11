@@ -51,6 +51,9 @@ function createFakeSdk(rounds) {
   const subscribers = [];
   const messages = [];
   const settingsOverrides = [];
+  const promptCalls = [];
+  const runtimeApiKeys = [];
+  const loaderOptions = [];
   const systemPrompts = [];
   const firstRoundMessages = [];
   let thinkingLevel;
@@ -98,7 +101,8 @@ function createFakeSdk(rounds) {
       if (holdRelease) { const release = holdRelease; holdRelease = undefined; release(); }
     },
     clearQueue() { return { steering: [], followUp: [] }; },
-    async prompt(text) {
+    async prompt(text, options) {
+      promptCalls.push({ text, options });
       inFlight = true;
       aborted = false;
       let round;
@@ -203,14 +207,14 @@ function createFakeSdk(rounds) {
     SettingsManager: { create: () => ({ applyOverrides: (overrides) => settingsOverrides.push(overrides) }) },
     SessionManager: { inMemory: (cwd) => ({ kind: "in-memory", cwd }), create: (cwd) => ({ kind: "persisted", cwd }) },
     DefaultResourceLoader: class {
-      constructor(options) { this.options = options; }
+      constructor(options) { this.options = options; loaderOptions.push(options); }
       async reload() {
         for (const extension of this.options.extensionFactories ?? []) await extension.factory(pi);
       }
     },
     ModelRuntime: {
       create: async () => ({
-        setRuntimeApiKey: async () => {},
+        setRuntimeApiKey: async (providerId, apiKey) => { runtimeApiKeys.push({ providerId, apiKey }); },
         getModel: () => ({ contextWindow }),
       }),
     },
@@ -222,6 +226,9 @@ function createFakeSdk(rounds) {
     tools,
     messages,
     settingsOverrides,
+    promptCalls,
+    loaderOptions,
+    runtimeApiKeys,
     systemPrompts,
     firstRoundMessages,
     get thinkingLevel() { return thinkingLevel; },
@@ -1510,4 +1517,59 @@ test("runState().runId equals the session.send runId for the duration of the hel
   await worker.handleJsonl(request("cancel", "session.cancel", { sessionId: "s1" }));
   await sendPromise;
   assert.deepEqual(runStateAccessor(), { active: false, runId: null });
+});
+
+test("user input is sent literally: prompt template expansion is off and resource discovery is disabled", async () => {
+  const fake = createFakeSdk([
+    { toolCalls: [{ name: "update_plan", args: { goal: "G", doneCriteria: ["C"], todos: [{ id: "t1", title: "Step", status: "in_progress" }] } }, { name: "complete_task", args: { summary: "Done", evidence: ["done"] } }] },
+  ]);
+  const session = await createSession(fake);
+  await session.prompt("/some-template arg", budgetFor("mid", 16, 300_000), undefined, "run-20");
+  assert.ok(fake.promptCalls.length > 0);
+  assert.equal(fake.promptCalls[0].text.includes("/some-template arg"), true);
+  for (const call of fake.promptCalls) assert.deepEqual(call.options, { expandPromptTemplates: false });
+  const loader = fake.loaderOptions[0];
+  for (const flag of ["noExtensions", "noSkills", "noPromptTemplates", "noThemes", "noContextFiles"]) assert.equal(loader[flag], true, flag);
+  assert.equal(loader.extensionFactories.some((extension) => extension.name === "synthv-task-loop"), true);
+});
+
+test("each run leaves the provider request timeout to Pi's defaults", async () => {
+  const fake = createFakeSdk([
+    { toolCalls: [{ name: "update_plan", args: { goal: "G", doneCriteria: ["C"], todos: [{ id: "t1", title: "Step", status: "in_progress" }] } }, { name: "complete_task", args: { summary: "Done", evidence: ["done"] } }] },
+  ]);
+  const session = await createSession(fake);
+  await session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-21");
+  assert.equal(fake.settingsOverrides.at(-1).retry, undefined);
+});
+
+test("re-initializing with the same credential id but a different API key recreates the session with the new key", async () => {
+  const fake = createFakeSdk([]);
+  let apiKey = "key-old";
+  const worker = new runtime.AgentRuntimeWorker(
+    runtime.createPiSessionFactory({ extensionPaths: () => [], loadSdk: async () => fake.sdk }),
+    { request: async () => ({ providerId: "example", modelId: "model-1", credentials: [{ id: "c1", providerId: "example", modelId: "model-1", authMethod: "api-key", apiKey }] }) },
+  );
+  await worker.handleJsonl(request("hello", "host.hello", { hostId: "host", protocol: { min: "1.0", max: "1.0" }, capabilities: [] }));
+  const first = JSON.parse((await worker.handleJsonl(request("i1", "session.initialize", { sessionId: "s1" })))[0]);
+  const sameKey = JSON.parse((await worker.handleJsonl(request("i2", "session.initialize", { sessionId: "s1" })))[0]);
+  assert.equal(sameKey.result.reused, true);
+  apiKey = "key-new";
+  const rotated = JSON.parse((await worker.handleJsonl(request("i3", "session.initialize", { sessionId: "s1" })))[0]);
+  assert.equal(first.ok && rotated.ok, true);
+  assert.notEqual(rotated.result.reused, true);
+  assert.deepEqual(fake.runtimeApiKeys.map((entry) => entry.apiKey), ["key-old", "key-new"]);
+});
+
+test("a rotating OAuth access token behind a credential store keeps the session", async () => {
+  const fake = createFakeSdk([]);
+  let accessToken = "token-1";
+  const worker = new runtime.AgentRuntimeWorker(
+    runtime.createPiSessionFactory({ extensionPaths: () => [], loadSdk: async () => fake.sdk, credentialStore: () => ({}) }),
+    { request: async () => ({ providerId: "example", modelId: "model-1", credentials: [{ id: "c1", providerId: "example", modelId: "model-1", authMethod: "oauth", apiKey: accessToken }] }) },
+  );
+  await worker.handleJsonl(request("hello", "host.hello", { hostId: "host", protocol: { min: "1.0", max: "1.0" }, capabilities: [] }));
+  await worker.handleJsonl(request("i1", "session.initialize", { sessionId: "s1" }));
+  accessToken = "token-2";
+  const second = JSON.parse((await worker.handleJsonl(request("i2", "session.initialize", { sessionId: "s1" })))[0]);
+  assert.equal(second.result.reused, true);
 });
