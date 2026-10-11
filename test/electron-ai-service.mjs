@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import test from "node:test";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const runtimeProtocolUrl = pathToFileURL(join(root, "packages/runtime-protocol/dist/index.js")).href;
@@ -108,7 +109,7 @@ const outcomeA = {
   evidence: ["evidence1"],
   missing: [],
   plan: planA,
-  budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 3, tokens: 500 },
+  budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 3, tokens: 500, uncachedInputTokens: 0, cacheReadTokens: 0 },
 };
 nextSendResult = { message: "Assistant reply one", outcome: outcomeA };
 const messages = await service.send_message(conversation.id, "Explain this score", { cwd: directory, effort: "mid" });
@@ -130,7 +131,7 @@ const outcomeB = {
   evidence: [],
   missing: ["missing-item"],
   plan: null,
-  budget: { level: "mid", maxTurns: 5, maxTokens: 1200, turns: 4, tokens: 800 },
+  budget: { level: "mid", maxTurns: 5, maxTokens: 1200, turns: 4, tokens: 800, uncachedInputTokens: 0, cacheReadTokens: 0 },
 };
 nextSendResult = { message: "", outcome: outcomeB };
 const secondTurn = await service.send_message(conversation.id, "Second turn", { effort: "mid" });
@@ -144,7 +145,7 @@ const outcomeC = {
   evidence: [],
   missing: [],
   plan: null,
-  budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 5, tokens: 1000 },
+  budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 5, tokens: 1000, uncachedInputTokens: 0, cacheReadTokens: 0 },
 };
 nextSendResult = { message: "", outcome: outcomeC };
 const thirdTurn = await service.send_message(conversation.id, "Third turn", { effort: "mid" });
@@ -157,11 +158,23 @@ const outcomeD = {
   evidence: [],
   missing: [],
   plan: null,
-  budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 2, tokens: 300 },
+  budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 2, tokens: 300, uncachedInputTokens: 0, cacheReadTokens: 0 },
 };
 nextSendResult = { message: "", outcome: outcomeD };
 const fourthTurn = await service.send_message(conversation.id, "Fourth turn", { effort: "mid" });
 assert.equal(fourthTurn[1].content, "", "a cancelled outcome is persisted like any other outcome");
+
+const outcomeE = {
+  status: "error",
+  summary: "provider failed",
+  evidence: [],
+  missing: [],
+  plan: null,
+  budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 1, tokens: 100, uncachedInputTokens: 0, cacheReadTokens: 0 },
+};
+nextSendResult = { message: "", outcome: outcomeE };
+const fifthTurn = await service.send_message(conversation.id, "Fifth turn", { effort: "mid" });
+assert.equal(fifthTurn[1].content, "provider failed", "an error outcome surfaces its summary as the reply and is persisted");
 
 assert.deepEqual(service.agentUsageSamples(), [
   { level: "mid", turns: 3, tokens: 500, censored: false },
@@ -232,11 +245,13 @@ assert.equal(anthropic.accounts.length + anthropic.apiKeys.length, 0);
   const activeRunRequests = [];
   let releaseInitialize;
   let blockNextInitialize = true;
+  let holdSend;
   const activeRunRuntime = {
     async request(method, params) {
       activeRunRequests.push({ method, params });
       if (method === "session.initialize" && blockNextInitialize) { blockNextInitialize = false; await new Promise((resolve) => { releaseInitialize = resolve; }); }
-      if (method === "session.send") return { message: "Handled.", outcome: { status: "completed", summary: "Handled.", evidence: ["e"], missing: [], plan: { goal: "G", doneCriteria: ["e"], todos: [{ id: "t1", title: "T", status: "completed" }] }, budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 1, tokens: 10 } } };
+      if (holdSend && method === "session.send") await holdSend;
+      if (method === "session.send") return { message: "Handled.", outcome: { status: "completed", summary: "Handled.", evidence: ["e"], missing: [], plan: { goal: "G", doneCriteria: ["e"], todos: [{ id: "t1", title: "T", status: "completed" }] }, budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 1, tokens: 10, uncachedInputTokens: 0, cacheReadTokens: 0 } } };
       return {};
     },
   };
@@ -269,6 +284,26 @@ assert.equal(anthropic.accounts.length + anthropic.apiKeys.length, 0);
   assert.equal(thirdSend[1].outcome.status, "completed", "the active-run slot is released after the cancelled run finishes");
   const sendRequest = activeRunRequests.filter((request) => request.method === "session.send").at(-1);
   assert.match(sendRequest.params.runId, /^active-\d+$/, "a runId is generated when the caller omits one");
+
+  // Steering: accepted only once session.send is issued, forwarded with the run's id, and persisted between the user message and the reply.
+  await assert.rejects(() => activeRunService.steer_agent_run(conversation.id, "too early"), /No agent run is in progress/, "no steer without an active run");
+  let releaseSend;
+  holdSend = new Promise((resolve) => { releaseSend = resolve; });
+  const steeredSend = activeRunService.send_message(conversation.id, "Original", { runId: "steer-run" });
+  while (!activeRunRequests.some((request) => request.method === "session.send" && request.params.runId === "steer-run")) await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(() => activeRunService.steer_agent_run(conversation.id, "   "), /Message is required/);
+  await assert.rejects(() => activeRunService.steer_agent_run(conversation.id, "x".repeat(32_001)), /32,000 character limit/);
+  const steerMessage = await activeRunService.steer_agent_run(conversation.id, "  use track 2, not 1  ");
+  assert.equal(steerMessage.role, "user");
+  assert.equal(steerMessage.content, "use track 2, not 1");
+  const steerRequest = activeRunRequests.filter((request) => request.method === "session.steer").at(-1);
+  assert.deepEqual(steerRequest.params, { sessionId: conversation.id, runId: "steer-run", input: "use track 2, not 1" });
+  releaseSend();
+  const steeredMessages = await steeredSend;
+  assert.deepEqual(steeredMessages.map((message) => [message.role, message.content]), [["user", "Original"], ["user", "use track 2, not 1"], ["assistant", "Handled."]]);
+  const reopened = await activeRunService.open_conversation(conversation.id);
+  assert.deepEqual(reopened.messages.slice(-3).map((message) => message.content), ["Original", "use track 2, not 1", "Handled."], "the steer text is persisted in order");
+  await assert.rejects(() => activeRunService.steer_agent_run(conversation.id, "too late"), /No agent run is in progress/, "the run slot is released after the run ends");
 }
 
 console.log("Electron AI service persists encrypted credentials and drives Agent Runtime sessions.");
@@ -285,3 +320,53 @@ assert.equal((await foreign.list_conversations()).length, foreignData.conversati
 await assert.rejects(foreign.resolveModelSelection(), /readable local credential|No eligible credential/);
 assert.equal(await readFile(foreignPath, "utf8"), foreignBytes);
 console.log("Unreadable local credentials preserve history and require a new login.");
+
+test("an accepted steer is persisted when its acknowledgement arrives after the run result", async (t) => {
+  const taskRoot = await mkdtemp(join(tmpdir(), "agent-steer-race-"));
+  t.after(() => rm(taskRoot, { recursive: true, force: true }));
+  const gate = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
+  const sendStarted = gate();
+  const steerStarted = gate();
+  const finishSend = gate();
+  const finishSteer = gate();
+  const taskPath = join(taskRoot, "ai.json");
+  const runtime = { async request(method) {
+    if (method === "session.send") {
+      sendStarted.resolve();
+      await finishSend.promise;
+      return { message: "Done", outcome: { status: "completed", summary: "Done", evidence: ["Verified"], missing: [], plan: { goal: "Edit the song", doneCriteria: ["Verified"], todos: [{ id: "edit", title: "Edit", status: "completed" }] }, budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 1, tokens: 10, uncachedInputTokens: 10, cacheReadTokens: 0 } } };
+    }
+    if (method === "session.steer") { steerStarted.resolve(); await finishSteer.promise; }
+    return {};
+  } };
+  const ai = new AiService({ metadataPath: taskPath, runtime, catalog, approvals });
+  const conversation = await ai.new_conversation();
+  const send = ai.send_message(conversation.id, "Original", { runId: "race-run" });
+  await sendStarted.promise;
+  const steer = ai.steer_agent_run(conversation.id, "Use track 2");
+  await steerStarted.promise;
+  finishSend.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  finishSteer.resolve();
+  await steer;
+  assert.deepEqual((await send).map((message) => message.content), ["Original", "Use track 2", "Done"]);
+  const reopened = new AiService({ metadataPath: taskPath, runtime, catalog, approvals });
+  assert.deepEqual((await reopened.open_conversation(conversation.id)).messages.map((message) => message.content), ["Original", "Use track 2", "Done"]);
+});
+
+test("persisted run results retain their plan and usage when no cache measurement was recorded", async (t) => {
+  const taskRoot = await mkdtemp(join(tmpdir(), "agent-usage-record-"));
+  t.after(() => rm(taskRoot, { recursive: true, force: true }));
+  const taskPath = join(taskRoot, "ai.json");
+  const ai = new AiService({ metadataPath: taskPath, runtime, catalog, approvals });
+  const conversation = await ai.new_conversation();
+  const outcome = { status: "needs_input", summary: "Which file?", missing: ["file path"], evidence: [], plan: { goal: "Review the song", doneCriteria: ["Review complete"], todos: [{ id: "review", title: "Review", status: "in_progress" }] }, budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 2, tokens: 500 } };
+  const metadata = JSON.parse(await readFile(taskPath, "utf8"));
+  metadata.conversations[0].messages = [{ role: "assistant", content: "Which file?", createdAt: "2026-01-01T00:00:00Z", outcome }];
+  await writeFile(taskPath, JSON.stringify(metadata));
+  const reopened = new AiService({ metadataPath: taskPath, runtime, catalog, approvals });
+  assert.deepEqual((await reopened.open_conversation(conversation.id)).messages[0].outcome, outcome);
+  assert.deepEqual(reopened.agentUsageSamples(), [{ level: "mid", turns: 2, tokens: 500, censored: false }]);
+  await reopened.new_conversation();
+  assert.deepEqual(JSON.parse(await readFile(taskPath, "utf8")).conversations[0].messages[0].outcome, outcome);
+});

@@ -34,7 +34,8 @@ test("A real ElectronRuntimeHost resolves the model through AiService and drives
       .replace('from "@synthv-toolbox/runtime-protocol";', `from "${runtimeProtocolUrl}";`)
       .replace('from "@synthv-toolbox/agent-runtime";', `from "${agentRuntimeUrl}";`)
       .replace('from "@model-auth/core";', `from "${modelAuthCoreUrl}";`)
-    .replace('from "./local-credential-store.js";', `from "${pathToFileURL(join(tauriRoot, "dist/electron/services/local-credential-store.js")).href}";`);
+      .replace('from "./local-credential-store.js";', `from "${pathToFileURL(join(tauriRoot, "dist/electron/services/local-credential-store.js")).href}";`)
+      .replace('from "./http-mcp-server.js";', `from "${pathToFileURL(join(tauriRoot, "dist/electron/services/http-mcp-server.js")).href}";`);
     for (const [search, replace] of extraReplacements) text = text.replace(search, replace);
     const executable = stripTypeScriptTypes(text, { mode: "transform" });
     return import(`data:text/javascript;base64,${Buffer.from(executable).toString("base64")}`);
@@ -65,7 +66,7 @@ test("A real ElectronRuntimeHost resolves the model through AiService and drives
                 evidence: ["Replied to the prompt."],
                 missing: [],
                 plan: { goal: "Reply to the test prompt.", doneCriteria: ["Replied to the prompt."], todos: [{ id: "reply", title: "Reply to the prompt.", status: "completed" }] },
-                budget: { ...budget, turns: 1, tokens: 100 },
+                budget: { ...budget, turns: 1, tokens: 100, uncachedInputTokens: 0, cacheReadTokens: 0 },
               },
             };
           },
@@ -105,7 +106,8 @@ test("onAgentProgress receives session.progress views carrying the sessionId and
       .replace('from "@synthv-toolbox/runtime-protocol";', `from "${runtimeProtocolUrl}";`)
       .replace('from "@synthv-toolbox/agent-runtime";', `from "${agentRuntimeUrl}";`)
       .replace('from "@model-auth/core";', `from "${modelAuthCoreUrl}";`)
-    .replace('from "./local-credential-store.js";', `from "${pathToFileURL(join(tauriRoot, "dist/electron/services/local-credential-store.js")).href}";`);
+      .replace('from "./local-credential-store.js";', `from "${pathToFileURL(join(tauriRoot, "dist/electron/services/local-credential-store.js")).href}";`)
+      .replace('from "./http-mcp-server.js";', `from "${pathToFileURL(join(tauriRoot, "dist/electron/services/http-mcp-server.js")).href}";`);
     for (const [search, replace] of extraReplacements) text = text.replace(search, replace);
     const executable = stripTypeScriptTypes(text, { mode: "transform" });
     return import(`data:text/javascript;base64,${Buffer.from(executable).toString("base64")}`);
@@ -130,8 +132,8 @@ test("onAgentProgress receives session.progress views carrying the sessionId and
         async create() {
           return {
             async prompt(input, budget, report, runId) {
-              report({ phase: "starting", round: 0, text: "", plan: null, tools: [], toolCount: 0, budget: { turns: 0, tokens: 0 }, retry: null, pendingInput: null, seq: 1 });
-              report({ phase: "ended", round: 0, text: `Handled: ${input}`, plan: null, tools: [], toolCount: 0, budget: { ...budget, turns: 1, tokens: 100 }, retry: null, pendingInput: null, seq: 2 });
+              report({ phase: "starting", round: 0, text: "", plan: null, tools: [], toolCount: 0, budget: { turns: 0, tokens: 0, uncachedInputTokens: 0, cacheReadTokens: 0 }, retry: null, pendingInput: null, seq: 1 });
+              report({ phase: "ended", round: 0, text: `Handled: ${input}`, plan: null, tools: [], toolCount: 0, budget: { ...budget, turns: 1, tokens: 100, uncachedInputTokens: 0, cacheReadTokens: 0 }, retry: null, pendingInput: null, seq: 2 });
               assert.equal(typeof runId, "string");
               return {
                 message: `Handled: ${input}`,
@@ -141,7 +143,7 @@ test("onAgentProgress receives session.progress views carrying the sessionId and
                   evidence: ["Replied to the prompt."],
                   missing: [],
                   plan: { goal: "Reply to the test prompt.", doneCriteria: ["Replied to the prompt."], todos: [{ id: "reply", title: "Reply to the prompt.", status: "completed" }] },
-                  budget: { ...budget, turns: 1, tokens: 100 },
+                  budget: { ...budget, turns: 1, tokens: 100, uncachedInputTokens: 0, cacheReadTokens: 0 },
                 },
               };
             },
@@ -173,4 +175,27 @@ test("onAgentProgress receives session.progress views carrying the sessionId and
   }
   assert.equal(progressViews[0].phase, "starting");
   assert.equal(progressViews[1].phase, "ended");
+});
+
+test("ElectronRuntimeHost enables long Pi prompt caching unless the user already chose a retention", async (t) => {
+  const root = dirname(dirname(fileURLToPath(import.meta.url)));
+  const runtimeProtocolUrl = pathToFileURL(join(root, "packages/runtime-protocol/dist/index.js")).href;
+  const agentRuntimeUrl = pathToFileURL(join(root, "packages/agent-runtime/dist/index.js")).href;
+  const raw = await readFile(join(root, "src/PiDesktop.Tauri/electron/services/runtime-host.ts"), "utf8");
+  const text = raw
+    .replace('from "@synthv-toolbox/runtime-protocol";', `from "${runtimeProtocolUrl}";`)
+    .replace('from "@synthv-toolbox/agent-runtime";', `from "${agentRuntimeUrl}";`)
+    .replace('from "./http-mcp-server.js";', `from "${pathToFileURL(join(root, "src/PiDesktop.Tauri/dist/electron/services/http-mcp-server.js")).href}";`);
+  const { ElectronRuntimeHost } = await import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(text, { mode: "transform" })).toString("base64")}`);
+  const previous = process.env.PI_CACHE_RETENTION;
+  t.after(() => { if (previous === undefined) delete process.env.PI_CACHE_RETENTION; else process.env.PI_CACHE_RETENTION = previous; });
+  const host = { invoke: () => { throw new Error("not used in this test"); } };
+
+  delete process.env.PI_CACHE_RETENTION;
+  new ElectronRuntimeHost(join(tmpdir(), "runtime-host-cache"), host);
+  assert.equal(process.env.PI_CACHE_RETENTION, "long");
+
+  process.env.PI_CACHE_RETENTION = "short";
+  new ElectronRuntimeHost(join(tmpdir(), "runtime-host-cache"), host);
+  assert.equal(process.env.PI_CACHE_RETENTION, "short");
 });

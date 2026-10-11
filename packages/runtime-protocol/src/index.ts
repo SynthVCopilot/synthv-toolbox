@@ -133,9 +133,12 @@ export interface AgentRunBudget {
   maxTokens: number | null;
 }
 
+/** `uncachedInputTokens` (input + cache writes) and `cacheReadTokens` are informational and never count against `maxTokens`. */
 export interface AgentBudgetUsage extends AgentRunBudget {
   turns: number;
   tokens: number;
+  uncachedInputTokens?: number;
+  cacheReadTokens?: number;
 }
 
 /**
@@ -145,8 +148,9 @@ export interface AgentBudgetUsage extends AgentRunBudget {
  * - `budget_exhausted`: the effort budget ran out before either signal.
  * - `incomplete`: the agent stopped advancing without a signal while budget remained.
  * - `cancelled`: the user stopped the run.
+ * - `error`: a model request failed; `summary` holds the error text and the plan is kept.
  */
-export type AgentRunStatus = "completed" | "needs_input" | "budget_exhausted" | "incomplete" | "cancelled";
+export type AgentRunStatus = "completed" | "needs_input" | "budget_exhausted" | "incomplete" | "cancelled" | "error";
 
 export interface AgentRunOutcome {
   status: AgentRunStatus;
@@ -178,6 +182,16 @@ export interface AgentSessionSendParams {
 }
 
 export const AGENT_RUN_ID_MAX_LENGTH = 64;
+
+/** Longest user message `session.send` or `session.steer` accepts, after trimming. */
+export const AGENT_INPUT_MAX_LENGTH = 32_000;
+
+/** Delivered to the run `runId` names while it is in flight; rejected when that run is not the session's active one. */
+export interface AgentSessionSteerParams {
+  sessionId: string;
+  runId: string;
+  input: string;
+}
 
 export const AGENT_RUN_PROGRESS_EVENT = "session.progress";
 
@@ -563,8 +577,18 @@ export function validateAgentRunOutcome(value: unknown): AgentRunOutcome | undef
   if (!evidence || !missing || missing.length > AGENT_PLAN_LIMITS.missing) return undefined;
   if (value.status === "completed" && (!summary || !plan || evidence.length !== plan.doneCriteria.length || missing.length)) return undefined;
   if (value.status === "needs_input" && (!summary || !missing.length || evidence.length)) return undefined;
+  if (value.status === "error" && (!summary || evidence.length || missing.length)) return undefined;
   if ((value.status === "budget_exhausted" || value.status === "incomplete" || value.status === "cancelled") && (summary || evidence.length || missing.length)) return undefined;
   return { status: value.status, summary, evidence, missing, plan, budget };
+}
+
+export function validateAgentSessionSteerParams(value: unknown): AgentSessionSteerParams | undefined {
+  if (!isRecord(value) || typeof value.sessionId !== "string" || !value.sessionId) return undefined;
+  if (typeof value.runId !== "string" || !value.runId || value.runId.length > AGENT_RUN_ID_MAX_LENGTH) return undefined;
+  if (typeof value.input !== "string") return undefined;
+  const input = value.input.trim();
+  if (!input || input.length > AGENT_INPUT_MAX_LENGTH) return undefined;
+  return { sessionId: value.sessionId, runId: value.runId, input };
 }
 
 export function validateAgentRunBudget(value: unknown): AgentRunBudget | undefined {
@@ -654,7 +678,10 @@ function standardNormalUpperTail(x: number): number {
 function validateAgentBudgetUsage(value: unknown): AgentBudgetUsage | undefined {
   const budget = validateAgentRunBudget(value);
   if (!budget || !isRecord(value) || !isCount(value.turns) || !isCount(value.tokens)) return undefined;
-  return { ...budget, turns: value.turns, tokens: value.tokens };
+  const usage = { ...budget, turns: value.turns, tokens: value.tokens };
+  if (value.uncachedInputTokens === undefined && value.cacheReadTokens === undefined) return usage;
+  if (!isCount(value.uncachedInputTokens) || !isCount(value.cacheReadTokens)) return undefined;
+  return { ...usage, uncachedInputTokens: value.uncachedInputTokens, cacheReadTokens: value.cacheReadTokens };
 }
 
 function isCount(value: unknown): value is number {
@@ -728,7 +755,7 @@ function isAgentTodoStatus(value: unknown): value is AgentTodoStatus {
 }
 
 function isAgentRunStatus(value: unknown): value is AgentRunStatus {
-  return value === "completed" || value === "needs_input" || value === "budget_exhausted" || value === "incomplete" || value === "cancelled";
+  return value === "completed" || value === "needs_input" || value === "budget_exhausted" || value === "incomplete" || value === "cancelled" || value === "error";
 }
 
 function boundedText(value: unknown, maxLength: number): string | undefined {

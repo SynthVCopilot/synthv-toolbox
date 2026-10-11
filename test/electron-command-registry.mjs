@@ -46,3 +46,16 @@ test("the file-approval commands are gone, replaced by broker-backed approval co
   const sent = await registry.invoke("send_message", { conversationId: "c1", input: "hi", runId: "run-1" });
   assert.equal(sent[1].runId, "run-1");
 });
+
+test("steer_agent_run is registered, validates its params and forwards to the AI service", async () => {
+  const host = { async load() { return {}; }, async contributions() { return []; }, runtime: { dispose: async () => {} } };
+  const calls = [];
+  const ai = { steer_agent_run: async (conversationId, input) => { calls.push([conversationId, input]); return { role: "user", content: input, createdAt: "" }; } };
+  const registry = new ElectronCommandRegistry(host, { ai, creative: {}, desktop: {}, synthv: {}, approvals: {}, componentAudio: { dataRoot: process.cwd() } });
+  assert.ok(registry.commands().includes("steer_agent_run"));
+  const steered = await registry.invoke("steer_agent_run", { conversationId: "c1", input: "use track 2" });
+  assert.equal(steered.content, "use track 2");
+  assert.deepEqual(calls, [["c1", "use track 2"]]);
+  await assert.rejects(() => registry.invoke("steer_agent_run", { conversationId: "c1" }), /input must be a non-empty string/);
+  await assert.rejects(() => registry.invoke("steer_agent_run", { input: "x" }), /conversationId must be a non-empty string/);
+});

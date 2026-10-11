@@ -189,6 +189,9 @@ test("the before_agent_start SynthV section is byte-identical across rounds", as
       const firstSection = first.systemPrompt.slice(first.systemPrompt.indexOf("## SynthV"));
       const secondSection = second.systemPrompt.slice(second.systemPrompt.indexOf("## SynthV"));
       assert.equal(firstSection, secondSection, "the appended SynthV section is static and byte-identical on every round");
+      assert.match(firstSection, /details\.issues[^\n]*details\.suggestions/, "the model is told to read structured errors before retrying");
+      assert.match(firstSection, /sv_command writes[^\n]*sv_query[^\n]*complete_task/, "the model is told to verify writes with a targeted query");
+      assert.equal(api.tools.get("sv_review")?.promptSnippet ?? "", "Report SynthV Sidebar and bridge status");
     } finally {
       await host.stop();
       await bridge.close();

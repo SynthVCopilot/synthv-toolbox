@@ -34,16 +34,15 @@ test("SynthV commands use argument arrays and verify a stable process identity",
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("profiles persist locally and session writes reject stale hashes", async () => {
+test("profiles persist locally without session content APIs", async () => {
   const root = await mkdtemp(join(tmpdir(), "synthv-profile-"));
   try {
     const service = new SynthVService(root, root, noBridge, root, async () => ({ stdout: "", stderr: "", code: 0 }), undefined, root);
     const state = await service.createProfile("Primary");
     const slotId = state.slots[0].id;
-    const written = await service.writeSession(slotId, "offline-license=false", "");
-    await assert.rejects(() => service.writeSession(slotId, "changed", "0".repeat(64)), /changed before write/);
-    assert.match(written.sha256, /^[0-9a-f]{64}$/);
-    assert.equal((await service.inspectOfflineLicense(slotId)).available, true);
+    assert.deepEqual(await service.sessionSize(slotId), { status: "unknown", sizeBytes: null });
+    for (const name of ["readSession", "writeSession", "inspectOfflineLicense", "setOfflineLicense"]) assert.equal(service[name], undefined);
+    assert.equal((await service.profileState()).slots[0].id, slotId);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

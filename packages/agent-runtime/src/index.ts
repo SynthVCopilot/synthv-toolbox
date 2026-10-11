@@ -1,6 +1,8 @@
 import { CredentialRouter, createCredentialMetadata, type CredentialMetadata, type ProviderAdapterHost, type ProviderRequest, type ProviderRequestContext, type ProviderResponse, type ProviderStreamEvent } from "@model-auth/core";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
+  AGENT_INPUT_MAX_LENGTH,
   AGENT_RUN_ID_MAX_LENGTH,
   AGENT_RUN_PROGRESS_EVENT,
   DEFAULT_AGENT_EFFORT,
@@ -14,6 +16,7 @@ import {
   parseJsonl,
   validateAgentRunBudget,
   validateAgentRunOutcome,
+  validateAgentSessionSteerParams,
   type AgentEffortProfile,
   type AgentRunBudget,
   type AgentRunOutcome,
@@ -37,6 +40,7 @@ import {
   createCompletionGuardRegistry,
   createTaskLoopExtension,
   createTaskLoopState,
+  isBudgetExhausted,
   effortProfileFor,
   resetRun,
   runTaskLoop,
@@ -56,7 +60,7 @@ export { TASK_LOOP_TOOL_NAMES };
 export const AGENT_RUNTIME_ID = "synthv-toolbox.agent-runtime";
 
 export const AGENT_RUNTIME_CAPABILITIES: CapabilityDescriptor[] = [
-  { id: "agent.sessions", version: "1.0", operations: ["initialize", "send", "close", "cancel"] },
+  { id: "agent.sessions", version: "1.0", operations: ["initialize", "send", "close", "cancel", "steer"] },
   { id: "host.capabilities", version: "1.0", operations: ["invoke"] },
   { id: "runtime.plugins", version: "1.0", operations: ["discover", "invoke"] },
   { id: "agent.progress", version: "1.0", operations: ["session.progress"] },
@@ -66,12 +70,18 @@ export interface PiSession {
   /** runId is stamped on every progress notification for this run; runState() exposes the same value. */
   prompt(input: string, budget: AgentRunBudget, report: (view: AgentRunView) => void, runId: string): Promise<{ message: string; outcome: AgentRunOutcome }>;
   cancel(): Promise<boolean>;
+  /** Queues a message for the in-flight run `runId`; the model sees it before its next request. */
+  steer(input: string, runId: string): Promise<AgentSteerResult>;
   dispose(): void | Promise<void>;
   readonly running: boolean;
 }
 
+export type AgentSteerResult = "steered" | "no-active-run" | "run-mismatch";
+
 export interface PiSessionFactory {
   create(input: { sessionId: string; cwd?: string; systemPrompt?: string; model?: PiModelSelection; outcome?: AgentRunOutcome }): Promise<PiSession>;
+  /** API key changes rebuild a session; live OAuth token rotation keeps it. */
+  credentialFingerprint?(model: PiModelSelection): string;
 }
 
 /** Registers a check the completion tool consults; a non-null return is the reason it fails. */
@@ -95,6 +105,7 @@ export interface PiModelSelection {
   modelId: string;
   apiKey: string;
   credentialId?: string;
+  authMethod?: "api-key" | "oauth";
 }
 
 interface HostModelCredential extends PiModelSelection { id: string; authMethod: "api-key" | "oauth"; }
@@ -154,7 +165,9 @@ export interface PiInlineExtension {
 }
 
 export interface PiAgentSession {
-  prompt(input: string): Promise<void>;
+  prompt(input: string, options?: { expandPromptTemplates?: boolean }): Promise<void>;
+  /** Queues a message delivered after the current turn's tool calls, before the next model request. */
+  steer(input: string): Promise<void>;
   abort(): Promise<void>;
   dispose(): void | Promise<void>;
   setThinkingLevel(level: string): void;
@@ -173,6 +186,11 @@ export interface PiSdk {
     extensionFactories?: PiInlineExtension[];
     settingsManager?: PiSettingsManager;
     systemPrompt?: string;
+    noExtensions?: boolean;
+    noSkills?: boolean;
+    noPromptTemplates?: boolean;
+    noThemes?: boolean;
+    noContextFiles?: boolean;
   }) => PiResourceLoader;
   ModelRuntime: { create(options: { refreshOnCreate: boolean; credentials?: PiCredentialStore }): Promise<{ setRuntimeApiKey(providerId: string, apiKey: string): Promise<void>; getModel(providerId: string, modelId: string): unknown }> };
   SettingsManager: { create(cwd: string, agentDir?: string): PiSettingsManager };
@@ -244,6 +262,7 @@ export interface PiSessionFactoryOptions {
 export function createPiSessionFactory(options: PiSessionFactoryOptions = {}): PiSessionFactory {
   const loadSdk = options.loadSdk ?? loadPiSdk;
   return {
+    credentialFingerprint: (model) => (options.credentialStore && model.authMethod === "oauth" ? "" : createHash("sha256").update(model.apiKey).digest("hex")),
     async create(input) {
       const sdk = await loadSdk();
       const cwd = input.cwd ?? process.cwd();
@@ -264,6 +283,11 @@ export function createPiSessionFactory(options: PiSessionFactoryOptions = {}): P
         additionalExtensionPaths: [...(options.extensionPaths?.() ?? [])],
         extensionFactories: [createTaskLoopExtension(state, completionGuards.run), ...(options.extensions?.({ sessionId: input.sessionId, guards, runState }) ?? [])],
         settingsManager,
+        noExtensions: true,
+        noSkills: true,
+        noPromptTemplates: true,
+        noThemes: true,
+        noContextFiles: true,
         ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
       });
       await resourceLoader.reload();
@@ -300,7 +324,7 @@ export function createPiSessionFactory(options: PiSessionFactoryOptions = {}): P
             applyEffortProfile(result.session, settingsManager, effortProfileFor(budget.level), contextWindow);
             const { status } = await runTaskLoop(state, effortProfileFor(budget.level), text, (round) => {
               projector.round();
-              return result.session.prompt(round);
+              return result.session.prompt(round, { expandPromptTemplates: false });
             });
             const outcome = buildOutcome(state, status);
             if (status === "completed") state.plan = null;
@@ -310,6 +334,8 @@ export function createPiSessionFactory(options: PiSessionFactoryOptions = {}): P
             return { message, outcome: validated };
           } finally {
             projector.end();
+            // A steer accepted during wind-down must not leak into the next run's first request.
+            result.session.clearQueue();
             currentProjector = null;
             running = false;
             currentRunId = null;
@@ -323,6 +349,14 @@ export function createPiSessionFactory(options: PiSessionFactoryOptions = {}): P
           result.session.clearQueue();
           await result.session.abort();
           return true;
+        },
+        steer: async (text, runId) => {
+          if (!running || state.cancelled || state.signal || isBudgetExhausted(state)) return "no-active-run";
+          if (runId !== currentRunId) return "run-mismatch";
+          await result.session.steer(text);
+          // A user message is progress, so the idle streak cannot end the run right after it.
+          state.roundProgress += 1;
+          return "steered";
         },
         dispose: () => { unsubscribe(); return result.session.dispose(); },
         get running() { return running; },
@@ -385,6 +419,7 @@ export class AgentRuntimeWorker {
       if (request.method === "session.initialize") return await this.initializeSession(request);
       if (request.method === "session.send") return await this.sendToSession(request);
       if (request.method === "session.cancel") return await this.cancelSession(request);
+      if (request.method === "session.steer") return await this.steerSession(request);
       if (request.method === "session.close") return await this.closeSession(request);
       if (request.method === "runtime.plugins.discover") return await this.discoverPlugins(request);
       if (request.method === "runtime.plugin.invoke") return await this.invokePlugin(request);
@@ -417,7 +452,7 @@ export class AgentRuntimeWorker {
       if (!outcome) return this.failure(request, "session.invalid", "session.initialize outcome is invalid.");
     }
     const model = await this.hostModelSelection();
-    const signature = JSON.stringify([params.cwd ?? "", params.systemPrompt ?? "", model.providerId, model.modelId, model.credentialId ?? ""]);
+    const signature = JSON.stringify([params.cwd ?? "", params.systemPrompt ?? "", model.providerId, model.modelId, model.credentialId ?? "", this.sessionsFactory.credentialFingerprint?.(model) ?? ""]);
     const existing = this.sessions.get(params.sessionId);
     if (existing?.signature === signature) return this.success(request, { sessionId: params.sessionId, reused: true });
     if (existing?.session.running) return this.failure(request, "session.busy", "The session has a run in progress; wait for it to finish or cancel it first.");
@@ -470,6 +505,17 @@ export class AgentRuntimeWorker {
     return this.success(request, { sessionId: params.sessionId, cancelled });
   }
 
+  private async steerSession(request: RpcRequest): Promise<RpcResponseSuccess | RpcResponseFailure> {
+    const params = validateAgentSessionSteerParams(request.params);
+    if (!params) return this.failure(request, "session.invalid", `session.steer requires sessionId, runId and a non-empty input of at most ${AGENT_INPUT_MAX_LENGTH} characters.`);
+    const record = this.sessions.get(params.sessionId);
+    if (!record) return this.failure(request, "session.not-found", "The session is not initialized.");
+    const steered = await record.session.steer(params.input, params.runId);
+    if (steered === "no-active-run") return this.failure(request, "session.no-active-run", "The session has no run in progress.");
+    if (steered === "run-mismatch") return this.failure(request, "session.run-mismatch", "The run id does not match the session's active run.");
+    return this.success(request, { sessionId: params.sessionId, runId: params.runId, steered: true });
+  }
+
   private async hostModelSelection(): Promise<PiModelSelection> {
     if (!this.hostCapabilities) throw new Error("Host model capability is unavailable.");
     const value = await this.hostCapabilities.request("host.model.resolve", {});
@@ -500,7 +546,7 @@ export class AgentRuntimeWorker {
     const routed = await gateway.request(value.providerId, { modelId: value.modelId, input: null });
     if (routed.kind !== "ok" || !isHostModelCredential(routed.value.output)) throw new Error("The selected model is unsupported.");
     const selected = routed.value.output;
-    return { providerId: selected.providerId, modelId: selected.modelId, apiKey: selected.apiKey, credentialId: selected.id };
+    return { providerId: selected.providerId, modelId: selected.modelId, apiKey: selected.apiKey, credentialId: selected.id, authMethod: selected.authMethod };
   }
 
   private async closeSession(request: RpcRequest): Promise<RpcResponseSuccess | RpcResponseFailure> {

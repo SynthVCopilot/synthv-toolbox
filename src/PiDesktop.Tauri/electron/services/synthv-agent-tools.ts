@@ -10,7 +10,7 @@ const PROMPT_SNIPPETS: Record<string, string> = {
   sv_query: "Read project data; pass contextMode writeIntent before a write",
   sv_command: "Apply a project edit; high-risk actions require Edit-mode approval",
   sv_ui: "Read or change SynthV UI state; some actions require Edit-mode approval",
-  sv_review: "Summarize recent changes for the user",
+  sv_review: "Report SynthV Sidebar and bridge status",
 };
 
 const AWAIT_APPROVAL_TOOL = "sv_await_approval";
@@ -31,6 +31,8 @@ const APP_RULES = [
   "after an executed approval, re-read before further writes",
   "denied or expired means adapt or call request_input",
   "when writers.lastWriteByOtherClient is true, re-read before writing and tell the user",
+  "on INVALID_ARGUMENT or Unknown SynthV action, read details.issues and details.suggestions before retrying",
+  "after sv_command writes, confirm with a targeted sv_query of the written track and range before complete_task, and cite it as evidence",
 ];
 
 /**

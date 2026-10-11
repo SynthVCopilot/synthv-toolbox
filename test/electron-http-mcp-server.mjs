@@ -4,11 +4,12 @@ import { stripTypeScriptTypes } from "node:module";
 import { request as httpRequest } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import test from "node:test";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const source = await readFile(join(root, "src/PiDesktop.Tauri/electron/services/http-mcp-server.ts"), "utf8");
 const executable = stripTypeScriptTypes(source, { mode: "transform" });
-const { HttpMcpServer } = await import(`data:text/javascript;base64,${Buffer.from(executable).toString("base64")}`);
+const { HttpMcpServer, ClientError } = await import(`data:text/javascript;base64,${Buffer.from(executable).toString("base64")}`);
 
 const authorizations = [];
 const calls = [];
@@ -90,8 +91,77 @@ const reboundHostStatus = await new Promise((resolve, reject) => {
   request.end(body);
 });
 assert.equal(reboundHostStatus, 403);
+const rawPost = (headers, body = JSON.stringify({ jsonrpc: "2.0", id: 44, method: "tools/list" })) => new Promise((resolve, reject) => {
+  const request = httpRequest({ host: "127.0.0.1", port: occupiedPort, path: "/mcp", method: "POST", headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body), ...headers } }, (res) => {
+    let text = ""; res.setEncoding("utf8"); res.on("data", (c) => { text += c; }); res.on("end", () => resolve({ status: res.statusCode, text }));
+  });
+  request.on("error", reject);
+  request.end(body);
+});
+assert.equal((await rawPost({ host: `localhost:${occupiedPort}` })).status, 200);
+assert.equal((await rawPost({ host: `127.0.0.1:${occupiedPort}`, origin: `http://127.0.0.1:${occupiedPort}` })).status, 200);
+assert.equal((await rawPost({ host: `127.0.0.1:${occupiedPort}`, origin: "null" })).status, 403);
+assert.equal((await rawPost({ host: `127.0.0.1:${occupiedPort}`, origin: "https://evil.example" })).status, 403);
+assert.equal((await rawPost({ host: `127.0.0.1:${occupiedPort + 1}` })).status, 403);
+assert.equal((await rawPost({ host: "localhost" })).status, 403);
+
+const secret = "secret-internal-detail";
+const originalTools = host.mcpTools;
+const originalChat = host.agentChat;
+const originalError = console.error;
+console.error = () => {};
+host.mcpTools = async () => { throw new Error(secret); };
+const rpcFailure = await rawPost({ host: `127.0.0.1:${occupiedPort}` });
+assert.equal(rpcFailure.status, 200);
+assert.equal(JSON.parse(rpcFailure.text).error.code, -32603);
+assert.equal(rpcFailure.text.includes(secret), false);
+const unhandled = await rawPost({ host: `127.0.0.1:${occupiedPort}` }, JSON.stringify({ jsonrpc: "2.0", id: 45, method: "tools/call", params: { name: "x" } }));
+assert.equal(unhandled.text.includes(secret), false);
+host.agentChat = async () => { throw new Error(secret); };
+const agentFailure = await fetch(status.agentEndpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ input: "hello" }) });
+assert.equal(agentFailure.status, 500);
+assert.equal((await agentFailure.text()).includes(secret), false);
+host.mcpTools = originalTools;
+const originalTask = host.agentTask;
+host.agentTask = async () => { throw new ClientError("Agent task was not found."); };
+const staleTask = await rawPost({ host: `127.0.0.1:${occupiedPort}` }, JSON.stringify({ jsonrpc: "2.0", id: 47, method: "tools/call", params: { name: "toolbox_agent", arguments: { action: "status", taskId: "stale" } } }));
+const staleBody = JSON.parse(staleTask.text);
+assert.equal(staleBody.error, undefined);
+assert.equal(staleBody.result.isError, true);
+assert.deepEqual(staleBody.result.content, [{ type: "text", text: "Agent task was not found." }]);
+host.agentTask = originalTask;
+host.agentChat = originalChat;
+console.error = originalError;
+
 const stopped = await server.stop();
 assert.equal(stopped.running, false);
 assert.equal(stopped.endpoint, undefined);
 
 console.log("Electron HTTP MCP server binds loopback and enforces runtime host authorization.");
+
+test("response serialization failures preserve the JSON-RPC request id and hide internal details", async (t) => {
+  let serializations = 0;
+  t.mock.method(console, "error", () => {});
+  const server = new HttpMcpServer({ ...host, async agentTask() { return { toJSON() { if (++serializations > 1) throw new Error(secret); return "ok"; } }; } });
+  t.after(() => server.stop());
+  const status = await server.start({ enabled: true, agentEnabled: true, internalEnabled: false, advancedEnabled: false, port: 0 });
+  const response = await rpc(status.endpoint, 46, "tools/call", { name: "toolbox_agent", arguments: { action: "list" } });
+  assert.equal(response.status, 500);
+  assert.deepEqual(response.body, { jsonrpc: "2.0", id: 46, error: { code: -32603, message: "Internal error." } });
+  assert.equal(JSON.stringify(response.body).includes(secret), false);
+});
+
+test("an unfinished request body times out before it can invoke a tool", { timeout: 70_000 }, async (t) => {
+  let calls = 0;
+  const server = new HttpMcpServer({ async mcpTools() { calls++; return []; }, async callMcpTool() { throw new Error("must not run"); } });
+  const status = await server.start({ enabled: true, agentEnabled: false, internalEnabled: false, advancedEnabled: false, port: 0 });
+  let request;
+  t.after(async () => { request?.destroy(); await server.stop(); });
+  const response = await new Promise((resolve, reject) => {
+    request = httpRequest(status.endpoint, { method: "POST", headers: { "content-type": "application/json", "content-length": 100 } }, (response) => { response.resume(); response.on("end", () => resolve(response.statusCode)); });
+    request.on("error", reject);
+    request.write("{");
+  });
+  assert.equal(response, 408);
+  assert.equal(calls, 0);
+});

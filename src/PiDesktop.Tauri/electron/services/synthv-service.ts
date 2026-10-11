@@ -5,11 +5,23 @@ import { basename, dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import type { EmbeddedBridge } from "./synthv-bridge.js";
+import type { DreamtonicsWebAccounts, WebAccountSnapshot } from "./dreamtonics-web.js";
 const bridgeProfiles = new Set(["sv2", "sv1", "flat"]);
 const shortcutActions = new Set(["start", "startLegacy", "stop", "save", "undo", "refresh"]);
 
 export type OperationResult = { succeeded: boolean; summary: string; detail: string };
 export type ProcessInfo = { processId: number; processIdentity: string; name: string; productName: string; version: string; command: string; windowTitle: string; isSv2: boolean; sandboxed: boolean | null };
+export const SESSION_OFFLINE_THRESHOLD_BYTES = 4096;
+export type SessionSizeInspection = { status: "offline" | "online" | "unknown"; sizeBytes: number | null };
+export async function inspectSessionSize(filePath: string): Promise<SessionSizeInspection> {
+  try {
+    const metadata = await stat(filePath);
+    if (!metadata.isFile()) return { status: "unknown", sizeBytes: null };
+    return { status: metadata.size > SESSION_OFFLINE_THRESHOLD_BYTES ? "offline" : "online", sizeBytes: metadata.size };
+  } catch {
+    return { status: "unknown", sizeBytes: null };
+  }
+}
 type Runner = (command: string, args: string[], env?: NodeJS.ProcessEnv) => Promise<{ stdout: string; stderr: string; code: number }>;
 type Slot = { id: string; displayName: string; createdAtUtc: string; lastActivatedAtUtc: string | null };
 type ProfileStore = { activeSlotId: string | null; slots: Slot[] };
@@ -21,7 +33,11 @@ export type AutostartController = {
 export class SynthVService {
   private pendingRoute: Record<string, unknown> | null = null;
   private readonly syncPreviews = new Map<string, { targetSlotId: string; categories: string[] }>();
-  constructor(private readonly root: string, private readonly bridgeDirectory: string, private readonly bridge: Pick<EmbeddedBridge, "status" | "requestStop">, private readonly bridgeIpcDirectory: string, private readonly runner: Runner = runCommand, private readonly autostart?: AutostartController, private readonly platformDataRoot?: string, private readonly env: NodeJS.ProcessEnv = process.env) {}
+  constructor(private readonly root: string, private readonly bridgeDirectory: string, private readonly bridge: Pick<EmbeddedBridge, "status" | "requestStop">, private readonly bridgeIpcDirectory: string, private readonly runner: Runner = runCommand, private readonly autostart?: AutostartController, private readonly platformDataRoot?: string, private readonly env: NodeJS.ProcessEnv = process.env, private readonly webAccounts?: DreamtonicsWebAccounts) {}
+
+  async sessionSize(slotId: string): Promise<SessionSizeInspection> { const store = await this.readStore(); this.slot(store, slotId); return inspectSessionSize(this.sessionPath(slotId, store.activeSlotId === slotId)); }
+  async webAccountLogin(slotId: string): Promise<void> { await this.assertSlot(slotId); if (!this.webAccounts) throw new Error("Web account login is unavailable."); await this.webAccounts.login(slotId); }
+  async webAccountQuery(slotId: string): Promise<WebAccountSnapshot> { await this.assertSlot(slotId); if (!this.webAccounts) throw new Error("Web account queries are unavailable."); return this.webAccounts.inspect(slotId); }
 
   async scanInstallations(): Promise<Array<Record<string, unknown>>> {
     const candidates = platform() === "win32" ? windowsCandidates(this.dataRoot(), this.env) : macCandidates(this.dataRoot());
@@ -81,7 +97,16 @@ export class SynthVService {
 
   async profileState(): Promise<Record<string, unknown>> {
     const store = await this.readStore();
-    const slots = await Promise.all(store.slots.map(async slot => ({ ...slot, isActive: slot.id === store.activeSlotId, dataPath: this.slotPath(slot.id), sessionCached: await exists(this.sessionPath(slot.id)), installedVoiceIds: [] })));
+    const slots = await Promise.all(store.slots.map(async slot => {
+      const isActive = slot.id === store.activeSlotId;
+      const sessionSize = await inspectSessionSize(this.sessionPath(slot.id, isActive));
+      const sessionCached = sessionSize.sizeBytes !== null;
+      const accountProbe = { sessionStatus: sessionCached ? "ready" : "missing", remoteUse: "unknown", authorizationStatus: "unknown", authorizedVoiceCount: 0, authorizedVoices: [], authorizedVoiceProducts: [], offlineLicense: { cacheStatus: "unknown", eligibility: "unknown", cachedProducts: [] }, checkedAtUtc: new Date().toISOString(), detail: "" };
+      const protection = { status: sessionCached ? "ready" : "signInRequired", snapshotAvailable: false, detail: "" };
+      const isolatedRoot = join(this.vaultPath(), "instances", slot.id.replaceAll("-", "").slice(0, 16));
+      const isolatedDataPath = join(isolatedRoot, "user", "current", "AppData", "Roaming", "Dreamtonics", "Synthesizer V Studio 2");
+      return { ...slot, color: "#6D5CE7", isActive, dataPath: this.slotPath(slot.id), sessionCached, sessionSize, installedVoiceIds: [], accountProbe, concurrentAccountProbe: accountProbe, sessionProtection: protection, concurrentSessionProtection: protection, concurrent: { ready: await exists(isolatedDataPath), dataPath: isolatedDataPath, runningPids: [], detail: "", content: { appSettings: "global", voiceLibraries: "global", effectiveAppSettings: false, effectiveVoiceLibraries: false } } };
+    }));
     const sandbox = await this.sandboxie();
     return { supported: platform() === "win32" || platform() === "darwin", canonicalPath: this.canonicalPath(), vaultPath: this.vaultPath(), activeSlotId: store.activeSlotId, canonicalRootExists: await exists(this.canonicalPath()), canImportCurrent: await exists(this.canonicalPath()), recoveryRequired: false, recoveryDetail: "", slots, blockers: [], concurrentProvider: sandbox ? { available: true, name: "Sandboxie", edition: "", version: "", installPath: dirname(sandbox.start), detail: "Sandboxie launch tools were found; a configured isolated box is required." } : { available: false, name: "Sandboxie", edition: "", version: "", installPath: "", detail: "Sandboxie Start.exe and SbieIni.exe were not found." }, concurrentDefaults: { appSettings: false, voiceLibraries: false } };
   }
@@ -97,7 +122,7 @@ export class SynthVService {
   }
 
   async renameProfile(slotId: string, displayName: string): Promise<Record<string, unknown>> { const store = await this.readStore(); const slot = this.slot(store, slotId); requireText(displayName, "displayName"); slot.displayName = displayName; await this.writeStore(store); return this.profileState(); }
-  async deleteProfile(slotId: string): Promise<Record<string, unknown>> { const store = await this.readStore(); this.slot(store, slotId); if (store.activeSlotId === slotId) throw new Error("The active profile cannot be deleted."); store.slots = store.slots.filter(slot => slot.id !== slotId); await rm(this.slotPath(slotId), { recursive: true, force: true }); await this.writeStore(store); return this.profileState(); }
+  async deleteProfile(slotId: string): Promise<Record<string, unknown>> { const store = await this.readStore(); this.slot(store, slotId); if (store.activeSlotId === slotId) throw new Error("The active profile cannot be deleted."); await this.webAccounts?.forget(slotId); store.slots = store.slots.filter(slot => slot.id !== slotId); await rm(this.slotPath(slotId), { recursive: true, force: true }); await this.writeStore(store); return this.profileState(); }
 
   async activateProfile(slotId: string): Promise<Record<string, unknown>> {
     const store = await this.readStore(); const slot = this.slot(store, slotId);
@@ -122,14 +147,6 @@ export class SynthVService {
   }
   async openProfileFolder(slotId: string): Promise<OperationResult> { await this.assertSlot(slotId); await this.reveal(this.slotPath(slotId)); return ok("Profile folder opened."); }
 
-  async readSession(slotId: string): Promise<{ path: string; sha256: string; plaintext: string }> { await this.assertSlot(slotId); const path = this.sessionPath(slotId); const content = await readFile(path); return { path, sha256: sha256(content), plaintext: content.toString("utf8") }; }
-  async writeSession(slotId: string, plaintext: string, expectedSha256: string): Promise<{ path: string; sha256: string }> { await this.assertSlot(slotId); requireText(plaintext, "plaintext"); const path = this.sessionPath(slotId); if (await exists(path) && sha256(await readFile(path)) !== expectedSha256) throw new Error("Session changed before write."); await mkdir(dirname(path), { recursive: true }); await writeFile(path, plaintext, "utf8"); return { path, sha256: sha256(Buffer.from(plaintext)) }; }
-  async inspectOfflineLicense(slotId: string): Promise<Record<string, unknown>> { const session = await this.readSession(slotId); return { slotId, available: session.plaintext.includes("offline"), sha256: session.sha256 }; }
-  async setOfflineLicense(slotId: string, enabled: boolean): Promise<OperationResult> { const session = await this.readSession(slotId); const value = session.plaintext.replace(/^offline-license=.*$/m, `offline-license=${enabled}`); await this.writeSession(slotId, value, session.sha256); return ok(enabled ? "Offline license enabled." : "Offline license disabled."); }
-
-  async previewOfflineSessionReplacement(slotId: string, sourcePath: string): Promise<Record<string, unknown>> { await this.assertSlot(slotId); requireText(sourcePath, "sourcePath"); const source = await readFile(resolve(sourcePath)); const destination = await readFile(this.sessionPath(slotId)); return { slotId, sourcePath: resolve(sourcePath), sourceSha256: sha256(source), destinationSha256: sha256(destination), sourceBytes: source.length, destinationBytes: destination.length }; }
-  async scheduleOfflineSessionReplacement(slotId: string, sourcePath: string, sourceSha256: string, destinationSha256: string): Promise<OperationResult> { const preview = await this.previewOfflineSessionReplacement(slotId, sourcePath); if (preview.sourceSha256 !== sourceSha256 || preview.destinationSha256 !== destinationSha256) throw new Error("Offline session replacement hashes do not match the preview."); await writeFile(this.sessionPath(slotId), await readFile(resolve(sourcePath))); return ok("Offline session replaced."); }
-
   async syncProfile(slotId: string, categories: string[]): Promise<Record<string, unknown>> { await this.assertSlot(slotId); if (!Array.isArray(categories) || !categories.every(value => ["settings", "database", "voice"].includes(value))) throw new Error("Unsupported sync category."); for (const category of categories) { const source = join(this.canonicalPath(), category); if (await exists(source)) await cp(source, join(this.slotPath(slotId), category), { recursive: true, force: true }); } return { slotId, categories, succeeded: true }; }
   async previewSelectiveSync(sourceSlotId: string, targetSlotId: string, categories: string[], overwrite: boolean): Promise<Record<string, unknown>> { await this.assertSlot(sourceSlotId); await this.assertSlot(targetSlotId); if (!Array.isArray(categories) || !categories.every(value => ["settings", "database", "voice"].includes(value)) || typeof overwrite !== "boolean") throw new Error("Invalid selective sync request."); const token = randomUUID(); this.syncPreviews.set(token, { targetSlotId, categories }); return { token, sourceSlotId, targetSlotId, categories, overwrite, entries: [] }; }
   async executeSelectiveSync(sourceSlotId: string, targetSlotId: string, categories: string[], token: string): Promise<Record<string, unknown>> { const preview = this.syncPreviews.get(token); if (!preview || preview.targetSlotId !== targetSlotId || JSON.stringify(preview.categories) !== JSON.stringify(categories)) throw new Error("Selective sync preview is no longer valid."); await this.assertSlot(sourceSlotId); for (const category of categories) { const source = join(this.slotPath(sourceSlotId), category); if (await exists(source)) await cp(source, join(this.slotPath(targetSlotId), category), { recursive: true, force: true }); } this.syncPreviews.delete(token); return { sourceSlotId, targetSlotId, categories, succeeded: true }; }
@@ -137,7 +154,7 @@ export class SynthVService {
   async launchProfile(slotId: string, projectPath?: string): Promise<OperationResult> { await this.activateProfile(slotId); const executable = (await this.scanInstallations()).find(item => item.bridgeProfile === "sv2")?.executablePath; if (typeof executable !== "string") return unavailable("No SynthV Studio 2 executable was found."); spawn(executable, projectPath ? [projectPath] : [], { detached: true, stdio: "ignore", windowsHide: true }).unref(); return ok("SynthV profile launched."); }
   async launchConcurrentProfile(slotId: string, projectPath?: string): Promise<OperationResult> { await this.prepareConcurrentProfile(slotId); const sandbox = await this.sandboxie(); if (!sandbox) return unavailable("Sandboxie Start.exe and SbieIni.exe were not found."); const executable = (await this.scanInstallations()).find(item => item.bridgeProfile === "sv2")?.executablePath; if (typeof executable !== "string") return unavailable("No SynthV Studio 2 executable was found."); const box = `SV2TB${slotId.replaceAll("-", "").slice(0, 24)}`; const result = await this.run(sandbox.start, [`/box:${box}`, "/silent", executable, ...(projectPath ? [resolve(projectPath)] : [])]); return result.code === 0 ? ok("SynthV profile launched in Sandboxie.") : fail("Sandboxie failed to launch SynthV.", result.stderr); }
   async launchSvpRoute(slotId: string, projectPath: string, _mode: string): Promise<OperationResult> { await this.assertSlot(slotId); requireText(projectPath, "projectPath"); return this.launchProfile(slotId, projectPath); }
-  async accountPrecheck(slotId?: string): Promise<Record<string, unknown>> { const state = await this.profileState(); const selected = slotId ?? (state as { activeSlotId?: unknown }).activeSlotId; return { supported: true, checkedAtUtc: new Date().toISOString(), slotId: selected, localUse: false, localProcesses: [], concurrentPids: [], remoteUse: "unknown", sessionStatus: selected ? ((await this.readSession(String(selected)).catch(() => null)) ? "ready" : "missing") : "missing", authorizationStatus: "unknown", authorizedVoiceCount: 0, sessionCached: false, recoveryPending: false, summary: "Local profile state was checked; remote account probing is unavailable.", detail: "" }; }
+  async accountPrecheck(slotId?: string): Promise<Record<string, unknown>> { const state = await this.profileState(); const selected = slotId ?? (state as { activeSlotId?: string }).activeSlotId; const size = selected ? await this.sessionSize(selected) : undefined; return { supported: true, checkedAtUtc: new Date().toISOString(), slotId: selected, localUse: false, localProcesses: [], concurrentPids: [], remoteUse: "unknown", sessionStatus: size?.sizeBytes != null ? "ready" : "missing", authorizationStatus: "unknown", authorizedVoiceCount: 0, sessionCached: size?.sizeBytes != null, recoveryPending: false, summary: "Local session file metadata was checked.", detail: "" }; }
   async voiceCatalog(): Promise<unknown[]> { return []; }
   async concurrentDefaults(appSettings: boolean, voiceLibraries: boolean): Promise<Record<string, unknown>> { if (typeof appSettings !== "boolean" || typeof voiceLibraries !== "boolean") throw new Error("Concurrent defaults must be booleans."); await this.writeConfig("concurrent-defaults.json", { appSettings, voiceLibraries }); return this.profileState(); }
   async concurrentContent(slotId: string, appSettings: string, voiceLibraries: string): Promise<Record<string, unknown>> { await this.assertSlot(slotId); if (!["on", "off", "global"].includes(appSettings) || !["on", "off", "global"].includes(voiceLibraries)) throw new Error("Invalid concurrent content preference."); await this.writeConfig(`concurrent-${slotId}.json`, { appSettings, voiceLibraries }); return this.profileState(); }
@@ -173,7 +190,7 @@ export class SynthVService {
   private canonicalPath(): string { return canonicalPathFor(platform(), this.dataRoot()); }
   private vaultPath(): string { return `${this.canonicalPath()}.toolbox-slots`; }
   private slotPath(id: string): string { return join(this.vaultPath(), "slots", id); }
-  private sessionPath(id: string): string { return join(this.slotPath(id), "license", "session"); }
+  private sessionPath(id: string, active = false): string { return join(active ? this.canonicalPath() : this.slotPath(id), "license", "session"); }
   private storePath(): string { return join(this.root, "sv2-profiles.json"); }
   private async writeConfig(name: string, value: unknown): Promise<void> { await mkdir(this.root, { recursive: true }); await writeFile(join(this.root, name), JSON.stringify(value), "utf8"); }
   private async sandboxie(): Promise<{ start: string; ini: string } | null> { if (platform() !== "win32") return null; const roots = [this.env.SANDBOXIE_HOME, this.env.ProgramW6432, this.env.ProgramFiles, this.env["ProgramFiles(x86)"]].filter((value): value is string => typeof value === "string" && value.length > 0).flatMap(root => root.endsWith("Sandboxie") || root.endsWith("Sandboxie-Plus") ? [root] : [join(root, "Sandboxie-Plus"), join(root, "Sandboxie")]); for (const root of roots) { const start = join(root, "Start.exe"); const ini = join(root, "SbieIni.exe"); if (await exists(start) && await exists(ini)) return { start, ini }; } return null; }

@@ -527,6 +527,9 @@ button.full { width: 100%; }
 .manager-pane-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 13px; }
 .manager-pane-heading h3 { margin: 0; font-size: 15px; }
 .manager-pane-heading p { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
+.session-size-indicator { display: inline-block; padding: 3px 7px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--muted); }
+.session-size-indicator.offline { color: var(--success, #17804a); }
+.session-size-indicator.online { color: var(--warning, #9a6500); }
 .compact-form { margin-top: 10px; }
 .manager-action-row { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 13px; }
 .manager-action-row button { min-height: 31px; font-size: 11px; }
@@ -1271,6 +1274,7 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .agent-status-completed { color: var(--success); background: color-mix(in srgb,var(--success) 14%,transparent); }
 .agent-status-needs_input { color: var(--warning); background: color-mix(in srgb,var(--warning) 14%,transparent); }
 .agent-status-budget_exhausted { color: var(--danger); background: color-mix(in srgb,var(--danger) 14%,transparent); }
+.agent-status-error { color: var(--danger); background: color-mix(in srgb,var(--danger) 14%,transparent); }
 .agent-status-incomplete { color: var(--muted); background: var(--surface-subtle); }
 .agent-status-cancelled { color: var(--muted); background: var(--surface-subtle); }
 .agent-outcome { display: grid; gap: 6px; margin-top: 8px; }
@@ -1303,6 +1307,7 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .agent-pending-input strong { display: block; margin-bottom: 3px; font-size: 11px; font-weight: 600; }
 .agent-pending-input p { margin: 0; font-size: 12px; color: var(--muted); }
 .agent-budget-meter { display: grid; gap: 6px; }
+.agent-cache-hit { color: var(--muted); font-size: 10px; }
 .agent-budget-row { display: grid; grid-template-columns: 48px minmax(0,1fr) auto; align-items: center; gap: 8px; font-size: 10px; color: var(--muted); }
 .agent-budget-bar { height: 4px; overflow: hidden; border-radius: 999px; background: var(--surface-subtle); }
 .agent-budget-fill { display: block; height: 100%; background: var(--primary); }
@@ -1716,3 +1721,5 @@ button.path-picker-button { display: inline-flex; flex: 0 0 34px; align-items: c
   .workflow-result > pre { color: #f5f5f5; background: #111; }
   .onboarding { background: radial-gradient(circle at 12% 6%, rgba(96,205,255,.09), transparent 30%), radial-gradient(circle at 92% 95%, rgba(58,131,190,.06), transparent 26%), var(--mica); }
 }
+
+.web-account-panel > p, .web-account-panel > ul, .web-account-panel > .manager-action-row { grid-column: 1 / -1; }

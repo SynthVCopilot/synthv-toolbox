@@ -355,7 +355,7 @@ export function registerV3Facade(
       },
       annotations: {
         readOnlyHint: false,
-        destructiveHint: false,
+        destructiveHint: true,
         openWorldHint: false,
       },
     },

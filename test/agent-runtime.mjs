@@ -30,7 +30,7 @@ function placeholderOutcome() {
     evidence: [],
     missing: [],
     plan: null,
-    budget: { level: "mid", maxTurns: 10, maxTokens: 100_000, turns: 0, tokens: 0 },
+    budget: { level: "mid", maxTurns: 10, maxTokens: 100_000, turns: 0, tokens: 0, uncachedInputTokens: 0, cacheReadTokens: 0 },
   };
 }
 
@@ -50,7 +50,11 @@ function createFakeSdk(rounds) {
   const handlers = { before_agent_start: [], turn_end: [], tool_call: [], tool_execution_end: [], session_compact: [] };
   const subscribers = [];
   const messages = [];
+  const steered = [];
   const settingsOverrides = [];
+  const promptCalls = [];
+  const runtimeApiKeys = [];
+  const loaderOptions = [];
   const systemPrompts = [];
   const firstRoundMessages = [];
   let thinkingLevel;
@@ -98,7 +102,9 @@ function createFakeSdk(rounds) {
       if (holdRelease) { const release = holdRelease; holdRelease = undefined; release(); }
     },
     clearQueue() { return { steering: [], followUp: [] }; },
-    async prompt(text) {
+    async steer(text) { steered.push(text); },
+    async prompt(text, options) {
+      promptCalls.push({ text, options });
       inFlight = true;
       aborted = false;
       let round;
@@ -203,14 +209,14 @@ function createFakeSdk(rounds) {
     SettingsManager: { create: () => ({ applyOverrides: (overrides) => settingsOverrides.push(overrides) }) },
     SessionManager: { inMemory: (cwd) => ({ kind: "in-memory", cwd }), create: (cwd) => ({ kind: "persisted", cwd }) },
     DefaultResourceLoader: class {
-      constructor(options) { this.options = options; }
+      constructor(options) { this.options = options; loaderOptions.push(options); }
       async reload() {
         for (const extension of this.options.extensionFactories ?? []) await extension.factory(pi);
       }
     },
     ModelRuntime: {
       create: async () => ({
-        setRuntimeApiKey: async () => {},
+        setRuntimeApiKey: async (providerId, apiKey) => { runtimeApiKeys.push({ providerId, apiKey }); },
         getModel: () => ({ contextWindow }),
       }),
     },
@@ -221,7 +227,11 @@ function createFakeSdk(rounds) {
     sdk,
     tools,
     messages,
+    steered,
     settingsOverrides,
+    promptCalls,
+    loaderOptions,
+    runtimeApiKeys,
     systemPrompts,
     firstRoundMessages,
     get thinkingLevel() { return thinkingLevel; },
@@ -254,7 +264,7 @@ test("JSONL worker negotiates before creating, sending to and closing a Pi sessi
   })))[0]);
   assert.equal(hello.ok, true);
   assert.equal(hello.result.runtimeId, runtime.AGENT_RUNTIME_ID);
-  assert.deepEqual(hello.result.capabilities.find((c) => c.id === "agent.sessions").operations, ["initialize", "send", "close", "cancel"]);
+  assert.deepEqual(hello.result.capabilities.find((c) => c.id === "agent.sessions").operations, ["initialize", "send", "close", "cancel", "steer"]);
   assert.deepEqual(hello.result.capabilities.find((c) => c.id === "agent.progress"), { id: "agent.progress", version: "1.0", operations: ["session.progress"] });
 
   assert.equal(JSON.parse((await worker.handleJsonl(request("3", "session.initialize", { sessionId: "s1" })))[0]).ok, true);
@@ -474,7 +484,7 @@ test("session initialization rejects a host model selection without credentials"
   assert.match(response.error.message, /No eligible credential/);
 });
 
-test("stdio worker emits JSONL responses and discovers backend and UI-only plugins", async () => {
+test("stdio worker emits JSONL responses and discovers backend and UI-only plugins", async (t) => {
   const pluginRoot = join(root, "test", ".tmp", "agent-runtime-cli-plugins");
   rmSync(pluginRoot, { recursive: true, force: true });
   mkdirSync(join(pluginRoot, "com.example.plugin", "backend"), { recursive: true });
@@ -504,6 +514,7 @@ test("stdio worker emits JSONL responses and discovers backend and UI-only plugi
 
   const workerPath = join(packageRoot, "dist", "worker.js");
   const child = spawn(process.execPath, [workerPath], { stdio: ["pipe", "pipe", "pipe"] });
+  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); });
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
   let stdoutBuffer = "";
@@ -533,7 +544,7 @@ test("stdio worker emits JSONL responses and discovers backend and UI-only plugi
   child.stdin.write(`${request("hello", "host.hello", { hostId: "host", protocol: { min: "1.0", max: "1.0" }, capabilities: [] })}\n`);
   child.stdin.write(`${request("plugins", "runtime.plugins.discover", { root: pluginRoot, enabledPluginIds: ["com.example.plugin"] })}\n`);
   await waitFor(() => messages.some((message) => message.kind === "request" && message.method === "host.capability.invoke")
-    && messages.some((message) => message.kind === "response" && message.id === "plugins"));
+    && messages.some((message) => message.kind === "response" && message.id === "plugins"), 30_000);
   assert.equal(messages.find((message) => message.kind === "response" && message.id === "hello").ok, true);
   assert.deepEqual(
     messages.find((message) => message.kind === "response" && message.id === "plugins").result.plugins.map((plugin) => plugin.id).sort(),
@@ -569,10 +580,12 @@ function makeTaskLoopState(overrides = {}) {
     budget: budgetFor("mid", 16, 300_000),
     turns: 0,
     tokens: 0,
+    uncachedInputTokens: 0,
+    cacheReadTokens: 0,
     signal: null,
     roundProgress: 0,
     roundError: null,
-    finishAttemptUsed: false,
+    finishAttempts: 0,
     cancelled: false,
     lastAssistantText: "",
     firstRound: true,
@@ -761,10 +774,11 @@ test("a failing complete_task call counts as idle, not progress", async () => {
   assert.equal(fake.remainingRounds, 0);
 });
 
-test("budget exhaustion by turns allows exactly one finish attempt then blocks everything", async () => {
+test("budget exhaustion by turns allows exactly two finish attempts then blocks everything", async () => {
   const fake = createFakeSdk([
     { turns: [
       { text: "warm up" },
+      { toolCalls: [{ name: "complete_task", args: { summary: "Bad", evidence: ["a"] } }] },
       { toolCalls: [{ name: "complete_task", args: { summary: "Bad", evidence: ["a"] } }] },
       { toolCalls: [{ name: "complete_task", args: { summary: "Bad", evidence: ["a"] } }] },
     ] },
@@ -773,11 +787,39 @@ test("budget exhaustion by turns allows exactly one finish attempt then blocks e
   const { outcome } = await session.prompt("Go", budgetFor("mid", 1, 300_000), undefined, "run-14");
   assert.equal(outcome.status, "budget_exhausted");
   const completeTaskResults = fake.messages.filter((m) => m.role === "toolResult" && m.toolName === "complete_task");
-  assert.equal(completeTaskResults.length, 2);
-  assert.equal(completeTaskResults[0].isError, true);
+  assert.equal(completeTaskResults.length, 3);
   assert.match(completeTaskResults[0].content[0].text, /update_plan/);
-  assert.equal(completeTaskResults[1].isError, true);
-  assert.match(completeTaskResults[1].content[0].text, /Run budget exhausted/);
+  assert.match(completeTaskResults[1].content[0].text, /update_plan/);
+  assert.equal(completeTaskResults[2].isError, true);
+  assert.match(completeTaskResults[2].content[0].text, /Run budget exhausted/);
+});
+
+test("a rejected finish attempt after budget exhaustion does not prevent a valid completion", async () => {
+  const fake = createFakeSdk([
+    { turns: [
+      { toolCalls: [{ name: "update_plan", args: { goal: "G", doneCriteria: ["C"], todos: [{ id: "t1", title: "Step", status: "completed" }] } }] },
+      { toolCalls: [{ name: "complete_task", args: { summary: "Bad", evidence: [] } }] },
+      { toolCalls: [{ name: "complete_task", args: { summary: "Done", evidence: ["done"] } }] },
+    ] },
+  ]);
+  const session = await createSession(fake);
+  const { outcome } = await session.prompt("Go", budgetFor("mid", 1, 300_000), undefined, "run-14b");
+  assert.equal(outcome.status, "completed");
+  assert.equal(outcome.summary, "Done");
+});
+
+test("cache reads are tracked separately and never count against the token budget", async () => {
+  const fake = createFakeSdk([
+    { turns: [
+      { text: "a", usage: { input: 10, output: 5, cacheRead: 100, cacheWrite: 20 } },
+      { toolCalls: [{ name: "update_plan", args: { goal: "G", doneCriteria: ["C"], todos: [{ id: "t1", title: "Step", status: "completed" }] } }, { name: "complete_task", args: { summary: "Done", evidence: ["done"] } }], usage: { input: 1, output: 1, cacheRead: 50, cacheWrite: 0 } },
+    ] },
+  ]);
+  const session = await createSession(fake);
+  const { outcome } = await session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-cache");
+  assert.equal(outcome.budget.tokens, 37);
+  assert.equal(outcome.budget.cacheReadTokens, 150);
+  assert.equal(outcome.budget.uncachedInputTokens, 31);
 });
 
 test("budget exhaustion by turns blocks non-terminating tools with terminate and ends budget_exhausted", async () => {
@@ -895,7 +937,7 @@ test("a seeded outcome restores the plan via the first-round message; an invalid
     evidence: [],
     missing: [],
     plan: { goal: "Seeded goal", doneCriteria: ["Criterion"], todos: [{ id: "t1", title: "Step", status: "pending" }] },
-    budget: { level: "mid", maxTurns: 16, maxTokens: 300_000, turns: 4, tokens: 1000 },
+    budget: { level: "mid", maxTurns: 16, maxTokens: 300_000, turns: 4, tokens: 1000, uncachedInputTokens: 0, cacheReadTokens: 0 },
   };
   const session = await createSession(fake, { outcome: seededOutcome });
   await session.prompt("Continue", budgetFor("mid", 16, 300_000), undefined, "run-22");
@@ -913,7 +955,7 @@ test("a completed seeded outcome does not restore its plan", async () => {
     evidence: ["cover.wav written"],
     missing: [],
     plan: { goal: "Make the cover", doneCriteria: ["Cover exported"], todos: [{ id: "t1", title: "Export", status: "completed" }] },
-    budget: { level: "mid", maxTurns: 16, maxTokens: 300_000, turns: 8, tokens: 4000 },
+    budget: { level: "mid", maxTurns: 16, maxTokens: 300_000, turns: 8, tokens: 4000, uncachedInputTokens: 0, cacheReadTokens: 0 },
   };
   const session = await createSession(fake, { outcome: seededOutcome });
   const { outcome } = await session.prompt("What tempo is this song?", budgetFor("mid", 1, 300_000), undefined, "run-23");
@@ -932,7 +974,7 @@ test("a needs_input seeded outcome delivers the question once, then clears it", 
     evidence: [],
     missing: ["target song"],
     plan: { goal: "G", doneCriteria: ["C"], todos: [{ id: "t1", title: "Step", status: "pending" }] },
-    budget: { level: "mid", maxTurns: 16, maxTokens: 300_000, turns: 2, tokens: 500 },
+    budget: { level: "mid", maxTurns: 16, maxTokens: 300_000, turns: 2, tokens: 500, uncachedInputTokens: 0, cacheReadTokens: 0 },
   };
   const session = await createSession(fake, { outcome: seededOutcome });
   await session.prompt("The second one", budgetFor("mid", 16, 300_000), undefined, "run-24");
@@ -995,27 +1037,50 @@ test("the system prompt is byte-identical across rounds and runs, regardless of 
   assert.doesNotMatch(fake.systemPrompts[0], /\d+ of \d+ turns/);
 });
 
-test("a provider error stops the loop immediately and rejects with the provider's message", async () => {
+test("a provider error stops the loop immediately and ends with an error outcome carrying the provider's message", async () => {
   const fake = createFakeSdk([
     { stopReason: "error", errorMessage: "401 invalid api key" },
   ]);
   const session = await createSession(fake);
-  await assert.rejects(
-    () => session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-31"),
-    /401 invalid api key/,
-  );
+  const { outcome } = await session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-31");
+  assert.equal(outcome.status, "error");
+  assert.equal(outcome.summary, "401 invalid api key");
   assert.equal(fake.remainingRounds, 0);
 });
 
-test("a provider error with no message rejects with a generic failure text", async () => {
+test("an error outcome keeps the plan and the budget used so far", async () => {
+  const fake = createFakeSdk([
+    { turns: [
+      { toolCalls: [{ name: "update_plan", args: { goal: "G", doneCriteria: ["C"], todos: [{ id: "t1", title: "Step", status: "in_progress" }] } }], usage: { input: 10, output: 10, cacheWrite: 0 } },
+      { stopReason: "error", errorMessage: "overloaded", usage: { input: 5, output: 0, cacheWrite: 0 } },
+    ] },
+  ]);
+  const session = await createSession(fake);
+  const { outcome } = await session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-31b");
+  assert.equal(outcome.status, "error");
+  assert.equal(outcome.plan.goal, "G");
+  assert.equal(outcome.budget.turns, 1);
+  assert.equal(outcome.budget.tokens, 25);
+});
+
+test("a provider error with no message ends with a generic failure text", async () => {
   const fake = createFakeSdk([
     { stopReason: "error" },
   ]);
   const session = await createSession(fake);
-  await assert.rejects(
-    () => session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-32"),
-    /Model request failed\./,
-  );
+  const { outcome } = await session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-32");
+  assert.equal(outcome.status, "error");
+  assert.equal(outcome.summary, "Model request failed.");
+});
+
+test("an oversized or blank provider error still yields a valid error outcome", async () => {
+  for (const [message, expected] of [["x".repeat(9000), "x".repeat(4000)], ["   ", "Model request failed."]]) {
+    const fake = createFakeSdk([{ stopReason: "error", errorMessage: message }]);
+    const session = await createSession(fake);
+    const { outcome } = await session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-32b");
+    assert.equal(outcome.status, "error");
+    assert.equal(outcome.summary, expected);
+  }
 });
 
 test("an error turn adds its tokens but is not counted as a turn", async () => {
@@ -1026,7 +1091,10 @@ test("an error turn adds its tokens but is not counted as a turn", async () => {
     ] },
   ]);
   const session = await createSession(fake);
-  await assert.rejects(() => session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-33"), /overloaded/);
+  const { outcome } = await session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-33");
+  assert.equal(outcome.status, "error");
+  assert.equal(outcome.budget.turns, 1);
+  assert.equal(outcome.budget.tokens, 25);
 });
 
 test("session.cancel aborts an in-flight run and the outcome is cancelled with the plan kept", async () => {
@@ -1132,7 +1200,7 @@ test("the projector reports seq 1 starting with the seeded plan, the plan only a
   assert.equal(views[0].seq, 1);
   assert.equal(views[0].phase, "starting");
   assert.equal(views[0].plan, null);
-  assert.deepEqual(views[0].budget, { level: "mid", maxTurns: 16, maxTokens: 300_000, turns: 0, tokens: 0 });
+  assert.deepEqual(views[0].budget, { level: "mid", maxTurns: 16, maxTokens: 300_000, turns: 0, tokens: 0, uncachedInputTokens: 0, cacheReadTokens: 0 });
   for (let i = 1; i < views.length; i++) assert.ok(views[i].seq > views[i - 1].seq, `seq must strictly increase at index ${i}`);
 
   const firstPlanIndex = views.findIndex((v) => v.plan !== null);
@@ -1167,16 +1235,14 @@ test("the ended view falls back to the last non-empty assistant text when the fi
   assert.equal(views.at(-1).text, message);
 });
 
-test("a provider error still emits an ended progress snapshot before prompt() rejects", async () => {
+test("a provider error still emits an ended progress snapshot", async () => {
   const fake = createFakeSdk([
     { stopReason: "error", errorMessage: "401 invalid api key" },
   ]);
   const session = await createSession(fake);
   const views = [];
-  await assert.rejects(
-    () => session.prompt("Go", budgetFor("mid", 16, 300_000), (view) => views.push(view), "run-42"),
-    /401 invalid api key/,
-  );
+  const { outcome } = await session.prompt("Go", budgetFor("mid", 16, 300_000), (view) => views.push(view), "run-42");
+  assert.equal(outcome.status, "error");
   assert.equal(views.at(-1).phase, "ended");
 });
 
@@ -1334,8 +1400,8 @@ test("round() increments are reported in order, and a throwing handle() never pr
 test("session.send rejects a missing runId, and accepted sends stream progress notifications before resolving", async () => {
   const notifications = [];
   const sentViews = [
-    { seq: 1, phase: "starting", round: 0, text: "", plan: null, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: null, maxTokens: null, turns: 0, tokens: 0 }, retry: null, pendingInput: null },
-    { seq: 2, phase: "ended", round: 0, text: "done", plan: null, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: null, maxTokens: null, turns: 0, tokens: 0 }, retry: null, pendingInput: null },
+    { seq: 1, phase: "starting", round: 0, text: "", plan: null, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: null, maxTokens: null, turns: 0, tokens: 0, uncachedInputTokens: 0, cacheReadTokens: 0 }, retry: null, pendingInput: null },
+    { seq: 2, phase: "ended", round: 0, text: "done", plan: null, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: null, maxTokens: null, turns: 0, tokens: 0, uncachedInputTokens: 0, cacheReadTokens: 0 }, retry: null, pendingInput: null },
   ];
   const worker = new runtime.AgentRuntimeWorker(
     {
@@ -1375,7 +1441,7 @@ test("a throwing notify sink does not fail the run", async () => {
     {
       create: async () => ({
         prompt: async (_input, _budget, report) => {
-          report({ seq: 1, phase: "starting", round: 0, text: "", plan: null, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: null, maxTokens: null, turns: 0, tokens: 0 }, retry: null, pendingInput: null });
+          report({ seq: 1, phase: "starting", round: 0, text: "", plan: null, tools: [], toolCount: 0, budget: { level: "mid", maxTurns: null, maxTokens: null, turns: 0, tokens: 0, uncachedInputTokens: 0, cacheReadTokens: 0 }, retry: null, pendingInput: null });
           return { message: "ok", outcome: placeholderOutcome() };
         },
         cancel: async () => false,
@@ -1454,4 +1520,234 @@ test("runState().runId equals the session.send runId for the duration of the hel
   await worker.handleJsonl(request("cancel", "session.cancel", { sessionId: "s1" }));
   await sendPromise;
   assert.deepEqual(runStateAccessor(), { active: false, runId: null });
+});
+
+test("user input is sent literally: prompt template expansion is off and resource discovery is disabled", async () => {
+  const fake = createFakeSdk([
+    { toolCalls: [{ name: "update_plan", args: { goal: "G", doneCriteria: ["C"], todos: [{ id: "t1", title: "Step", status: "in_progress" }] } }, { name: "complete_task", args: { summary: "Done", evidence: ["done"] } }] },
+  ]);
+  const session = await createSession(fake);
+  await session.prompt("/some-template arg", budgetFor("mid", 16, 300_000), undefined, "run-20");
+  assert.ok(fake.promptCalls.length > 0);
+  assert.equal(fake.promptCalls[0].text.includes("/some-template arg"), true);
+  for (const call of fake.promptCalls) assert.deepEqual(call.options, { expandPromptTemplates: false });
+  const loader = fake.loaderOptions[0];
+  for (const flag of ["noExtensions", "noSkills", "noPromptTemplates", "noThemes", "noContextFiles"]) assert.equal(loader[flag], true, flag);
+  assert.equal(loader.extensionFactories.some((extension) => extension.name === "synthv-task-loop"), true);
+});
+
+test("each run leaves the provider request timeout to Pi's defaults", async () => {
+  const fake = createFakeSdk([
+    { toolCalls: [{ name: "update_plan", args: { goal: "G", doneCriteria: ["C"], todos: [{ id: "t1", title: "Step", status: "in_progress" }] } }, { name: "complete_task", args: { summary: "Done", evidence: ["done"] } }] },
+  ]);
+  const session = await createSession(fake);
+  await session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-21");
+  assert.equal(fake.settingsOverrides.at(-1).retry, undefined);
+});
+
+test("re-initializing with the same credential id but a different API key recreates the session with the new key", async () => {
+  const fake = createFakeSdk([]);
+  let apiKey = "key-old";
+  const worker = new runtime.AgentRuntimeWorker(
+    runtime.createPiSessionFactory({ extensionPaths: () => [], loadSdk: async () => fake.sdk }),
+    { request: async () => ({ providerId: "example", modelId: "model-1", credentials: [{ id: "c1", providerId: "example", modelId: "model-1", authMethod: "api-key", apiKey }] }) },
+  );
+  await worker.handleJsonl(request("hello", "host.hello", { hostId: "host", protocol: { min: "1.0", max: "1.0" }, capabilities: [] }));
+  const first = JSON.parse((await worker.handleJsonl(request("i1", "session.initialize", { sessionId: "s1" })))[0]);
+  const sameKey = JSON.parse((await worker.handleJsonl(request("i2", "session.initialize", { sessionId: "s1" })))[0]);
+  assert.equal(sameKey.result.reused, true);
+  apiKey = "key-new";
+  const rotated = JSON.parse((await worker.handleJsonl(request("i3", "session.initialize", { sessionId: "s1" })))[0]);
+  assert.equal(first.ok && rotated.ok, true);
+  assert.notEqual(rotated.result.reused, true);
+  assert.deepEqual(fake.runtimeApiKeys.map((entry) => entry.apiKey), ["key-old", "key-new"]);
+});
+
+test("an API key change behind a credential store recreates the session", async () => {
+  const fake = createFakeSdk([]);
+  let apiKey = "key-old";
+  const worker = new runtime.AgentRuntimeWorker(
+    runtime.createPiSessionFactory({ extensionPaths: () => [], loadSdk: async () => fake.sdk, credentialStore: () => ({}) }),
+    { request: async () => ({ providerId: "example", modelId: "model-1", credentials: [{ id: "c1", providerId: "example", modelId: "model-1", authMethod: "api-key", apiKey }] }) },
+  );
+  await worker.handleJsonl(request("hello", "host.hello", { hostId: "host", protocol: { min: "1.0", max: "1.0" }, capabilities: [] }));
+  await worker.handleJsonl(request("i1", "session.initialize", { sessionId: "s1" }));
+  const same = JSON.parse((await worker.handleJsonl(request("i2", "session.initialize", { sessionId: "s1" })))[0]);
+  assert.equal(same.result.reused, true);
+  apiKey = "key-new";
+  const rotated = JSON.parse((await worker.handleJsonl(request("i3", "session.initialize", { sessionId: "s1" })))[0]);
+  assert.equal(rotated.ok, true);
+  assert.notEqual(rotated.result.reused, true);
+});
+
+test("a rotating OAuth access token behind a credential store keeps the session", async () => {
+  const fake = createFakeSdk([]);
+  let accessToken = "token-1";
+  const worker = new runtime.AgentRuntimeWorker(
+    runtime.createPiSessionFactory({ extensionPaths: () => [], loadSdk: async () => fake.sdk, credentialStore: () => ({}) }),
+    { request: async () => ({ providerId: "example", modelId: "model-1", credentials: [{ id: "c1", providerId: "example", modelId: "model-1", authMethod: "oauth", apiKey: accessToken }] }) },
+  );
+  await worker.handleJsonl(request("hello", "host.hello", { hostId: "host", protocol: { min: "1.0", max: "1.0" }, capabilities: [] }));
+  await worker.handleJsonl(request("i1", "session.initialize", { sessionId: "s1" }));
+  accessToken = "token-2";
+  const second = JSON.parse((await worker.handleJsonl(request("i2", "session.initialize", { sessionId: "s1" })))[0]);
+  assert.equal(second.result.reused, true);
+});
+
+const steerHost = { request: async () => ({ providerId: "openai", modelId: "gpt-4.1", credentials: [{ id: "c1", providerId: "openai", modelId: "gpt-4.1", authMethod: "api-key", apiKey: "k" }] }) };
+
+async function createSteerWorker(fake) {
+  const worker = new runtime.AgentRuntimeWorker(runtime.createPiSessionFactory({ extensionPaths: () => [], loadSdk: async () => fake.sdk }), steerHost);
+  await worker.handleJsonl(request("hello", "host.hello", { hostId: "host", protocol: { min: "1.0", max: "1.0" }, capabilities: [] }));
+  await worker.handleJsonl(request("init", "session.initialize", { sessionId: "s1" }));
+  return worker;
+}
+
+const steerRequest = async (worker, params) => JSON.parse((await worker.handleJsonl(request("steer", "session.steer", params)))[0]);
+
+test("session.steer reaches the Pi session of the matching in-flight run with trimmed input", async () => {
+  const fake = createFakeSdk([{ hold: true, text: "working" }]);
+  const worker = await createSteerWorker(fake);
+  const sendPromise = worker.handleJsonl(request("send", "session.send", { sessionId: "s1", input: "hi", runId: "run-1" }));
+  await waitFor(() => fake.messages.length > 0);
+
+  const response = await steerRequest(worker, { sessionId: "s1", runId: "run-1", input: "  use track 2, not 1  " });
+  assert.equal(response.ok, true);
+  assert.equal(response.result.steered, true);
+  assert.deepEqual(fake.steered, ["use track 2, not 1"]);
+
+  await worker.handleJsonl(request("cancel", "session.cancel", { sessionId: "s1" }));
+  await sendPromise;
+});
+
+test("session.steer is rejected without an active run, for a different runId, after cancel, and for an unknown session", async () => {
+  const fake = createFakeSdk([{ hold: true, text: "working" }]);
+  const worker = await createSteerWorker(fake);
+
+  const idle = await steerRequest(worker, { sessionId: "s1", runId: "run-1", input: "go left" });
+  assert.equal(idle.ok, false);
+  assert.equal(idle.error.code, "session.no-active-run");
+
+  const unknown = await steerRequest(worker, { sessionId: "nope", runId: "run-1", input: "go left" });
+  assert.equal(unknown.error.code, "session.not-found");
+
+  const sendPromise = worker.handleJsonl(request("send", "session.send", { sessionId: "s1", input: "hi", runId: "run-1" }));
+  await waitFor(() => fake.messages.length > 0);
+  const mismatch = await steerRequest(worker, { sessionId: "s1", runId: "other-run", input: "go left" });
+  assert.equal(mismatch.ok, false);
+  assert.equal(mismatch.error.code, "session.run-mismatch");
+
+  await worker.handleJsonl(request("cancel", "session.cancel", { sessionId: "s1" }));
+  const afterCancel = await steerRequest(worker, { sessionId: "s1", runId: "run-1", input: "go left" });
+  assert.equal(afterCancel.error.code, "session.no-active-run");
+  await sendPromise;
+  assert.deepEqual(fake.steered, []);
+});
+
+test("session.steer validates its params before touching the session", async () => {
+  const fake = createFakeSdk([{ hold: true, text: "working" }]);
+  const worker = await createSteerWorker(fake);
+  const sendPromise = worker.handleJsonl(request("send", "session.send", { sessionId: "s1", input: "hi", runId: "run-1" }));
+  await waitFor(() => fake.messages.length > 0);
+
+  for (const params of [
+    { sessionId: "s1", runId: "run-1", input: "   " },
+    { sessionId: "s1", runId: "run-1", input: "x".repeat(32_001) },
+    { sessionId: "s1", input: "go left" },
+    { sessionId: "s1", runId: "r".repeat(65), input: "go left" },
+    { runId: "run-1", input: "go left" },
+  ]) {
+    const response = await steerRequest(worker, params);
+    assert.equal(response.ok, false);
+    assert.equal(response.error.code, "session.invalid");
+  }
+  assert.equal((await steerRequest(worker, { sessionId: "s1", runId: "run-1", input: "x".repeat(32_000) })).ok, true);
+  assert.equal(fake.steered.length, 1);
+
+  await worker.handleJsonl(request("cancel", "session.cancel", { sessionId: "s1" }));
+  await sendPromise;
+});
+
+test("a steer counts as progress, so the idle-continuation streak does not end the run right after it", async () => {
+  let session;
+  const fake = createFakeSdk([
+    { text: "thinking" },
+    { text: "thinking more", after: async () => { assert.equal(await session.steer("also check the tempo", "run-steer"), "steered"); } },
+    { text: "still nothing" },
+    { text: "nothing again" },
+  ]);
+  session = await createSession(fake);
+  const { outcome } = await session.prompt("Go", budgetFor("low", 16, 300_000), undefined, "run-steer");
+  assert.equal(outcome.status, "incomplete");
+  assert.deepEqual(fake.steered, ["also check the tempo"]);
+  assert.equal(fake.remainingRounds, 0, "the steered round resets the idle streak, so two more idle rounds run before the limit");
+});
+
+test("a steer arriving after complete_task in the final round is rejected rather than queued for the next run", async () => {
+  let session;
+  let late;
+  const fake = createFakeSdk([
+    { toolCalls: [
+      { name: "update_plan", args: { goal: "G", doneCriteria: ["C"], todos: [{ id: "t1", title: "Step", status: "completed" }] } },
+      { name: "complete_task", args: { summary: "Done", evidence: ["done"] } },
+    ], after: async () => { late = await session.steer("too late", "run-late"); } },
+  ]);
+  session = await createSession(fake);
+  const { outcome } = await session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-late");
+  assert.equal(outcome.status, "completed");
+  assert.equal(late, "no-active-run");
+  assert.deepEqual(fake.steered, []);
+});
+
+test("stdio worker answers session.steer immediately while an earlier request is still blocking the queue", async () => {
+  const pluginRoot = join(root, "test", ".tmp", "agent-runtime-steer-plugins");
+  rmSync(pluginRoot, { recursive: true, force: true });
+  mkdirSync(join(pluginRoot, "com.example.slow", "backend"), { recursive: true });
+  writeFileSync(join(pluginRoot, "com.example.slow", "package.json"), '{"type":"module"}\n');
+  writeFileSync(join(pluginRoot, "com.example.slow", "manifest.json"), JSON.stringify({
+    schemaVersion: 1,
+    id: "com.example.slow",
+    name: "Slow plugin",
+    version: "1.0.0",
+    hostApi: { min: "1.0", max: "1.0" },
+    backend: { entry: "backend/index.js" },
+    permissions: { "project.read": "optional" },
+  }));
+  writeFileSync(
+    join(pluginRoot, "com.example.slow", "backend", "index.js"),
+    "export async function activate(context) { await context.invokeHost('project.read', 'project', 'read', { id: 'project-1' }); }\n",
+  );
+
+  const child = spawn(process.execPath, [join(packageRoot, "dist", "worker.js")], { stdio: ["pipe", "pipe", "pipe"] });
+  child.stdout.setEncoding("utf8");
+  let stdoutBuffer = "";
+  const messages = [];
+  let hostRequest;
+  child.stdout.on("data", (chunk) => {
+    stdoutBuffer += chunk;
+    const lines = stdoutBuffer.split("\n");
+    stdoutBuffer = lines.pop();
+    for (const line of lines) {
+      if (!line) continue;
+      const message = JSON.parse(line);
+      messages.push(message);
+      if (message.kind === "request" && message.method === "host.capability.invoke") hostRequest = message;
+    }
+  });
+  try {
+    child.stdin.write(`${request("hello", "host.hello", { hostId: "host", protocol: { min: "1.0", max: "1.0" }, capabilities: [] })}\n`);
+    child.stdin.write(`${request("plugins", "runtime.plugins.discover", { root: pluginRoot, enabledPluginIds: ["com.example.slow"] })}\n`);
+    await waitFor(() => hostRequest !== undefined, 20_000);
+
+    child.stdin.write(`${request("steer", "session.steer", { sessionId: "s1", runId: "run-1", input: "go left" })}\n`);
+    await waitFor(() => messages.some((message) => message.kind === "response" && message.id === "steer"), 20_000);
+    assert.equal(messages.some((message) => message.kind === "response" && message.id === "plugins"), false, "discovery is still blocked on the host when the steer answers");
+    assert.equal(messages.find((message) => message.id === "steer").error.code, "session.not-found");
+
+    child.stdin.write(`${JSON.stringify({ kind: "response", id: hostRequest.id, protocolVersion: hostRequest.protocolVersion, ok: true, result: { granted: true } })}\n`);
+    await waitFor(() => messages.some((message) => message.kind === "response" && message.id === "plugins"), 20_000);
+  } finally {
+    child.kill("SIGTERM");
+    await new Promise((resolve) => child.once("exit", resolve));
+  }
 });

@@ -6,6 +6,7 @@ import { AgentRuntimeWorker } from "@synthv-toolbox/agent-runtime";
 import type { PiCredential, PiCredentialStore, PiModelSelection } from "@synthv-toolbox/agent-runtime";
 import {
   AGENT_EFFORT_LEVELS,
+  AGENT_INPUT_MAX_LENGTH,
   DEFAULT_AGENT_EFFORT,
   estimateAgentRunBudget,
   validateAgentRunOutcome,
@@ -166,6 +167,8 @@ interface ActiveRun {
   runId: string;
   cancelRequested: boolean;
   sendIssued: boolean;
+  /** Await acknowledgements before persisting so accepted steers retain their submission order. */
+  steers: Array<Promise<ConversationMessage>>;
 }
 
 /** Stores encrypted credential material locally and delegates model requests to the shared Agent Runtime. */
@@ -463,10 +466,10 @@ export class AiService {
   async send_message(conversationId: string, input: string, options: { cwd?: string; effort?: AgentEffortLevel; runId?: string } = {}): Promise<ConversationMessage[]> {
     const text = input.trim();
     if (!text) throw new Error("Message is required.");
-    if (text.length > 32_000) throw new Error("Message exceeds the 32,000 character limit.");
+    if (text.length > AGENT_INPUT_MAX_LENGTH) throw new Error("Message exceeds the 32,000 character limit.");
     if (this.activeRuns.has(conversationId)) throw new Error("A run is already in progress.");
     const effort = options.effort ?? DEFAULT_AGENT_EFFORT;
-    const active: ActiveRun = { runId: options.runId ?? this.id(), cancelRequested: false, sendIssued: false };
+    const active: ActiveRun = { runId: options.runId ?? this.id(), cancelRequested: false, sendIssued: false, steers: [] };
     this.activeRuns.set(conversationId, active);
     try {
       const metadata = await this.load();
@@ -477,9 +480,11 @@ export class AiService {
       const { assistant, outcome } = active.cancelRequested
         ? { assistant: "", outcome: cancelledOutcome(effort, this.agentUsageSamples()) }
         : await this.runSend(conversation.id, text, effort, active);
+      const steers = await Promise.allSettled(active.steers);
       const now = this.now().toISOString();
       const messages: ConversationMessage[] = [
         { role: "user", content: text, createdAt: now },
+        ...steers.flatMap((result) => result.status === "fulfilled" ? [result.value] : []),
         { role: "assistant", content: assistant, createdAt: now, outcome },
       ];
       conversation.messages.push(...messages);
@@ -500,6 +505,19 @@ export class AiService {
     if (!outcome) throw new Error("Agent Runtime returned an invalid run outcome.");
     const assistant = (typeof response.message === "string" ? response.message.trim() : "") || outcome.summary;
     return { assistant, outcome };
+  }
+
+  /** Delivers a message to the conversation's in-flight run; rejects when no run has reached the runtime. */
+  async steer_agent_run(conversationId: string, input: string): Promise<ConversationMessage> {
+    const text = input.trim();
+    if (!text) throw new Error("Message is required.");
+    if (text.length > AGENT_INPUT_MAX_LENGTH) throw new Error("Message exceeds the 32,000 character limit.");
+    const active = this.activeRuns.get(conversationId);
+    if (!active?.sendIssued || active.cancelRequested) throw new Error("No agent run is in progress.");
+    const pending: Promise<ConversationMessage> = this.options.runtime.request("session.steer", { sessionId: conversationId, runId: active.runId, input: text })
+      .then(() => ({ role: "user", content: text, createdAt: this.now().toISOString() }));
+    active.steers.push(pending);
+    return { ...await pending };
   }
 
   async cancel_agent_run(conversationId: string): Promise<void> {
@@ -523,7 +541,7 @@ export class AiService {
     const samples: AgentUsageSample[] = [];
     for (const message of finished) {
       const { status, budget } = message.outcome;
-      if (status === "incomplete" || status === "cancelled") continue;
+      if (status === "incomplete" || status === "cancelled" || status === "error") continue;
       samples.push({ level: budget.level, turns: budget.turns, tokens: budget.tokens, censored: status === "budget_exhausted" });
     }
     return samples;
@@ -623,7 +641,7 @@ function parseMetadata(raw: string): AiServiceMetadata {
 
 function cancelledOutcome(effort: AgentEffortLevel, samples: AgentUsageSample[]): AgentRunOutcome {
   const budget = estimateAgentRunBudget(effort, samples);
-  return { status: "cancelled", summary: "", evidence: [], missing: [], plan: null, budget: { ...budget, turns: 0, tokens: 0 } };
+  return { status: "cancelled", summary: "", evidence: [], missing: [], plan: null, budget: { ...budget, turns: 0, tokens: 0, uncachedInputTokens: 0, cacheReadTokens: 0 } };
 }
 
 function latestOutcome(conversation: ConversationSnapshot): AgentRunOutcome | undefined {

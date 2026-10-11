@@ -391,7 +391,10 @@ function redactValue(value: unknown, depth = 0): unknown {
       continue;
     }
     if (
-      (key === "issues" || key === "warnings" || key === "path") &&
+      (key === "issues" ||
+        key === "warnings" ||
+        key === "path" ||
+        key === "suggestions") &&
       Array.isArray(child)
     ) {
       result[key] = child

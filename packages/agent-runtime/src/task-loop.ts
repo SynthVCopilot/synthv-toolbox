@@ -47,9 +47,16 @@ export interface PiBeforeAgentStartResult {
   message?: { customType: string; content: string; display?: boolean };
 }
 
+export interface PiUsage {
+  input: number;
+  output: number;
+  cacheRead?: number;
+  cacheWrite: number;
+}
+
 export interface PiTurnEndAssistantMessage {
   role: string;
-  usage?: { input: number; output: number; cacheWrite: number };
+  usage?: PiUsage;
   stopReason?: string;
   errorMessage?: string;
   content?: unknown[];
@@ -70,7 +77,7 @@ export interface PiToolExecutionEndEvent {
 }
 
 export interface PiSessionCompactEvent {
-  compactionEntry: { usage?: { input: number; output: number; cacheWrite: number } };
+  compactionEntry: { usage?: PiUsage };
 }
 
 export interface PiExtensionApi {
@@ -101,10 +108,12 @@ export interface TaskLoopState {
   budget: AgentRunBudget;
   turns: number;
   tokens: number;
+  uncachedInputTokens: number;
+  cacheReadTokens: number;
   signal: TaskLoopSignal | null;
   roundProgress: number;
   roundError: { message: string; aborted: boolean } | null;
-  finishAttemptUsed: boolean;
+  finishAttempts: number;
   cancelled: boolean;
   lastAssistantText: string;
   firstRound: boolean;
@@ -117,10 +126,12 @@ export function createTaskLoopState(plan: AgentPlan | null, budget: AgentRunBudg
     budget,
     turns: 0,
     tokens: 0,
+    uncachedInputTokens: 0,
+    cacheReadTokens: 0,
     signal: null,
     roundProgress: 0,
     roundError: null,
-    finishAttemptUsed: false,
+    finishAttempts: 0,
     cancelled: false,
     lastAssistantText: "",
     firstRound: true,
@@ -133,13 +144,24 @@ export function resetRun(state: TaskLoopState, budget: AgentRunBudget): void {
   state.budget = budget;
   state.turns = 0;
   state.tokens = 0;
+  state.uncachedInputTokens = 0;
+  state.cacheReadTokens = 0;
   state.signal = null;
   state.roundProgress = 0;
   state.roundError = null;
-  state.finishAttemptUsed = false;
+  state.finishAttempts = 0;
   state.cancelled = false;
   state.lastAssistantText = "";
   state.firstRound = true;
+}
+
+/** Finish-tool calls allowed after the budget is exhausted, so one rejected completion does not end the run without a summary. */
+const MAX_FINISH_ATTEMPTS = 2;
+
+function addUsage(state: TaskLoopState, usage: PiUsage): void {
+  state.tokens += usage.input + usage.output + usage.cacheWrite;
+  state.uncachedInputTokens += usage.input + usage.cacheWrite;
+  state.cacheReadTokens += usage.cacheRead ?? 0;
 }
 
 export function isBudgetExhausted(state: TaskLoopState): boolean {
@@ -388,7 +410,7 @@ export function createTaskLoopExtension(state: TaskLoopState, runCompletionGuard
       pi.on("turn_end", (event) => {
         const message = event.message;
         if (message.role !== "assistant") return;
-        if (message.usage) state.tokens += message.usage.input + message.usage.output + message.usage.cacheWrite;
+        if (message.usage) addUsage(state, message.usage);
         if (message.stopReason === "error") {
           state.roundError = { message: message.errorMessage || "Model request failed.", aborted: false };
           return;
@@ -414,15 +436,15 @@ export function createTaskLoopExtension(state: TaskLoopState, runCompletionGuard
 
       pi.on("session_compact", (event) => {
         const usage = event.compactionEntry?.usage;
-        if (usage) state.tokens += usage.input + usage.output + usage.cacheWrite;
+        if (usage) addUsage(state, usage);
       });
 
       pi.on("tool_call", (event) => {
         if (state.cancelled) return { block: true, reason: "Run was cancelled.", terminate: true };
         if (state.signal) return { block: true, reason: "Run already ended.", terminate: true };
         if (!isBudgetExhausted(state)) return;
-        if ((event.toolName === "complete_task" || event.toolName === "request_input") && !state.finishAttemptUsed) {
-          state.finishAttemptUsed = true;
+        if ((event.toolName === "complete_task" || event.toolName === "request_input") && state.finishAttempts < MAX_FINISH_ATTEMPTS) {
+          state.finishAttempts += 1;
           return;
         }
         return { block: true, reason: "Run budget exhausted.", terminate: true };
@@ -439,11 +461,8 @@ function planProgress(plan: AgentPlan | null): string {
 
 async function runRound(state: TaskLoopState, runPrompt: (text: string) => Promise<void>, text: string): Promise<void> {
   state.roundProgress = 0;
-  // Cast defeats TS narrowing the property to the null literal across the await below.
-  state.roundError = null as TaskLoopState["roundError"];
+  state.roundError = null;
   await runPrompt(text);
-  const error = state.roundError;
-  if (error && !error.aborted) throw new Error(error.message);
 }
 
 /** Runs the outer prompt/continuation loop and produces the run outcome. `runPrompt` sends one round to the session. */
@@ -457,7 +476,7 @@ export async function runTaskLoop(
   if (!state.cancelled) await runRound(state, runPrompt, input);
   let idleStreak = state.roundProgress === 0 ? 1 : 0;
 
-  while (!state.cancelled && !state.roundError?.aborted && !state.signal && !isBudgetExhausted(state)) {
+  while (!state.cancelled && !state.roundError && !state.signal && !isBudgetExhausted(state)) {
     if (idleStreak > profile.maxIdleContinuations) break;
     await runRound(state, runPrompt, continuationPrompt(state));
     idleStreak = state.roundProgress === 0 ? idleStreak + 1 : 0;
@@ -465,17 +484,22 @@ export async function runTaskLoop(
 
   const status: AgentRunOutcome["status"] = state.signal
     ? state.signal.kind === "completed" ? "completed" : "needs_input"
+    : state.roundError && !state.roundError.aborted ? "error"
     : state.cancelled ? "cancelled" : isBudgetExhausted(state) ? "budget_exhausted" : "incomplete";
   return { status };
 }
 
 export function buildOutcome(state: TaskLoopState, status: AgentRunOutcome["status"]): AgentRunOutcome {
-  const budget = { ...state.budget, turns: state.turns, tokens: state.tokens };
+  const budget = { ...state.budget, turns: state.turns, tokens: state.tokens, uncachedInputTokens: state.uncachedInputTokens, cacheReadTokens: state.cacheReadTokens };
   if (status === "completed" && state.signal?.kind === "completed") {
     return { status, summary: state.signal.summary, evidence: state.signal.evidence, missing: [], plan: state.plan, budget };
   }
   if (status === "needs_input" && state.signal?.kind === "needs_input") {
     return { status, summary: state.signal.question, evidence: [], missing: state.signal.missing, plan: state.plan, budget };
+  }
+  if (status === "error") {
+    const summary = (state.roundError?.message.trim() || "Model request failed.").slice(0, AGENT_PLAN_LIMITS.summaryLength);
+    return { status, summary, evidence: [], missing: [], plan: state.plan, budget };
   }
   return { status, summary: "", evidence: [], missing: [], plan: state.plan, budget };
 }

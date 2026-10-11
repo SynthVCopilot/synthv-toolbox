@@ -2,19 +2,22 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { createRequire, stripTypeScriptTypes } from 'node:module';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 const require = createRequire(new URL('../src/PiDesktop.Tauri/package.json', import.meta.url));
 const { createI18n } = require('vue-i18n');
 const { parse } = require('@babel/parser');
 const read = name => fs.readFileSync(new URL(`../src/PiDesktop.Tauri/src/${name}`, import.meta.url), 'utf8');
 const source = read('main.ts');
-const names = new Set(['renderConcurrentDisclaimer', 'renderAccountIndicatorConsent', 'renderProfileDeletionDialog', 'renderBlockedSwitchDialog', 'renderSvpRouteDialog', 'renderSvpRouteCandidate', 'accountProbeSessionLabel', 'accountProbeIssueRules', 'accountProbeIssue', 'accountProbeEnvironments', 'accountProbeEnvironmentSummary', 'environmentDefinitelyUnavailable', 'accountProbeBadge', 'officialAuthorizationBadge', 'accountProbeIdentity', 'officialAccountIdentity', 'accountUseStateForSlot', 'accountUseDot', 'renderAccounts', 'renderAuthorizedVoice', 'renderSessionDocument', 'renderAccountManager', 'aiConnectionSummary', 'aiProviders', 'activeAiProvider', 'isActiveAiProvider', 'aiProviderDisplayName', 'supportsWindowsSv2Extensions', 'renderSettings']);
+const names = new Set(['renderConcurrentDisclaimer', 'renderAccountIndicatorConsent', 'renderProfileDeletionDialog', 'renderBlockedSwitchDialog', 'renderSvpRouteDialog', 'renderSvpRouteCandidate', 'accountProbeSessionLabel', 'accountProbeIssueRules', 'accountProbeIssue', 'accountProbeEnvironments', 'accountProbeEnvironmentSummary', 'environmentDefinitelyUnavailable', 'accountProbeBadge', 'officialAuthorizationBadge', 'accountProbeIdentity', 'officialAccountIdentity', 'accountUseStateForSlot', 'accountUseDot', 'renderAccounts', 'renderAuthorizedVoice', 'renderWebAccountQuery', 'renderSessionSizeIndicator', 'renderAccountManager', 'aiConnectionSummary', 'aiProviders', 'activeAiProvider', 'isActiveAiProvider', 'aiProviderDisplayName', 'supportsWindowsSv2Extensions', 'renderSettings']);
 const functions = parse(source, { sourceType: 'module', plugins: ['typescript'] }).program.body.filter(node => node.type === 'FunctionDeclaration' && names.has(node.id.name));
 assert.equal(functions.length, names.size);
 for (const fn of functions) assert.doesNotMatch(source.slice(fn.start, fn.end), /[\u4e00-\u9fff]/u, `${fn.id.name} contains untranslated UI text`);
 const context = vm.createContext({ createI18n, document: { documentElement: {} }, localStorage: { getItem: () => null, setItem() {} }, icon: () => '<svg></svg>', escapeHtml: value => String(value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]), cachedAccountProfiles: null, renderSv2InstanceList: () => '', resultMetric: (name, value) => `${name}: ${value}`, findVoiceMetadata: () => undefined, sv2VoiceCatalog: [], busy: false });
 const evaluate = value => vm.runInContext(value, context);
-context.offlineLicenseStatuses = new Map();
-context.sv2SessionDocuments = new Map();
+context.sv2WebAccounts = new Map();
+
 const stripModule = value => stripTypeScriptTypes(value.replace(/^import .*;\r?\n/gm, '').replace(/^export /gm, ''), { mode: 'transform' });
 evaluate(stripModule(read('i18n.ts')));
 evaluate(stripModule(read('i18nAccounts.ts')));
@@ -34,7 +37,7 @@ assert.match(evaluate('t("settings.aiDisabledDescription")'), /own local MCP ser
 assert.match(source, /error = probe\.detail \|\| t\("accountNotice\.authorizationUnknown"\)/);
 const hostile = '<img src=x onerror=alert(1)> & "name"';
 const probe = { sessionStatus: 'ready', remoteUse: 'clear', authorizationStatus: 'verified', authorizedVoiceCount: 2, authorizedVoices: [], authorizedVoiceProducts: [], accountDisplayName: hostile, accountEmail: hostile, detail: '原始诊断', };
-const slot = { id: 'slot', displayName: hostile, color: '#123456', sessionCached: true, isActive: true, dataPath: hostile, accountProbe: probe, concurrentAccountProbe: { ...probe }, concurrent: { ready: true, runningPids: [21] }, sessionProtection: { status: 'ready' }, concurrentSessionProtection: { status: 'ready' }, installedVoiceIds: [] };
+const slot = { id: 'slot', displayName: hostile, color: '#123456', sessionCached: true, sessionSize: { status: 'offline', sizeBytes: 4097 }, isActive: true, dataPath: hostile, accountProbe: probe, concurrentAccountProbe: { ...probe }, concurrent: { ready: true, runningPids: [21] }, sessionProtection: { status: 'ready' }, concurrentSessionProtection: { status: 'ready' }, installedVoiceIds: [] };
 context.profiles = { supported: true, slots: [slot], blockers: [{ name: hostile, reason: '原始诊断', pid: 33 }], concurrentProvider: { available: true, name: hostile, detail: '原始诊断' }, canImportCurrent: true };
 context.app = { platform: 'windows', sv2AccountIndicatorEnabled: true, sv2ConcurrentEnabled: true, mode: 'toolbox', svpAssociation: { supported: true, detail: '原始诊断' }, appVersion: '1.0', configPath: hostile };
 context.pendingConcurrentLaunchSlot = 'slot';
@@ -59,31 +62,64 @@ for (const lang of ['en', 'zh-CN', 'en']) {
     assert.doesNotMatch(html, /<img src=x|accountUi\./);
     if (lang === 'en') assert.doesNotMatch(html, /[\u4e00-\u9fff]/);
   }
+  context.accountManagerSection = 'profile';
+  const sessionLabel = new RegExp(lang === 'en' ? 'Offline · 4097 bytes' : '离线 · 4097 字节');
+  assert.match(evaluate('renderAccountManager()'), sessionLabel);
+  context.app.platform = 'macos';
+  assert.match(evaluate('renderAccountManager()'), sessionLabel);
+  context.app.platform = 'windows';
 }
+context.profiles.slots[0].sessionSize = { status: 'unknown', sizeBytes: null };
+assert.match(evaluate('renderAccountManager()'), /Unknown · Size unavailable/);
+context.profiles.slots[0].sessionSize = { status: 'offline', sizeBytes: 4097 };
 assert.match(evaluate('renderBlockedSwitchDialog()'), /&lt;img/);
 context.accountManagerSection = 'profile';
-context.offlineLicenseStatuses.set('slot', { enabled: true, eligible: true, currentDevice: false, localCacheStatus: 'inactive', deviceName: hostile, checkedAtUtc: '2026-09-13T00:00:00Z', cachedProducts: [] });
-const offlineOtherDevice = evaluate('renderAccountManager()');
-assert.match(offlineOtherDevice, /Server offline authorization is enabled/);
-assert.match(offlineOtherDevice, /Local offline cache is inactive/);
-assert.match(offlineOtherDevice, /data-offline-license-enabled="false" disabled/);
-assert.doesNotMatch(offlineOtherDevice, /<img src=x|accountUi\./);
-context.offlineLicenseStatuses.get('slot').currentDevice = true;
+context.sv2WebAccounts.set('slot', { status: 'ready', use: 'available', offlineDevices: [{ name: hostile, enabled: true }], licenses: [], checkedAtUtc: '2026-10-02T00:00:00Z' });
+const webQuery = evaluate('renderAccountManager()');
+assert.match(webQuery, /Connection test passed/);
+assert.match(webQuery, /data-web-account-query/);
+assert.doesNotMatch(webQuery, /<img src=x|accountUi\./);
+assert.doesNotMatch(webQuery, /data-write-sv2-session|data-copy-session-field|data-offline-license-set/);
 context.busy = true;
-assert.match(evaluate('renderAccountManager()'), /data-offline-license-enabled="false" disabled/);
+assert.match(evaluate('renderAccountManager()'), /data-web-account-query="slot" disabled/);
 context.busy = false;
 assert.match(evaluate('renderSvpRouteDialog()'), /原始诊断/);
 assert.match(evaluate('renderSvpRouteDialog()'), /matches all required voices/);
 context.app.platform = 'macos';
 assert.match(evaluate('renderBlockedSwitchDialog()'), /macOS v1 does not terminate processes/);
+assert.match(evaluate('renderAccountManager()'), /Offline · 4097 bytes/);
 context.accountManagerSection = 'global';
 assert.match(evaluate('renderAccountManager()'), /sequential data-slot switching/);
 assert.doesNotMatch(source, /function renderToolboxUpdateResult/);
 assert.doesNotMatch(evaluate('renderSettings()'), /update-channel|data-check-toolbox-update/);
 assert.doesNotMatch(source, /data-offline-license-check/);
-assert.match(source, /data-copy-session-field/);
+assert.doesNotMatch(source, /data-copy-session-field/);
 assert.match(read('styles.css'), /session-credential-value code[^\n]*white-space: nowrap/);
 const header = read('vue/components/PageHeader.vue');
 assert.match(header, /useI18n/);
 assert.doesNotMatch(header, /[\u4e00-\u9fff]/);
 console.log('Account and settings translations switch live, cover bounded UI, and preserve escaping and backend diagnostics.');
+
+const { SynthVService } = await import(new URL('../src/PiDesktop.Tauri/electron/services/synthv-service.ts', import.meta.url));
+const profileRoot = await mkdtemp(join(tmpdir(), 'account-profile-ui-'));
+try {
+  const service = new SynthVService(profileRoot, profileRoot, { status: async () => ({ connected: false }), requestStop: async () => {} }, profileRoot, async () => ({ code: 0, stdout: '', stderr: '' }), undefined, profileRoot);
+  const created = await service.createProfile('Fixture');
+  const slot = created.slots[0];
+  await mkdir(join(slot.dataPath, 'license'), { recursive: true });
+  await writeFile(join(slot.dataPath, 'license', 'session'), Buffer.alloc(4097));
+  context.profiles = await service.profileState();
+  context.managedProfileSlotId = slot.id;
+  context.accountManagerSection = 'profile';
+  context.sv2WebAccounts.clear();
+  for (const platform of ['windows', 'macos']) {
+    context.app.platform = platform;
+    for (const lang of ['en', 'zh-CN']) {
+      evaluate(`setLocale(${JSON.stringify(lang)})`);
+      assert.match(evaluate('renderAccounts()'), /data-manage-slot/);
+      const html = evaluate('renderAccountManager()');
+      assert.match(html, /session-size-indicator offline/);
+      assert.match(html, /data-web-account-login/);
+    }
+  }
+} finally { await rm(profileRoot, { recursive: true, force: true }); }
