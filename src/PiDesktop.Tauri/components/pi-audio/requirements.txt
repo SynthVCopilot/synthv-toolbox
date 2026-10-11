@@ -8,6 +8,7 @@ mido
 scipy
 setuptools<81
 faster-whisper
+mlx-whisper; platform_system == "Darwin" and platform_machine == "arm64"
 pypinyin
 cmudict
 

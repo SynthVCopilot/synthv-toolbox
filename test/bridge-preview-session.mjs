@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { AGENT_EFFORT_LEVELS, DEFAULT_AGENT_EFFORT, estimateAgentRunBudget } from "../packages/runtime-protocol/dist/index.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -12,8 +13,8 @@ source = source
   .replace("const preview = !hasDesktopBridge();", "const preview = true;")
   .replace("export const api =", "const api =");
 source = stripTypeScriptTypes(source);
-const api = Function("packageJson", `${source}; return api;`)(
-  { version: "preview" },
+const api = Function("packageJson", "AGENT_EFFORT_LEVELS", "DEFAULT_AGENT_EFFORT", "estimateAgentRunBudget", `${source}; return api;`)(
+  { version: "preview" }, AGENT_EFFORT_LEVELS, DEFAULT_AGENT_EFFORT, estimateAgentRunBudget,
 );
 
 await api.autoConnectSynthvBridge(4202, "preview-4202");

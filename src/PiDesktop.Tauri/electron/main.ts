@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, shell, Tray } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenDialogOptions } from "./bridge.js";
@@ -7,6 +7,16 @@ import { ElectronRuntimeHost } from "./services/runtime-host.js";
 import { ElectronCommandRegistry } from "./services/command-registry.js";
 import { AiService, agentRuntimePort, type AiProviderId } from "./services/ai-service.js";
 import { AgentApprovalBroker } from "./services/agent-approvals.js";
+import { createAgentTaskService } from "./services/agent-task-service.js";
+import { createCoverAgentToolsExtension } from "./services/cover-agent-tools.js";
+import { createCoverService } from "./services/cover-service.js";
+import { createCoverHost } from "./services/cover-host.js";
+import { createCoverScoreService } from "./services/cover-score.js";
+import { createCoverScoreToolsExtension } from "./services/cover-score-tools.js";
+import { createCreativeRuntime } from "./services/creative-runtime.js";
+import { createMediaImporter } from "./services/media-importer.js";
+import { createCoverAudio } from "./services/cover-audio.js";
+import { resolveFfmpegBinaries } from "./services/component-audio-commands.js";
 import { createCreativeService } from "./services/creative-service.js";
 import { createComponentExecutor } from "./services/component-executor.js";
 import { DesktopStateService } from "./services/desktop-state.js";
@@ -206,8 +216,21 @@ async function initializeServices(): Promise<void> {
   });
   const synthv = new SynthVService(join(userData, "synthv"), bridgeDirectory, bridge, bridgeIpcDirectory, undefined, autostartController(), undefined, process.env, webAccounts);
   const componentsRoot = app.isPackaged ? join(process.resourcesPath, "components") : resolve(currentDirectory, "../../components");
-  const creative = createCreativeService(join(userData, "creative"), createComponentExecutor(componentsRoot));
   let ai: AiService;
+  let agentTasks: ReturnType<typeof createAgentTaskService> | undefined;
+  const creativeRoot = join(userData, "creative");
+  const creativeRuntime = createCreativeRuntime({ dataRoot: creativeRoot, componentsRoot });
+  const coverScore = createCoverScoreService(creativeRoot);
+  const coverHost = createCoverHost(bridge, synthv);
+  const cover = createCoverService({
+    dataRoot: creativeRoot, runtime: creativeRuntime, score: coverScore, host: coverHost, ai: () => ai,
+    importer: async python => createMediaImporter({ dataRoot: creativeRoot, python, ffmpegPath: (await resolveFfmpegBinaries({ dataRoot: join(userData, "components") })).ffmpeg }),
+    audio: async python => createCoverAudio({ dataRoot: creativeRoot, componentsRoot, python, ffmpegPath: (await resolveFfmpegBinaries({ dataRoot: join(userData, "components") })).ffmpeg }),
+  });
+  const creative = createCreativeService(creativeRoot, async (command, args) => {
+    const runtime = await creativeRuntime.status();
+    return createComponentExecutor(componentsRoot, runtime.ready ? runtime.pythonPath : undefined, undefined, { dataRoot: creativeRoot })(command, args);
+  }, bridge, cover);
   let capabilities: HostCapabilities;
   let desktop: DesktopStateService;
   const delivery = createSynthVDeliveryRegistry();
@@ -220,24 +243,49 @@ async function initializeServices(): Promise<void> {
     resolveModel: () => ai.resolveModelSelection() as unknown as Promise<JsonValue>,
   }, {
     sessionFactory: createPiSessionFactory({
-      extensions: ({ sessionId, guards, runState }) => [createSynthVToolsExtension({ bridge, approvals, sessionId, guards, runState, registry: delivery, workMode: () => desktop.agentWorkMode() })],
+      credentialStore: model => ai.modelCredentialStore(model),
+      extensions: ({ sessionId, guards, runState }) => {
+        const bound = cover.session(sessionId);
+        if (bound?.phase === "repair") return [createCoverScoreToolsExtension({ service: coverScore, jobForSession: () => bound.jobId, phaseForSession: () => bound.phase, guards })];
+        if (bound?.phase === "tuning" && bound.target && bound.monitor) {
+          const target = bound.target, monitor = bound.monitor;
+          guards.completion(() => monitor.readNotes.size !== target.notes.length ? `Read the entire Cover group: ${monitor.readNotes.size}/${target.notes.length} notes inspected.` : monitor.writes < 1 ? "Apply and verify real tuning changes before completing the Cover." : null);
+          return [createSynthVToolsExtension({ bridge: coverHost.forTuning(target, monitor), approvals, sessionId, guards, runState, registry: delivery, workMode: () => "solo" })];
+        }
+        return [createSynthVToolsExtension({ bridge, approvals, sessionId, guards, runState, registry: delivery, workMode: () => desktop.agentWorkMode() }), createCoverAgentToolsExtension({ sessionId, guards, runState, invoke: (command, args) => cover.invoke(command, args) })];
+      },
       persistTranscripts: () => desktop.agentTranscriptsEnabled(),
     }),
-    onAgentProgress: (progress) => emitToRenderer("agent.run.progress", progress),
+    onAgentProgress: (progress) => { agentTasks?.recordProgress(progress); emitToRenderer("agent.run.progress", progress); },
   });
   await runtimeHost.load();
-  ai = new AiService({ metadataPath: join(userData, "ai", "metadata.json"), safeStorage, runtime: agentRuntimePort(runtimeHost.runtime), catalog: modelCatalog(), approvals, usage: { query: async (provider, credentialIds) => ({ queriedAt: new Date().toISOString(), accounts: credentialIds.map(credentialId => ({ provider, credentialId, status: "unknown", plan: null, windows: [], balance: null, error: null })) }) }, authorizer: { authorize: authorizeProvider } });
+  ai = new AiService({ metadataPath: join(userData, "ai", "metadata.json"), runtime: agentRuntimePort(runtimeHost.runtime), catalog: modelCatalog(), approvals, usage: { query: async (provider, credentialIds) => ({ queriedAt: new Date().toISOString(), accounts: credentialIds.map(credentialId => ({ providerId: provider, credentialId, status: "unknown", plan: null, windows: [], balance: null, error: null })) }) }, authorizer: { authorize: authorizeProvider } });
   capabilities = new HostCapabilities(synthv, creative, ai);
-  desktop = new DesktopStateService(userData, app.getVersion(), runtimeHost, ai, synthv, channel => { updateChannel = channel; updater.setChannel(channel); });
+  desktop = new DesktopStateService(userData, app.getVersion(), runtimeHost, ai, synthv, channel => { updateChannel = channel; updater.setChannel(channel); }, creativeRuntime);
   await desktop.load();
+  const coverChildren = async (conversationId: string) => (await cover.invoke("media_tasks", {}) as Array<Record<string, any>>).filter(job => job.parentConversationId === conversationId);
+  agentTasks = createAgentTaskService({
+    dataRoot: join(userData, "ai"), ai: () => ai, effort: () => desktop.agentEffort(),
+    approvals: conversationId => approvals.list().filter(item => item.conversationId === conversationId),
+    children: async conversationId => (await coverChildren(conversationId)).map(job => ({
+      ...job,
+      repair: job.repairConversationId ? agentTasks?.sessionProgress(job.repairConversationId) ?? null : null,
+      tuning: job.tuningConversationId ? agentTasks?.sessionProgress(job.tuningConversationId) ?? null : null,
+    })),
+    cancelChildren: async conversationId => {
+      for (const job of await coverChildren(conversationId)) if (["queued", "running", "cancelling"].includes(job.status)) await cover.invoke("cancel_media_task", { id: job.id });
+    },
+  });
   const httpServer = new HttpMcpServer({
     mcpTools: async () => (await runtimeHost.mcpTools()).map(name => ({ name, description: name === "toolbox_internal" ? "Invoke an authorized internal Toolbox operation." : "Invoke an authorized advanced Toolbox operation.", inputSchema: { type: "object", properties: { capability: { type: "string" }, operation: { type: "string" }, params: { type: "object" } }, required: ["capability", "operation", "params"], additionalProperties: false }, permission: name === "toolbox_internal" ? "internal" : "advanced" })),
     callMcpTool: async (name, arguments_) => ({ content: await runtimeHost.callMcpTool(name, arguments_ as never) }),
+    agentTask: args => agentTasks!.invoke(args),
     agentChat: async (input, conversationId) => { const conversation = conversationId ? await ai.open_conversation(conversationId) : await ai.new_conversation(); return ai.send_message(conversation.id, input, { effort: desktop.agentEffort() }); },
   });
   await runtimeHost.attachHttpServer(httpServer);
   commandRegistry = new ElectronCommandRegistry(runtimeHost, { ai, creative, desktop, synthv, componentAudio: {
     dataRoot: join(userData, "components"),
+    creativeRuntime,
     openExternal: url => shell.openExternal(url),
     reveal: async path => { shell.showItemInFolder(path); },
     saveFile: async defaultName => {
@@ -247,7 +295,7 @@ async function initializeServices(): Promise<void> {
       return result.canceled ? undefined : result.filePath;
     },
   }, approvals }, emitToRenderer);
-  registerQuitCleanup(async () => { approvals.dispose(); await bridge.close(); });
+  registerQuitCleanup(async () => { approvals.dispose(); creative.dispose?.(); await cover.dispose(); await runtimeHost.runtime.dispose(); await agentTasks?.dispose(); await httpServer.stop(); await bridge.close(); });
 }
 
 let quitCleanupDone = false;

@@ -21,6 +21,7 @@ torch(CPU 即可) + panns-inference。Python ≤3.11（basic-pitch 生态限制�
 import argparse
 from functools import lru_cache
 import json
+import os
 import sys
 
 import numpy as np
@@ -57,15 +58,17 @@ def note_name(p: int) -> str:
 
 
 def data_root():
-    """统一数据根：~/.SynthVcopilot（模型/输出/配置/历史都在这个根下）。"""
+    """统一数据根：模型、输出、配置与历史都保存在同一个根目录。"""
+    import os
     import pathlib
 
-    return pathlib.Path.home() / ".SynthVcopilot"
+    configured = os.environ.get("SYNTHV_TOOLBOX_DATA_ROOT")
+    return pathlib.Path(configured).expanduser().resolve() if configured else pathlib.Path.home() / ".SynthVcopilot"
 
 
 def safe_output_path(name_or_rel: str, subdir: str = "output", suffix: str | None = None,
                      allow_external: bool = False):
-    """把（可能来自外部的）输出路径安全落到 ~/.SynthVcopilot/ 数据根下。
+    """把（可能来自外部的）输出路径安全落到组件数据根下。
 
     规则：硬禁止 `..` 穿透；相对路径落到 `<root>/<subdir>/` 下；
     绝对路径默认仅当**已在数据根内**时放行；经受信任调用方验证的
@@ -96,6 +99,8 @@ def safe_output_path(name_or_rel: str, subdir: str = "output", suffix: str | Non
     if suffix and out.suffix.lower() != suffix:
         out = out.with_suffix(suffix)
     out.parent.mkdir(parents=True, exist_ok=True)
+    if out.exists():
+        raise FileExistsError(f"输出文件已存在，拒绝覆盖: {out}")
     return out
 
 
@@ -125,6 +130,9 @@ def _ensure_panns_assets():
     """
     import os
 
+    if os.environ.get("SYNTHV_TOOLBOX_DATA_ROOT"):
+        raise RuntimeError("PANNs labels require a home-directory data path; isolated desktop runs do not write there.")
+
     models = data_root() / "models" / "panns"
     models.mkdir(parents=True, exist_ok=True)
     ckpt = models / "Cnn14_mAP=0.431.pth"
@@ -140,11 +148,13 @@ def extract_notes(path: str):
     """basic-pitch 音符提取 → [{pitch,start,end,velocity}]，按 start 排序。"""
     import contextlib
 
-    from basic_pitch.inference import predict
+    from basic_pitch import FilenameSuffix, build_icassp_2022_model_path
+    from basic_pitch.inference import Model, predict
 
     # basic-pitch 会往 stdout 打印进度行，污染本工具的纯 JSON 输出——改道 stderr。
     with contextlib.redirect_stdout(sys.stderr):
-        _, _, note_events = predict(path)
+        model = basic_pitch_model(Model, build_icassp_2022_model_path(FilenameSuffix.onnx))
+        _, _, note_events = predict(path, model_or_model_path=model)
     notes = [
         {
             "pitch": int(p),
@@ -155,7 +165,58 @@ def extract_notes(path: str):
         for (s, e, p, a, _bends) in note_events
     ]
     notes.sort(key=lambda n: n["start"])
-    return notes
+    return notes, model.inference_info
+
+
+@lru_cache(maxsize=1)
+def basic_pitch_model(model_type, model_path):
+    import onnxruntime as ort
+
+    class HardwareOnnxModel(model_type):
+        def __init__(self, path):
+            mode = os.environ.get("SYNTHV_TOOLBOX_INFERENCE_DEVICE", "auto").strip().lower() or "auto"
+            if mode not in {"auto", "cpu"}:
+                raise ValueError("SYNTHV_TOOLBOX_INFERENCE_DEVICE must be 'auto' or 'cpu'.")
+            available = ort.get_available_providers()
+            if "CPUExecutionProvider" not in available:
+                raise RuntimeError("ONNX Runtime does not provide CPUExecutionProvider.")
+            preferred = hardware_provider_priority()
+            hardware_available = [provider for provider in preferred if provider in available]
+            selected = [] if mode == "cpu" else hardware_available
+            requested = [*selected, "CPUExecutionProvider"]
+            options = ort.SessionOptions()
+            if "DmlExecutionProvider" in selected:
+                options.enable_mem_pattern = False
+                options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+            self.model_type = model_type.MODEL_TYPES.ONNX
+            self.model = ort.InferenceSession(
+                str(path),
+                sess_options=options,
+                providers=requested,
+                enable_fallback=0,
+            )
+            self.model.disable_fallback()
+            actual = self.model.get_providers()
+            self.inference_info = {
+                "deviceMode": mode,
+                "availableProviders": available,
+                "availableHardwareProviders": hardware_available,
+                "hardwareAvailable": bool(hardware_available),
+                "requestedProviders": requested,
+                "actualProviders": actual,
+                "hardwareProvider": next((provider for provider in actual if provider != "CPUExecutionProvider"), None),
+                "hardwareEnabled": any(provider != "CPUExecutionProvider" for provider in actual),
+            }
+
+    return HardwareOnnxModel(model_path)
+
+
+def hardware_provider_priority():
+    if sys.platform == "darwin":
+        return ["CoreMLExecutionProvider"]
+    if sys.platform == "win32":
+        return ["CUDAExecutionProvider", "DmlExecutionProvider"]
+    return ["CUDAExecutionProvider"]
 
 
 def cmd_probe(args) -> dict:
@@ -213,7 +274,7 @@ def cmd_probe(args) -> dict:
     }
 
     if args.notes:
-        notes = extract_notes(args.audio)
+        notes, inference_info = extract_notes(args.audio)
         pitches = [n["pitch"] for n in notes]
         octs: dict[int, int] = {}
         for p in pitches:
@@ -226,6 +287,7 @@ def cmd_probe(args) -> dict:
             "long_over_800ms": long_n,
             "octave_histogram": {f"O{o}": c for o, c in sorted(octs.items())},
         }
+        result["inference"] = inference_info
 
     if args.panns:
         import contextlib
@@ -544,25 +606,73 @@ def map_lyrics_to_notes(lyrics_file: str, notes):
 
 
 def transcribe_words(audio_path: str):
-    """Use local Whisper word timestamps; the model is cached after first download."""
+    """Return local Whisper word timing evidence and the backend actually used."""
+    mode = os.environ.get("SYNTHV_TOOLBOX_INFERENCE_DEVICE", "auto").strip().lower() or "auto"
+    if mode not in {"auto", "cpu"}:
+        raise ValueError("SYNTHV_TOOLBOX_INFERENCE_DEVICE must be 'auto' or 'cpu'.")
+    if mode == "auto" and sys.platform == "darwin" and __import__("platform").machine() == "arm64":
+        try:
+            import mlx_whisper
+        except ImportError as exc:
+            raise RuntimeError("Apple Silicon 自动歌词识别依赖 mlx-whisper 缺失。") from exc
+        import contextlib
+
+        model_repo = os.environ.get("SYNTHV_TOOLBOX_MLX_WHISPER_MODEL", "mlx-community/whisper-small-mlx")
+        with contextlib.redirect_stdout(sys.stderr):
+            result = mlx_whisper.transcribe(
+                audio_path, path_or_hf_repo=model_repo, word_timestamps=True,
+                verbose=False, condition_on_previous_text=False,
+            )
+        words = []
+        for segment in result.get("segments", []):
+            for word in segment.get("words", []):
+                text = str(word.get("word", "")).strip()
+                start, end = word.get("start"), word.get("end")
+                if text and start is not None and end is not None:
+                    words.append({"text": text, "start": float(start), "end": float(end), "probability": word.get("probability")})
+        if not words:
+            raise RuntimeError("MLX Whisper 没有返回带时间戳的词；未写入猜测的歌词或音素。")
+        return words, str(result.get("language", "unknown")), {
+            "backend": "mlx-whisper", "model": model_repo, "device": "mps",
+            "languageProbability": result.get("language_probability"),
+            "wordCount": len(words), "timingBasis": "whisper word timestamps",
+        }, result.get("segments", [])
+
     try:
         from faster_whisper import WhisperModel
     except ImportError as exc:
         raise RuntimeError("自动歌词识别依赖缺失；请更新 pi-audio 组件。") from exc
-    model = WhisperModel("small", device="cpu", compute_type="int8")
+    if mode == "cpu":
+        device, compute_type = "cpu", "int8"
+    else:
+        try:
+            import ctranslate2
+            cuda_devices = ctranslate2.get_cuda_device_count()
+        except Exception as exc:
+            raise RuntimeError("无法确认 Whisper 的 CUDA 执行后端；CPU 仅支持显式测试覆盖。") from exc
+        if cuda_devices < 1:
+            raise RuntimeError("当前平台没有受支持的 Whisper 硬件后端；CPU 仅支持显式测试覆盖。")
+        device, compute_type = "cuda", "float16"
+    model = WhisperModel("small", device=device, compute_type=compute_type)
     segments, info = model.transcribe(
         audio_path, beam_size=5, word_timestamps=True, vad_filter=False,
         condition_on_previous_text=False,
     )
     words = []
+    segment_rows = []
     for segment in segments:
+        segment_rows.append({"start": float(segment.start), "end": float(segment.end), "text": segment.text.strip()})
         for word in segment.words or []:
             text = word.word.strip()
             if text and word.start is not None and word.end is not None:
-                words.append({"text": text, "start": float(word.start), "end": float(word.end)})
+                words.append({"text": text, "start": float(word.start), "end": float(word.end), "probability": getattr(word, "probability", None)})
     if not words:
         raise RuntimeError("自动歌词识别没有返回带时间戳的词；未写入猜测的歌词或音素。")
-    return words, str(info.language or "unknown")
+    return words, str(info.language or "unknown"), {
+        "backend": "faster-whisper", "model": "small", "device": device,
+        "languageProbability": getattr(info, "language_probability", None),
+        "wordCount": len(words), "timingBasis": "whisper word timestamps",
+    }, segment_rows
 
 
 @lru_cache(maxsize=1)
@@ -764,8 +874,8 @@ def advanced_pair_diff(vnotes, inotes, requested_tol):
 
 
 def cmd_pair_diff(args) -> dict:
-    vnotes = extract_notes(args.vocal)
-    inotes = extract_notes(args.inst) if args.inst else []
+    vnotes, inference_info = extract_notes(args.vocal)
+    inotes = extract_notes(args.inst)[0] if args.inst else []
     advanced = None
     if args.advanced and args.inst:
         selected, confidence, trials = advanced_pair_diff(vnotes, inotes, args.tol)
@@ -802,7 +912,7 @@ def cmd_pair_diff(args) -> dict:
         lyric_texts, lyric_result = map_lyrics_to_notes(args.lyrics_file, mono)
         markers = [{"lyric": lyric, "phoneset": None, "phoneme": None} for lyric in lyric_texts]
     elif args.transcribe:
-        words, language = transcribe_words(args.vocal)
+        words, language, _transcription, _segments = transcribe_words(args.vocal)
         markers, lyric_result = map_transcription_to_notes(words, mono, language)
         lyric_texts = [marker["lyric"] for marker in markers]
     else:
@@ -825,6 +935,7 @@ def cmd_pair_diff(args) -> dict:
         "note": "歌词来自词级时间戳识别；词典音素不是声学对齐。未提供伴奏时直接提取演唱旋律。",
     }
     result.update(lyric_result)
+    result["inference"] = inference_info
     if args.lyrics_file:
         result["lyrics_file"] = args.lyrics_file
     if advanced is not None:
@@ -839,6 +950,184 @@ def cmd_pair_diff(args) -> dict:
         result["midi_out"] = str(out_path)
 
     return result
+
+
+def collapse_with_evidence(notes):
+    ordered = sorted((dict(note) for note in notes), key=lambda note: (note["start"], -note["pitch"]))
+    mono = []
+    truncated = 0
+    discarded_overlap = 0
+    for note in ordered:
+        if not mono:
+            mono.append(note)
+            continue
+        previous = mono[-1]
+        if note["start"] >= previous["end"] - 0.02:
+            new_end = min(previous["end"], note["start"])
+            if new_end < previous["end"]:
+                truncated += 1
+            previous["end"] = new_end
+            mono.append(note)
+        elif note["pitch"] > previous["pitch"]:
+            previous["end"] = note["start"]
+            truncated += 1
+            mono.append(note)
+        else:
+            discarded_overlap += 1
+    before_fragment_filter = len(mono)
+    mono = [note for note in mono if note["end"] - note["start"] >= 0.06]
+    return mono, {
+        "rawCandidateCount": len(notes),
+        "monophonicCandidateCount": before_fragment_filter,
+        "processedNoteCount": len(mono),
+        "overlapTrims": truncated,
+        "discardedOverlaps": discarded_overlap,
+        "droppedShortFragments": before_fragment_filter - len(mono),
+        "mergedNotes": 0,
+        "pitchRangeFiltering": 0,
+        "confidenceHint": "Basic Pitch candidate confidences are not exposed by this API; no confidence threshold or pitch-range filter was applied.",
+    }
+
+
+def _note_seconds(note, marker=None):
+    value = {
+        "startSeconds": round(float(note["start"]), 6),
+        "endSeconds": round(float(note["end"]), 6),
+        "pitch": int(note["pitch"]),
+        "velocity": int(note.get("velocity", 90)),
+    }
+    if marker is not None:
+        value["lyric"] = marker.get("lyric") or ""
+    if marker and marker.get("phoneme"):
+        value["phoneme"] = marker["phoneme"]
+        value["phoneset"] = marker["phoneset"]
+        value["phonemeSource"] = "pronunciation dictionary; not acoustic alignment"
+    return value
+
+
+def _word_note_evidence(words, notes):
+    evidence = []
+    for word in words:
+        overlaps = []
+        for index, note in enumerate(notes):
+            duration = max(0.0, min(note["end"], word["end"]) - max(note["start"], word["start"]))
+            if duration > 0:
+                overlaps.append({"noteIndex": index, "overlapSeconds": round(duration, 6)})
+        evidence.append({**word, "overlappingNotes": overlaps})
+    return evidence
+
+
+def cmd_transcribe_extract(args):
+    import hashlib
+    import pathlib
+    import shutil
+    import uuid
+
+    source = pathlib.Path(args.audio).expanduser()
+    if not source.is_absolute() or source.is_symlink() or not source.is_file():
+        raise ValueError("音频输入必须是存在的绝对路径普通文件，且不得是符号链接。")
+    if not os.environ.get("SYNTHV_TOOLBOX_DATA_ROOT"):
+        raise RuntimeError("transcribe-extract requires SYNTHV_TOOLBOX_DATA_ROOT.")
+    root = data_root()
+    out_root = root / "output" / "cover-audio"
+    out_root.mkdir(parents=True, exist_ok=True)
+    run_id = str(uuid.UUID(args.run_id)) if args.run_id else str(uuid.uuid4())
+    staging = out_root / f".{run_id}.tmp"
+    final = out_root / run_id
+    staging.mkdir(mode=0o700)
+    try:
+        raw_notes, inference = extract_notes(str(source))
+        mono, transformations = collapse_with_evidence(raw_notes)
+        if args.lyrics_file:
+            transcript = read_lyrics_file(args.lyrics_file)
+            provided_markers, _ = map_lyrics_to_notes(args.lyrics_file, mono)
+            markers = [{"lyric": lyric, "phoneset": None, "phoneme": None} for lyric in provided_markers]
+            words, language, segments = [], "provided", []
+            asr = {"backend": "manual-input", "model": None, "device": None, "wordCount": 0, "timingBasis": None}
+            alignment = {"recognized_words": 0, "lyric_markers": sum(marker["lyric"] is not None for marker in markers),
+                         "phoneme_markers": 0, "unmarked_notes": sum(marker["lyric"] is None for marker in markers),
+                         "unaligned_words": 0, "dictionary_missing_words": 0, "dictionary_phoneme_words": 0,
+                         "language": language, "source": "manual sequence mapping; no acoustic timing evidence"}
+            lyric_source = "provided"
+        else:
+            words, language, asr, segments = transcribe_words(str(source))
+            markers, alignment = map_transcription_to_notes(words, mono, language)
+            transcript = " ".join(str(segment.get("text", "")).strip() for segment in segments).strip()
+            lyric_source = "automatic-transcription"
+        notes = [_note_seconds(note, marker) for note, marker in zip(mono, markers)]
+        raw = [_note_seconds(note) for note in raw_notes]
+        midi_path = staging / "melody.mid"
+        write_midi(midi_path, mono, markers)
+        lyrics_path = staging / "lyrics.txt"
+        lyrics_path.write_text(transcript, encoding="utf-8")
+        segments_path = staging / "segments.json"
+        segments_path.write_text(json.dumps({
+            "language": language, "backend": asr, "segments": segments,
+            "words": _word_note_evidence(words, mono),
+            "alignment": alignment,
+            "alignmentDescription": "Whisper word timestamps are acoustic timing evidence; dictionary-derived phonemes are lexical hints only. Manually supplied lyrics are sequence-mapped without acoustic timing.",
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        notes_path = staging / "notes.json"
+        notes_path.write_text(json.dumps({
+            "timingBasis": "seconds", "noteCount": len(notes), "notes": notes,
+            "transformations": transformations,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        raw_notes_path = staging / "raw-notes.json"
+        raw_notes_path.write_text(json.dumps({
+            "timingBasis": "seconds", "noteCount": len(raw), "notes": raw,
+            "description": "All Basic Pitch candidates are preserved before monophonic selection; no user-range filter was applied.",
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        probe = cmd_probe(argparse.Namespace(audio=str(source), panns=False, notes=False))
+        try:
+            import soundfile as sf
+            audio_info = sf.info(str(source))
+            duration_seconds = float(audio_info.duration)
+            sample_rate = int(audio_info.samplerate)
+        except (RuntimeError, OSError):
+            duration_seconds = float(probe.get("duration_sec", 0.0))
+            sample_rate = None
+        word_probabilities = [float(word["probability"]) for word in words if isinstance(word.get("probability"), (int, float))]
+        analysis = {
+            "tool": "pi-audio/transcribe-extract", "sourcePath": str(source),
+            "durationSeconds": duration_seconds, "sampleRate": sample_rate,
+            "audioAnalysis": probe, "noteCount": len(notes), "rawNoteCount": len(raw),
+            "monoRate": round(monophony_rate(mono), 4), "pitchRange": [min((n["pitch"] for n in mono), default=None), max((n["pitch"] for n in mono), default=None)],
+            "transformations": transformations, "inference": inference,
+            "transcription": {
+                **asr, "language": language, "source": lyric_source,
+                "lowConfidenceWordCount": sum(probability < 0.4 for probability in word_probabilities),
+                "meanWordProbability": round(sum(word_probabilities) / len(word_probabilities), 4) if word_probabilities else None,
+            },
+            "alignment": alignment,
+            "qualityWarnings": [
+                "Whisper word timestamps do not guarantee syllable- or phoneme-level alignment.",
+                "Basic Pitch candidate confidence scores are unavailable; review raw candidates and recorded cleanup counts.",
+            ],
+        }
+        analysis_path = staging / "analysis.json"
+        analysis_path.write_text(json.dumps(analysis, ensure_ascii=False, indent=2), encoding="utf-8")
+        for item in staging.iterdir():
+            if not item.is_file() or item.stat().st_size == 0:
+                raise RuntimeError(f"生成结果无效: {item.name}")
+        shutil.move(str(staging), str(final))
+        def output_path(name):
+            return str(final / name)
+        digest = hashlib.sha256((final / "notes.json").read_bytes()).hexdigest()
+        return {
+            "tool": "pi-audio/transcribe-extract", "runId": run_id,
+            "midiPath": output_path("melody.mid"), "lyricsPath": output_path("lyrics.txt"),
+            "segmentsPath": output_path("segments.json"), "analysisPath": output_path("analysis.json"),
+            "notesPath": output_path("notes.json"), "notesSha256": digest,
+            "rawNotesPath": output_path("raw-notes.json"),
+            "noteCount": len(notes), "rawNoteCount": len(raw), "timingBasis": "seconds",
+            "durationSeconds": analysis["durationSeconds"], "language": language,
+            "transcription": analysis["transcription"], "transformations": transformations,
+            "inference": inference,
+        }
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        shutil.rmtree(final, ignore_errors=True)
+        raise
 
 
 def main():
@@ -868,6 +1157,12 @@ def main():
     s = sub.add_parser("source-style", help="离线提取参考演唱特征")
     s.add_argument("audio", help="现有本地音频路径")
     s.set_defaults(fn=cmd_source_style)
+
+    c = sub.add_parser("transcribe-extract", help="本地词级转录 + 全音域旋律 MIDI 与音符 JSON")
+    c.add_argument("audio")
+    c.add_argument("--lyrics-file", help="可选 UTF-8 歌词文本；自动识别仍会生成分词时间证据")
+    c.add_argument("--run-id", help="调用方提供的 UUID 输出目录标识")
+    c.set_defaults(fn=cmd_transcribe_extract)
 
     args = ap.parse_args()
     try:

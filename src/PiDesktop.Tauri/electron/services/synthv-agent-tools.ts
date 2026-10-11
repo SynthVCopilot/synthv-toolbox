@@ -134,15 +134,15 @@ function buildSynthVSection(instructions: string): string {
   return ["## SynthV", instructions, ...APP_RULES.map((rule) => `- ${rule}`)].join("\n");
 }
 
-/** An AbortSignal that fires when `timeoutMs` elapses or `parent` aborts, whichever comes first. */
-function timeoutSignal(timeoutMs: number, parent?: AbortSignal): AbortSignal {
+function timeoutSignal(timeoutMs: number, parent?: AbortSignal): { signal: AbortSignal; dispose(): void } {
   const controller = new AbortController();
-  if (parent?.aborted) { controller.abort(); return controller.signal; }
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
   const onParentAbort = () => controller.abort();
-  parent?.addEventListener("abort", onParentAbort, { once: true });
-  controller.signal.addEventListener("abort", () => { clearTimeout(timer); parent?.removeEventListener("abort", onParentAbort); }, { once: true });
-  return controller.signal;
+  const timer = setTimeout(onParentAbort, timeoutMs);
+  const dispose = () => { clearTimeout(timer); parent?.removeEventListener("abort", onParentAbort); };
+  if (parent?.aborted) controller.abort();
+  else parent?.addEventListener("abort", onParentAbort, { once: true });
+  controller.signal.addEventListener("abort", dispose, { once: true });
+  return { signal: controller.signal, dispose };
 }
 
 /** A resolution the broker settled, a still-pending/executing approval a wait timed out or aborted on, or an id this conversation cannot find (unknown, foreign, or evicted after the 5-minute retention). */
@@ -156,7 +156,10 @@ async function waitForApprovals(approvals: AgentApprovalBroker, ids: readonly st
   const targets = ids.filter((id) => !isDelivered(id));
   if (targets.length === 0) return [];
   return Promise.all(targets.map(async (id) => {
-    const resolution = await approvals.wait(id, conversationId, timeoutSignal(timeoutMs, signal));
+    const timeout = timeoutSignal(timeoutMs, signal);
+    let resolution: AgentApprovalResolution | undefined;
+    try { resolution = await approvals.wait(id, conversationId, timeout.signal); }
+    finally { timeout.dispose(); }
     if (resolution) return resolution;
     if (approvals.isActive(id, conversationId)) return { id, resolution: "pending" as const, expiresAtUtc: approvals.expiresAtUtc(id, conversationId) };
     return { id, resolution: "unknown" as const };

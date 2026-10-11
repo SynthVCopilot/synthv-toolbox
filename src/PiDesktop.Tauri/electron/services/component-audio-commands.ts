@@ -13,7 +13,12 @@ type Job = { id: string; operation: string; status: string; progressPercent?: nu
 type Artifact = { path: string; operation: string };
 
 export interface CommandRegistry { register(command: string, handler: (args: Args) => Promise<unknown>): void; }
-export interface ComponentAudioOptions { ffmpegPath?: string; dataRoot: string; run?: (file: string, args: string[]) => Promise<Result>; reveal?: (path: string) => Promise<void>; saveFile?: (defaultName: string) => Promise<string | undefined>; openExternal?: (url: string) => Promise<void>; }
+export interface CreativeRuntimeStatus { ready: boolean; pythonPath?: string; missing: string[]; detail: string; }
+export interface CreativeRuntime {
+  status(): Promise<CreativeRuntimeStatus>;
+  ensure(options?: { signal?: AbortSignal; onProgress?: (progress: number, detail: string) => void }): Promise<string>;
+}
+export interface ComponentAudioOptions { ffmpegPath?: string; dataRoot: string; creativeRuntime?: CreativeRuntime; run?: (file: string, args: string[]) => Promise<Result>; reveal?: (path: string) => Promise<void>; saveFile?: (defaultName: string) => Promise<string | undefined>; openExternal?: (url: string) => Promise<void>; }
 
 const runProcess = (file: string, args: string[]) => new Promise<Result>((done, reject) => {
   const child = spawn(file, args, { windowsHide: true, shell: false }); let stdout = ""; let stderr = "";
@@ -21,11 +26,41 @@ const runProcess = (file: string, args: string[]) => new Promise<Result>((done, 
   child.once("error", reject); child.once("close", code => code === 0 ? done({ stdout, stderr }) : reject(new Error(stderr || `${file} exited with ${code}`)));
 });
 
+export interface FfmpegBinariesOptions { dataRoot: string; ffmpegPath?: string; }
+export interface FfmpegBinaries { ffmpeg: string; ffprobe: string; source: "configured" | "system"; }
+
+export async function resolveFfmpegBinaries(options: FfmpegBinariesOptions): Promise<FfmpegBinaries> {
+  const suffix = process.platform === "win32" ? ".exe" : "";
+  let directory: string | null = null;
+  try {
+    const value = JSON.parse(await readFile(join(resolve(options.dataRoot), "ffmpeg.json"), "utf8"));
+    directory = typeof value.directory === "string" && value.directory ? value.directory : null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  if (directory) return { ffmpeg: join(directory, "ffmpeg" + suffix), ffprobe: join(directory, "ffprobe" + suffix), source: "configured" };
+  if (options.ffmpegPath) {
+    return { ffmpeg: options.ffmpegPath, ffprobe: join(dirname(options.ffmpegPath), "ffprobe" + suffix), source: "configured" };
+  }
+  return { ffmpeg: "ffmpeg", ffprobe: "ffprobe", source: "system" };
+}
+
+export async function queryFfmpegStatus(options: FfmpegBinariesOptions, run = runProcess) {
+  let runtime: FfmpegBinaries = { ffmpeg: "ffmpeg", ffprobe: "ffprobe", source: "system" };
+  try {
+    runtime = await resolveFfmpegBinaries(options);
+    const [ffmpeg] = await Promise.all([run(runtime.ffmpeg, ["-version"]), run(runtime.ffprobe, ["-version"])]);
+    return { available: true, source: runtime.source, ffmpegPath: runtime.ffmpeg, ffprobePath: runtime.ffprobe, version: ffmpeg.stdout.split(/\r?\n/)[0] ?? "", detail: "FFmpeg and FFprobe are ready." };
+  } catch (error) {
+    return { available: false, source: runtime.source, ffmpegPath: runtime.ffmpeg, ffprobePath: runtime.ffprobe, detail: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 export function registerComponentAudioCommands(registry: CommandRegistry, options: ComponentAudioOptions): void {
   const root = resolve(options.dataRoot); const outputRoot = join(root, "audio-output"); const configPath = join(root, "ffmpeg.json"); const run = options.run ?? runProcess;
   const plans = new Map<string, { plan: Plan; digest: string; expires: number }>(); const jobs = new Map<string, Job>(); const artifacts = new Map<string, Artifact>();
   const readConfig = async (): Promise<{ directory: string | null }> => { try { const value = JSON.parse(await readFile(configPath, "utf8")); return { directory: typeof value.directory === "string" && value.directory ? value.directory : null }; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { directory: null }; throw error; } };
-  const binaries = async () => { const config = await readConfig(); const suffix = process.platform === "win32" ? ".exe" : ""; return config.directory ? { ffmpeg: join(config.directory, `ffmpeg${suffix}`), ffprobe: join(config.directory, `ffprobe${suffix}`), source: "configured" } : { ffmpeg: options.ffmpegPath ?? "ffmpeg", ffprobe: options.ffmpegPath ? join(dirname(options.ffmpegPath), `ffprobe${suffix}`) : "ffprobe", source: options.ffmpegPath ? "configured" : "system" }; };
+  const binaries = async () => resolveFfmpegBinaries({ dataRoot: root, ffmpegPath: options.ffmpegPath });
   const makePlan = async (operation: "prepare" | "normalize", request: AudioRequest | NormalizeRequest): Promise<Plan> => {
     const inputPath = resolve(text(request.inputPath, "inputPath")); if (!(await stat(inputPath)).isFile()) throw new Error("The audio input must be a file."); await mkdir(outputRoot, { recursive: true });
     const planId = randomUUID(); const token = randomUUID(); const digest = sha(request); const outputPath = join(outputRoot, `${operation}-${planId}.wav`);
@@ -40,7 +75,7 @@ export function registerComponentAudioCommands(registry: CommandRegistry, option
     return { ...job };
   };
 
-  registry.register("ffmpeg_status", async () => { const runtime = await binaries(); try { await Promise.all([accessPath(runtime.ffmpeg), accessPath(runtime.ffprobe)]); const result = await run(runtime.ffmpeg, ["-version"]); return { available: true, source: runtime.source, ffmpegPath: runtime.ffmpeg, ffprobePath: runtime.ffprobe, version: result.stdout.split(/\r?\n/)[0] ?? "", detail: "FFmpeg and FFprobe are ready." }; } catch (error) { return { available: false, source: runtime.source, ffmpegPath: runtime.ffmpeg, ffprobePath: runtime.ffprobe, detail: error instanceof Error ? error.message : String(error) }; } });
+  registry.register("ffmpeg_status", async () => queryFfmpegStatus({ dataRoot: root, ffmpegPath: options.ffmpegPath }, run));
   registry.register("get_ffmpeg_configuration", readConfig);
   registry.register("set_ffmpeg_directory", async args => { const directory = args.directory === null ? null : resolve(text(args.directory, "directory")); if (directory) { const suffix = process.platform === "win32" ? ".exe" : ""; await Promise.all([access(join(directory, `ffmpeg${suffix}`)), access(join(directory, `ffprobe${suffix}`))]); } await writeComponentState(configPath, { directory }); return { succeeded: true, summary: "FFmpeg configuration saved.", detail: directory ?? "System PATH" }; });
   registry.register("open_ffmpeg_download_page", async () => { if (!options.openExternal) throw new Error("External URL handling is unavailable."); await options.openExternal("https://ffmpeg.org/download.html"); return { succeeded: true, summary: "Opened the FFmpeg download page.", detail: "" }; });
@@ -57,8 +92,109 @@ export function registerComponentAudioCommands(registry: CommandRegistry, option
   registry.register("save_audio_artifact", async args => { const artifact = getArtifact(artifacts, text(args.artifactId, "artifactId")); const destination = await options.saveFile?.(basename(artifact.path)); if (!destination) return { saved: false }; await copyFile(artifact.path, destination); return { saved: true, fileName: basename(destination) }; });
   registry.register("audio_capture_capability", async () => ({ available: false, platform: process.platform, reason: "System audio capture requires a platform capture component." })); registry.register("list_synthv_capture_targets", async () => []);
   for (const command of ["capture_synthv_clip", "compare_synthv_clips"]) registry.register(command, async () => { throw new Error(`${command} requires the platform audio capture component.`); });
-  const tasks: Args[] = []; registry.register("component_downloads", async () => tasks); registry.register("queue_component_install", async args => { const id = text(args.id, "id"); const bundled = ["pi-audio", "cvrs", "vocal-separation"].includes(id); tasks.unshift({ id: randomUUID(), componentId: id, status: bundled ? "completed" : "failed", downloadedBytes: 0, totalBytes: null, error: bundled ? null : "No managed installer is available.", createdAt: new Date().toISOString() }); return tasks; });
-  for (const [command, status] of [["cancel_component_install", "cancelled"], ["retry_component_install", "queued"]]) registry.register(command, async args => updateTask(tasks, text(args.taskId, "taskId"), status));
+  const tasks: Args[] = [];
+  const attempts = new Map<string, AbortController>();
+  const generations = new Map<string, number>();
+  const supportedComponents = new Set(["pi-audio", "cvrs", "vocal-separation"]);
+  const runtimeStatus = async (): Promise<CreativeRuntimeStatus> => {
+    if (!options.creativeRuntime) return { ready: false, missing: ["creative runtime"], detail: "The local creative Python runtime is not configured." };
+    try {
+      const status = await options.creativeRuntime.status();
+      return { ...status, ready: status.ready === true, detail: typeof status.detail === "string" ? status.detail : "Runtime status was returned without details." };
+    } catch (error) {
+      return { ready: false, missing: ["runtime status"], detail: error instanceof Error ? error.message : String(error) };
+    }
+  };
+  const beginInstall = (task: Args) => {
+    const generation = (generations.get(String(task.id)) ?? 0) + 1;
+    generations.set(String(task.id), generation);
+    queueMicrotask(() => { void install(task, generation); });
+  };
+  const install = async (task: Args, generation: number): Promise<void> => {
+    const id = String(task.id);
+    if (generations.get(id) !== generation || task.status !== "queued") return;
+    if (!supportedComponents.has(String(task.componentId))) {
+      task.status = "failed"; task.error = "No managed installer is available for this component.";
+      task.detail = task.error; task.updatedAt = new Date().toISOString(); return;
+    }
+    if (!options.creativeRuntime) {
+      task.status = "failed"; task.error = "The local creative Python runtime is not configured.";
+      task.detail = task.error; task.updatedAt = new Date().toISOString(); return;
+    }
+    const controller = new AbortController();
+    attempts.set(id, controller);
+    task.status = "installing"; task.progress = 0; task.error = null;
+    task.detail = "Checking and preparing the local Python runtime.";
+    task.updatedAt = new Date().toISOString();
+    try {
+      task.runtimeStatus = await runtimeStatus();
+      if (controller.signal.aborted || generations.get(id) !== generation) return;
+      const pythonPath = await options.creativeRuntime.ensure({
+        signal: controller.signal,
+        onProgress: (progress, detail) => {
+          if (controller.signal.aborted || generations.get(id) !== generation) return;
+          if (Number.isFinite(progress)) task.progress = Math.min(99, Math.max(0, progress));
+          task.detail = detail || "Preparing the local Python runtime.";
+          task.updatedAt = new Date().toISOString();
+        },
+      });
+      if (controller.signal.aborted || generations.get(id) !== generation) return;
+      if (typeof pythonPath !== "string" || !pythonPath.trim()) throw new Error("The runtime completed without returning its Python executable path.");
+      const finalStatus = await runtimeStatus();
+      task.runtimeStatus = finalStatus;
+      if (!finalStatus.ready) throw new Error(finalStatus.detail || "The creative runtime is not ready after installation.");
+      task.pythonPath = pythonPath;
+      task.progress = 100; task.status = "completed"; task.error = null;
+      task.detail = "The local Python runtime is ready for component workflows.";
+      task.completedAt = new Date().toISOString(); task.updatedAt = task.completedAt;
+    } catch (error) {
+      if (generations.get(id) !== generation) return;
+      const cancelled = controller.signal.aborted;
+      task.status = cancelled ? "cancelled" : "failed";
+      task.error = cancelled ? null : error instanceof Error ? error.message : String(error);
+      task.detail = cancelled ? "Runtime preparation was cancelled." : task.error;
+      task.completedAt = new Date().toISOString(); task.updatedAt = task.completedAt;
+    } finally {
+      if (attempts.get(id) === controller) attempts.delete(id);
+    }
+  };
+  registry.register("component_downloads", async () => tasks);
+  registry.register("component_runtime_status", runtimeStatus);
+  registry.register("queue_component_install", async args => {
+    const componentId = text(args.id, "id");
+    const now = new Date().toISOString();
+    const task: Args = {
+      id: randomUUID(), componentId,
+      displayName: ({ "pi-audio": "Pi Audio", cvrs: "CVRS", "vocal-separation": "Vocal Separation" } as Record<string, string>)[componentId] ?? componentId,
+      status: "queued", downloadedBytes: 0, totalBytes: null,
+      progress: 0, error: null, detail: "Queued local runtime preparation.", createdAt: now, updatedAt: now,
+    };
+    tasks.unshift(task);
+    beginInstall(task);
+    return tasks;
+  });
+  registry.register("cancel_component_install", async args => {
+    const task = findTask(tasks, text(args.taskId, "taskId"));
+    if (["queued", "installing", "downloading"].includes(String(task.status))) {
+      const id = String(task.id);
+      attempts.get(id)?.abort();
+      generations.set(id, (generations.get(id) ?? 0) + 1);
+      task.status = "cancelled"; task.error = null; task.detail = "Runtime preparation was cancelled.";
+      task.completedAt = new Date().toISOString(); task.updatedAt = task.completedAt;
+    }
+    return tasks;
+  });
+  registry.register("retry_component_install", async args => {
+    const task = findTask(tasks, text(args.taskId, "taskId"));
+    if (["failed", "cancelled"].includes(String(task.status))) {
+      attempts.get(String(task.id))?.abort();
+      task.status = "queued"; task.progress = 0; task.error = null;
+      task.detail = "Queued local runtime preparation."; delete task.completedAt; delete task.pythonPath;
+      task.updatedAt = new Date().toISOString();
+      beginInstall(task);
+    }
+    return tasks;
+  });
   registry.register("open_downloaded_component", async () => { throw new Error("There is no downloaded installer to open."); }); registry.register("remove_local_component", async () => { throw new Error("Bundled components cannot be removed separately."); });
 }
 
@@ -75,5 +211,5 @@ function integer(value: number, min: number, max: number, name: string): number 
 function valid(value: unknown, min: number): value is number { return typeof value === "number" && Number.isFinite(value) && value >= min; }
 function sha(value: unknown): string { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
 async function accessPath(file: string): Promise<void> { if (file.includes("/") || file.includes("\\")) await access(file); }
-function updateTask(tasks: Args[], id: string, status: string): Args[] { const task = tasks.find(item => item.id === id); if (!task) throw new Error("Component task was not found."); task.status = status; return tasks; }
+function findTask(tasks: Args[], id: string): Args { const task = tasks.find(item => item.id === id); if (!task) throw new Error("Component task was not found."); return task; }
 export async function writeComponentState(path: string, value: unknown): Promise<void> { await mkdir(dirname(path), { recursive: true }); const temporary = `${path}.${randomUUID()}.tmp`; await writeFile(temporary, JSON.stringify(value), "utf8"); await rename(temporary, path); }

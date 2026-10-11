@@ -27,12 +27,12 @@ export interface ToolGroup {
 }
 
 const featureDefinitions: FeatureCatalogItem[] = [
-  { id: "cover", title: "一键 Cover", description: "从 BV 或 YouTube 来源完成 Cover，并导入当前 SynthV 工程。", icon: "sparkles", accent: "violet", homePriority: 1, base: ["来源音频处理", "旋律 MIDI 与歌词", "导入当前工程"], ai: ["快捷指令编排", "指定声库授权提示", "失败阶段解释与重试"], requirements: ["媒体导入器", "人声伴奏分离", "pi-audio", "SynthV Bridge"], componentIds: ["media-fetcher", "vocal-separation", "pi-audio", "ffmpeg"], requiresConnectedBridge: false },
+  { id: "cover", title: "一键 Cover", description: "下载整曲、分离人声、识别旋律、由 AI 修复数据与连续性并调教，最后保存到当前 SynthV 工程。", icon: "sparkles", accent: "violet", homePriority: 1, base: ["整曲下载与人声分离", "旋律识别与歌词识别", "保存到当前工程"], ai: ["AI 音符与连续性修复", "AI 调教复核", "解释失败并安全重试"], requirements: ["媒体导入器", "人声伴奏分离", "pi-audio", "SynthV Bridge"], componentIds: ["ffmpeg"], requiresConnectedBridge: true },
   { id: "tuning-learning", title: "分声库调声学习", description: "从参考人声提取演唱特征，为每个声库独立学习并应用有边界的调声参数。", icon: "waveform", accent: "emerald", homePriority: 2, base: ["离线演唱特征", "分声库档案", "A/B 反馈更新"], ai: ["自动参数建议", "Bridge 安全应用", "Solo 迭代基础"], requirements: ["pi-audio", "SynthV Bridge（应用时）"], componentIds: ["pi-audio"] },
-  { id: "media-import", title: "BV / YouTube 音频导入", description: "预览明确提供的 Bilibili 或 YouTube 来源，并在权利确认后下载为受管理 WAV。", icon: "download", accent: "blue", homePriority: 2, base: ["BV / URL 元数据预览", "受管 WAV 与 SHA-256", "来源与权利确认记录"], ai: ["后续自动分离与 Cover 编排", "来源结构说明", "失败原因归类"], requirements: ["media-fetcher", "FFmpeg", "Node.js 22+"], componentIds: ["media-fetcher", "ffmpeg"] },
-  { id: "source-separation", title: "人声 / 伴奏分离", description: "将混合音频分离为人声和伴奏，便于后续编辑。", icon: "audio", accent: "violet", homePriority: 3, base: ["人声与伴奏双轨", "稳定的输出文件", "可用于后续处理"], ai: ["自动接入 Cover 工作流", "分离结果复检", "模型运行失败解释"], requirements: ["人声伴奏分离组件", "FFmpeg"], componentIds: ["vocal-separation", "ffmpeg"] },
+  { id: "media-import", title: "BV / YouTube 音频导入", description: "预览明确提供的 Bilibili 或 YouTube 来源，并在权利确认后下载为受管理 WAV。", icon: "download", accent: "blue", homePriority: 2, base: ["BV / URL 元数据预览", "受管 WAV 与 SHA-256", "来源与权利确认记录"], ai: ["后续自动分离与 Cover 编排", "来源结构说明", "失败原因归类"], requirements: ["Python 3.11", "FFmpeg"], componentIds: ["ffmpeg"] },
+  { id: "source-separation", title: "人声 / 伴奏分离", description: "将混合音频分离为人声和伴奏，便于后续编辑。", icon: "audio", accent: "violet", homePriority: 3, base: ["人声与伴奏双轨", "稳定的输出文件", "可用于后续处理"], ai: ["自动接入 Cover 工作流", "分离结果复检", "模型运行失败解释"], requirements: ["人声伴奏分离组件", "FFmpeg"], componentIds: ["ffmpeg"] },
   { id: "score-to-synthv", title: "曲谱导入 SynthV", description: "把本地 MIDI 或 MusicXML 曲谱安全转换为当前 SynthV 工程中的单声部音符组。", icon: "file", accent: "emerald", homePriority: 1, base: ["MIDI / MusicXML 读取", "单声部音符转换", "导入前文件指纹校验"], ai: ["声部选择建议", "导入结果复核", "后续调声规划"], requirements: ["SynthV Bridge"], requiresConnectedBridge: true },
-  { id: "audio-to-project", title: "演唱音频 → MIDI / SynthV", description: "从演唱音频提取单音旋律、歌词与音素；伴奏可选，可只导出 MIDI，也可继续导入当前 SynthV 工程。", icon: "pipeline", accent: "violet", homePriority: 4, base: ["可选伴奏辅助分离", "旋律、歌词与音素 MIDI 标记", "可选 Bridge 导入"], ai: ["候选参数寻优", "低置信音符纠正", "导入结果复核"], requirements: ["FFmpeg", "pi-audio", "Bridge（可选）"], componentIds: ["ffmpeg", "pi-audio"] },
+  { id: "audio-to-project", title: "演唱音频 → MIDI / SynthV", description: "从演唱音频提取单音旋律；伴奏可选，可导出 MIDI 并继续导入 SynthV，再在作词页填词。", icon: "pipeline", accent: "violet", homePriority: 4, base: ["可选伴奏辅助分离", "单声部旋律 MIDI", "可选 Bridge 导入"], ai: ["候选参数寻优", "低置信音符纠正", "导入结果复核"], requirements: ["FFmpeg", "pi-audio", "Bridge（可选）"], componentIds: ["ffmpeg", "pi-audio"] },
   { id: "audio-preparation", title: "音频准备", description: "将本地音频转换为适合 SynthV 使用的格式，并在需要时检查或调整响度。", icon: "audio", accent: "violet", base: ["音频信息检查", "格式转换", "响度调整"], ai: ["参数建议", "结果复核", "交付风险提示"], requirements: ["FFmpeg"], componentIds: ["ffmpeg"] },
   { id: "audio-insight", title: "音频结构分析", description: "提取速度、拍点、调性、能量和频谱趋势，为编曲、调声与复检建立可追溯依据。", icon: "waveform", accent: "blue", homePriority: 3, base: ["BPM / 拍点 / 调性", "能量与频谱曲线", "结构化分析报告"], ai: ["段落与风格归纳", "异常片段解释", "制作方向建议"], requirements: ["FFmpeg", "pi-audio"], componentIds: ["ffmpeg", "pi-audio"] },
   { id: "project-tools", title: "SV 工程文件", description: "只读探测已保存的 .svp，生成参考轨或无参安全副本，并导出普通 LRC 与逐字 LRC。", icon: "file", accent: "blue", base: ["工程结构探测", "安全副本生成", "LRC / 逐字 LRC"], ai: ["工程风险说明", "变更方案草拟", "批量结果复核"], requirements: ["CVRS"], componentIds: ["cvrs"] },
@@ -52,7 +52,7 @@ const groupDefinitions: ToolGroup[] = [
     description: "从一个来源开始完成 Cover 工作流。",
     icon: "import",
     accent: "violet",
-    featureIds: ["cover"],
+    featureIds: ["cover", "media-import", "score-to-synthv"],
   },
   {
     id: "convert",
@@ -60,7 +60,7 @@ const groupDefinitions: ToolGroup[] = [
     description: "处理音频、提取旋律，或准备可继续编辑的素材。",
     icon: "pipeline",
     accent: "violet",
-    featureIds: ["source-separation", "audio-to-project", "audio-preparation"],
+    featureIds: ["audio-to-project", "audio-preparation", "source-separation", "project-tools"],
   },
   {
     id: "analysis",
@@ -68,7 +68,7 @@ const groupDefinitions: ToolGroup[] = [
     description: "了解人声表现与音频结构，为下一步创作提供依据。",
     icon: "waveform",
     accent: "blue",
-    featureIds: ["tuning-learning", "audio-insight"],
+    featureIds: ["audio-insight"],
   },
   {
     id: "quality",
@@ -76,7 +76,7 @@ const groupDefinitions: ToolGroup[] = [
     description: "检查工程、发音和渲染结果，定位需要处理的问题。",
     icon: "doctor",
     accent: "emerald",
-    featureIds: ["project-doctor", "pronunciation-doctor", "render-review"],
+    featureIds: ["project-doctor", "pronunciation-doctor", "render-review", "batch-recipes"],
   },
 ];
 
@@ -96,7 +96,8 @@ export const featureCatalog: FeatureCatalogItem[] = featureDefinitions.map((feat
 }));
 
 export const guiFeatureIds = new Set(groupDefinitions.flatMap((group) => group.featureIds));
-export const guiFeatureCatalog = featureCatalog.filter((feature) => guiFeatureIds.has(feature.id));
+const pendingFeatures = new Set(["tuning-learning", "ab-audition"]);
+export const guiFeatureCatalog = featureCatalog.filter((feature) => guiFeatureIds.has(feature.id) && !pendingFeatures.has(feature.id));
 
 export const toolGroups: ToolGroup[] = groupDefinitions.map((group) => ({
   ...group,

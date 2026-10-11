@@ -32,7 +32,9 @@ python cvrs.py export-lrc target.svp --track-index 1 --out target.lrc --word-out
 `add-ref` 把 wav 写成一条 **静音(mixer.mute) + 不渲染(renderEnabled=false) + isInstrumental**
 的参考轨，**从目标自身克隆空轨壳**以保证 schema 与目标版本完全一致（这是"只写不读"下
 唯一读目标结构的地方，且只搬骨架、清空全部音符/参数/唱法）。输出落
-`~/.SynthVcopilot/output/<目标>_cvrs.svp`，**源文件不改动、禁 `..` 穿透**。
+`<数据根>/output/<目标>_cvrs.svp`，**源文件不改动、禁 `..` 穿透**。桌面应用通过
+`SYNTHV_TOOLBOX_DATA_ROOT` 将数据根设为应用私有组件目录；独立运行时默认使用
+`~/.SynthVcopilot`。
 
 参数：`--begin-seconds`（音频起始）、`--out`（输出名）。wav 时长由 ffprobe 自动探测（可选）。
 
@@ -50,5 +52,5 @@ Tempo Map 换算时间；停顿超过 `--line-gap-seconds`（默认 `0.8` 秒）
 DLL 注入 bounce / UI 自动化导出 / 人工渲染+看门狗（见 agents_memory Pi_Agent/002）。
 
 ## 数据纪律
-输出统一 `~/.SynthVcopilot/output/`，硬禁 `..` 穿透，绝对路径仅数据根内放行；
+输出统一落到数据根的 `output/`，硬禁 `..` 穿透，绝对路径仅数据根内放行；
 所有写操作都会拒绝把输出解析到源工程本身。

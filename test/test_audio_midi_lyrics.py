@@ -22,7 +22,7 @@ class AudioMidiLyricsTests(unittest.TestCase):
             args = SimpleNamespace(vocal="vocal.wav", inst=None, advanced=False,
                                    lyrics_file=str(lyrics), transcribe=False, midi=str(output),
                                    output_external=True, tol=0.08)
-            with patch.object(pi_audio, "extract_notes", return_value=[{"pitch": 60, "start": 0, "end": 1, "velocity": 90}]), \
+            with patch.object(pi_audio, "extract_notes", return_value=([{"pitch": 60, "start": 0, "end": 1, "velocity": 90}], {"hardwareEnabled": False})), \
                  patch.object(pi_audio, "transcribe_words", side_effect=AssertionError("Unexpected transcription")):
                 pi_audio.cmd_pair_diff(args)
             events = [event for track in mido.MidiFile(output, charset="utf-8").tracks for event in track]
@@ -36,10 +36,42 @@ class AudioMidiLyricsTests(unittest.TestCase):
         self.assertTrue(all(a["end"] <= b["start"] for a, b in zip(result, result[1:])))
         self.assertEqual(pi_audio.monophony_rate(result), 1.0)
 
+    def test_full_range_candidate_cleanup_keeps_raw_outliers_and_reports_changes(self):
+        candidates = [
+            {"pitch": 29, "start": 0.0, "end": 0.5},
+            {"pitch": 90, "start": 0.4, "end": 0.8},
+            {"pitch": 48, "start": 0.42, "end": 0.7},
+            {"pitch": 61, "start": 1.0, "end": 1.04},
+        ]
+        original = [dict(note) for note in candidates]
+        processed, evidence = pi_audio.collapse_with_evidence(candidates)
+        self.assertEqual(candidates, original)
+        self.assertEqual(evidence["rawCandidateCount"], 4)
+        self.assertEqual(evidence["pitchRangeFiltering"], 0)
+        self.assertEqual(evidence["overlapTrims"], 1)
+        self.assertEqual(evidence["discardedOverlaps"], 1)
+        self.assertEqual(evidence["droppedShortFragments"], 1)
+        self.assertEqual([note["pitch"] for note in processed], [29, 90])
+
+    def test_unrecognized_lyrics_are_explicit_repair_items(self):
+        note = {"pitch": 60, "start": 0.0, "end": 0.5}
+        self.assertEqual(pi_audio._note_seconds(note, {"lyric": None})["lyric"], "")
+        self.assertNotIn("lyric", pi_audio._note_seconds(note))
+
+    def test_midi_writer_keeps_complete_scores_over_512_notes(self):
+        import mido
+        notes = [{"pitch": 60 + index % 12, "start": index * 0.1, "end": index * 0.1 + 0.08} for index in range(600)]
+        markers = [{"lyric": None, "phoneset": None, "phoneme": None} for _ in notes]
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "long-score.mid"
+            pi_audio.write_midi(output, notes, markers)
+            events = [event for track in mido.MidiFile(output).tracks for event in track if event.type == "note_on"]
+            self.assertEqual(len(events), 600)
+
     def test_melody_only_workflow_does_not_load_transcription(self):
         args = SimpleNamespace(vocal="vocal.wav", inst=None, advanced=False,
                                lyrics_file=None, transcribe=False, midi=None, tol=0.08)
-        with patch.object(pi_audio, "extract_notes", return_value=[{"pitch": 60, "start": 0, "end": 1, "velocity": 90}]), \
+        with patch.object(pi_audio, "extract_notes", return_value=([{"pitch": 60, "start": 0, "end": 1, "velocity": 90}], {"hardwareEnabled": False})), \
              patch.object(pi_audio, "transcribe_words", side_effect=AssertionError("Unexpected transcription")):
             result = pi_audio.cmd_pair_diff(args)
         self.assertEqual(result["mono_notes"], 1)

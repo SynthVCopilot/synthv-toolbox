@@ -170,6 +170,7 @@ let audioToProjectRightsConfirmed = false;
 let audioToProjectTrackIndex = 1;
 let audioToProjectGroupName = "Toolbox Audio Import";
 let mediaTasks: MediaTaskSnapshot[] = [];
+let coverDraft = { source: "", voice: "", process: "", lyrics: "", track: "1", group: "Toolbox Cover", rights: false };
 let tuningProfiles: TuningProfile[] = [];
 let audioCaptureCapability: AudioCaptureCapability | undefined;
 let audioCaptureTargets: AudioCaptureTarget[] = [];
@@ -590,7 +591,7 @@ function scheduleAudioJobPoll(jobId: string): void {
       audioUiError = formatError(reason);
       audioJobPollTimer = window.setTimeout(() => { void poll(); }, 1000);
     }
-    if (page === "import" && activeWorkflow === "audio-preparation") render();
+    if (page === "convert" && activeWorkflow === "audio-preparation") render();
   };
   audioJobPollTimer = window.setTimeout(() => { void poll(); }, 800);
 }
@@ -600,16 +601,16 @@ function refreshAudioRuntimeStatus(): void {
   void audioApi.ffmpegStatus().then((status) => {
     if (generation !== audioRuntimeRequestGeneration) return;
     audioRuntime = status;
-    if (page === "import" && activeWorkflow === "audio-preparation") render();
+    if (page === "convert" && activeWorkflow === "audio-preparation") render();
   }).catch((reason) => {
     if (generation !== audioRuntimeRequestGeneration) return;
     audioRuntime = { available: false, detail: formatError(reason) };
-    if (page === "import" && activeWorkflow === "audio-preparation") render();
+    if (page === "convert" && activeWorkflow === "audio-preparation") render();
   });
 }
 
 function refreshAudioPreparationIfSelected(): void {
-  if (page === "import" && activeWorkflow === "audio-preparation") refreshAudioRuntimeStatus();
+  if (page === "convert" && activeWorkflow === "audio-preparation") refreshAudioRuntimeStatus();
 }
 
 function syncAudioPreparationFormsFromDom(): void {
@@ -1004,12 +1005,38 @@ function scheduleMediaTaskPoll(): void {
     mediaTaskPollTimer = undefined;
     try {
       mediaTasks = await api.mediaTasks();
-      render();
+      renderKeepingCoverDraft();
     } catch (reason) {
       error = formatError(reason);
-      render();
+      renderKeepingCoverDraft();
     }
   }, 700);
+}
+
+function syncCoverDraftFromDom(): { id?: string; selectionStart?: number | null; selectionEnd?: number | null } {
+  coverDraft = {
+    source: document.querySelector<HTMLInputElement>("#cover-source")?.value ?? coverDraft.source,
+    voice: document.querySelector<HTMLInputElement>("#cover-voice")?.value ?? coverDraft.voice,
+    process: document.querySelector<HTMLSelectElement>("#cover-process")?.value ?? coverDraft.process,
+    lyrics: document.querySelector<HTMLTextAreaElement>("#cover-lyrics")?.value ?? coverDraft.lyrics,
+    track: document.querySelector<HTMLInputElement>("#cover-track")?.value ?? coverDraft.track,
+    group: document.querySelector<HTMLInputElement>("#cover-group")?.value ?? coverDraft.group,
+    rights: document.querySelector<HTMLInputElement>("#cover-rights")?.checked ?? coverDraft.rights,
+  };
+  const active = document.activeElement as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+  if (!active?.id.startsWith("cover-")) return {};
+  return { id: active.id, selectionStart: "selectionStart" in active ? active.selectionStart : null, selectionEnd: "selectionEnd" in active ? active.selectionEnd : null };
+}
+
+function renderKeepingCoverDraft(): void {
+  const active = page === "import" && activeWorkflow === "cover" ? syncCoverDraftFromDom() : undefined;
+  render();
+  if (!active?.id) return;
+  const next = document.getElementById(active.id) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+  next?.focus();
+  if (next && "setSelectionRange" in next && active.selectionStart !== null && active.selectionStart !== undefined) {
+    next.setSelectionRange(active.selectionStart, active.selectionEnd ?? active.selectionStart);
+  }
 }
 
 function navItem(target: Page, label: string, glyph: IconName): string {
@@ -1989,6 +2016,7 @@ function featureAvailability(feature: Feature, current: BootstrapState): Feature
 
 function groupFeatures(group: ToolGroup): Feature[] {
   return group.featureIds.flatMap((id) => {
+    if (id === "cover" && app?.mode !== "ai") return [];
     const feature = features.find((item) => item.id === id);
     return feature ? [feature] : [];
   });
@@ -2016,6 +2044,51 @@ type JsonObject = Record<string, unknown>;
 
 function asObject(value: unknown): JsonObject | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : undefined;
+}
+
+function coverInferenceLabel(value: unknown): string {
+  const inference = asObject(value);
+  if (!inference) return typeof value === "string" && value.trim() ? value : t("workflowCopy.coverInferenceUnknown");
+  const providerNames = (providers: unknown): string[] => {
+    if (!Array.isArray(providers)) return [];
+    return providers.flatMap((provider) => {
+      if (typeof provider === "string") return [provider];
+      const item = asObject(provider);
+      const name = item && [item.name, item.displayName, item.provider, item.id, item.backend].find((field) => typeof field === "string" && field.trim());
+      return typeof name === "string" ? [name] : [];
+    });
+  };
+  const actual = providerNames(inference.actualProviders);
+  const requested = providerNames(inference.requestedProviders);
+  const providerSummary = [
+    actual.length ? t("workflowCopy.coverInferenceActual", { providers: actual.join(", ") }) : "",
+    requested.length ? t("workflowCopy.coverInferenceRequested", { providers: requested.join(", ") }) : "",
+  ].filter(Boolean).join(" · ");
+  if (providerSummary) return providerSummary;
+  const backend = [inference.backend, inference.provider, inference.model, inference.name].find((field) => typeof field === "string" && field.trim());
+  return typeof backend === "string" ? backend : t("workflowCopy.coverInferenceUnknown");
+}
+
+function coverStageLabel(stage: string): string {
+  const stageKeys: Record<string, string> = {
+    download: "coverStageDownload", media_download: "coverStageDownload", downloading: "coverStageDownload",
+    separation: "coverStageSeparation", vocal_separation: "coverStageSeparation", separating: "coverStageSeparation",
+    recognition: "coverStageRecognition", melody_recognition: "coverStageRecognition", recognizing: "coverStageRecognition",
+    repair: "coverStageRepair", ai_repair: "coverStageRepair", repairing: "coverStageRepair",
+    tuning: "coverStageTuning", ai_tuning: "coverStageTuning", tuning_ai: "coverStageTuning",
+    save: "coverStageSave", saving: "coverStageSave", synthv_save: "coverStageSave",
+    completed: "coverStageCompleted",
+  };
+  const key = stageKeys[stage.trim().toLowerCase()];
+  return key ? t(`workflowCopy.${key}`) : stage.replaceAll(/[_-]+/g, " ");
+}
+
+function openCoverConversation(conversationId: string): void {
+  page = "copilot";
+  void run(async () => {
+    conversation = await api.openConversation(conversationId);
+    approvalsSnapshot = await api.agentApprovals();
+  });
 }
 
 function resultMetric(label: string, value: unknown, tone = ""): string {
@@ -2115,7 +2188,7 @@ function renderWorkflowResult(result: WorkflowResult, ai: boolean): string {
   const exportActions = `<div class="result-actions"><span>${t("workflow.exportReport")}</span><button class="secondary" data-export-workflow="markdown">${icon("download", 15)} Markdown</button><button class="secondary" data-export-workflow="json">${icon("download", 15)} JSON</button></div>`;
   const review = result.aiReview
     ? `<div class="ai-review"><strong>${icon("sparkles", 15)} ${t("workflow.aiReview")}</strong><p>${escapeHtml(result.aiReview)}</p></div>`
-    : ai ? `<button class="secondary" data-review-workflow>${icon("sparkles", 16)} ${t("workflow.review")}</button>` : "";
+    : ai ? `<button class="secondary" data-page="copilot">${icon("sparkles", 16)} ${t("home.openCopilot")}</button>` : "";
   return `<section class="workflow-result"><div class="result-head"><div><span class="availability ready">${t("workflow.completed")}</span><h3>${escapeHtml(result.summary)}</h3></div>${result.outputPath ? `<code>${escapeHtml(result.outputPath)}</code>` : ""}</div>${structured}${raw}${exportActions}${review}</section>`;
 }
 
@@ -2138,7 +2211,6 @@ function renderLyricBridgeFit(): string {
 }
 
 function renderLyricStudio(ai: boolean): string {
-  const sectionOptions = lyricSections.map((section) => `<option value="${escapeHtml(section.label)}" ${section.label === lyricCandidateSection ? "selected" : ""}>${escapeHtml(section.label)}</option>`).join("");
   const lineCount = lyricDraft.trim() ? lyricDraft.trim().split(/\r?\n/).length : 0;
   const projectOptions = lyricProjects.map((project) => `<option value="${escapeHtml(project.id)}" ${project.id === lyricProjectId ? "selected" : ""}>${escapeHtml(project.title)} · ${t("lyrics.lines", { count: project.lineCount })} · r${project.revision}</option>`).join("");
   const projectStatus = lyricProjectId === undefined
@@ -2150,7 +2222,7 @@ function renderLyricStudio(ai: boolean): string {
   const versionOptions = savedVersions.map((version) => `<option value="${version.revision}">r${version.revision} · ${escapeHtml(version.savedAtUtc.slice(0, 16))}</option>`).join("");
   const projectToolbar = `<section class="lyric-project-toolbar panel-inset"><div><span class="eyebrow">${t("lyrics.localProject")}</span><strong>${escapeHtml(projectStatus)}</strong><small>${t("lyrics.projectLocalDescription")}</small></div><div class="lyric-project-actions"><button type="button" class="secondary compact" data-new-lyric-project>${t("lyrics.newProject")}</button><select id="lyric-project-select" ${lyricProjects.length ? "" : "disabled"}><option value="">${lyricProjects.length ? t("lyrics.chooseProject") : t("lyrics.noProjects")}</option>${projectOptions}</select><button type="button" class="secondary compact" data-load-lyric-project ${lyricProjects.length ? "" : "disabled"}>${t("lyrics.open")}</button><button type="button" class="secondary compact" data-export-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>${t("lyrics.export")}</button><button type="button" class="primary compact" data-save-lyric-project>${lyricProjectId === undefined ? t("lyrics.saveAsProject") : t("lyrics.save")}</button>${versionOptions ? `<select id="lyric-version-select"><option value="">${t("lyrics.versionHistory")}</option>${versionOptions}</select><button type="button" class="secondary compact" data-restore-lyric-version>${t("lyrics.restoreVersion")}</button>` : ""}</div></section>`;
   const structureRows = lyricSections.map((section, index) => `<article class="lyric-section-row" data-lyric-section-id="${escapeHtml(section.id)}"><span class="section-index">${index + 1}</span><label>${t("lyrics.sectionName")}<input data-lyric-section-field="label" maxlength="60" value="${escapeHtml(section.label)}" /></label><label>${t("lyrics.lineCount")}<input data-lyric-section-field="lineCount" type="number" min="1" max="32" value="${section.lineCount}" /></label><label>${t("lyrics.scheme")}<input data-lyric-section-field="rhymeScheme" maxlength="32" value="${escapeHtml(section.rhymeScheme)}" placeholder="${t("lyrics.schemeHint")}" /></label><input type="hidden" data-lyric-section-field="kind" value="${escapeHtml(section.kind)}" /><div class="lyric-row-actions"><button type="button" class="icon-plain" data-move-lyric-section="up" data-section-id="${escapeHtml(section.id)}" title="${t("lyrics.moveUp")}" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" class="icon-plain" data-move-lyric-section="down" data-section-id="${escapeHtml(section.id)}" title="${t("lyrics.moveDown")}" ${index === lyricSections.length - 1 ? "disabled" : ""}>↓</button><button type="button" class="icon-plain danger" data-remove-lyric-section="${escapeHtml(section.id)}" title="${t("lyrics.delete")}">×</button></div></article>`).join("");
-  const copilot = ai ? `<section class="lyric-copilot panel-inset"><div class="lyric-subhead"><div><span class="eyebrow">COPILOT</span><h3>${icon("sparkles", 17)} ${t("lyrics.continueWriting")}</h3></div><span class="availability ready">${t("lyrics.suggestionsOnly")}</span></div><form id="lyric-candidate-form" class="lyric-candidate-form"><label class="wide">${t("lyrics.brief")}<textarea id="lyric-brief" rows="3" maxlength="2000" placeholder="${t("lyrics.briefHint")}">${escapeHtml(lyricCandidateBrief)}</textarea></label><label class="wide">${t("lyrics.imagery")}<input id="lyric-imagery" maxlength="1000" value="${escapeHtml(lyricCandidateImagery)}" placeholder="${t("lyrics.imageryHint")}" /></label><label>${t("lyrics.targetSection")}<select id="lyric-candidate-section">${sectionOptions}</select></label><label>${t("lyrics.tone")}<input id="lyric-candidate-tone" maxlength="80" value="${escapeHtml(lyricCandidateTone)}" placeholder="${t("lyrics.toneHint")}" /></label><label>${t("lyrics.endingHintLabel")}<input id="lyric-candidate-rhyme" maxlength="24" value="${escapeHtml(lyricCandidateRhyme)}" placeholder="${t("lyrics.endingHint")}" /></label><label>${t("lyrics.candidateCount")}<select id="lyric-candidate-count">${[2, 3, 4, 5, 6].map((count) => `<option value="${count}" ${lyricCandidateCount === count ? "selected" : ""}>${t("lyrics.suggestionCount", { count })}</option>`).join("")}</select></label><button class="primary wide">${icon("sparkles", 16)} ${t("lyrics.suggest")}</button></form>${renderLyricCandidates()}</section>` : `<section class="lyric-copilot locked panel-inset"><div class="lyric-subhead"><div><span class="eyebrow">COPILOT</span><h3>${icon("sparkles", 17)} ${t("lyrics.continueWriting")}</h3></div><span class="availability blocked">${t("lyrics.aiMode")}</span></div><p>${t("lyrics.copilotDescription")}</p><button type="button" class="secondary" data-enable-ai>${t("lyrics.enableCopilot")}</button></section>`;
+  const copilot = ai ? `<section class="lyric-copilot panel-inset"><h3>${t("lyrics.continueWriting")}</h3><p>${t("lyrics.copilotDescription")}</p><button type="button" class="secondary" data-page="copilot">${t("home.openCopilot")}</button>${renderLyricCandidates()}</section>` : "";
   return `<div class="lyric-mode-banner"><span class="feature-icon ${ai ? "violet" : "emerald"}">${icon(ai ? "sparkles" : "lyrics", 21)}</span><div><strong>${t("lyrics.focus")}</strong><p>${t("lyrics.autosaveDescription")}</p></div><span class="lyric-save-state">${t("lyrics.localAutosave")}</span></div>${projectToolbar}<div class="lyric-workbench-grid lyric-writing-layout"><main class="lyric-editor panel-inset"><div class="lyric-editor-head"><label class="lyric-title">${t("lyrics.songTitle")}<input id="lyric-song-title" maxlength="120" value="${escapeHtml(lyricSongTitle)}" placeholder="${t("lyrics.untitledLyrics")}" /></label><div class="lyric-editor-actions"><button type="button" class="secondary compact" data-copy-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>${t("lyrics.copyButton")}</button><button type="button" class="secondary compact" data-clear-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>${t("lyrics.clearButton")}</button></div></div><label class="lyric-draft-label">${t("lyrics.draftLabel")}<textarea id="lyric-draft" rows="22" spellcheck="false" placeholder="${t("lyrics.draftHint")}">${escapeHtml(lyricDraft)}</textarea></label><footer class="lyric-editor-footer"><span>${t("lyrics.draftStats", { lines: lineCount, characters: lyricDraft.length.toLocaleString(locale()) })}</span><span>${t("lyrics.autosaveTyping")}</span></footer></main><aside class="lyric-helper-stack">${copilot}${renderLyricBridgeFit()}<details class="lyric-tools panel-inset"><summary><span><span class="eyebrow">${t("lyrics.optionalTools")}</span><strong>${icon("recipe", 16)} ${t("lyrics.structure")}</strong></span><small>${t("lyrics.structureStats", { sections: lyricSections.length, lines: lyricSections.reduce((sum, section) => sum + section.lineCount, 0) })}</small></summary><form id="lyric-structure-form"><div class="lyric-presets"><span>${t("lyrics.quickStart")}</span><button type="button" data-lyric-preset="compact">${t("lyrics.presetCompact")}</button><button type="button" data-lyric-preset="pop">${t("lyrics.presetPop")}</button><button type="button" data-lyric-preset="rap">${t("lyrics.presetRap")}</button><button type="button" data-lyric-preset="blank">${t("lyrics.presetBlank")}</button></div><div class="lyric-section-list">${structureRows}</div><div class="lyric-structure-actions"><button type="button" class="secondary" data-add-lyric-section>${icon("plus", 15)} ${t("lyrics.addSection")}</button><button class="primary">${icon("recipe", 15)} ${t("lyrics.insertStructure")}</button></div></form></details><details class="lyric-tools panel-inset"><summary><span><span class="eyebrow">${t("lyrics.optionalTools")}</span><strong>${icon("pronunciation", 16)} ${t("lyrics.rhymeHelper")}</strong></span><small>${t("lyrics.rhymeOnDemand")}</small></summary><form id="rhyme-lookup-form" class="rhyme-search"><input id="rhyme-query" required maxlength="24" value="${escapeHtml(lyricRhymeQuery)}" placeholder="${t("lyrics.rhymeHint")}" /><select id="rhyme-match-mode"><option value="family" ${lyricRhymeMode === "family" ? "selected" : ""}>${t("lyrics.familyLabel")}</option><option value="exact" ${lyricRhymeMode === "exact" ? "selected" : ""}>${t("lyrics.exactLabel")}</option></select><button class="secondary">${t("lyrics.findRhymes")}</button></form>${renderRhymeLookupResult()}</details></aside></div>`;
 }
 
@@ -2288,24 +2360,38 @@ function renderWorkflowPanel(id: string): string {
       ${audioUiNotice ? `<div class="audio-inline-notice" role="status">${escapeHtml(audioUiNotice)}</div>` : ""}${audioUiError ? `<div class="audio-inline-error" role="alert">${escapeHtml(audioUiError)}</div>` : ""}${jobPanel}
     </div>`;
   } else if (id === "cover") {
-    const processOptions = [`<option value="">${t("workflowCopy.selectAutomatically")}${synthvProcesses.length > 1 ? t("workflowCopy.agentSelectsWhenMultipleInstancesAreRunning") : ""}</option>`, ...synthvProcesses.map((process) => `<option value="${process.processId}">PID ${process.processId} · ${escapeHtml(process.name)}</option>`)].join("");
     const taskCards = mediaTasks.filter((item) => item.kind === "cover").slice(-5).reverse().map((task) => {
       const result = asObject(task.result) ?? {};
-      const midi = asObject(result.midi) ?? {};
-      const assignment = asObject(result.voiceAssignment) ?? {};
       const action = ["queued", "running", "cancelling"].includes(task.status)
         ? `<button class="secondary compact" data-cancel-media-task="${escapeHtml(task.id)}" ${task.status === "cancelling" ? "disabled" : ""}>${task.status === "cancelling" ? t("workflowCopy.stopping") : t("workflowCopy.cancel")}</button>`
         : ["failed", "cancelled"].includes(task.status)
-          ? `<button class="secondary compact" data-retry-media-task="${escapeHtml(task.id)}">${t("workflowCopy.retry")}</button>`
+          ? task.retryable === false ? `<small>${t("workflowCopy.coverHostWriteMayNeedInspection")}</small>` : `<button class="secondary compact" data-retry-media-task="${escapeHtml(task.id)}">${t("workflowCopy.retry")}</button>`
           : "";
-      const outputPath = typeof midi.outputPath === "string" ? midi.outputPath : "";
-      const voiceBoundary = assignment.requiresHostSelection === true ? `<small>${t("workflowCopy.requestedVoice")}${escapeHtml(String(result.requestedVoice ?? ""))} ${t("workflowCopy.theHostApiCannotAssignVoiceIdentities")}</small>` : "";
-      const svpPath = typeof result.svpPath === "string" ? result.svpPath : "";
-      const saveState = svpPath ? `<small>SVP：${escapeHtml(svpPath)} · ${result.saveVerified === true ? t("workflowCopy.saveVerified") : t("workflowCopy.saveNotVerified")}</small>` : "";
-      return `<article class="download-item ${task.status}"><span class="component-status ${task.status === "completed" ? "ready" : ""}">${icon(task.status === "failed" ? "plug" : "sparkles", 17)}</span><div><div class="download-title"><strong>${t("workflowCopy.oneClickCover")}</strong><span>${escapeHtml(t(`workflowTaskStatus.${task.status}`))}</span></div><div class="progress-track"><span style="width:${Math.max(2, Math.min(100, task.progress))}%"></span></div><small>${escapeHtml(task.error || task.detail)}</small>${outputPath ? `<small>MIDI：${escapeHtml(outputPath)}</small>` : ""}${saveState}${voiceBoundary}</div>${action}</article>`;
+      const recognition = asObject(result.recognition) ?? {};
+      const repair = asObject(result.repair) ?? {};
+      const tuning = asObject(result.tuning) ?? {};
+      const outputPaths = [
+        ["coverSourceAudio", result.sourceAudioPath], ["coverVocalTrack", result.vocalPath],
+        ["coverInstrumentalTrack", result.instrumentalPath], ["coverLyricsFile", result.lyricsPath],
+        ["coverRepairedScore", result.repairedScorePath], ["coverReport", result.reportPath],
+        ["coverSynthvProject", result.svpPath],
+      ].filter((entry): entry is [string, string] => typeof entry[1] === "string" && Boolean(entry[1]));
+      const paths = outputPaths.map(([label, path]) => `<div class="audio-output-path"><span>${t(`workflowCopy.${label}`)}</span><code>${escapeHtml(path)}</code><button class="secondary compact" data-cover-copy-path="${escapeHtml(path)}">${t("workflowCopy.copyPath")}</button></div>`).join("");
+      const repairConversationId = typeof task.repairConversationId === "string" ? task.repairConversationId : typeof repair.conversationId === "string" ? repair.conversationId : "";
+      const tuningConversationId = typeof task.tuningConversationId === "string" ? task.tuningConversationId : typeof tuning.conversationId === "string" ? tuning.conversationId : "";
+      const conversations = `${repairConversationId ? `<button class="secondary compact" data-cover-conversation="${escapeHtml(repairConversationId)}">${t("workflowCopy.openRepairConversation")}</button>` : ""}${tuningConversationId ? `<button class="secondary compact" data-cover-conversation="${escapeHtml(tuningConversationId)}">${t("workflowCopy.openTuningConversation")}</button>` : ""}`;
+      const unresolved = Array.isArray(repair.unresolved) ? repair.unresolved.length : typeof repair.unresolved === "number" ? repair.unresolved : 0;
+      const repairSummary = Object.keys(repair).length ? `<small>${t("workflowCopy.coverRepairCoverage", { notes: Number(repair.noteCount ?? 0), changes: Number(repair.changeCount ?? 0), unresolved })}</small>` : "";
+      const recognitionSummary = Object.keys(recognition).length ? `<small>${escapeHtml(t("workflowCopy.coverFullSongRecognition", { notes: Number(recognition.noteCount ?? 0), rawNotes: Number(recognition.rawNoteCount ?? 0), inference: coverInferenceLabel(recognition.inference), device: typeof recognition.separationDevice === "string" ? recognition.separationDevice : t("workflowCopy.unknown") }))}</small>` : "";
+      const tuningSummary = Object.keys(tuning).length ? `<small>${t("workflowCopy.coverTuningWrites", { reviewed: Number(tuning.notesReviewed ?? 0), writes: Number(tuning.verifiedWrites ?? 0) })}</small>` : "";
+      const stage = typeof task.stage === "string" ? coverStageLabel(task.stage) : "";
+      const saveState = result.svpPath ? `<small>${t("workflowCopy.coverSaveState")}: ${result.saveVerified === true ? t("workflowCopy.saveVerified") : t("workflowCopy.saveNotVerified")}</small>` : "";
+      const voiceBoundary = `<small>${t("workflowCopy.coverVoiceAssignmentLimit")}${escapeHtml(String(result.requestedVoice || t("workflowCopy.currentTrackVoice")))} · ${t("workflowCopy.theHostApiCannotAssignVoiceIdentities")}</small>`;
+      const renderStatus = result.renderStatus === "not_rendered" ? `<small>${t("workflowCopy.coverNotRendered")}</small>` : "";
+      return `<article class="download-item ${task.status}"><span class="component-status ${task.status === "completed" ? "ready" : ""}">${icon(task.status === "failed" ? "plug" : "sparkles", 17)}</span><div><div class="download-title"><strong>${t("workflowCopy.oneClickCover")}</strong><span>${escapeHtml(t(`workflowTaskStatus.${task.status}`))}</span></div>${stage ? `<small>${t("workflowCopy.coverStage")}${escapeHtml(stage)}</small>` : ""}<div class="progress-track"><span style="width:${Math.max(2, Math.min(100, task.progress))}%"></span></div><small>${escapeHtml(task.error || task.detail)}</small>${recognitionSummary}${repairSummary}${tuningSummary}${saveState}${voiceBoundary}${renderStatus}${paths}${conversations}</div>${action}</article>`;
     }).join("");
     const taskList = taskCards ? `<section class="download-queue"><div class="section-heading"><div><h3>${t("workflowCopy.coverTasks")}</h3><p>${t("workflowCopy.downloadSeparationAndMelodyExtractionCanBe")}</p></div></div><div class="download-list">${taskCards}</div></section>` : "";
-    form = `<div class="mode-limit"><strong>${t("workflowCopy.voiceAssignmentLimit")}</strong>${t("workflowCopy.toolboxRecordsTheRequestedVoiceAndConnects")}</div><form id="cover-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.bvOrYoutubeSource")}<input id="cover-source" required placeholder="${t("workflowCopy.bv1OrHttpsWwwYoutubeComWatch")}" /></label><div class="workflow-pair"><label>${t("workflowCopy.targetVoice")}<input id="cover-voice" required maxlength="200" placeholder="${t("workflowCopy.forExampleMai2")}" /></label><label>${t("workflowCopy.synthvProcess")}<select id="cover-process">${processOptions}</select></label></div><label>${t("workflowCopy.fullLyricsOptionalCjkCharactersAndLatin")}<textarea id="cover-lyrics" rows="7" placeholder="${t("workflowCopy.leaveBlankToUseDefaultMidiSynthv")}"></textarea></label><div class="workflow-pair"><label>${t("workflowCopy.targetTrackNumber")}<input id="cover-track" type="number" min="1" max="10000" value="1" required /></label><label>${t("workflowCopy.noteGroupName")}<input id="cover-group" value="Toolbox Cover" maxlength="200" required /></label></div><label class="checkbox workflow-check"><input id="cover-rights" type="checkbox" /> ${t("workflowCopy.iOwnTheSourceContentOrHave")}</label><button class="primary">${icon("sparkles", 16)} ${t("workflowCopy.startFullCover")}</button></form>${taskList}`;
+    form = `<div class="mode-limit"><strong>${t("workflowCopy.voiceAssignmentLimit")}</strong>${t("workflowCopy.toolboxRecordsTheRequestedVoiceAndConnects")}</div><form id="cover-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.bvOrYoutubeSource")}<input id="cover-source" required value="${escapeHtml(coverDraft.source)}" placeholder="${t("workflowCopy.bv1OrHttpsWwwYoutubeComWatch")}" /></label><div class="workflow-pair"><label>${t("workflowCopy.targetVoice")}<input id="cover-voice" maxlength="200" value="${escapeHtml(coverDraft.voice)}" placeholder="${t("workflowCopy.coverVoiceOptional")}" /></label><label>${t("workflowCopy.synthvProcess")}<select id="cover-process"><option value="">${t("workflowCopy.selectAutomatically")}${synthvProcesses.length > 1 ? t("workflowCopy.agentSelectsWhenMultipleInstancesAreRunning") : ""}</option>${synthvProcesses.map((process) => `<option value="${process.processId}" ${coverDraft.process === String(process.processId) ? "selected" : ""}>PID ${process.processId} · ${escapeHtml(process.name)}</option>`).join("")}</select></label></div><label>${t("workflowCopy.fullLyricsOptionalCjkCharactersAndLatin")}<textarea id="cover-lyrics" rows="7" placeholder="${t("workflowCopy.leaveBlankToUseDefaultMidiSynthv")}">${escapeHtml(coverDraft.lyrics)}</textarea></label><div class="workflow-pair"><label>${t("workflowCopy.targetTrackNumber")}<input id="cover-track" type="number" min="1" max="10000" value="${escapeHtml(coverDraft.track)}" required /></label><label>${t("workflowCopy.noteGroupName")}<input id="cover-group" value="${escapeHtml(coverDraft.group)}" maxlength="200" required /></label></div><label class="checkbox workflow-check"><input id="cover-rights" type="checkbox" ${coverDraft.rights ? "checked" : ""} /> ${t("workflowCopy.iOwnTheSourceContentOrHave")}</label><button class="primary">${icon("sparkles", 16)} ${t("workflowCopy.startFullCover")}</button></form>${taskList}`;
   } else if (id === "tuning-learning") {
     const profiles = tuningProfiles.length ? `<div class="download-list">${tuningProfiles.map((profile) => `<article class="download-item completed"><span class="component-status ready">${icon("waveform", 17)}</span><div><div class="download-title"><strong>${escapeHtml(profile.voiceName)}</strong><span>${t("workflowCopy.profileSamples", { references: profile.sourceSamples, feedback: profile.outcomeSamples })}</span></div><small>${t("workflowCopy.loudness")} ${profile.parameters.loudness.toFixed(2)} ${t("workflowCopy.tension")} ${profile.parameters.tension.toFixed(3)} ${t("workflowCopy.breathiness")} ${profile.parameters.breathiness.toFixed(3)} ${t("workflowCopy.vibrato")} ${profile.parameters.vibratoStrength.toFixed(3)}</small></div></article>`).join("")}</div>` : `<div class="mode-limit">${t("workflowCopy.noTuningProfilesYetEachExactVoice")}</div>`;
     form = `<div class="workflow-split"><form id="tuning-learn-form" class="workflow-form"><h3>${t("workflowCopy.learnFromReferenceVocals")}</h3><label>${t("workflowCopy.referenceVocalAudioPath")}<div class="path-picker-control"><input id="tuning-audio" required />${pathPickerButton("tuning-audio", "audio")}</div></label><label>${t("workflowCopy.exactVoiceName")}<input id="tuning-voice" required maxlength="200" /></label><button class="primary">${icon("waveform", 16)} ${t("workflowCopy.analyzeAndUpdateProfile")}</button></form><form id="tuning-apply-form" class="workflow-form"><h3>${t("workflowCopy.applyLearnedParameters")}</h3><label>${t("workflowCopy.voiceProfile")}<select id="tuning-profile" required>${tuningProfiles.map((profile) => `<option value="${escapeHtml(profile.voiceName)}">${escapeHtml(profile.voiceName)}</option>`).join("")}</select></label><div class="workflow-pair"><label>${t("workflowCopy.track")}<input id="tuning-track" type="number" min="1" value="1" required /></label><label>${t("workflowCopy.noteGroup")}<input id="tuning-group" type="number" min="1" value="1" required /></label></div><button class="primary" ${app.bridgeConnected && tuningProfiles.length ? "" : "disabled"}>${icon("sparkles", 16)} ${app.bridgeConnected ? t("workflowCopy.applyToSynthv") : t("workflowCopy.connectBridgeFirst")}</button></form></div>${profiles}`;
@@ -3917,6 +4003,7 @@ async function withAiProviderStateRefresh<T>(action: () => Promise<T>): Promise<
 
 document.addEventListener("input", (event) => {
   const target = event.target as HTMLElement;
+  if (target.id.startsWith("cover-")) { syncCoverDraftFromDom(); return; }
   if (target.id === "ffmpeg-directory") {
     ffmpegDirectoryDraft = (target as HTMLInputElement).value;
     return;
@@ -3941,6 +4028,7 @@ document.addEventListener("input", (event) => {
 });
 document.addEventListener("change", (event) => {
   const target = event.target as HTMLElement;
+  if (target.id.startsWith("cover-")) { syncCoverDraftFromDom(); return; }
   if (target.closest(".audio-preparation")) syncAudioPreparationFormsFromDom();
 });
 
@@ -4964,6 +5052,17 @@ document.addEventListener("click", (event) => {
     });
     return;
   }
+  if (target.dataset.coverCopyPath) {
+    void navigator.clipboard.writeText(target.dataset.coverCopyPath).then(() => {
+      notice = t("workflowCopy.copied");
+      renderKeepingCoverDraft();
+    }).catch((reason) => {
+      error = formatError(reason);
+      renderKeepingCoverDraft();
+    });
+    return;
+  }
+  if (target.dataset.coverConversation) { openCoverConversation(target.dataset.coverConversation); return; }
   if (target.hasAttribute("data-new-conversation")) { if (agentRunInFlight) return; void run(async () => { conversation = await api.newConversation(); [conversations, approvalsSnapshot] = await Promise.all([api.listConversations(), api.agentApprovals()]); }); return; }
   if (target.dataset.conversation) { if (agentRunInFlight) return; void run(async () => { conversation = await api.openConversation(target.dataset.conversation ?? ""); approvalsSnapshot = await api.agentApprovals(); }); return; }
   if (target.hasAttribute("data-cancel-agent-run")) { void cancelAgentRun(); return; }
@@ -5017,7 +5116,7 @@ async function listenForSvpRouteRequests(): Promise<void> {
 async function listenForAudioPreparationDrops(): Promise<void> {
   if (!hasDesktopBridge()) return;
   await listenForDesktopFileDrops((drop) => {
-    if (page !== "import" || (activeWorkflow !== "audio-preparation" && activeWorkflow !== "audio-to-project")) return;
+    if (page !== "convert" || (activeWorkflow !== "audio-preparation" && activeWorkflow !== "audio-to-project")) return;
     if (activeWorkflow === "audio-preparation") {
       if (drop.paths.length !== 1) {
         audioUiError = t("workflowCopy.onlyOneAudioFileCanBeDropped");

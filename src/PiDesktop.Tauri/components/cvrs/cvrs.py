@@ -44,29 +44,43 @@ CONTROL_LYRICS = {"", "-", "+", "br", "sil", "sp", "ap"}
 
 
 def data_root() -> pathlib.Path:
-    return pathlib.Path.home() / ".SynthVcopilot"
+    import os
+
+    configured = os.environ.get("SYNTHV_TOOLBOX_DATA_ROOT")
+    return pathlib.Path(configured).expanduser().resolve() if configured else pathlib.Path.home() / ".SynthVcopilot"
 
 
 def safe_output_path(name_or_rel: str, subdir: str = "output", suffix: str | None = None) -> pathlib.Path:
-    """输出落 ~/.SynthVcopilot/ 数据根；硬禁 '..' 穿透；绝对路径仅根内放行。"""
-    root = data_root()
+    """输出落组件数据根；硬禁 '..' 穿透和符号链接逃逸。"""
+    root = data_root().resolve()
     p = pathlib.PurePath(name_or_rel)
     if any(part == ".." for part in p.parts):
         raise ValueError(f"路径含 '..'，禁止穿透: {name_or_rel}")
     if p.is_absolute():
-        resolved = pathlib.Path(name_or_rel).resolve()
-        try:
-            resolved.relative_to(root.resolve())
-        except ValueError:
-            raise ValueError(f"绝对路径不在数据根 {root} 内，拒绝: {name_or_rel}")
-        out = resolved
+        out = pathlib.Path(name_or_rel)
     else:
         out = root / subdir / p
-    out = pathlib.Path(out)
     if suffix and out.suffix.lower() != suffix:
         out = out.with_suffix(suffix)
+
+    if out.is_symlink():
+        raise FileExistsError(f"拒绝使用符号链接作为输出文件: {out}")
+    out = out.resolve(strict=False)
+    ensure_within_data_root(out, root, name_or_rel)
     out.parent.mkdir(parents=True, exist_ok=True)
+    resolved_parent = out.parent.resolve(strict=True)
+    ensure_within_data_root(resolved_parent, root, name_or_rel)
+    out = resolved_parent / out.name
+    if out.is_symlink() or out.exists():
+        raise FileExistsError(f"输出文件已存在，拒绝覆盖: {out}")
     return out
+
+
+def ensure_within_data_root(path: pathlib.Path, root: pathlib.Path, original: str) -> None:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        raise ValueError(f"输出路径不在数据根 {root} 内，拒绝: {original}")
 
 
 def load_svp(path: str):
@@ -81,10 +95,8 @@ def load_svp(path: str):
 
 def write_svp(project: dict, output_path: pathlib.Path) -> None:
     """按 SynthV 的单行、UTF-8、无 BOM 习惯写出工程。"""
-    output_path.write_text(
-        json.dumps(project, ensure_ascii=False, separators=(",", ":")),
-        encoding="utf-8",
-    )
+    with output_path.open("x", encoding="utf-8") as output:
+        output.write(json.dumps(project, ensure_ascii=False, separators=(",", ":")))
 
 
 def ensure_distinct_output(source: str, output_path: pathlib.Path) -> None:
@@ -442,8 +454,10 @@ def cmd_export_lrc(args) -> dict:
     ensure_distinct_output(args.svp, word_path)
     if normal_path.resolve() == word_path.resolve():
         raise ValueError("普通 LRC 与逐字 LRC 不能使用同一个输出文件名")
-    normal_path.write_text(render_lrc(phrases), encoding="utf-8")
-    word_path.write_text(render_lrc(phrases, enhanced=True), encoding="utf-8")
+    with normal_path.open("x", encoding="utf-8") as output:
+        output.write(render_lrc(phrases))
+    with word_path.open("x", encoding="utf-8") as output:
+        output.write(render_lrc(phrases, enhanced=True))
     return {
         "tool": "cvrs/export-lrc",
         "source": args.svp,

@@ -8,6 +8,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const runtimeProtocolUrl = pathToFileURL(join(root, "packages/runtime-protocol/dist/index.js")).href;
 const { estimateAgentRunBudget } = await import(runtimeProtocolUrl);
+const credentialStoreUrl = pathToFileURL(join(root, "src/PiDesktop.Tauri/dist/electron/services/local-credential-store.js")).href;
+const { createLocalCredentialStore } = await import(credentialStoreUrl);
 const source = await readFile(join(root, "src/PiDesktop.Tauri/electron/services/ai-service.ts"), "utf8");
 const executable = stripTypeScriptTypes(source
   .replace(
@@ -18,22 +20,12 @@ const executable = stripTypeScriptTypes(source
     'import { AgentRuntimeWorker } from "@synthv-toolbox/agent-runtime";',
     "class AgentRuntimeWorker {}",
   )
+  .replace('from "./local-credential-store.js";', `from "${credentialStoreUrl}";`)
   .replace('from "@synthv-toolbox/runtime-protocol";', `from "${runtimeProtocolUrl}";`), { mode: "transform" });
 const { AiService } = await import(`data:text/javascript;base64,${Buffer.from(executable).toString("base64")}`);
 
 const directory = await mkdtemp(join(tmpdir(), "electron-ai-service-"));
 const metadataPath = join(directory, "ai.json");
-const secrets = [];
-const safeStorage = {
-  isEncryptionAvailable: () => true,
-  encryptString(value) {
-    secrets.push(value);
-    return Buffer.from(`sealed:${value}`);
-  },
-  decryptString(value) {
-    return value.toString("utf8").replace(/^sealed:/, "");
-  },
-};
 const requests = [];
 let nextSendResult = { message: "Runtime response" };
 const runtime = {
@@ -51,13 +43,12 @@ const catalog = {
     return { force, providers: ["openai-codex"] };
   },
 };
-const usage = { async query(provider, credentialIds) { return { provider, credentialIds }; } };
+const usage = { async query(provider, credentialIds) { return { accounts: credentialIds.map(credentialId => ({ providerId: provider, credentialId, status: "unknown" })) }; } };
 const cancelledConversations = [];
 const approvals = { cancelConversation(conversationId) { cancelledConversations.push(conversationId); } };
 let identifier = 0;
 const service = new AiService({
   metadataPath,
-  safeStorage,
   runtime,
   catalog,
   approvals,
@@ -76,11 +67,11 @@ assert.equal(added.credential.label, "Personal key");
 assert.equal(added.credential.sealed, undefined);
 const encryptedMetadata = await readFile(metadataPath, "utf8");
 assert.doesNotMatch(encryptedMetadata, /api-secret|oauth-secret/);
-assert.match(encryptedMetadata, /c2VhbGVkOmFwaS1zZWNyZXQ=/);
+assert.ok(JSON.parse(encryptedMetadata).credentials[0].sealed.startsWith("local1:"));
 
 const credentialId = added.credential.id;
 await service.update_ai_api_key("anthropic", credentialId, { label: "Rotated key", apiKey: "rotated-secret", models: [["cla", "ude-opus-4-8"].join("")] });
-assert.ok(secrets.includes("rotated-secret"));
+assert.equal(await createLocalCredentialStore(directory).unseal(JSON.parse(await readFile(metadataPath, "utf8")).credentials[0].sealed), "rotated-secret");
 await service.update_ai_credential("anthropic", credentialId, true, 3);
 await service.update_ai_credential("anthropic", credentialId, false, undefined, "Edited key", { team: "class" });
 const edited = (await service.ai_provider_state(false)).providers.find(provider => provider.id === "anthropic").apiKeys[0];
@@ -99,9 +90,12 @@ assert.equal(selected.providers.find((provider) => provider.id === "anthropic").
 
 const authorized = await service.authorize_ai_provider("anthropic", "authorize-1");
 assert.equal(authorized.credential.kind, "oauth");
-assert.ok(secrets.includes("oauth-secret"));
+assert.equal(await createLocalCredentialStore(directory).unseal(JSON.parse(await readFile(metadataPath, "utf8")).credentials.find(item => item.id === authorized.credential.id).sealed), "oauth-secret");
 const usageState = await service.ai_provider_usage();
-assert.equal(usageState.providers.anthropic.provider, "anthropic");
+assert.equal(usageState.accounts[0].provider, "anthropic");
+assert.equal(usageState.accounts[0].channel, "oauth");
+assert.equal(usageState.accounts[0].usage.providerId, "anthropic");
+assert.ok(usageState.accounts.every(item => item.credentialId !== credentialId), "API keys are not advertised as subscription accounts");
 assert.deepEqual(await service.opencode_provider_catalog(true), { force: true, providers: ["openai-codex"] });
 
 const conversation = await service.new_conversation();
@@ -198,13 +192,12 @@ await writeFile(droppedPath, JSON.stringify({
     messages: [{ role: "assistant", content: "hello", createdAt: "2026-09-13T00:00:00.000Z", outcome: { status: "completed" } }],
   }],
 }), "utf8");
-const recovered = new AiService({ metadataPath: droppedPath, safeStorage, runtime, catalog, approvals, id: () => "recovered" });
+const recovered = new AiService({ metadataPath: droppedPath, runtime, catalog, approvals, id: () => "recovered" });
 const droppedConversation = await recovered.open_conversation("conv-dropped");
 assert.equal(droppedConversation.messages[0].outcome, undefined, "an invalid stored outcome is dropped when metadata loads");
 
 const cancelled = new AiService({
   metadataPath: join(directory, "cancelled.json"),
-  safeStorage,
   runtime,
   catalog,
   approvals,
@@ -250,7 +243,7 @@ assert.equal(anthropic.accounts.length + anthropic.apiKeys.length, 0);
   let activeRunIdentifier = 0;
   const activeRunCancelled = [];
   const activeRunApprovals = { cancelConversation(conversationId) { activeRunCancelled.push(conversationId); } };
-  const activeRunService = new AiService({ metadataPath: join(directory, "active-run.json"), safeStorage, runtime: activeRunRuntime, catalog, approvals: activeRunApprovals, id: () => `active-${++activeRunIdentifier}` });
+  const activeRunService = new AiService({ metadataPath: join(directory, "active-run.json"), runtime: activeRunRuntime, catalog, approvals: activeRunApprovals, id: () => `active-${++activeRunIdentifier}` });
   const conversation = await activeRunService.new_conversation();
 
   const firstSend = activeRunService.send_message(conversation.id, "First", { runId: "explicit-run-id" });
@@ -279,3 +272,16 @@ assert.equal(anthropic.accounts.length + anthropic.apiKeys.length, 0);
 }
 
 console.log("Electron AI service persists encrypted credentials and drives Agent Runtime sessions.");
+
+const foreignPath = join(directory, "foreign.json");
+const foreignData = JSON.parse(await readFile(metadataPath, "utf8"));
+foreignData.credentials.forEach(credential => { credential.sealed = "unreadable-ciphertext"; credential.enabled = true; });
+await writeFile(foreignPath, JSON.stringify(foreignData));
+const foreignBytes = await readFile(foreignPath, "utf8");
+const foreign = new AiService({metadataPath:foreignPath,runtime,catalog,approvals,usage});
+const unavailableState = await foreign.ai_provider_state(false);
+assert.ok(unavailableState.providers.every(provider => provider.connected === false));
+assert.equal((await foreign.list_conversations()).length, foreignData.conversations.length);
+await assert.rejects(foreign.resolveModelSelection(), /readable local credential|No eligible credential/);
+assert.equal(await readFile(foreignPath, "utf8"), foreignBytes);
+console.log("Unreadable local credentials preserve history and require a new login.");

@@ -82,6 +82,14 @@ export interface AgentSessionGuards {
 /** Whether this session currently has a run in flight, and that run's id. */
 export type AgentRunStateAccessor = () => { active: boolean; runId: string | null };
 
+export type PiCredential = { type: "api_key"; key: string } | { type: "oauth"; access: string; refresh: string; expires: number; [key: string]: unknown };
+export interface PiCredentialStore {
+  read(providerId: string, options?: { signal?: AbortSignal }): Promise<PiCredential | undefined>;
+  list(options?: { signal?: AbortSignal }): Promise<Array<{ providerId: string; type: PiCredential["type"] }>>;
+  modify(providerId: string, update: (current: PiCredential | undefined) => Promise<PiCredential | undefined>, options?: { signal?: AbortSignal }): Promise<PiCredential | undefined>;
+  delete(providerId: string, options?: { signal?: AbortSignal }): Promise<void>;
+}
+
 export interface PiModelSelection {
   providerId: string;
   modelId: string;
@@ -166,7 +174,7 @@ export interface PiSdk {
     settingsManager?: PiSettingsManager;
     systemPrompt?: string;
   }) => PiResourceLoader;
-  ModelRuntime: { create(options: { refreshOnCreate: false }): Promise<{ setRuntimeApiKey(providerId: string, apiKey: string): Promise<void>; getModel(providerId: string, modelId: string): unknown }> };
+  ModelRuntime: { create(options: { refreshOnCreate: boolean; credentials?: PiCredentialStore }): Promise<{ setRuntimeApiKey(providerId: string, apiKey: string): Promise<void>; getModel(providerId: string, modelId: string): unknown }> };
   SettingsManager: { create(cwd: string, agentDir?: string): PiSettingsManager };
   SessionManager: { inMemory(cwd: string): unknown; create(cwd: string): unknown };
   createAgentSession(options: {
@@ -225,6 +233,7 @@ export class ModelAuthGateway {
 export type ModelAuthResult<T> = { kind: "ok"; value: T } | { kind: "unsupported"; reason: string };
 
 export interface PiSessionFactoryOptions {
+  credentialStore?: (model: PiModelSelection) => PiCredentialStore;
   extensionPaths?: () => readonly string[];
   extensions?: (session: { sessionId: string; guards: AgentSessionGuards; runState: AgentRunStateAccessor }) => readonly PiInlineExtension[];
   loadSdk?: () => Promise<PiSdk>;
@@ -259,8 +268,9 @@ export function createPiSessionFactory(options: PiSessionFactoryOptions = {}): P
       });
       await resourceLoader.reload();
       if (!input.model) throw new Error("A host-selected model is required to create a Pi session.");
-      const modelRuntime = await sdk.ModelRuntime.create({ refreshOnCreate: false });
-      await modelRuntime.setRuntimeApiKey(input.model.providerId, input.model.apiKey);
+      const credentials = options.credentialStore?.(input.model);
+      const modelRuntime = await sdk.ModelRuntime.create({ refreshOnCreate: Boolean(credentials), ...(credentials ? { credentials } : {}) });
+      if (!credentials) await modelRuntime.setRuntimeApiKey(input.model.providerId, input.model.apiKey);
       const model = modelRuntime.getModel(input.model.providerId, input.model.modelId);
       if (!model) throw new Error(`Pi does not support ${input.model.providerId}/${input.model.modelId}.`);
       const contextWindow = getContextWindow(model);

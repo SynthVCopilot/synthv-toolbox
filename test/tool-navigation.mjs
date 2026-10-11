@@ -11,17 +11,18 @@ const messages = read(join(root, "src", "PiDesktop.Tauri", "src", "featureMessag
 const i18n = read(join(root, "src", "PiDesktop.Tauri", "src", "i18n.ts"));
 
 for (const [group, ids] of Object.entries({
-  import: ["cover"],
-  convert: ["source-separation", "audio-to-project", "audio-preparation"],
-  analysis: ["tuning-learning", "audio-insight"],
-  quality: ["project-doctor", "pronunciation-doctor", "render-review"],
+  import: ["cover", "media-import", "score-to-synthv"],
+  convert: ["audio-to-project", "audio-preparation", "source-separation", "project-tools"],
+  analysis: ["audio-insight"],
+  quality: ["project-doctor", "pronunciation-doctor", "render-review", "batch-recipes"],
 })) {
   assert.match(catalog, new RegExp(`id: "${group}"[\\s\\S]*?featureIds: \\[${ids.map((id) => `"${id}"`).join(", ")}\\]`));
 }
 
-for (const hidden of ["media-import", "score-to-synthv", "project-tools", "ab-audition", "retake-compare", "batch-recipes", "selective-sync"]) {
+for (const hidden of ["tuning-learning", "ab-audition", "retake-compare", "selective-sync"]) {
   assert.doesNotMatch(catalog.match(/const groupDefinitions:[\s\S]*?\n\];/)?.[0] ?? "", new RegExp(`"${hidden}"`));
 }
+assert.doesNotMatch(catalog.match(/const pendingFeatures = new Set\(\[[^\]]*\]\);/)?.[0] ?? "", /"(?:cover|media-import|source-separation)"/);
 
 assert.match(catalog, /export const guiFeatureIds = new Set\(groupDefinitions\.flatMap/);
 assert.match(catalog, /export const guiFeatureCatalog = featureCatalog\.filter/);
@@ -29,6 +30,7 @@ assert.match(main, /const features: Feature\[\] = guiFeatureCatalog;/);
 assert.match(main, /toolGroups\.map\(\(group\) => navItem\(group\.id, group\.title, group\.icon\)\)/);
 assert.match(main, /case "convert": return renderToolCategory\("convert"\);/);
 assert.match(main, /case "analysis": return renderToolCategory\("analysis"\);/);
+assert.match(main, /if \(id === "cover" && app\?\.mode !== "ai"\) return \[\];/);
 assert.match(main, /const enteringToolCategory = toolGroups\.some\(\(group\) => group\.id === targetPage\);/);
 assert.match(main, /if \(!feature \|\| !group\) return;/);
 assert.match(messages, /convert: \{ title: "Convert"/);
