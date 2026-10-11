@@ -49,10 +49,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const MAX_REPORTED_ISSUES = 8;
+
 function failedOutcomeEnvelope(
   code: string,
   message: string,
   phase: string,
+  details?: unknown,
 ): string {
   return JSON.stringify({
     outcome: "failed",
@@ -60,7 +63,7 @@ function failedOutcomeEnvelope(
     wrote: false,
     undoRequired: false,
     retry: "correct_request",
-    error: { code, message },
+    error: details === undefined ? { code, message } : { code, message, details },
   });
 }
 
@@ -94,6 +97,13 @@ function buildTool(
             "INVALID_ARGUMENT",
             `Invalid arguments for ${name}`,
             "accepted",
+            {
+              issues: parsed.error.issues.slice(0, MAX_REPORTED_ISSUES).map((issue) => ({
+                path: issue.path.map(String),
+                code: issue.code,
+                message: issue.message.slice(0, 200),
+              })),
+            },
           ),
           isError: true,
         };
@@ -121,8 +131,9 @@ function classifyFromCore(
   if (name === "sv_command") {
     const action = typeof args.action === "string" ? args.action : undefined;
     const commandArgs = isRecord(args.args) ? args.args : {};
-    let risk: EmbeddedBridgeRisk = "normal";
+    let risk: EmbeddedBridgeRisk = "high";
     if (action !== undefined) {
+      risk = "normal";
       try {
         const policy = commandPolicyFor(action);
         if (
@@ -133,7 +144,7 @@ function classifyFromCore(
           risk = "high";
         }
       } catch {
-        risk = "normal";
+        risk = "high";
       }
     }
     return { category: "projectWrite", risk };
@@ -145,7 +156,7 @@ function classifyFromCore(
     if (actionTool?.annotations?.readOnlyHint === true) {
       return { category: "read", risk: "normal" };
     }
-    return { category: "uiChange", risk: "normal" };
+    return { category: "uiChange", risk: actionTool === undefined ? "high" : "normal" };
   }
 
   if (name === "sv_status") {

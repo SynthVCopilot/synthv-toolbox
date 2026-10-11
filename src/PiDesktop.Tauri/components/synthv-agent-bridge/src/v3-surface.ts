@@ -156,6 +156,49 @@ function readJsonResult(result: CallToolResult): unknown {
   }
 }
 
+function editDistance(a: string, b: string): number {
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i += 1) {
+    const current = [i];
+    for (let j = 1; j <= b.length; j += 1) {
+      current.push(
+        Math.min(
+          (previous[j] ?? 0) + 1,
+          (current[j - 1] ?? 0) + 1,
+          (previous[j - 1] ?? 0) + (a[i - 1] === b[j - 1] ? 0 : 1),
+        ),
+      );
+    }
+    previous = current;
+  }
+  return previous[b.length] ?? 0;
+}
+
+function actionNotFoundDetails(
+  definitions: ActionToolDefinitions,
+  action: string,
+): { suggestions: string[]; next?: string } {
+  const lowered = action.toLowerCase();
+  const suggestions = [...definitions.keys()]
+    .map((name) => ({ name, distance: editDistance(lowered, name.toLowerCase()) }))
+    .sort((left, right) => left.distance - right.distance || left.name.localeCompare(right.name))
+    .slice(0, 3)
+    .map((entry) => entry.name);
+  return suggestions.length === 0
+    ? { suggestions }
+    : { suggestions, next: `call sv_describe with action=${suggestions[0]}` };
+}
+
+function unknownActionError(
+  definitions: ActionToolDefinitions,
+  action: string,
+): BridgeProtocolError {
+  return new BridgeProtocolError(
+    `Unknown SynthV action: ${action}`,
+    actionNotFoundDetails(definitions, action),
+  );
+}
+
 function parseActionInput(
   tool: ActionTool,
   action: string,
@@ -239,7 +282,7 @@ async function invokeActionTool(
 ): Promise<CallToolResult> {
   const tool = definitions.get(action);
   if (tool === undefined) {
-    throw new BridgeProtocolError(`Unknown SynthV action: ${action}`);
+    throw unknownActionError(definitions, action);
   }
   if (typeof tool.handler !== "function") {
     throw new BridgeProtocolError(`SynthV action ${action} is not directly callable`);
@@ -263,7 +306,7 @@ function assertActionCategory(
 ): void {
   const tool = definitions.get(action);
   if (tool === undefined) {
-    throw new BridgeProtocolError(`Unknown SynthV action: ${action}`);
+    throw unknownActionError(definitions, action);
   }
   const policy = optionalCommandPolicy(action);
   const accepted =
@@ -273,6 +316,7 @@ function assertActionCategory(
   if (!accepted) {
     throw new BridgeProtocolError(
       `${action} is not available through sv_${category}`,
+      { next: `call sv_describe with action=${action}` },
     );
   }
 }
@@ -1610,7 +1654,7 @@ export function registerV3InternalAdapters(
           actions: input.actions.map((action) => {
             const tool = definitions.get(action);
             if (tool === undefined) {
-              throw new BridgeProtocolError(`Unknown SynthV action: ${action}`);
+              throw unknownActionError(definitions, action);
             }
             return describeActionTool(action, tool);
           }),
