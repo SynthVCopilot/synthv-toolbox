@@ -44,9 +44,8 @@ mac:
   category: public.app-category.music
   hardenedRuntime: true
   gatekeeperAssess: false
-  identity: "${env.CSC_NAME}"
+  identity: null
 dmg:
-  license: src/PiDesktop.Tauri/electron/assets/TERMS-OF-USE.rtf
   artifactName: "Synthesizer-V-Toolbox-${version}.${ext}"
 publish:
   provider: github

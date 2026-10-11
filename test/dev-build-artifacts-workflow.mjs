@@ -25,14 +25,10 @@ assert.doesNotMatch(release, /gh release/);
 
 assert.match(release, /tags: \["v\*"\]/);
 assert.match(release, /GH_TOKEN: \$\{\{ github\.token \}\}/);
-assert.match(release, /--publish always/);
-assert.match(release, /name: Validate code-signing environment/);
-assert.match(release, /CSC_LINK: \$\{\{ secrets\.CSC_LINK \}\}/);
-assert.match(release, /CSC_KEY_PASSWORD: \$\{\{ secrets\.CSC_KEY_PASSWORD \}\}/);
-assert.match(release, /CSC_NAME: \$\{\{ secrets\.CSC_NAME \}\}/);
-assert.match(release, /Missing code-signing environment/);
-assert.match(release, /target: --win/);
-assert.match(release, /target: --mac/);
+assert.match(release, /--win --publish always/);
+assert.match(release, /--mac --arm64 --publish never/);
+assert.doesNotMatch(release, /CSC_(LINK|KEY_PASSWORD|NAME)|Validate code-signing environment|Missing code-signing environment/);
+assert.match(release, /^  macos-source:\n    name: macos-source$/m);
 assert.match(development, /pull_request:/);
 assert.match(development, /branches: \[main\]/);
 assert.match(development, /--publish never/);

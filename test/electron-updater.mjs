@@ -31,7 +31,7 @@ assert.doesNotMatch(builder, /electron\/dist|packages\/agent-runtime\/node_modul
 assert.match(builder, /^win:[\s\S]*^  target:[\s\S]*^    - nsis$/m);
 assert.match(builder, /^mac:[\s\S]*^  target:[\s\S]*^    - dmg$/m);
 assert.match(builder, /hardenedRuntime: true/);
-assert.match(builder, /identity: "\$\{env\.CSC_NAME\}"/);
+assert.match(builder, /^  identity: null$/m);
 assert.match(builder, /^publish:[\s\S]*^  provider: github$/m);
 assert.match(builder, /^  channel: latest$/m);
 const extraResources = builder.slice(builder.indexOf("extraResources:"), builder.indexOf("win:"));
@@ -39,10 +39,10 @@ assert.doesNotMatch(extraResources, /packages\/agent-runtime|resources\/node/);
 assert.match(builder, /buildResources: src\/PiDesktop\.Tauri\/electron\/assets/);
 assert.match(builder, /icon: src\/PiDesktop\.Tauri\/electron\/assets\/icon\.ico/);
 assert.match(builder, /icon: src\/PiDesktop\.Tauri\/electron\/assets\/icon\.icns/);
-assert.match(builder, /license: src\/PiDesktop\.Tauri\/electron\/assets\/TERMS-OF-USE\.rtf/);
+assert.doesNotMatch(builder, /^  license:/m);
 assert.match(builder, /from: src\/PiDesktop\.Tauri\/components\/synthv-agent-bridge\/dist/);
 assert.doesNotMatch(builder, /src-tauri|resources\/node/);
-for (const asset of ["icon.ico", "icon.icns", "TERMS-OF-USE.txt", "TERMS-OF-USE.rtf"]) {
+for (const asset of ["icon.ico", "icon.icns", "TERMS-OF-USE.txt"]) {
   assert.equal(existsSync(join(root, "src/PiDesktop.Tauri/electron/assets", asset)), true, `${asset} must be packaged from Electron assets`);
 }
 
