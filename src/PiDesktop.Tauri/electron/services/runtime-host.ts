@@ -11,7 +11,7 @@ import {
   type PluginPermission,
   type RpcNotification,
 } from "@synthv-toolbox/runtime-protocol";
-import type { HttpMcpServer } from "./http-mcp-server.js";
+import { ClientError, type HttpMcpServer } from "./http-mcp-server.js";
 
 export interface ElectronRuntimeHostOptions {
   sessionFactory?: PiSessionFactory;
@@ -185,7 +185,7 @@ export class ElectronRuntimeHost {
     if (!isObject(argumentsValue)) throw new Error("MCP privileged tool arguments must be an object.");
     const args = argumentsValue as { capability?: unknown; operation?: unknown; params?: unknown; permission?: unknown };
     if (typeof args.capability !== "string" || typeof args.operation !== "string" || !isObject(args.params) || "permission" in args) {
-      throw new Error("MCP privileged tool requires capability, operation, and object params.");
+      throw new ClientError("MCP privileged tool requires capability, operation, and object params.");
     }
     return this.hostCapabilities.invoke(permission, args.capability, args.operation, args.params as JsonValue);
   }
