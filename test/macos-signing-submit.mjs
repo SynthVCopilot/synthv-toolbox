@@ -26,9 +26,10 @@ const sha256 = (buffer) => `sha256:${createHash("sha256").update(buffer).digest(
 const noSleep = async () => {};
 
 // A signing center that follows the request and push-upload contract of the center README.
-async function startCenter({ partSize = 4, received = [], createState = "awaiting_upload", partFailures = [] } = {}) {
-  const log = { create: null, createHeaders: null, plans: 0, parts: new Map(), partHeaders: [], complete: 0, completeBody: null };
+async function startCenter({ partSize = 4, received = [], createState = "awaiting_upload", partFailures = [], createFailures = [] } = {}) {
+  const log = { createCalls: 0, create: null, createHeaders: null, plans: 0, parts: new Map(), partHeaders: [], complete: 0, completeBody: null };
   const failures = [...partFailures];
+  const createErrors = [...createFailures];
   const server = createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -36,6 +37,9 @@ async function startCenter({ partSize = 4, received = [], createState = "awaitin
     const json = (status, value) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(value)); };
     if (req.headers.authorization !== "Bearer test-key") return json(401, { error: "invalid_api_key" });
     if (req.method === "POST" && req.url === "/v1/requests") {
+      log.createCalls += 1;
+      const failure = createErrors.shift();
+      if (failure) return json(failure, { error: "github_unavailable" });
       log.create = JSON.parse(body.toString("utf8"));
       log.createHeaders = req.headers;
       return json(202, { request_id: REQUEST_ID, state: createState });
@@ -74,7 +78,6 @@ async function submitFixture(content = Buffer.from("0123456789")) {
 }
 
 const submitEnv = (fixture, center, extra = {}) => ({
-  SIGNING_URL: center.url,
   SIGNING_API_KEY: "test-key",
   GITHUB_RUN_ID: "42",
   GITHUB_RUN_ATTEMPT: "1",
@@ -90,7 +93,7 @@ describe("push request to the signing center", () => {
     const center = await startCenter();
     const fixture = await submitFixture();
     try {
-      const result = await submitSource({ env: submitEnv(fixture, center), sleep: noSleep });
+      const result = await submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center), sleep: noSleep });
       assert.deepEqual(center.log.create, {
         project_id: PROJECT,
         platform: "macos",
@@ -117,7 +120,7 @@ describe("push request to the signing center", () => {
     const center = await startCenter({ createState: "accepted_waiting_source" });
     const fixture = await submitFixture();
     try {
-      const result = await submitSource({ env: submitEnv(fixture, center), sleep: noSleep });
+      const result = await submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center), sleep: noSleep });
       assert.equal(result.request_id, REQUEST_ID);
       assert.equal(center.log.parts.size, 0);
       assert.equal(center.log.complete, 0);
@@ -128,7 +131,7 @@ describe("push request to the signing center", () => {
     const center = await startCenter({ received: [1, 2] });
     const fixture = await submitFixture();
     try {
-      await submitSource({ env: submitEnv(fixture, center), sleep: noSleep });
+      await submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center), sleep: noSleep });
       assert.deepEqual([...center.log.parts.keys()], [3]);
       assert.equal(center.log.complete, 1);
     } finally { await center.close(); }
@@ -139,17 +142,47 @@ describe("push request to the signing center", () => {
     const fixture = await submitFixture();
     const sleeps = [];
     try {
-      await submitSource({ env: submitEnv(fixture, center), sleep: async (ms) => { sleeps.push(ms); } });
+      await submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center), sleep: async (ms) => { sleeps.push(ms); } });
       assert.deepEqual([...center.log.parts.keys()].sort(), [1, 2, 3]);
       assert.ok(sleeps.length >= 2);
     } finally { await center.close(); }
+  });
+
+  test("retries the create call with the same idempotency key after a transient center error", async () => {
+    const center = await startCenter({ createFailures: [503] });
+    const fixture = await submitFixture();
+    const sleeps = [];
+    try {
+      const result = await submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center), sleep: async (ms) => { sleeps.push(ms); } });
+      assert.equal(center.log.createCalls, 2);
+      assert.equal(center.log.createHeaders["idempotency-key"], `${PROJECT}-42-1`);
+      assert.equal(result.request_id, REQUEST_ID);
+      assert.equal(sleeps.length, 1);
+    } finally { await center.close(); }
+  });
+
+  test("does not retry a create call the center rejects", async () => {
+    const center = await startCenter({ createFailures: [403] });
+    const fixture = await submitFixture();
+    try {
+      await assert.rejects(submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center), sleep: noSleep }), { code: "SIGNING_REQUEST_FAILED" });
+      assert.equal(center.log.createCalls, 1);
+    } finally { await center.close(); }
+  });
+
+  test("the signing center address is fixed in code and cannot be redirected by the environment", async () => {
+    const fixture = await submitFixture();
+    const urls = [];
+    const fetchImpl = async (url) => { urls.push(url); return new Response("{}", { status: 401 }); };
+    await assert.rejects(submitSource({ env: { ...submitEnv(fixture, { url: "" }), SIGNING_URL: "https://attacker.example" }, fetchImpl, sleep: noSleep }), { code: "SIGNING_REQUEST_FAILED" });
+    assert.deepEqual(urls, ["https://sign.voidcarve.com/v1/requests"]);
   });
 
   test("does not retry a part rejected with 400", async () => {
     const center = await startCenter({ partFailures: [400] });
     const fixture = await submitFixture();
     try {
-      await assert.rejects(submitSource({ env: submitEnv(fixture, center), sleep: noSleep }), { code: "SOURCE_UPLOAD_FAILED" });
+      await assert.rejects(submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center), sleep: noSleep }), { code: "SOURCE_UPLOAD_FAILED" });
       assert.equal(center.log.complete, 0);
     } finally { await center.close(); }
   });
@@ -158,12 +191,12 @@ describe("push request to the signing center", () => {
     const center = await startCenter();
     const fixture = await submitFixture();
     try {
-      await assert.rejects(submitSource({ env: submitEnv(fixture, center, { INPUT_TAG: "v1.2.3-rc.1" }), sleep: noSleep }), { code: "TAG_NOT_STABLE" });
-      await assert.rejects(submitSource({ env: submitEnv(fixture, center, { INPUT_TAG: "refs/heads/main" }), sleep: noSleep }), { code: "TAG_NOT_STABLE" });
-      await assert.rejects(submitSource({ env: submitEnv(fixture, center, { GITHUB_RUN_ATTEMPT: "2" }), sleep: noSleep }), { code: "INVALID_RUN_ATTEMPT" });
-      await assert.rejects(submitSource({ env: submitEnv(fixture, center, { SIGNING_API_KEY: "" }), sleep: noSleep }), { code: "SIGNING_API_KEY_UNAVAILABLE" });
-      await assert.rejects(submitSource({ env: submitEnv(fixture, center, { SIGNING_URL: "http://sign.example.com" }), sleep: noSleep }), { code: "SIGNING_URL_INVALID" });
-      await assert.rejects(submitSource({ env: submitEnv(fixture, center, { INPUT_WORK_DIR: path.join(fixture.runnerTemp, "elsewhere") }), sleep: noSleep }), { code: "INVALID_TEMP_DIR" });
+      await assert.rejects(submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center, { INPUT_TAG: "v1.2.3-rc.1" }), sleep: noSleep }), { code: "TAG_NOT_STABLE" });
+      await assert.rejects(submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center, { INPUT_TAG: "refs/heads/main" }), sleep: noSleep }), { code: "TAG_NOT_STABLE" });
+      await assert.rejects(submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center, { GITHUB_RUN_ATTEMPT: "2" }), sleep: noSleep }), { code: "INVALID_RUN_ATTEMPT" });
+      await assert.rejects(submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center, { SIGNING_API_KEY: "" }), sleep: noSleep }), { code: "SIGNING_API_KEY_UNAVAILABLE" });
+      await assert.rejects(submitSource({ signingOrigin: "http://sign.example.com", env: submitEnv(fixture, center), sleep: noSleep }), { code: "SIGNING_URL_INVALID" });
+      await assert.rejects(submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center, { INPUT_WORK_DIR: path.join(fixture.runnerTemp, "elsewhere") }), sleep: noSleep }), { code: "INVALID_TEMP_DIR" });
       assert.equal(center.log.create, null);
     } finally { await center.close(); }
   });
@@ -172,7 +205,7 @@ describe("push request to the signing center", () => {
     const center = await startCenter();
     const fixture = await submitFixture();
     try {
-      await assert.rejects(submitSource({ env: submitEnv(fixture, center, { SIGNING_API_KEY: "wrong" }), sleep: noSleep }), { code: "SIGNING_REQUEST_FAILED" });
+      await assert.rejects(submitSource({ signingOrigin: center.url, env: submitEnv(fixture, center, { SIGNING_API_KEY: "wrong" }), sleep: noSleep }), { code: "SIGNING_REQUEST_FAILED" });
     } finally { await center.close(); }
   });
 
@@ -182,7 +215,7 @@ describe("push request to the signing center", () => {
     const output = path.join(fixture.runnerTemp, "output.txt");
     try {
       const errors = [];
-      const code = await main(["submit"], { env: submitEnv(fixture, center, { GITHUB_OUTPUT: output }), stderr: { write: (text) => errors.push(text) }, sleep: noSleep });
+      const code = await main(["submit"], { signingOrigin: center.url, env: submitEnv(fixture, center, { GITHUB_OUTPUT: output }), stderr: { write: (text) => errors.push(text) }, sleep: noSleep });
       assert.equal(code, 0, errors.join(""));
       const context = JSON.parse(await readFile(path.join(fixture.runnerTemp, "signing-request", "request.json"), "utf8"));
       assert.deepEqual(context, {

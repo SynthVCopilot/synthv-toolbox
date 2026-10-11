@@ -15,7 +15,6 @@ permissions: {}
 
 env:
   BUILD_RUN_ID: ${{ github.event.workflow_run.id || inputs.build_run_id }}
-  SIGNING_URL: ${{ vars.SIGNING_URL }}
 
 defaults:
   run:
@@ -73,6 +72,7 @@ jobs:
     needs: resolve
     runs-on: ubuntu-latest
     timeout-minutes: 190
+    environment: macos-signing
     permissions:
       contents: read
     steps:
@@ -105,6 +105,7 @@ jobs:
     concurrency:
       group: desktop-macos-publish
       cancel-in-progress: false
+    environment: macos-signing
     permissions:
       contents: write
     env:
@@ -131,19 +132,28 @@ jobs:
           INPUT_REQUEST_ID: ${{ needs.resolve.outputs.request_id }}
           INPUT_INPUT_DIGEST: ${{ needs.resolve.outputs.input_digest }}
         run: node .github/scripts/publish-macos.mjs fetch
+      - name: Create the draft release if the Windows workflow has not
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ needs.resolve.outputs.tag }}
+        run: node .github/scripts/release-draft.mjs ensure
       - name: Upload to the release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
           SIGNED_DIR: ${{ steps.fetch.outputs.dir }}
         run: |
-          gh release view "$RELEASE_TAG" --json assets > /dev/null
           gh release upload "$RELEASE_TAG" "$SIGNED_DIR"/* --clobber
           published="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')"
           for file in "$SIGNED_DIR"/*; do
             name="$(basename "$file")"
             grep -qxF "$name" <<< "$published" || { echo "Release asset was not published: $name" >&2; exit 1; }
           done
+      - name: Publish the release once Windows assets are present
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ needs.resolve.outputs.tag }}
+        run: node .github/scripts/release-draft.mjs promote
       - name: Wipe signed workspace
         if: always()
         run: rm -rf "$RUNNER_TEMP/toolbox-signed-$GITHUB_RUN_ID" "$RUNNER_TEMP/signed-macos"

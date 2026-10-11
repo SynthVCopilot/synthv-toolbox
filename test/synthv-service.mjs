@@ -124,14 +124,16 @@ test("scanInstallations reads scripts under the injected data root, not the real
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("installBridge runs the real installers, always through the explicit IPC directory, and the fixed diagnosis then reports them as installed", async () => {
+test("installBridge runs the real installers in-process, always through the explicit IPC directory, and the fixed diagnosis then reports them as installed", async () => {
   const root = await mkdtemp(join(tmpdir(), "synthv-bridge-install-"));
   const bridgeDir = await mkdtemp(join(tmpdir(), "synthv-bridge-ipc-"));
-  // Second layer of defense: even if the installer ever fell back to TMPDIR, this must not be the real one.
-  const childTmp = await mkdtemp(join(tmpdir(), "synthv-bridge-childtmp-"));
+  const realManifest = join(tmpdir(), "synthv-agent-bridge.install.json");
+  const before = await manifestFingerprint(realManifest);
+  const spawned = [];
+  const runner = async (command, args) => { spawned.push([command, args]); return { stdout: "", stderr: "", code: 0 }; };
   try {
     // env deliberately carries no SYNTHV_AGENT_BRIDGE_DIR: the explicit bridgeIpcDirectory parameter alone must govern it.
-    const service = new SynthVService(root, bridgeDirectory, noBridge, bridgeDir, undefined, undefined, root, { ...process.env, TMPDIR: childTmp });
+    const service = new SynthVService(root, bridgeDirectory, noBridge, bridgeDir, runner, undefined, root, { ...process.env });
     const scriptsPath = join(root, "scripts");
 
     const sv2Install = await service.installBridge([{ scriptsPath, bridgeProfile: "sv2" }]);
@@ -146,12 +148,22 @@ test("installBridge runs the real installers, always through the explicit IPC di
     const sv1Diagnosis = await service.diagnoseBridge([{ scriptsPath, bridgeProfile: "sv1" }]);
     assert.equal(sv1Diagnosis[0].result.succeeded, true);
 
-    assert.equal(await manifestFingerprint(join(childTmp, "synthv-agent-bridge.install.json")), null, "the installer never fell back to the child's TMPDIR either");
+    assert.deepEqual(await manifestFingerprint(realManifest), before, "the installer never fell back to the real temp directory");
+    assert.equal(spawned.some(([command]) => command === process.execPath), false, "a hardened Electron binary cannot act as Node, so the installers must not be spawned through it");
   } finally {
     await rm(root, { recursive: true, force: true });
     await rm(bridgeDir, { recursive: true, force: true });
-    await rm(childTmp, { recursive: true, force: true });
   }
+});
+
+test("installBridge reports a failed installation instead of throwing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "synthv-bridge-missing-"));
+  try {
+    const service = new SynthVService(root, join(root, "no-bridge"), noBridge, root, async () => ({ stdout: "", stderr: "", code: 0 }), undefined, root);
+    const [install] = await service.installBridge([{ scriptsPath: join(root, "scripts"), bridgeProfile: "sv2" }]);
+    assert.equal(install.result.succeeded, false);
+    assert.equal(install.result.summary, "Bridge installation failed.");
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 // Regression guard: the real installer defaults its manifest path to os.tmpdir(), so this proves the test never touched it.

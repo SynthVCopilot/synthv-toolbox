@@ -3,6 +3,7 @@ import { access, cp, lstat, mkdir, readFile, realpath, rm, stat, symlink, writeF
 import { homedir, platform } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import type { EmbeddedBridge } from "./synthv-bridge.js";
 const bridgeProfiles = new Set(["sv2", "sv1", "flat"]);
 const shortcutActions = new Set(["start", "startLegacy", "stop", "save", "undo", "refresh"]);
@@ -149,7 +150,18 @@ export class SynthVService {
   async getAutostart(): Promise<{ enabled: boolean; error: string | null }> { if (this.autostart) return this.autostart.get(); try { return { enabled: Boolean(JSON.parse(await readFile(join(this.root, "autostart.json"), "utf8")).enabled), error: null }; } catch { return { enabled: false, error: null }; } }
   async reveal(path: string): Promise<void> { const absolute = resolve(path); if (platform() === "win32") await this.run("explorer.exe", ["/select,", absolute]); else await this.run("open", ["-R", absolute]); }
 
-  private async installBridgeTarget(target: { scriptsPath: string; bridgeProfile: string }): Promise<OperationResult> { this.assertBridgeTarget(target); const script = target.bridgeProfile === "sv1" ? "install-sv1-legacy-bridge.mjs" : "install-synthv-bridge.mjs"; const args = [join(this.bridgeDirectory, "scripts", script), "--target", target.scriptsPath]; const result = await this.run(process.execPath, args, { ...this.env, ELECTRON_RUN_AS_NODE: "1", SYNTHV_AGENT_BRIDGE_DIR: this.bridgeIpcDirectory }); return result.code === 0 ? ok("Bridge installed.") : fail("Bridge installation failed.", result.stderr); }
+  private async installBridgeTarget(target: { scriptsPath: string; bridgeProfile: string }): Promise<OperationResult> {
+    this.assertBridgeTarget(target);
+    const installer = (name: string) => import(pathToFileURL(join(this.bridgeDirectory, "scripts", name)).href);
+    const silent = () => undefined;
+    try {
+      if (target.bridgeProfile === "sv1") await (await installer("install-sv1-legacy-bridge.mjs")).installSv1LegacyBridge({ target: target.scriptsPath, log: silent });
+      else await (await installer("install-synthv-bridge.mjs")).installSynthvBridge({ target: target.scriptsPath, ipcDirectory: this.bridgeIpcDirectory, log: silent, warn: silent });
+      return ok("Bridge installed.");
+    } catch (error) {
+      return fail("Bridge installation failed.", error instanceof Error ? error.message : String(error));
+    }
+  }
   private async diagnoseBridgeTarget(target: { scriptsPath: string; bridgeProfile: string }): Promise<OperationResult> { this.assertBridgeTarget(target); const files = target.bridgeProfile === "sv1" ? [join(target.scriptsPath, "SynthV Agent Bridge SV1 Legacy", "SynthVAgentBridgeSV1Legacy.lua")] : [join(target.scriptsPath, "SynthV Agent Bridge", "SynthVAgentBridge.lua"), join(target.scriptsPath, "SynthV Agent Bridge", "StopSynthVAgentBridge.lua")]; return (await Promise.all(files.map(file => exists(file)))).every(Boolean) ? ok("Bridge scripts are installed.") : fail("Bridge scripts are unavailable.", "Expected bridge files are missing."); }
   private assertBridgeTarget(target: { scriptsPath: string; bridgeProfile: string }): void { requireText(target.scriptsPath, "scriptsPath"); if (!bridgeProfiles.has(target.bridgeProfile)) throw new Error("Unsupported Bridge profile."); }
   private async assertProcess(processId: number, identity: string): Promise<void> { if (!Number.isSafeInteger(processId) || processId <= 0 || !identity) throw new Error("Invalid SynthV process target."); if (!(await this.listProcesses()).some(process => process.processId === processId && process.processIdentity === identity)) throw new Error("SynthV process identity changed."); }

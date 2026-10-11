@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, test } from "node:test";
@@ -11,10 +11,12 @@ const yaml = createRequire(path.join(root, "src/PiDesktop.Tauri/node_modules/ele
 
 const releaseText = read(".github/workflows/desktop.yml");
 const publishText = read(".github/workflows/desktop-macos-publish.yml");
+const windowsText = read(".github/workflows/desktop-windows.yml");
 const nightlyText = read(".github/workflows/ffmpeg-verify.yml");
 const builderText = read("electron-builder.yml");
 const release = yaml.load(releaseText);
 const publish = yaml.load(publishText);
+const windows = yaml.load(windowsText);
 const builder = yaml.load(builderText);
 
 const stepsOf = (job) => job.steps.map((step, index) => ({ ...step, index }));
@@ -25,79 +27,146 @@ const CENTER_RELEASE_STEP = /^(?:(?:if|then|else|do|!)\s+)*(?:[A-Z_][A-Z0-9_]*=\
 // The center matches the policy's required_job against the job name with this pattern (center policy.ts).
 const REQUIRED_JOB = /^[\w-]{1,100}$/;
 
+const BUNDLE_DIR = "${{ runner.temp }}/toolbox-sign-${{ github.run_id }}-bundle";
+
 describe("Desktop Release workflow", () => {
+  const build = release.jobs["macos-build"];
+  const source = release.jobs["macos-source"];
+
   test("keeps the stable tag trigger and nothing else", () => {
     assert.deepEqual(release.on, { push: { tags: ["v*"] } });
     assert.deepEqual(release.permissions, {});
   });
 
-  test("carries no code-signing secrets", () => {
+  test("holds only the macOS jobs so a Windows failure or rerun cannot void the signing request", () => {
+    assert.deepEqual(Object.keys(release.jobs).sort(), ["macos-build", "macos-source"]);
+    assert.doesNotMatch(releaseText, /windows|--win\b/i);
     assert.doesNotMatch(releaseText, /CSC_(LINK|KEY_PASSWORD|NAME)|Validate code-signing environment/);
-    assert.deepEqual(Object.keys(release.jobs).sort(), ["macos-source", "windows"]);
-  });
-
-  test("Windows is built unsigned and published by electron-builder", () => {
-    const job = release.jobs.windows;
-    assert.equal(job["runs-on"], "windows-latest");
-    assert.deepEqual(job.permissions, { contents: "write" });
-    const publishStep = stepsOf(job).find((step) => /electron-builder/.test(runs(step)));
-    assert.match(runs(publishStep), /--win --publish always/);
-    assert.equal(publishStep.env.GH_TOKEN, "${{ github.token }}");
   });
 
   test("macos-source is a single non-matrix job the center can match by name", () => {
-    const job = release.jobs["macos-source"];
-    assert.ok(job, "job id macos-source");
-    assert.equal(job.name, "macos-source");
-    assert.match(job.name, REQUIRED_JOB);
-    assert.equal(job.strategy, undefined);
-    assert.equal(job["runs-on"], "macos-14");
-    assert.deepEqual(job.permissions, { contents: "read" });
+    assert.ok(source, "job id macos-source");
+    assert.equal(source.name, "macos-source");
+    assert.match(source.name, REQUIRED_JOB);
+    assert.equal(source.strategy, undefined);
+    assert.deepEqual(source.permissions, { contents: "read" });
+    assert.deepEqual(source.needs, "macos-build");
   });
 
-  test("macos-source builds unsigned, submits, and ends after the upload", () => {
-    const steps = stepsOf(release.jobs["macos-source"]);
+  test("the signing key is gated by the macos-signing environment and never meets build scripts", () => {
+    assert.equal(source.environment, "macos-signing");
+    assert.equal(build.environment, undefined);
+    assert.doesNotMatch(JSON.stringify(build), /secrets\./);
+    assert.equal((releaseText.match(/secrets\./g) ?? []).length, 1);
+    const runsText = stepsOf(source).map(runs).join("\n");
+    assert.doesNotMatch(runsText, /npm |electron-builder|pnpm|yarn/);
+  });
+
+  test("macos-build builds unsigned and hands over the source bundle", () => {
+    assert.equal(build["runs-on"], "macos-14");
+    assert.deepEqual(build.permissions, { contents: "read" });
+    const steps = stepsOf(build);
     const find = (pattern) => steps.find((step) => pattern.test(runs(step)) || pattern.test(step.uses ?? ""));
-    const build = find(/npm run build:electron/);
+    const validate = find(/docs\/releases/);
+    const install = find(/npm ci/);
+    const compile = find(/npm run build:electron/);
     const pack = find(/electron-builder/);
     const bundle = find(/submit-macos\.mjs prepare/);
-    const submit = find(/submit-macos\.mjs submit/);
     const upload = find(/upload-artifact/);
-    assert.ok(build.index < pack.index && pack.index < bundle.index && bundle.index < submit.index && submit.index < upload.index);
+    assert.ok(validate.index < install.index && install.index < compile.index && compile.index < pack.index && pack.index < bundle.index && bundle.index < upload.index);
     assert.match(runs(pack), /--mac/);
     assert.match(runs(pack), /--publish never/);
     assert.doesNotMatch(runs(pack), /--publish always/);
     assert.equal(pack.env.CSC_IDENTITY_AUTO_DISCOVERY, "false");
+    assert.equal(upload.with.name, "signing-source");
+    assert.equal(upload.with.path, "${{ steps.bundle.outputs.work_dir }}/source.zip");
+    assert.equal(steps.at(-1).index, upload.index);
+    assert.equal(build.steps.find((step) => /actions\/checkout/.test(step.uses ?? "")).with["persist-credentials"], false);
+  });
+
+  test("macos-source submits the downloaded bundle and ends after handing the request over", () => {
+    const steps = stepsOf(source);
+    const download = steps.find((step) => /download-artifact/.test(step.uses ?? ""));
+    const submit = steps.find((step) => /submit-macos\.mjs submit/.test(runs(step)));
+    const upload = steps.find((step) => /upload-artifact/.test(step.uses ?? ""));
+    assert.ok(download.index < submit.index && submit.index < upload.index);
+    assert.equal(download.with.name, "signing-source");
+    assert.equal(download.with.path, BUNDLE_DIR);
+    assert.equal(submit.env.INPUT_WORK_DIR, BUNDLE_DIR);
     assert.equal(upload.with.name, "signing-request");
     assert.equal(steps.at(-1).index, upload.index, "the job stops once the request is handed over");
   });
 
-  test("only the submit step receives the signing key and the center address", () => {
-    const steps = stepsOf(release.jobs["macos-source"]);
-    for (const step of steps) {
+  test("only the submit step receives the signing key and no center address comes from repository variables", () => {
+    for (const step of stepsOf(source)) {
       const secrets = JSON.stringify(step.env ?? {});
-      if (/submit-macos\.mjs submit/.test(runs(step))) {
-        assert.match(secrets, /secrets\.SIGNING_API_KEY/);
-        assert.match(secrets, /vars\.SIGNING_URL/);
-      } else {
-        assert.doesNotMatch(secrets, /secrets\./);
-      }
+      if (/submit-macos\.mjs submit/.test(runs(step))) assert.match(secrets, /secrets\.SIGNING_API_KEY/);
+      else assert.doesNotMatch(secrets, /secrets\./);
     }
-    assert.equal((releaseText.match(/secrets\./g) ?? []).length, 1);
+    for (const text of [releaseText, publishText, windowsText]) assert.doesNotMatch(text, /SIGNING_URL|vars\./);
   });
 
   test("the request carries the tag version and the exact commit", () => {
-    const steps = stepsOf(release.jobs["macos-source"]);
+    const steps = [...stepsOf(build), ...stepsOf(source)];
     for (const step of steps.filter((entry) => /submit-macos\.mjs/.test(runs(entry)))) {
       assert.equal(step.env.INPUT_TAG, "${{ github.ref_name }}");
       assert.equal(step.env.INPUT_SOURCE_SHA, "${{ github.sha }}");
     }
   });
 
+  test("the release tag must match the package version and have release notes before anything is built", () => {
+    for (const job of [build, windows.jobs.draft]) {
+      const validate = job.steps.find((step) => /docs\/releases/.test(runs(step)));
+      assert.match(runs(validate), /test -s "docs\/releases\/\$\{RELEASE_TAG\}\.md"/);
+      assert.match(runs(validate), /package\.json'\)\.version"\)" = "\$RELEASE_TAG"/);
+    }
+  });
+
   test("reruns are refused", () => {
-    const first = release.jobs["macos-source"].steps[0];
-    assert.equal(first.if, "${{ github.run_attempt != 1 }}");
-    assert.equal(first.run, "exit 1");
+    for (const job of [build, source]) {
+      assert.equal(job.steps[0].if, "${{ github.run_attempt != 1 }}");
+      assert.equal(job.steps[0].run, "exit 1");
+    }
+  });
+});
+
+describe("Desktop Windows Release workflow", () => {
+  test("is its own tag workflow, so macOS signing does not depend on it", () => {
+    assert.deepEqual(windows.on, { push: { tags: ["v*"] } });
+    assert.deepEqual(windows.permissions, {});
+    assert.deepEqual(Object.keys(windows.jobs), ["draft", "windows", "publish"]);
+    assert.doesNotMatch(windowsText, /secrets\.|workflow_run|needs: macos/);
+  });
+
+  test("builds unsigned and publishes with electron-builder into the draft release", () => {
+    const job = windows.jobs.windows;
+    assert.equal(job["runs-on"], "windows-latest");
+    assert.equal(job.needs, "draft");
+    assert.deepEqual(job.permissions, { contents: "write" });
+    const publishStep = stepsOf(job).find((step) => /electron-builder/.test(runs(step)));
+    assert.match(runs(publishStep), /--win --publish always/);
+    assert.equal(publishStep.env.GH_TOKEN, "${{ github.token }}");
+  });
+
+  test("no checkout keeps the write token, and only release steps receive it", () => {
+    for (const job of Object.values(windows.jobs)) {
+      const checkout = job.steps.find((step) => /actions\/checkout/.test(step.uses ?? ""));
+      assert.equal(checkout.with["persist-credentials"], false);
+      for (const step of job.steps) {
+        const needsToken = /release-draft\.mjs|electron-builder/.test(runs(step));
+        assert.equal(JSON.stringify(step.env ?? {}).includes("github.token"), needsToken, `${job.name}: ${step.name ?? step.uses}`);
+      }
+    }
+  });
+
+  test("the release stays a draft until both platforms uploaded and then a clean job publishes it", () => {
+    assert.equal(builder.publish.releaseType, "draft");
+    const draft = stepsOf(windows.jobs.draft).map(runs).join("\n");
+    const publish = stepsOf(windows.jobs.publish).map(runs).join("\n");
+    assert.match(draft, /release-draft\.mjs ensure/);
+    assert.match(publish, /release-draft\.mjs promote/);
+    assert.equal(windows.jobs.publish.needs, "windows");
+    assert.doesNotMatch(publish, /npm /);
   });
 });
 
@@ -180,6 +249,22 @@ describe("Desktop macOS Publish workflow", () => {
     assert.equal((publishText.match(/secrets\./g) ?? []).length, 2);
   });
 
+  test("the key-bearing jobs are gated by the macos-signing environment", () => {
+    assert.equal(publish.jobs["await-signing"].environment, "macos-signing");
+    assert.equal(publish.jobs.publish.environment, "macos-signing");
+    assert.equal(publish.jobs.resolve.environment, undefined);
+  });
+
+  test("the draft exists before the upload and is published only after the upload is verified", () => {
+    const steps = stepsOf(publish.jobs.publish);
+    const ensure = steps.find((step) => /release-draft\.mjs ensure/.test(runs(step)));
+    const upload = steps.find((step) => /gh release upload/.test(runs(step)));
+    const promote = steps.find((step) => /release-draft\.mjs promote/.test(runs(step)));
+    assert.ok(ensure.index < upload.index && upload.index < promote.index);
+    assert.match(runs(upload), /Release asset was not published/);
+    assert.equal(promote.env.INPUT_TAG, "${{ needs.resolve.outputs.tag }}");
+  });
+
   test("hands over only public request data", () => {
     assert.doesNotMatch(releaseText + publishText, /CSC_(LINK|KEY_PASSWORD|NAME)|BEGIN [A-Z ]*PRIVATE KEY|\.p12|\.p8/i);
   });
@@ -189,5 +274,26 @@ describe("nightly builds", () => {
   test("keep their own release path and do not wait for the signing center", () => {
     assert.match(nightlyText, /gh release create "v\$NIGHTLY_VERSION"/);
     assert.doesNotMatch(nightlyText, /SIGNING_API_KEY|submit-macos|publish-macos/);
+  });
+});
+
+// The center flips the RunAsNode fuse off for every Electron profile, so a signed app cannot be spawned as a plain Node.
+describe("signed Electron app", () => {
+  const shipped = [];
+  const scan = (target) => {
+    if (statSync(target).isFile()) {
+      if (/\.(ts|mjs|cjs|js)$/.test(target)) shipped.push(target);
+      return;
+    }
+    for (const entry of readdirSync(target)) if (entry !== "node_modules" && entry !== ".git") scan(path.join(target, entry));
+  };
+
+  test("no shipped code relies on ELECTRON_RUN_AS_NODE", () => {
+    scan(path.join(root, "src/PiDesktop.Tauri/electron"));
+    for (const resource of builder.extraResources) {
+      if (typeof resource === "object" && resource.from.startsWith("src/")) scan(path.join(root, resource.from));
+    }
+    assert.ok(shipped.length > 20, "the scan covers the main process and the bundled components");
+    assert.deepEqual(shipped.filter((file) => /RUN_AS_NODE/.test(readFileSync(file, "utf8"))).map((file) => path.relative(root, file)), []);
   });
 });

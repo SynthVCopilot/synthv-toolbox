@@ -7,31 +7,8 @@ on:
 permissions: {}
 
 jobs:
-  windows:
-    name: Publish Windows
-    runs-on: windows-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "22.19.0"
-          cache: npm
-          cache-dependency-path: src/PiDesktop.Tauri/package-lock.json
-      - name: Install desktop dependencies
-        working-directory: src/PiDesktop.Tauri
-        run: npm ci --no-audit --no-fund
-      - name: Build desktop assets
-        working-directory: src/PiDesktop.Tauri
-        run: npm run build:electron
-      - name: Package and publish update artifacts
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: npm exec --prefix src/PiDesktop.Tauri -- electron-builder --config electron-builder.yml --win --publish always
-
-  macos-source:
-    name: macos-source
+  macos-build:
+    name: macos-build
     runs-on: macos-14
     timeout-minutes: 60
     permissions:
@@ -43,6 +20,12 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - name: Validate release metadata
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          test -s "docs/releases/${RELEASE_TAG}.md"
+          test "v$(node -p "require('./src/PiDesktop.Tauri/package.json').version")" = "$RELEASE_TAG"
       - uses: actions/setup-node@v6
         with:
           node-version: "22.19.0"
@@ -64,14 +47,46 @@ jobs:
           INPUT_TAG: ${{ github.ref_name }}
           INPUT_SOURCE_SHA: ${{ github.sha }}
         run: node .github/scripts/submit-macos.mjs prepare
+      - name: Hand the source bundle to the submit job
+        uses: actions/upload-artifact@v4
+        with:
+          name: signing-source
+          path: ${{ steps.bundle.outputs.work_dir }}/source.zip
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
+  # The signing key lives only in this job; it never runs dependency install or build scripts.
+  macos-source:
+    name: macos-source
+    needs: macos-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: macos-signing
+    permissions:
+      contents: read
+    steps:
+      - name: Reject workflow reruns
+        if: ${{ github.run_attempt != 1 }}
+        run: exit 1
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22.19.0"
+      - name: Download source bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: signing-source
+          path: ${{ runner.temp }}/toolbox-sign-${{ github.run_id }}-bundle
       - name: Submit to signing center
         id: submit
         env:
-          SIGNING_URL: ${{ vars.SIGNING_URL }}
           SIGNING_API_KEY: ${{ secrets.SIGNING_API_KEY }}
           INPUT_TAG: ${{ github.ref_name }}
           INPUT_SOURCE_SHA: ${{ github.sha }}
-          INPUT_WORK_DIR: ${{ steps.bundle.outputs.work_dir }}
+          INPUT_WORK_DIR: ${{ runner.temp }}/toolbox-sign-${{ github.run_id }}-bundle
         run: node .github/scripts/submit-macos.mjs submit
       - name: Hand the request to the publish workflow
         uses: actions/upload-artifact@v4

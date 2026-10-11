@@ -179,7 +179,7 @@ async function centerJson(fetchImpl, url, apiKey, body, extraHeaders = {}, timeo
   return readJsonBody(response, 'SIGNING_REQUEST_FAILED');
 }
 
-// The plan and complete calls are idempotent on the center, so a lost response can be asked for again.
+// The create, plan and complete calls are idempotent on the center, so a lost response can be asked for again.
 async function centerRetry(sleep, call) {
   for (let attempt = 1; ; attempt += 1) {
     try { return await call(); } catch (error) {
@@ -229,8 +229,8 @@ async function uploadParts(fetchImpl, sleep, base, apiKey, file, bundle) {
   }
 }
 
-export async function submitSource({ env = process.env, fetchImpl = fetch, sleep = defaultSleep } = {}) {
-  const endpoint = signEndpoint(env);
+export async function submitSource({ env = process.env, fetchImpl = fetch, sleep = defaultSleep, signingOrigin } = {}) {
+  const endpoint = signEndpoint(signingOrigin);
   const runId = requireRunId(env.GITHUB_RUN_ID);
   requireFirstAttempt(env);
   const version = stableVersion(env.INPUT_TAG);
@@ -256,7 +256,8 @@ export async function submitSource({ env = process.env, fetchImpl = fetch, sleep
     version,
     source_sha: sourceSha,
   };
-  const created = await centerJson(fetchImpl, endpoint, apiKey, body, { 'idempotency-key': `${PROJECT_ID}-${runId}-1` });
+  const idempotencyKey = { 'idempotency-key': `${PROJECT_ID}-${runId}-1` };
+  const created = await centerRetry(sleep, () => centerJson(fetchImpl, endpoint, apiKey, body, idempotencyKey));
   if (typeof created.request_id !== 'string' || !UUID.test(created.request_id)) throw new ToolError('SIGNING_REQUEST_FAILED');
   if (created.state !== 'accepted_waiting_source') {
     if (created.state !== 'awaiting_upload') throw new ToolError('SIGNING_REQUEST_FAILED');
@@ -286,14 +287,14 @@ export async function writeContext(result, { env = process.env } = {}) {
   return dir;
 }
 
-export async function main(args = process.argv.slice(2), { env = process.env, stderr = process.stderr, fetchImpl = fetch, sleep = defaultSleep, exec = defaultExec } = {}) {
+export async function main(args = process.argv.slice(2), { env = process.env, stderr = process.stderr, fetchImpl = fetch, sleep = defaultSleep, exec = defaultExec, signingOrigin } = {}) {
   try {
     if (args.length !== 1 || !['prepare', 'submit'].includes(args[0])) throw new ToolError('INVALID_COMMAND');
     if (args[0] === 'prepare') {
       const { workDir, version } = await prepare({ env, exec });
       await writeOutputs(env, { work_dir: workDir, version });
     } else {
-      const result = await submitSource({ env, fetchImpl, sleep });
+      const result = await submitSource({ env, fetchImpl, sleep, signingOrigin });
       await writeOutputs(env, { request_id: result.request_id, context_dir: await writeContext(result, { env }) });
     }
     return 0;

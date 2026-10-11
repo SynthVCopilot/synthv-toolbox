@@ -1,16 +1,11 @@
 #!/usr/bin/env node
 import { cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-const args = process.argv.slice(2);
-const targetIndex = args.indexOf("--target");
-const target = targetIndex >= 0 ? args[targetIndex + 1] : process.env.SYNTHV_SV1_SCRIPTS_DIR;
-if (!target) {
-  console.error("Usage: npm run install:sv1-legacy -- --target <SV1 scripts directory>");
-  process.exitCode = 2;
-} else {
+export async function installSv1LegacyBridge({ target, log = console.log }) {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const source = path.join(root, "legacy-sv1", "synthv", "SynthVAgentBridgeSV1Legacy.lua");
   const destination = path.join(path.resolve(target), "SynthV Agent Bridge SV1 Legacy");
@@ -22,5 +17,17 @@ if (!target) {
   if ((await readFile(staged, "utf8")) !== expected) throw new Error("Staged SV1 legacy executor verification failed.");
   await rename(staged, output).catch(async () => { await rm(output, { force: true }); await rename(staged, output); });
   await writeFile(path.join(destination, "INSTALLATION.txt"), "Run Scripts > Rescan in Synthesizer V Studio Pro 1.11.2, then start SynthV Agent Bridge SV1 Legacy.\n", "utf8");
-  console.log(`Installed SV1 legacy Bridge at ${output}`);
+  log(`Installed SV1 legacy Bridge at ${output}`);
+}
+
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const args = process.argv.slice(2);
+  const targetIndex = args.indexOf("--target");
+  const target = targetIndex >= 0 ? args[targetIndex + 1] : process.env.SYNTHV_SV1_SCRIPTS_DIR;
+  if (!target) {
+    console.error("Usage: npm run install:sv1-legacy -- --target <SV1 scripts directory>");
+    process.exitCode = 2;
+  } else {
+    await installSv1LegacyBridge({ target });
+  }
 }

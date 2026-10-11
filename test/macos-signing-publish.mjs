@@ -23,6 +23,8 @@ const SHA = "0123456789abcdef0123456789abcdef01234567";
 const REQUEST_ID = "6f1d0c2e-3b4a-4c5d-8e9f-a0b1c2d3e4f5";
 const NOTARIZATION_ID = "11111111-2222-4333-8444-555555555555";
 const INPUT_DIGEST = `sha256:${"b".repeat(64)}`;
+// The final stage consumes the previous stage output, so its report names a different digest than the request.
+const REPORT_INPUT_DIGEST = `sha256:${"a".repeat(64)}`;
 const temps = [];
 after(async () => { await Promise.all(temps.map((dir) => rm(dir, { recursive: true, force: true }))); });
 const temp = (prefix) => { const dir = mkdtempSync(path.join(tmpdir(), prefix)); temps.push(dir); return dir; };
@@ -94,7 +96,7 @@ describe("signing request hand-off", () => {
 });
 
 // A signing center status and download surface as described in the center README.
-async function startCenter({ states = [], archive = Buffer.from("signed-archive"), digest = null, headerDigest = null, cutFirstDownload = false, downloadStatus = null, overrides = {} } = {}) {
+async function startCenter({ states = [], archive = Buffer.from("signed-archive"), digest = null, headerDigest = null, cutFirstDownload = false, downloadStatus = null, overrides = {}, statusReport = { input_digest: REPORT_INPUT_DIGEST } } = {}) {
   const log = { ranges: [], statusCalls: 0, downloads: 0 };
   const queue = [...states];
   const archiveDigest = digest ?? `sha256:${sha256Hex(archive)}`;
@@ -106,7 +108,7 @@ async function startCenter({ states = [], archive = Buffer.from("signed-archive"
       const body = {
         request_id: REQUEST_ID, project_id: PROJECT, state, platform: "macos", version: "1.2.3", source_run_id: 77, source_sha: SHA,
         input_digest: INPUT_DIGEST, retry_after_seconds: 30, error: state === "failed" ? "notarization_rejected" : null,
-        output: state === "succeeded" ? { archive_digest: archiveDigest, archive_size: archive.length } : null, ...overrides,
+        output: state === "succeeded" ? { archive_digest: archiveDigest, archive_size: archive.length, report: statusReport } : null, ...overrides,
       };
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(body));
@@ -138,7 +140,7 @@ async function startCenter({ states = [], archive = Buffer.from("signed-archive"
 }
 
 const signingEnv = (center, extra = {}) => ({
-  SIGNING_URL: center.url, SIGNING_API_KEY: "test-key", INPUT_BUILD_RUN_ID: "77", INPUT_VERSION: "1.2.3", INPUT_SOURCE_SHA: SHA,
+  SIGNING_API_KEY: "test-key", INPUT_BUILD_RUN_ID: "77", INPUT_VERSION: "1.2.3", INPUT_SOURCE_SHA: SHA,
   INPUT_REQUEST_ID: REQUEST_ID, INPUT_INPUT_DIGEST: INPUT_DIGEST, ...extra,
 });
 
@@ -148,7 +150,7 @@ describe("waiting for notarization", () => {
     try {
       const seen = [];
       const waits = [];
-      await awaitSigning({ env: signingEnv(center), sleep: async (ms) => { waits.push(ms); }, log: (line) => seen.push(line) });
+      await awaitSigning({ env: signingEnv(center), signingOrigin: center.url, sleep: async (ms) => { waits.push(ms); }, log: (line) => seen.push(line) });
       assert.equal(center.log.statusCalls, 3);
       assert.deepEqual(seen, ["state: accepted_waiting_source", "state: running", "state: succeeded"]);
       assert.ok(waits.every((ms) => ms >= 15_000 && ms <= 300_000));
@@ -158,7 +160,7 @@ describe("waiting for notarization", () => {
   test("a failed request stops the release with the center's error code", async () => {
     const center = await startCenter({ states: ["running", "failed"] });
     try {
-      await assert.rejects(awaitSigning({ env: signingEnv(center), sleep: noSleep, log: () => {} }), { code: "SIGNING_FAILED", detail: "notarization_rejected" });
+      await assert.rejects(awaitSigning({ env: signingEnv(center), signingOrigin: center.url, sleep: noSleep, log: () => {} }), { code: "SIGNING_FAILED", detail: "notarization_rejected" });
     } finally { await center.close(); }
   });
 
@@ -166,7 +168,7 @@ describe("waiting for notarization", () => {
     const center = await startCenter({ states: ["running"] });
     let clock = 0;
     try {
-      await assert.rejects(awaitSigning({ env: signingEnv(center, { INPUT_TIMEOUT_SECONDS: "100" }), sleep: async (ms) => { clock += ms; }, now: () => clock, log: () => {} }), { code: "SIGNING_TIMEOUT" });
+      await assert.rejects(awaitSigning({ env: signingEnv(center, { INPUT_TIMEOUT_SECONDS: "100" }), signingOrigin: center.url, sleep: async (ms) => { clock += ms; }, now: () => clock, log: () => {} }), { code: "SIGNING_TIMEOUT" });
     } finally { await center.close(); }
   });
 
@@ -174,27 +176,41 @@ describe("waiting for notarization", () => {
     for (const overrides of [{ source_run_id: 78 }, { version: "1.2.4" }, { source_sha: "f".repeat(40) }, { input_digest: `sha256:${"c".repeat(64)}` }, { project_id: "iris-shell-arm64" }, { request_id: "7f1d0c2e-3b4a-4c5d-8e9f-a0b1c2d3e4f5" }]) {
       const center = await startCenter({ states: ["succeeded"], overrides });
       try {
-        await assert.rejects(awaitSigning({ env: signingEnv(center), sleep: noSleep, log: () => {} }), { code: "SIGNING_REQUEST_MISMATCH" });
+        await assert.rejects(awaitSigning({ env: signingEnv(center), signingOrigin: center.url, sleep: noSleep, log: () => {} }), { code: "SIGNING_REQUEST_MISMATCH" });
       } finally { await center.close(); }
     }
+  });
+
+  test("refuses a succeeded status without the report input digest", async () => {
+    const center = await startCenter({ states: ["succeeded"], statusReport: {} });
+    try {
+      await assert.rejects(awaitSigning({ env: signingEnv(center), signingOrigin: center.url, sleep: noSleep, log: () => {} }), { code: "SIGNING_OUTPUT_INVALID" });
+    } finally { await center.close(); }
+  });
+
+  test("the signing center address is fixed in code and cannot be redirected by the environment", async () => {
+    const urls = [];
+    const fetchImpl = async (url) => { urls.push(url); return new Response("{}", { status: 401 }); };
+    await assert.rejects(awaitSigning({ env: { ...signingEnv({}), SIGNING_URL: "https://attacker.example" }, fetchImpl, sleep: noSleep, log: () => {} }), { code: "SIGNING_AUTH_FAILED" });
+    assert.deepEqual(urls, [`https://sign.voidcarve.com/v1/requests/${REQUEST_ID}`]);
   });
 
   test("a rejected key is final", async () => {
     const center = await startCenter({ states: ["running"] });
     try {
-      await assert.rejects(awaitSigning({ env: signingEnv(center, { SIGNING_API_KEY: "wrong" }), sleep: noSleep, log: () => {} }), { code: "SIGNING_AUTH_FAILED" });
+      await assert.rejects(awaitSigning({ env: signingEnv(center, { SIGNING_API_KEY: "wrong" }), signingOrigin: center.url, sleep: noSleep, log: () => {} }), { code: "SIGNING_AUTH_FAILED" });
     } finally { await center.close(); }
   });
 });
 
 const report = (overrides = {}, files = {}) => ({
-  schema_version: 1, request_id: REQUEST_ID, generation: 4, stage: "dmg_finalize", input_digest: INPUT_DIGEST, recipe_sha: "d".repeat(40),
+  schema_version: 1, request_id: REQUEST_ID, generation: 4, stage: "dmg_finalize", input_digest: REPORT_INPUT_DIGEST, recipe_sha: "d".repeat(40),
   policy_digest: `sha256:${"e".repeat(64)}`, team_id: TEAM_ID, bundle_id: BUNDLE_ID, version: "1.2.3", architecture: "arm64",
   codesign_verified: true, timestamp_verified: true, asar_integrity_verified: true, notarization_id: NOTARIZATION_ID, notarization_status: "Accepted",
   notary_archive_sha256: "f".repeat(64), gatekeeper_verified: true, staple_verified: true,
   files: [{ path: "product.dmg", size: 16, sha256: sha256Hex("signed-dmg-bytes"), ...files }], ...overrides,
 });
-const expectedReport = { requestId: REQUEST_ID, version: "1.2.3", inputDigest: INPUT_DIGEST, productSize: 16, productSha256: sha256Hex("signed-dmg-bytes") };
+const expectedReport = { requestId: REQUEST_ID, version: "1.2.3", inputDigest: REPORT_INPUT_DIGEST, productSize: 16, productSha256: sha256Hex("signed-dmg-bytes") };
 
 describe("verification report", () => {
   test("accepts the final disk image report for this request", () => {
@@ -205,6 +221,7 @@ describe("verification report", () => {
     ["another team", { team_id: "ABCDE12345" }],
     ["another bundle id", { bundle_id: "io.example.other" }],
     ["another input digest", { input_digest: `sha256:${"0".repeat(64)}` }],
+    ["the request digest instead of the stage input digest", { input_digest: INPUT_DIGEST }],
     ["another request", { request_id: "7f1d0c2e-3b4a-4c5d-8e9f-a0b1c2d3e4f5" }],
     ["another version", { version: "1.2.4" }],
     ["another architecture", { architecture: "x64" }],
@@ -321,7 +338,7 @@ describe("fetching the signed image", () => {
   const fetchWith = async (center, { exec = macTools().exec, env = {} } = {}) => {
     const runnerTemp = temp("toolbox-fetch-");
     const dir = await fetchSigned({
-      env: { ...signingEnv(center), GITHUB_RUN_ID: "88", RUNNER_TEMP: runnerTemp, ...env }, exec, sleep: noSleep, now: () => Date.UTC(2026, 9, 11, 10, 0, 0),
+      env: { ...signingEnv(center), GITHUB_RUN_ID: "88", RUNNER_TEMP: runnerTemp, ...env }, signingOrigin: center.url, exec, sleep: noSleep, now: () => Date.UTC(2026, 9, 11, 10, 0, 0),
     });
     return { dir, runnerTemp };
   };

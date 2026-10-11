@@ -81,7 +81,7 @@ export async function readContext({ env = process.env } = {}) {
 
 // Signing center access.
 
-function signingInputs(env) {
+function signingInputs(env, signingOrigin) {
   const buildRunId = requireRunId(env.INPUT_BUILD_RUN_ID);
   const version = env.INPUT_VERSION;
   const sourceSha = env.INPUT_SOURCE_SHA;
@@ -91,7 +91,7 @@ function signingInputs(env) {
   const requestId = env.INPUT_REQUEST_ID;
   const digest = env.INPUT_INPUT_DIGEST;
   if (!UUID.test(requestId ?? '') || !ARCHIVE_DIGEST.test(digest ?? '')) throw new ToolError('INVALID_INPUT');
-  return { buildRunId, version, sourceSha, apiKey, requestId, digest, endpoint: signEndpoint(env) };
+  return { buildRunId, version, sourceSha, apiKey, requestId, digest, endpoint: signEndpoint(signingOrigin) };
 }
 
 async function signingStatus({ fetchImpl }, inputs) {
@@ -124,11 +124,13 @@ function interpretStatus(body) {
   if (body.state !== 'succeeded') return null;
   const output = body.output;
   if (!output || !ARCHIVE_DIGEST.test(output.archive_digest ?? '') || !Number.isSafeInteger(output.archive_size) || output.archive_size < 1) throw new ToolError('SIGNING_OUTPUT_INVALID');
-  return { digest: output.archive_digest, size: output.archive_size };
+  const reportInputDigest = output.report?.input_digest;
+  if (!ARCHIVE_DIGEST.test(reportInputDigest ?? '')) throw new ToolError('SIGNING_OUTPUT_INVALID');
+  return { digest: output.archive_digest, size: output.archive_size, reportInputDigest };
 }
 
-export async function awaitSigning({ env = process.env, fetchImpl = fetch, sleep = defaultSleep, now = Date.now, log = (line) => process.stdout.write(`${line}\n`) } = {}) {
-  const inputs = signingInputs(env);
+export async function awaitSigning({ env = process.env, fetchImpl = fetch, sleep = defaultSleep, now = Date.now, log = (line) => process.stdout.write(`${line}\n`), signingOrigin } = {}) {
+  const inputs = signingInputs(env, signingOrigin);
   const timeoutMs = Number(env.INPUT_TIMEOUT_SECONDS ?? 10800) * 1000;
   if (!(timeoutMs > 0)) throw new ToolError('INVALID_INPUT');
   const deadline = now() + timeoutMs;
@@ -154,6 +156,7 @@ export async function awaitSigning({ env = process.env, fetchImpl = fetch, sleep
 const REPORT_KEYS = ['schema_version', 'request_id', 'generation', 'stage', 'input_digest', 'recipe_sha', 'policy_digest', 'team_id', 'bundle_id', 'version', 'architecture',
   'codesign_verified', 'timestamp_verified', 'asar_integrity_verified', 'notarization_id', 'notarization_status', 'notary_archive_sha256', 'gatekeeper_verified', 'staple_verified', 'files'];
 
+// The final stage consumes the previous stage's output, so its input digest is not the request's digest; the status report is the reference.
 export function validateVerification(report, { requestId, version, inputDigest, productSize, productSha256 }) {
   const ok = report !== null && typeof report === 'object' && !Array.isArray(report)
     && Object.keys(report).length === REPORT_KEYS.length && REPORT_KEYS.every((key) => Object.hasOwn(report, key))
@@ -322,8 +325,8 @@ async function describe(file, name, version) {
   return { name, version, size: sha512.size, sha512: sha512.hash.digest('base64') };
 }
 
-export async function fetchSigned({ env = process.env, fetchImpl = fetch, sleep = defaultSleep, now = Date.now, exec = defaultExec } = {}) {
-  const inputs = signingInputs(env);
+export async function fetchSigned({ env = process.env, fetchImpl = fetch, sleep = defaultSleep, now = Date.now, exec = defaultExec, signingOrigin } = {}) {
+  const inputs = signingInputs(env, signingOrigin);
   const runId = requireRunId(env.GITHUB_RUN_ID);
   if (!env.RUNNER_TEMP || !path.isAbsolute(env.RUNNER_TEMP)) throw new ToolError('TEMP_UNAVAILABLE');
   const names = assetNames(inputs.version);
@@ -348,7 +351,7 @@ export async function fetchSigned({ env = process.env, fetchImpl = fetch, sleep 
   const sha256 = await hashFile(product);
   let report;
   try { report = JSON.parse(await readFile(reportFile, 'utf8')); } catch { throw new ToolError('VERIFICATION_REPORT_INVALID'); }
-  validateVerification(report, { requestId: inputs.requestId, version: inputs.version, inputDigest: inputs.digest, productSize: sha256.size, productSha256: sha256.hash.digest('hex') });
+  validateVerification(report, { requestId: inputs.requestId, version: inputs.version, inputDigest: expected.reportInputDigest, productSize: sha256.size, productSha256: sha256.hash.digest('hex') });
   const zip = path.join(out, names.zip);
   await verifyMacos({ exec, dmg: product, version: inputs.version, zip, tmpRoot: env.RUNNER_TEMP });
   await copyFile(product, path.join(out, names.dmg));
@@ -372,7 +375,7 @@ export async function main(args = process.argv.slice(2), deps = {}) {
   try {
     const [command] = args;
     if (args.length !== 1 || !['resolve', 'context', 'await', 'fetch'].includes(command)) throw new ToolError('INVALID_COMMAND');
-    const injected = { env, fetchImpl: deps.fetchImpl, sleep: deps.sleep, now: deps.now, exec: deps.exec, log: deps.log };
+    const injected = { env, fetchImpl: deps.fetchImpl, sleep: deps.sleep, now: deps.now, exec: deps.exec, log: deps.log, signingOrigin: deps.signingOrigin };
     const defined = Object.fromEntries(Object.entries(injected).filter(([, value]) => value !== undefined));
     if (command === 'resolve') {
       const run = await resolve(defined);

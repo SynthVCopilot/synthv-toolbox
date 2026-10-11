@@ -41,9 +41,10 @@ export function stableVersion(tag) {
   return match[1];
 }
 
-/** Returns the origin-only signing center URL joined with the requests path. */
-export function signEndpoint(env) {
-  const origin = (env.SIGNING_URL ?? '').replace(/\/+$/, '');
+export const SIGNING_ORIGIN = 'https://sign.voidcarve.com';
+
+/** Joins the requests path onto the signing center origin; the origin is fixed in code, not configurable per repository. */
+export function signEndpoint(origin = SIGNING_ORIGIN) {
   const secure = /^https:\/\/[A-Za-z0-9.-]+(?::\d+)?$/.test(origin);
   // The loopback form lets contract tests run against a local mock server.
   const loopback = /^http:\/\/127\.0\.0\.1:\d+$/.test(origin);

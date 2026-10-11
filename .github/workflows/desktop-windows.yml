@@ -1,0 +1,78 @@
+name: Desktop Windows Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  draft:
+    name: Create draft release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Validate release metadata
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          test -s "docs/releases/${RELEASE_TAG}.md"
+          test "v$(node -p "require('./src/PiDesktop.Tauri/package.json').version")" = "$RELEASE_TAG"
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ github.ref_name }}
+        run: node .github/scripts/release-draft.mjs ensure
+
+  windows:
+    name: Publish Windows
+    needs: draft
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22.19.0"
+          cache: npm
+          cache-dependency-path: src/PiDesktop.Tauri/package-lock.json
+      - name: Install desktop dependencies
+        working-directory: src/PiDesktop.Tauri
+        run: npm ci --no-audit --no-fund
+      - name: Build desktop assets
+        working-directory: src/PiDesktop.Tauri
+        run: npm run build:electron
+      - name: Package and publish update artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: npm exec --prefix src/PiDesktop.Tauri -- electron-builder --config electron-builder.yml --win --publish always
+
+  publish:
+    name: Publish release when complete
+    needs: windows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Publish the release once macOS assets are present
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ github.ref_name }}
+        run: node .github/scripts/release-draft.mjs promote

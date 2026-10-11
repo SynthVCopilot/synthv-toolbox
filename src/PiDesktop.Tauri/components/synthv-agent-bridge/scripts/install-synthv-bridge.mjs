@@ -10,6 +10,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -144,10 +145,7 @@ async function installScriptsAtomically(
   return expectedHashes;
 }
 
-async function requestHotReload() {
-  const ipcDirectory = path.resolve(
-    process.env.SYNTHV_AGENT_BRIDGE_DIR?.trim() || os.tmpdir(),
-  );
+async function requestHotReload(ipcDirectory, log, warn) {
   const prefix = path.join(ipcDirectory, "synthv-agent-bridge");
   const statusFile = `${prefix}.status.json`;
   const reloadFile = `${prefix}.reload`;
@@ -163,16 +161,16 @@ async function requestHotReload() {
     status?.state === "running" &&
     ageMs <= Math.max(60_000, statusStaleMs * 12);
   if (status?.state !== "running" || (!recoverableStaleSession && ageMs > statusStaleMs)) {
-    console.log(
+    log(
       "Bridge is not currently connected. Run Scripts → SynthV Agent Bridge → Start SynthV Agent Bridge once.",
     );
-    console.log(
+    log(
       "Use npm run doctor -- --target <SynthV scripts directory> for a full local diagnosis.",
     );
     return "offline";
   }
   if (ageMs > statusStaleMs) {
-    console.log(
+    log(
       `Bridge heartbeat is ${Math.round(ageMs)} ms old; attempting a recovery reload before requiring manual startup.`,
     );
   }
@@ -188,20 +186,17 @@ async function requestHotReload() {
       typeof updated.sessionToken === "string" &&
       updated.sessionToken !== previousSessionToken
     ) {
-      console.log("Running SynthV Agent Bridge hot-reloaded successfully.");
+      log("Running SynthV Agent Bridge hot-reloaded successfully.");
       return "reloaded";
     }
   }
-  console.warn(
+  warn(
     "Hot reload was requested but not confirmed. If this Bridge predates hot-reload support, restart it manually once.",
   );
   return "unconfirmed";
 }
 
-async function writeInstallManifest(scriptFile, buildIdentity) {
-  const ipcDirectory = path.resolve(
-    process.env.SYNTHV_AGENT_BRIDGE_DIR?.trim() || os.tmpdir(),
-  );
+async function writeInstallManifest(ipcDirectory, scriptFile, buildIdentity) {
   await mkdir(ipcDirectory, { recursive: true });
   const installFile = path.join(
     ipcDirectory,
@@ -223,32 +218,22 @@ async function writeInstallManifest(scriptFile, buildIdentity) {
   );
 }
 
-const argumentsList = process.argv.slice(2);
-const targetFlagIndex = argumentsList.indexOf("--target");
-const reloadEnabled = !argumentsList.includes("--no-reload");
-const installSidebar = !argumentsList.includes("--without-sidebar");
-if (targetFlagIndex >= 0 && !argumentsList[targetFlagIndex + 1]) {
-  usage();
-  process.exit(2);
-}
-
-const suppliedTarget =
-  targetFlagIndex >= 0
-    ? argumentsList[targetFlagIndex + 1]
-    : process.env.SYNTHV_SCRIPTS_DIR;
-
-if (!suppliedTarget) {
-  usage();
-  process.exitCode = 2;
-} else {
+export async function installSynthvBridge({
+  target,
+  reload = true,
+  sidebar = true,
+  ipcDirectory,
+  log = console.log,
+  warn = console.warn,
+}) {
   const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const packageManifest = JSON.parse(
     await readFile(path.join(repositoryRoot, "package.json"), "utf8"),
   );
   const componentIdentity =
-    await readComponentBuildIdentity(repositoryRoot, { includeSidebar: installSidebar });
+    await readComponentBuildIdentity(repositoryRoot, { includeSidebar: sidebar });
   const sourceDirectory = path.join(repositoryRoot, "synthv");
-  const destinationDirectory = path.resolve(suppliedTarget, "SynthV Agent Bridge");
+  const destinationDirectory = path.resolve(target, "SynthV Agent Bridge");
   const destinationBridgeFile = path.join(
     destinationDirectory,
     "SynthVAgentBridge.lua",
@@ -260,7 +245,7 @@ if (!suppliedTarget) {
     installedBridgeBefore !== sourceBridge;
   let sidebarChanged = false;
   let sourceSidebar;
-  if (installSidebar) {
+  if (sidebar) {
     const destinationSidebarFile = path.join(
       destinationDirectory,
       "SynthVAgentSidebar.lua",
@@ -275,7 +260,7 @@ if (!suppliedTarget) {
   const installedFiles = [
     "SynthVAgentBridge.lua",
     "StopSynthVAgentBridge.lua",
-    ...(installSidebar ? ["SynthVAgentSidebar.lua"] : []),
+    ...(sidebar ? ["SynthVAgentSidebar.lua"] : []),
   ];
   await mkdir(destinationDirectory, { recursive: true });
   const installedHashes = await installScriptsAtomically(
@@ -284,50 +269,77 @@ if (!suppliedTarget) {
     installedFiles,
     {
       "SynthVAgentBridge.lua": sourceBridge,
-      ...(installSidebar
+      ...(sidebar
         ? { "SynthVAgentSidebar.lua": sourceSidebar }
         : {}),
     },
   );
   await writeInstallManifest(
+    ipcDirectory,
     path.join(destinationDirectory, "SynthVAgentBridge.lua"),
     {
       packageVersion: packageManifest.version,
       protocolVersion: 3,
       executorBuildId: componentIdentity.executorBuildId,
-      sidebarBuildId: installSidebar
+      sidebarBuildId: sidebar
         ? componentIdentity.sidebarBuildId
         : null,
       executorSourceFingerprint:
         componentIdentity.executorSourceFingerprint,
-      sidebarSourceFingerprint: installSidebar
+      sidebarSourceFingerprint: sidebar
         ? componentIdentity.sidebarSourceFingerprint
         : null,
       installedFiles: installedHashes,
     },
   );
-  console.log(`Installed SynthV Agent Bridge scripts to ${destinationDirectory}`);
-  const reloadResult = reloadEnabled
-    ? await requestHotReload()
+  log(`Installed SynthV Agent Bridge scripts to ${destinationDirectory}`);
+  const reloadResult = reload
+    ? await requestHotReload(ipcDirectory, log, warn)
     : "disabled";
   if (bridgeChanged) {
-    console.log(
+    log(
       reloadResult === "reloaded"
         ? "The Bridge runtime changed. Hot reload updated the current session, but SynthV may reuse cached menu-script code after a project or app restart. Before the next manual start, choose Scripts → Rescan, then start SynthV Agent Bridge once."
         : "The Bridge runtime changed. Choose Scripts → Rescan, then start SynthV Agent Bridge once so SynthV does not reuse cached menu-script code.",
     );
   }
-  if (!installSidebar) {
-    console.log(
+  if (!sidebar) {
+    log(
       "Skipped the optional side-panel script. An existing installed sidebar, if any, was left unchanged.",
     );
   } else if (sidebarChanged) {
-    console.log(
+    log(
       "The side-panel script changed. Close and reopen SynthV to reload the native side-panel layout; Rescan alone may leave an already-rendered panel unchanged. Then run Scripts → SynthV Agent Bridge → Start SynthV Agent Bridge once.",
     );
   } else {
-    console.log(
+    log(
       "The installed side-panel script is unchanged.",
     );
+  }
+}
+
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const argumentsList = process.argv.slice(2);
+  const targetFlagIndex = argumentsList.indexOf("--target");
+  if (targetFlagIndex >= 0 && !argumentsList[targetFlagIndex + 1]) {
+    usage();
+    process.exit(2);
+  }
+  const target =
+    targetFlagIndex >= 0
+      ? argumentsList[targetFlagIndex + 1]
+      : process.env.SYNTHV_SCRIPTS_DIR;
+  if (!target) {
+    usage();
+    process.exitCode = 2;
+  } else {
+    await installSynthvBridge({
+      target,
+      reload: !argumentsList.includes("--no-reload"),
+      sidebar: !argumentsList.includes("--without-sidebar"),
+      ipcDirectory: path.resolve(
+        process.env.SYNTHV_AGENT_BRIDGE_DIR?.trim() || os.tmpdir(),
+      ),
+    });
   }
 }

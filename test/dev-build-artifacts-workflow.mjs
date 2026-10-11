@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const read = (filename) => readFileSync(join(root, filename), "utf8").replace(/\r\n/g, "\n");
 const release = read(".github/workflows/desktop.yml");
+const windows = read(".github/workflows/desktop-windows.yml");
 const development = read(".github/workflows/ffmpeg-verify.yml");
 const prepare = read(".github/workflows/prepare-desktop.yml");
 const packageJson = JSON.parse(read("src/PiDesktop.Tauri/package.json"));
@@ -14,18 +15,21 @@ const verifyJob = development.slice(development.indexOf("  verify:"), developmen
 const nightlyReleaseJob = development.slice(development.indexOf("  prepare-nightly-release:"), development.indexOf("  publish-nightly:"));
 const nightlyJob = development.slice(development.indexOf("  publish-nightly:"));
 
-for (const workflow of [release, development]) {
+for (const workflow of [release, windows, development]) {
   assert.match(workflow, /actions\/setup-node@v6/);
   assert.match(workflow, /npm ci --no-audit --no-fund/);
   assert.match(workflow, /npm run build/);
   assert.match(workflow, /npm exec --prefix src\/PiDesktop\.Tauri -- electron-builder --config electron-builder\.yml/);
-  assert.doesNotMatch(workflow, /cargo |tauri |tauri-action|download-artifact|nightly-release\.mjs/);
+  assert.doesNotMatch(workflow, /cargo |tauri |tauri-action|nightly-release\.mjs/);
 }
+assert.doesNotMatch(development, /download-artifact/);
+assert.deepEqual([...release.matchAll(/download-artifact@v4\n\s+with:\n\s+name: (\S+)/g)].map((match) => match[1]), ["signing-source"]);
 assert.doesNotMatch(release, /gh release/);
 
 assert.match(release, /tags: \["v\*"\]/);
-assert.match(release, /GH_TOKEN: \$\{\{ github\.token \}\}/);
-assert.match(release, /--win --publish always/);
+assert.match(windows, /GH_TOKEN: \$\{\{ github\.token \}\}/);
+assert.match(windows, /--win --publish always/);
+assert.match(windows, /persist-credentials: false/);
 assert.match(release, /--mac --arm64 --publish never/);
 assert.doesNotMatch(release, /CSC_(LINK|KEY_PASSWORD|NAME)|Validate code-signing environment|Missing code-signing environment/);
 assert.match(release, /^  macos-source:\n    name: macos-source$/m);
