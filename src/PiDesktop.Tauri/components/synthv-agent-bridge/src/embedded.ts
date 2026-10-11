@@ -49,10 +49,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const MAX_REPORTED_ISSUES = 8;
+
 function failedOutcomeEnvelope(
   code: string,
   message: string,
   phase: string,
+  details?: unknown,
 ): string {
   return JSON.stringify({
     outcome: "failed",
@@ -60,7 +63,7 @@ function failedOutcomeEnvelope(
     wrote: false,
     undoRequired: false,
     retry: "correct_request",
-    error: { code, message },
+    error: details === undefined ? { code, message } : { code, message, details },
   });
 }
 
@@ -94,6 +97,13 @@ function buildTool(
             "INVALID_ARGUMENT",
             `Invalid arguments for ${name}`,
             "accepted",
+            {
+              issues: parsed.error.issues.slice(0, MAX_REPORTED_ISSUES).map((issue) => ({
+                path: issue.path.map(String),
+                code: issue.code,
+                message: issue.message.slice(0, 200),
+              })),
+            },
           ),
           isError: true,
         };
@@ -121,6 +131,7 @@ function classifyFromCore(
   if (name === "sv_command") {
     const action = typeof args.action === "string" ? args.action : undefined;
     const commandArgs = isRecord(args.args) ? args.args : {};
+    // A missing or unknown action is rejected by the bridge itself, so it must not queue an approval.
     let risk: EmbeddedBridgeRisk = "normal";
     if (action !== undefined) {
       try {
