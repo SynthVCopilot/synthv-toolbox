@@ -73,6 +73,8 @@ export interface PiSession {
 
 export interface PiSessionFactory {
   create(input: { sessionId: string; cwd?: string; systemPrompt?: string; model?: PiModelSelection; outcome?: AgentRunOutcome }): Promise<PiSession>;
+  /** Changes when the credential the session was created with can no longer be used by it; sessions with a live credential store never change. */
+  credentialFingerprint?(model: PiModelSelection): string;
 }
 
 /** Registers a check the completion tool consults; a non-null return is the reason it fails. */
@@ -146,7 +148,7 @@ export interface PiResourceLoader {
 }
 
 export interface PiSettingsManager {
-  applyOverrides(overrides: { compaction?: { enabled?: boolean; reserveTokens?: number; keepRecentTokens?: number }; retry?: { provider?: { timeoutMs?: number } } }): void;
+  applyOverrides(overrides: { compaction?: { enabled?: boolean; reserveTokens?: number; keepRecentTokens?: number } }): void;
 }
 
 export interface PiInlineExtension {
@@ -250,6 +252,7 @@ export interface PiSessionFactoryOptions {
 export function createPiSessionFactory(options: PiSessionFactoryOptions = {}): PiSessionFactory {
   const loadSdk = options.loadSdk ?? loadPiSdk;
   return {
+    credentialFingerprint: (model) => (options.credentialStore ? "" : createHash("sha256").update(model.apiKey).digest("hex")),
     async create(input) {
       const sdk = await loadSdk();
       const cwd = input.cwd ?? process.cwd();
@@ -352,14 +355,12 @@ function getContextWindow(model: unknown): number {
   return typeof contextWindow === "number" && contextWindow > 0 ? contextWindow : 200_000;
 }
 
-const PROVIDER_REQUEST_TIMEOUT_MS = 120_000;
-
 /** Applies the level's thinking level and compaction overrides for this run's prompt(); see AGENT_EFFORT_PROFILES. */
 function applyEffortProfile(session: PiAgentSession, settingsManager: PiSettingsManager, profile: AgentEffortProfile, contextWindow: number): void {
   session.setThinkingLevel(profile.thinking);
   const reserveTokens = profile.compactionTrigger === null ? 16_384 : Math.max(16_384, Math.round(contextWindow * (1 - profile.compactionTrigger)));
   const keepRecentTokens = Math.min(profile.keepRecentTokens, Math.floor((contextWindow - reserveTokens) / 2));
-  settingsManager.applyOverrides({ compaction: { enabled: true, reserveTokens, keepRecentTokens }, retry: { provider: { timeoutMs: PROVIDER_REQUEST_TIMEOUT_MS } } });
+  settingsManager.applyOverrides({ compaction: { enabled: true, reserveTokens, keepRecentTokens } });
 }
 
 export class AgentRuntimeWorker {
@@ -430,7 +431,7 @@ export class AgentRuntimeWorker {
       if (!outcome) return this.failure(request, "session.invalid", "session.initialize outcome is invalid.");
     }
     const model = await this.hostModelSelection();
-    const signature = JSON.stringify([params.cwd ?? "", params.systemPrompt ?? "", model.providerId, model.modelId, model.credentialId ?? "", createHash("sha256").update(model.apiKey).digest("hex")]);
+    const signature = JSON.stringify([params.cwd ?? "", params.systemPrompt ?? "", model.providerId, model.modelId, model.credentialId ?? "", this.sessionsFactory.credentialFingerprint?.(model) ?? ""]);
     const existing = this.sessions.get(params.sessionId);
     if (existing?.signature === signature) return this.success(request, { sessionId: params.sessionId, reused: true });
     if (existing?.session.running) return this.failure(request, "session.busy", "The session has a run in progress; wait for it to finish or cancel it first.");

@@ -1477,14 +1477,13 @@ test("user input is sent literally: prompt template expansion is off and resourc
   assert.equal(loader.extensionFactories.some((extension) => extension.name === "synthv-task-loop"), true);
 });
 
-test("each run applies a single provider request timeout", async () => {
+test("each run leaves the provider request timeout to Pi's defaults", async () => {
   const fake = createFakeSdk([
     { toolCalls: [{ name: "update_plan", args: { goal: "G", doneCriteria: ["C"], todos: [{ id: "t1", title: "Step", status: "in_progress" }] } }, { name: "complete_task", args: { summary: "Done", evidence: ["done"] } }] },
   ]);
   const session = await createSession(fake);
   await session.prompt("Go", budgetFor("mid", 16, 300_000), undefined, "run-21");
-  const timeout = fake.settingsOverrides.at(-1).retry.provider.timeoutMs;
-  assert.equal(Number.isInteger(timeout) && timeout > 0, true);
+  assert.equal(fake.settingsOverrides.at(-1).retry, undefined);
 });
 
 test("re-initializing with the same credential id but a different API key recreates the session with the new key", async () => {
@@ -1503,4 +1502,18 @@ test("re-initializing with the same credential id but a different API key recrea
   assert.equal(first.ok && rotated.ok, true);
   assert.notEqual(rotated.result.reused, true);
   assert.deepEqual(fake.runtimeApiKeys.map((entry) => entry.apiKey), ["key-old", "key-new"]);
+});
+
+test("a rotating OAuth access token behind a credential store keeps the session", async () => {
+  const fake = createFakeSdk([]);
+  let accessToken = "token-1";
+  const worker = new runtime.AgentRuntimeWorker(
+    runtime.createPiSessionFactory({ extensionPaths: () => [], loadSdk: async () => fake.sdk, credentialStore: () => ({}) }),
+    { request: async () => ({ providerId: "example", modelId: "model-1", credentials: [{ id: "c1", providerId: "example", modelId: "model-1", authMethod: "oauth", apiKey: accessToken }] }) },
+  );
+  await worker.handleJsonl(request("hello", "host.hello", { hostId: "host", protocol: { min: "1.0", max: "1.0" }, capabilities: [] }));
+  await worker.handleJsonl(request("i1", "session.initialize", { sessionId: "s1" }));
+  accessToken = "token-2";
+  const second = JSON.parse((await worker.handleJsonl(request("i2", "session.initialize", { sessionId: "s1" })))[0]);
+  assert.equal(second.result.reused, true);
 });
