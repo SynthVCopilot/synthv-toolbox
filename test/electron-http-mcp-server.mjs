@@ -90,6 +90,49 @@ const reboundHostStatus = await new Promise((resolve, reject) => {
   request.end(body);
 });
 assert.equal(reboundHostStatus, 403);
+const rawPost = (headers, body = JSON.stringify({ jsonrpc: "2.0", id: 44, method: "tools/list" })) => new Promise((resolve, reject) => {
+  const request = httpRequest({ host: "127.0.0.1", port: occupiedPort, path: "/mcp", method: "POST", headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body), ...headers } }, (res) => {
+    let text = ""; res.setEncoding("utf8"); res.on("data", (c) => { text += c; }); res.on("end", () => resolve({ status: res.statusCode, text }));
+  });
+  request.on("error", reject);
+  request.end(body);
+});
+assert.equal((await rawPost({ host: `localhost:${occupiedPort}` })).status, 200);
+assert.equal((await rawPost({ host: `127.0.0.1:${occupiedPort}`, origin: `http://127.0.0.1:${occupiedPort}` })).status, 200);
+assert.equal((await rawPost({ host: `127.0.0.1:${occupiedPort}`, origin: "null" })).status, 403);
+assert.equal((await rawPost({ host: `127.0.0.1:${occupiedPort}`, origin: "https://evil.example" })).status, 403);
+assert.equal((await rawPost({ host: `127.0.0.1:${occupiedPort + 1}` })).status, 403);
+assert.equal((await rawPost({ host: "localhost" })).status, 403);
+
+const secret = "secret-internal-detail";
+const originalTools = host.mcpTools;
+const originalChat = host.agentChat;
+const originalError = console.error;
+console.error = () => {};
+host.mcpTools = async () => { throw new Error(secret); };
+const rpcFailure = await rawPost({ host: `127.0.0.1:${occupiedPort}` });
+assert.equal(rpcFailure.status, 200);
+assert.equal(JSON.parse(rpcFailure.text).error.code, -32603);
+assert.equal(rpcFailure.text.includes(secret), false);
+const unhandled = await rawPost({ host: `127.0.0.1:${occupiedPort}` }, JSON.stringify({ jsonrpc: "2.0", id: 45, method: "tools/call", params: { name: "x" } }));
+assert.equal(unhandled.text.includes(secret), false);
+host.agentChat = async () => { throw new Error(secret); };
+const agentFailure = await fetch(status.agentEndpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ input: "hello" }) });
+assert.equal(agentFailure.status, 500);
+assert.equal((await agentFailure.text()).includes(secret), false);
+host.mcpTools = originalTools;
+const originalTask = host.agentTask;
+let serializations = 0;
+host.agentTask = async () => ({ toJSON() { if (++serializations > 1) throw new Error(secret); return "ok"; } });
+const outerFailure = await rawPost({ host: `127.0.0.1:${occupiedPort}` }, JSON.stringify({ jsonrpc: "2.0", id: 46, method: "tools/call", params: { name: "toolbox_agent", arguments: { action: "list" } } }));
+assert.equal(outerFailure.status, 500);
+assert.equal(outerFailure.text.includes(secret), false);
+host.agentTask = originalTask;
+assert.equal(server.server.requestTimeout, 30_000);
+assert.ok(server.server.headersTimeout > 0 && server.server.headersTimeout <= 30_000);
+host.agentChat = originalChat;
+console.error = originalError;
+
 const stopped = await server.stop();
 assert.equal(stopped.running, false);
 assert.equal(stopped.endpoint, undefined);

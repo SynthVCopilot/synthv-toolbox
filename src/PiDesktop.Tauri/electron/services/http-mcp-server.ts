@@ -5,6 +5,11 @@ const serverVersion = "0.2.0";
 const internalTool = "toolbox_internal";
 const advancedTool = "toolbox_advanced";
 const agentTaskTool = "toolbox_agent";
+const requestTimeoutMs = 30_000;
+const headersTimeoutMs = 10_000;
+
+/** Error whose message is safe to return to the client. */
+class ClientError extends Error {}
 
 export interface McpAuthorization {
   internalEnabled: boolean;
@@ -65,7 +70,15 @@ export class HttpMcpServer {
     await this.stop();
     this.config = { ...config };
     try {
-      const server = createServer((request, response) => void this.handleRequest(request, response));
+      const server = createServer((request, response) => {
+        this.handleRequest(request, response).catch((error) => {
+          console.error("MCP request failed:", error);
+          if (!response.headersSent) send(response, 500, { error: "Internal server error." });
+          else response.destroy();
+        });
+      });
+      server.requestTimeout = requestTimeoutMs;
+      server.headersTimeout = headersTimeoutMs;
       server.on("error", (error) => { this.lastError = error.message; });
       await listen(server, config.port);
       this.server = server;
@@ -130,7 +143,8 @@ export class HttpMcpServer {
       try {
         return send(response, 200, { messages: await this.host.agentChat(body.input, typeof body.conversationId === "string" ? body.conversationId : undefined) });
       } catch (error) {
-        return send(response, 400, { error: errorMessage(error) });
+        console.error("Agent request failed:", error);
+        return send(response, 500, { error: "Agent request failed." });
       }
     }
     return send(response, 404, { error: "Not found." });
@@ -156,7 +170,9 @@ export class HttpMcpServer {
           return rpcError(id, -32601, "Method not found.");
       }
     } catch (error) {
-      return rpcError(id, -32603, errorMessage(error));
+      if (error instanceof ClientError) return rpcError(id, -32602, error.message);
+      console.error("MCP request failed:", error);
+      return rpcError(id, -32603, "Internal error.");
     }
   }
 
@@ -173,12 +189,12 @@ export class HttpMcpServer {
   }
 
   private async callTool(params: unknown): Promise<Record<string, unknown>> {
-    if (!isRecord(params) || typeof params.name !== "string") throw new Error("tools/call requires a tool name.");
+    if (!isRecord(params) || typeof params.name !== "string") throw new ClientError("tools/call requires a tool name.");
     const authorization = this.authorization();
     const tools = [...await this.host.mcpTools(authorization)];
     if (this.config?.enabled && this.config.agentEnabled && this.host.agentTask) tools.push(agentTool());
     const tool = tools.find((candidate) => candidate.name === params.name);
-    if (!tool || !isToolPermitted(tool, authorization)) throw new Error("Tool is disabled or unavailable.");
+    if (!tool || !isToolPermitted(tool, authorization)) throw new ClientError("Tool is disabled or unavailable.");
     const arguments_ = isRecord(params.arguments) ? withoutPermission(params.arguments) : {};
     if (tool.name === agentTaskTool) {
       const structuredContent = await this.host.agentTask!(arguments_);
@@ -303,8 +319,9 @@ function readJson(request: IncomingMessage): Promise<unknown | Error> {
 }
 
 function send(response: ServerResponse, status: number, body?: unknown, headers: Record<string, string> = {}): void {
-  response.writeHead(status, { ...headers, ...(body === undefined ? {} : { "content-type": "application/json" }) });
-  response.end(body === undefined ? undefined : JSON.stringify(body));
+  const payload = body === undefined ? undefined : JSON.stringify(body);
+  response.writeHead(status, { ...headers, ...(payload === undefined ? {} : { "content-type": "application/json" }) });
+  response.end(payload);
 }
 
 function listen(server: Server, port: number): Promise<void> {
