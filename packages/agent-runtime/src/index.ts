@@ -1,4 +1,5 @@
 import { CredentialRouter, createCredentialMetadata, type CredentialMetadata, type ProviderAdapterHost, type ProviderRequest, type ProviderRequestContext, type ProviderResponse, type ProviderStreamEvent } from "@model-auth/core";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
   AGENT_RUN_ID_MAX_LENGTH,
@@ -145,7 +146,7 @@ export interface PiResourceLoader {
 }
 
 export interface PiSettingsManager {
-  applyOverrides(overrides: { compaction?: { enabled?: boolean; reserveTokens?: number; keepRecentTokens?: number } }): void;
+  applyOverrides(overrides: { compaction?: { enabled?: boolean; reserveTokens?: number; keepRecentTokens?: number }; retry?: { provider?: { timeoutMs?: number } } }): void;
 }
 
 export interface PiInlineExtension {
@@ -154,7 +155,7 @@ export interface PiInlineExtension {
 }
 
 export interface PiAgentSession {
-  prompt(input: string): Promise<void>;
+  prompt(input: string, options?: { expandPromptTemplates?: boolean }): Promise<void>;
   abort(): Promise<void>;
   dispose(): void | Promise<void>;
   setThinkingLevel(level: string): void;
@@ -173,6 +174,11 @@ export interface PiSdk {
     extensionFactories?: PiInlineExtension[];
     settingsManager?: PiSettingsManager;
     systemPrompt?: string;
+    noExtensions?: boolean;
+    noSkills?: boolean;
+    noPromptTemplates?: boolean;
+    noThemes?: boolean;
+    noContextFiles?: boolean;
   }) => PiResourceLoader;
   ModelRuntime: { create(options: { refreshOnCreate: boolean; credentials?: PiCredentialStore }): Promise<{ setRuntimeApiKey(providerId: string, apiKey: string): Promise<void>; getModel(providerId: string, modelId: string): unknown }> };
   SettingsManager: { create(cwd: string, agentDir?: string): PiSettingsManager };
@@ -264,6 +270,11 @@ export function createPiSessionFactory(options: PiSessionFactoryOptions = {}): P
         additionalExtensionPaths: [...(options.extensionPaths?.() ?? [])],
         extensionFactories: [createTaskLoopExtension(state, completionGuards.run), ...(options.extensions?.({ sessionId: input.sessionId, guards, runState }) ?? [])],
         settingsManager,
+        noExtensions: true,
+        noSkills: true,
+        noPromptTemplates: true,
+        noThemes: true,
+        noContextFiles: true,
         ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
       });
       await resourceLoader.reload();
@@ -300,7 +311,7 @@ export function createPiSessionFactory(options: PiSessionFactoryOptions = {}): P
             applyEffortProfile(result.session, settingsManager, effortProfileFor(budget.level), contextWindow);
             const { status } = await runTaskLoop(state, effortProfileFor(budget.level), text, (round) => {
               projector.round();
-              return result.session.prompt(round);
+              return result.session.prompt(round, { expandPromptTemplates: false });
             });
             const outcome = buildOutcome(state, status);
             if (status === "completed") state.plan = null;
@@ -341,12 +352,14 @@ function getContextWindow(model: unknown): number {
   return typeof contextWindow === "number" && contextWindow > 0 ? contextWindow : 200_000;
 }
 
+const PROVIDER_REQUEST_TIMEOUT_MS = 120_000;
+
 /** Applies the level's thinking level and compaction overrides for this run's prompt(); see AGENT_EFFORT_PROFILES. */
 function applyEffortProfile(session: PiAgentSession, settingsManager: PiSettingsManager, profile: AgentEffortProfile, contextWindow: number): void {
   session.setThinkingLevel(profile.thinking);
   const reserveTokens = profile.compactionTrigger === null ? 16_384 : Math.max(16_384, Math.round(contextWindow * (1 - profile.compactionTrigger)));
   const keepRecentTokens = Math.min(profile.keepRecentTokens, Math.floor((contextWindow - reserveTokens) / 2));
-  settingsManager.applyOverrides({ compaction: { enabled: true, reserveTokens, keepRecentTokens } });
+  settingsManager.applyOverrides({ compaction: { enabled: true, reserveTokens, keepRecentTokens }, retry: { provider: { timeoutMs: PROVIDER_REQUEST_TIMEOUT_MS } } });
 }
 
 export class AgentRuntimeWorker {
@@ -417,7 +430,7 @@ export class AgentRuntimeWorker {
       if (!outcome) return this.failure(request, "session.invalid", "session.initialize outcome is invalid.");
     }
     const model = await this.hostModelSelection();
-    const signature = JSON.stringify([params.cwd ?? "", params.systemPrompt ?? "", model.providerId, model.modelId, model.credentialId ?? ""]);
+    const signature = JSON.stringify([params.cwd ?? "", params.systemPrompt ?? "", model.providerId, model.modelId, model.credentialId ?? "", createHash("sha256").update(model.apiKey).digest("hex")]);
     const existing = this.sessions.get(params.sessionId);
     if (existing?.signature === signature) return this.success(request, { sessionId: params.sessionId, reused: true });
     if (existing?.session.running) return this.failure(request, "session.busy", "The session has a run in progress; wait for it to finish or cancel it first.");
