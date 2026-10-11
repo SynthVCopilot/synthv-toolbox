@@ -70,11 +70,11 @@ test("unknown and wrong-category actions return nearest names and a describe hin
   });
 });
 
-test("classification fails closed and sv_status is annotated destructive", async () => {
+test("calls the bridge rejects anyway are not queued for approval, and sv_status is annotated destructive", async () => {
   await withBridge(async (bridge) => {
-    assert.equal(bridge.classify("sv_command", {}).risk, "high");
-    assert.equal(bridge.classify("sv_command", { action: "no_such_action_xyz", args: {} }).risk, "high");
-    assert.equal(bridge.classify("sv_ui", { action: "no_such_action_xyz" }).risk, "high");
+    assert.equal(bridge.classify("sv_command", {}).risk, "normal");
+    assert.equal(bridge.classify("sv_command", { action: "no_such_action_xyz", args: {} }).risk, "normal");
+    assert.equal(bridge.classify("sv_ui", { action: "no_such_action_xyz" }).risk, "normal");
     assert.equal(tool(bridge, "sv_status").annotations.destructiveHint, true);
   });
 });

@@ -131,9 +131,9 @@ function classifyFromCore(
   if (name === "sv_command") {
     const action = typeof args.action === "string" ? args.action : undefined;
     const commandArgs = isRecord(args.args) ? args.args : {};
-    let risk: EmbeddedBridgeRisk = "high";
+    // A missing or unknown action is rejected by the bridge itself, so it must not queue an approval.
+    let risk: EmbeddedBridgeRisk = "normal";
     if (action !== undefined) {
-      risk = "normal";
       try {
         const policy = commandPolicyFor(action);
         if (
@@ -144,7 +144,7 @@ function classifyFromCore(
           risk = "high";
         }
       } catch {
-        risk = "high";
+        risk = "normal";
       }
     }
     return { category: "projectWrite", risk };
@@ -156,7 +156,7 @@ function classifyFromCore(
     if (actionTool?.annotations?.readOnlyHint === true) {
       return { category: "read", risk: "normal" };
     }
-    return { category: "uiChange", risk: actionTool === undefined ? "high" : "normal" };
+    return { category: "uiChange", risk: "normal" };
   }
 
   if (name === "sv_status") {
