@@ -42,6 +42,9 @@ interface PoolEntry {
 
 export const EXTERNAL_TOOL_OUTPUT_LIMIT = 100_000;
 const COMBINATORS = ["oneOf", "anyOf", "allOf"] as const;
+const DEFINITION_KEYS = ["$defs", "definitions"] as const;
+/** Keywords whose values are instance data, so a "$ref" key inside them is not a reference. */
+const DATA_KEYWORDS = new Set(["const", "enum", "default", "examples"]);
 
 /** Normalizes desktop settings records (DesktopStateService.enabledMcpServers) into configs; malformed entries are dropped. */
 export function mcpServerConfigs(raw: readonly unknown[]): McpServerConfig[] {
@@ -122,6 +125,9 @@ export class ExternalMcpPool {
     if (entry.removed) return Promise.reject(new Error(`External MCP server "${entry.config.name}" is no longer enabled.`));
     return entry.connecting ??= (async () => {
       try {
+        // The dead client may still be reaping a server its launcher left behind; dispose() waits for that.
+        const stale = entry.client;
+        if (stale) { entry.client = undefined; void this.retire(stale); }
         const { command, args, env, cwd, name } = entry.config;
         const client: McpStdioClient = new McpStdioClient({
           command, args, ...(env ? { env } : {}), ...(cwd ? { cwd } : {}), label: name,
@@ -142,7 +148,10 @@ export class ExternalMcpPool {
     entry.removed = true;
     const client = entry.client;
     entry.client = undefined;
-    if (!client) return Promise.resolve();
+    return client ? this.retire(client) : Promise.resolve();
+  }
+
+  private retire(client: McpStdioClient): Promise<void> {
     const closing = client.close().catch(() => undefined);
     this.closing.add(closing);
     return closing.finally(() => this.closing.delete(closing));
@@ -189,13 +198,17 @@ export function createExternalMcpToolsExtension(options: ExternalMcpToolsOptions
 }
 
 /**
- * mcp__<serverSlug>__<toolName>, restricted to /^[a-zA-Z0-9_-]{1,64}$/ so every provider accepts it. Names are assigned in config order and
- * sorted tool order, so a collision always gets the same numeric suffix; truncated names carry a hash of the original.
+ * mcp__<serverSlug>__<toolName>, restricted to /^[a-zA-Z0-9_-]{1,64}$/ so every provider accepts it. Pass every enabled server,
+ * including failed ones: servers sharing a slug all get a hash of their id, so whether another server connected never decides which
+ * server a name (possibly replayed from a saved transcript) reaches. Within a server, sorted tool order keeps numeric suffixes
+ * stable; truncated names carry a hash of the original.
  */
 export function externalToolNames(servers: readonly { id: string; name: string; tools: readonly { name: string }[] }[]): Map<string, string> {
   const names = new Map<string, string>(), used = new Set<string>();
-  for (const server of servers) {
-    const prefix = `mcp__${slug(server.name) || slug(server.id) || "server"}__`;
+  const slugs = servers.map(server => slug(server.name) || slug(server.id) || "server");
+  for (const [index, server] of servers.entries()) {
+    const shared = slugs.filter(item => item === slugs[index]).length > 1;
+    const prefix = `mcp__${slugs[index]}${shared ? `_${hash(server.id).slice(0, 4)}` : ""}__`;
     for (const tool of [...server.tools].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
       const base = toolPart(prefix, tool.name);
       let name = base;
@@ -209,21 +222,98 @@ export function externalToolNames(servers: readonly { id: string; name: string; 
 
 /**
  * The Anthropic API rejects input schemas that are not a plain top-level object (including top-level oneOf/anyOf/allOf),
- * which would fail the whole session. Such schemas become a permissive object keeping the variants' properties as hints;
- * the server still validates the real shape.
+ * which would fail the whole session. A top-level $ref is resolved first; anything else becomes a permissive object keeping the
+ * variants' properties and definitions as hints and only the keys every accepted shape requires. The server still validates
+ * the real shape.
  */
 export function toolParameters(schema: unknown): Record<string, unknown> {
   if (!isRecord(schema)) return { type: "object", properties: {} };
-  if (schema.type === "object" && !COMBINATORS.some(key => key in schema)) return schema;
-  const properties: Record<string, unknown> = {};
-  const variants = [schema, ...COMBINATORS.flatMap(key => Array.isArray(schema[key]) ? schema[key] as unknown[] : [])];
-  for (const variant of variants) if (isRecord(variant) && isRecord(variant.properties)) for (const [key, value] of Object.entries(variant.properties)) if (!(key in properties)) properties[key] = value;
-  return {
-    type: "object", properties, additionalProperties: true,
-    ...(typeof schema.description === "string" ? { description: schema.description } : {}),
-    ...(isRecord(schema.$defs) ? { $defs: schema.$defs } : {}),
-    ...(isRecord(schema.definitions) ? { definitions: schema.definitions } : {}),
-  };
+  const root = dereference(schema, schema);
+  if (root.type === "object" && !("$ref" in root) && !COMBINATORS.some(key => key in root)) return withoutDanglingRefs(root);
+  const variants = COMBINATORS.flatMap(key => Array.isArray(root[key]) ? (root[key] as unknown[]).filter(isRecord).map(variant => ({ key, schema: dereference(variant, schema) })) : []);
+  const sources = [root, ...variants.map(variant => variant.schema)];
+  const properties: Record<string, unknown> = {}, alternatives = new Map<string, Map<string, unknown>>();
+  for (const source of [root, ...variants.filter(variant => variant.key === "allOf").map(variant => variant.schema)]) if (isRecord(source.properties)) for (const [key, value] of Object.entries(source.properties)) if (!(key in properties)) properties[key] = value;
+  // A property that oneOf/anyOf variants define differently (a "kind" const per variant) must accept every variant's schema.
+  for (const variant of variants) if (variant.key !== "allOf" && isRecord(variant.schema.properties)) for (const [key, value] of Object.entries(variant.schema.properties)) if (!(key in properties)) alternatives.set(key, (alternatives.get(key) ?? new Map()).set(JSON.stringify(value), value));
+  for (const [key, options] of alternatives) properties[key] = options.size === 1 ? [...options.values()][0] : { anyOf: [...options.values()] };
+  // allOf adds every variant's requirements; oneOf/anyOf only guarantee what all their variants require.
+  const required = new Set(strings(root.required));
+  for (const variant of variants) if (variant.key === "allOf") for (const key of strings(variant.schema.required)) required.add(key);
+  for (const key of ["oneOf", "anyOf"] as const) {
+    const lists = variants.filter(variant => variant.key === key).map(variant => strings(variant.schema.required));
+    for (const name of lists[0] ?? []) if (lists.every(list => list.includes(name))) required.add(name);
+  }
+  const definitions = Object.fromEntries(DEFINITION_KEYS.flatMap(key => {
+    const merged: Record<string, unknown> = {};
+    for (const source of sources) if (isRecord(source[key])) for (const [name, value] of Object.entries(source[key])) if (!(name in merged)) merged[name] = value;
+    return Object.keys(merged).length ? [[key, merged]] : [];
+  }));
+  return withoutDanglingRefs({
+    type: "object", properties, ...(required.size ? { required: [...required] } : {}), additionalProperties: true,
+    ...(typeof root.description === "string" ? { description: root.description } : {}), ...definitions,
+  });
+}
+
+/** Inlines a $ref chain that points inside the document; siblings of the $ref are kept. */
+function dereference(schema: Record<string, unknown>, document: Record<string, unknown>): Record<string, unknown> {
+  let current = schema;
+  for (let depth = 0; depth < 8 && typeof current.$ref === "string"; depth++) {
+    const target = pointer(document, current.$ref);
+    if (!isRecord(target)) break;
+    const { $ref: _ref, ...siblings } = current;
+    current = { ...siblings, ...target };
+  }
+  return current;
+}
+
+/**
+ * A $ref that does not resolve inside the schema makes Pi reject every call ("schema is false") and may make the provider reject the
+ * session, so definitions that reach one are dropped and properties that reach one become unconstrained hints.
+ */
+function withoutDanglingRefs(schema: Record<string, unknown>): Record<string, unknown> {
+  const broken = (node: unknown) => !refsResolve(node, schema, new Set());
+  const next = { ...schema };
+  let changed = false;
+  for (const key of DEFINITION_KEYS) {
+    const defs = schema[key];
+    if (!isRecord(defs) || !Object.values(defs).some(broken)) continue;
+    const kept = Object.entries(defs).filter(([, value]) => !broken(value));
+    if (kept.length) next[key] = Object.fromEntries(kept); else delete next[key];
+    changed = true;
+  }
+  if (isRecord(schema.properties) && Object.values(schema.properties).some(broken)) {
+    next.properties = Object.fromEntries(Object.entries(schema.properties).map(([key, value]) => [key, broken(value) ? isRecord(value) && typeof value.description === "string" ? { description: value.description } : {} : value]));
+    changed = true;
+  }
+  if (isRecord(schema.additionalProperties) && broken(schema.additionalProperties)) { next.additionalProperties = true; changed = true; }
+  return changed ? next : schema;
+}
+
+function refsResolve(node: unknown, document: Record<string, unknown>, seen: Set<string>): boolean {
+  if (Array.isArray(node)) return node.every(item => refsResolve(item, document, seen));
+  if (!isRecord(node)) return true;
+  if (typeof node.$ref === "string" && !seen.has(node.$ref)) {
+    seen.add(node.$ref);
+    const target = pointer(document, node.$ref);
+    if (target === undefined || !refsResolve(target, document, seen)) return false;
+  }
+  return Object.entries(node).every(([key, value]) => key === "$ref" || DATA_KEYWORDS.has(key) || refsResolve(value, document, seen));
+}
+
+/** Resolves a same-document JSON pointer reference ("#/$defs/Item"); anything else (URLs, anchors) is unresolvable here. */
+function pointer(document: Record<string, unknown>, ref: string): unknown {
+  if (ref === "#") return document;
+  if (!ref.startsWith("#/")) return undefined;
+  let node: unknown = document;
+  for (const raw of ref.slice(2).split("/")) {
+    let part: string;
+    try { part = decodeURIComponent(raw).replace(/~1/g, "/").replace(/~0/g, "~"); } catch { return undefined; }
+    if (Array.isArray(node) && /^\d+$/.test(part)) node = node[Number(part)];
+    else if (isRecord(node) && Object.hasOwn(node, part)) node = node[part];
+    else return undefined;
+  }
+  return node;
 }
 
 /** Text blocks are joined; binary content is summarized because the agent loop only carries text tool results. */
@@ -260,11 +350,13 @@ function guidance(servers: readonly ExternalMcpServerTools[], mode: "edit" | "so
 function toolPart(prefix: string, toolName: string): string {
   const room = 64 - prefix.length;
   const part = toolName.replace(/[^a-zA-Z0-9_-]+/g, "_");
-  const hash = createHash("sha256").update(toolName).digest("hex").slice(0, 8);
-  if (!/[a-zA-Z0-9]/.test(part)) return `${prefix}tool_${hash}`;
-  return part.length <= room ? `${prefix}${part}` : `${prefix}${part.slice(0, room - hash.length - 1)}_${hash}`;
+  const digest = hash(toolName).slice(0, 8);
+  if (!/[a-zA-Z0-9]/.test(part)) return `${prefix}tool_${digest}`;
+  return part.length <= room ? `${prefix}${part}` : `${prefix}${part.slice(0, room - digest.length - 1)}_${digest}`;
 }
 
+function hash(value: string): string { return createHash("sha256").update(value).digest("hex"); }
+function strings(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; }
 function slug(value: string): string { return value.normalize("NFKD").replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").toLowerCase().slice(0, 20).replace(/_+$/, ""); }
 function toolKey(serverId: string, toolName: string): string { return `${serverId}\u0000${toolName}`; }
 function fingerprint(config: McpServerConfig): string { return JSON.stringify([config.command, config.args, Object.entries(config.env ?? {}).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0), config.cwd ?? null]); }

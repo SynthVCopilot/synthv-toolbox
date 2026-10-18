@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { statSync } from "node:fs";
 import { delimiter, extname, isAbsolute, join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { BRAND } from "../brand.js";
 
 /**
@@ -47,6 +48,10 @@ export class McpStdioClient {
   private state: State = "idle";
   private connecting?: Promise<void>;
   private exited?: Promise<void>;
+  /** Settles on "close": every holder of the stdio pipes is gone, including descendants that outlived the direct child. */
+  private drained?: Promise<void>;
+  private closing?: Promise<void>;
+  private spawnedAt = 0;
   private reason?: string;
   private nextId = 0;
   private stdout = "";
@@ -92,15 +97,24 @@ export class McpStdioClient {
     return { content, ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {}), ...(result.isError === true ? { isError: true } : {}) };
   }
 
-  /** Ends stdin so a well-behaved server exits on EOF; a server that ignores it loses its whole process tree after a short grace period. */
-  async close(graceMs = CLOSE_GRACE_MS): Promise<void> {
+  /**
+   * Ends stdin so a well-behaved server exits on EOF; a server that ignores it loses its whole process tree after a short grace period.
+   * Runs once; later calls share the first shutdown, so every caller can await the cleanup.
+   */
+  close(graceMs = CLOSE_GRACE_MS): Promise<void> {
     this.fail("was closed");
+    return this.closing ??= this.shutdown(graceMs);
+  }
+
+  private async shutdown(graceMs: number): Promise<void> {
     const child = this.child;
-    if (!child || !running(child)) return;
+    if (!child?.pid) return;
     try { child.stdin.end(); } catch { }
-    if (await this.waitExit(graceMs)) return;
-    await terminateTree(child);
-    await this.waitExit(2_000);
+    if (!(await this.waitExit(graceMs))) { await terminateTree(child); await this.waitExit(2_000); }
+    // The real server behind a cmd.exe or npx launcher can outlive it, keep the pipes open and ignore EOF. taskkill /T cannot
+    // walk from a dead parent, so Windows looks the orphans up by parent pid; POSIX signals the process group the child led.
+    if (process.platform !== "win32") await signalGroup(child.pid);
+    else if (!(await within(this.drained!, Math.max(graceMs, 250)))) { await killWindowsOrphans(child.pid, this.spawnedAt); await within(this.drained!, 2_000); }
   }
 
   private connectTimeout(): number { return this.options.connectTimeoutMs ?? 15_000; }
@@ -128,8 +142,10 @@ export class McpStdioClient {
     // POSIX children lead their own process group so close() can take down grandchildren (npx -> node) too.
     const child = spawn(plan.file, plan.args, { cwd: this.options.cwd, env, windowsHide: true, shell: false, windowsVerbatimArguments: plan.verbatim, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"] });
     this.child = child;
-    let markExited!: () => void;
+    this.spawnedAt = Date.now();
+    let markExited!: () => void, markDrained!: () => void;
     this.exited = new Promise(done => { markExited = done; });
+    this.drained = new Promise(done => { markDrained = done; });
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => this.onStdout(chunk));
@@ -138,14 +154,16 @@ export class McpStdioClient {
     child.stdin.on("error", () => { });
     child.once("error", (error: NodeJS.ErrnoException) => {
       markExited();
+      markDrained();
       this.fail(error.code === "ENOENT" ? `could not be started: command "${this.options.command}" was not found. Check that it is installed and on PATH` : `could not be started: ${error.message}`);
     });
     const exitReason = (code: number | null, signal: NodeJS.Signals | null) => signal ? `was terminated by ${signal}` : `exited with code ${code}`;
-    child.once("close", (code, signal) => this.fail(exitReason(code, signal)));
+    child.once("close", (code, signal) => { markDrained(); this.fail(exitReason(code, signal)); });
     child.once("exit", (code, signal) => {
       markExited();
       // Let buffered stdout/stderr drain first; "close" normally follows within milliseconds unless a grandchild still holds the pipes.
-      setTimeout(() => this.fail(exitReason(code, signal)), 100).unref();
+      // An exit nobody asked for still gets close(), because a launcher can die while the real server keeps running behind it.
+      setTimeout(() => { this.fail(exitReason(code, signal)); void this.close(); }, 100).unref();
     });
   }
 
@@ -239,10 +257,7 @@ export class McpStdioClient {
 
   private async waitExit(ms: number): Promise<boolean> {
     const child = this.child;
-    if (!child || !running(child)) return true;
-    let timer: NodeJS.Timeout | undefined;
-    const timedOut = new Promise<boolean>(done => { timer = setTimeout(() => done(false), ms); });
-    try { return await Promise.race([this.exited!.then(() => true), timedOut]); } finally { clearTimeout(timer); }
+    return !child || !running(child) || within(this.exited!, ms);
   }
 }
 
@@ -300,25 +315,64 @@ export function mergeEnv(base: NodeJS.ProcessEnv, extra: Readonly<Record<string,
 
 function running(child: ChildProcessWithoutNullStreams): boolean { return child.pid !== undefined && child.exitCode === null && child.signalCode === null; }
 
+async function within(promise: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<boolean>(done => { timer = setTimeout(() => done(false), ms); });
+  try { return await Promise.race([promise.then(() => true), timedOut]); } finally { clearTimeout(timer); }
+}
+
 async function terminateTree(child: ChildProcessWithoutNullStreams): Promise<void> {
   if (!child.pid) return;
-  if (process.platform === "win32") {
-    await new Promise<void>((done) => {
-      const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, shell: false, stdio: "ignore" });
-      killer.once("error", () => done());
-      killer.once("close", () => done());
-      setTimeout(() => done(), 3_000).unref();
-    });
-    return;
-  }
-  let hasProcessGroup = true;
-  try { process.kill(-child.pid, "SIGTERM"); } catch {
-    hasProcessGroup = false;
-    try { child.kill("SIGTERM"); } catch { }
-  }
-  await new Promise((done) => setTimeout(done, 300));
-  if (hasProcessGroup) try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch { } }
-  else try { child.kill("SIGKILL"); } catch { }
+  if (process.platform === "win32") return taskkill(child.pid);
+  if (await signalGroup(child.pid)) return;
+  try { child.kill("SIGTERM"); } catch { }
+  await delay(300);
+  try { child.kill("SIGKILL"); } catch { }
+}
+
+/** SIGTERM, then SIGKILL, to the process group the child led (it was spawned detached). False when no such group exists. */
+async function signalGroup(pid: number): Promise<boolean> {
+  try { process.kill(-pid, "SIGTERM"); } catch { return false; }
+  await delay(300);
+  try { process.kill(-pid, "SIGKILL"); } catch { }
+  return true;
+}
+
+function taskkill(pid: number): Promise<void> {
+  return new Promise<void>((done) => {
+    const killer = spawn("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { windowsHide: true, shell: false, stdio: "ignore" });
+    killer.once("error", () => done());
+    killer.once("close", () => done());
+    setTimeout(() => done(), 3_000).unref();
+  });
+}
+
+const PROCESS_TABLE = "Get-CimInstance Win32_Process | ForEach-Object { if ($_.CreationDate) { '{0} {1} {2}' -f $_.ProcessId, $_.ParentProcessId, $_.CreationDate.ToFileTimeUtc() } }";
+const FILETIME_UNIX_EPOCH_MS = 11_644_473_600_000;
+
+/**
+ * Windows keeps a process's parent pid after the parent exits, so a dead child's orphans can still be found (taskkill /T then
+ * takes their subtrees). Only processes created after the spawn qualify, and when the pid was reused, only those older than the reuser.
+ */
+async function killWindowsOrphans(pid: number, spawnedAt: number): Promise<void> {
+  const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const table = await capture(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(PROCESS_TABLE, "utf16le").toString("base64")], 15_000);
+  const rows = table.split(/\r?\n/).map(line => line.trim().split(/\s+/).map(Number)).filter(row => row.length === 3 && row.every(Number.isFinite)).map(([id, parent, created]) => ({ id: id!, parent: parent!, created: created! / 10_000 - FILETIME_UNIX_EPOCH_MS }));
+  // The dead child itself may still be listed (created right at spawn); any other holder of its pid is a newer process whose children are not ours.
+  const holder = rows.find(row => row.id === pid && Math.abs(row.created - spawnedAt) > 1_000);
+  for (const row of rows) if (row.parent === pid && row.id !== pid && row.id !== process.pid && row.created >= spawnedAt - 2_000 && (!holder || row.created < holder.created)) await taskkill(row.id);
+}
+
+function capture(file: string, args: string[], timeoutMs: number): Promise<string> {
+  return new Promise<string>((done) => {
+    let output = "";
+    const child = spawn(file, args, { windowsHide: true, shell: false, stdio: ["ignore", "pipe", "ignore"] });
+    const timer = setTimeout(() => { try { child.kill(); } catch { } done(output); }, timeoutMs);
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => { output += chunk; });
+    child.once("error", () => { clearTimeout(timer); done(output); });
+    child.once("close", () => { clearTimeout(timer); done(output); });
+  });
 }
 
 function toolInfo(raw: unknown): McpToolInfo | undefined {

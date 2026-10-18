@@ -1,19 +1,27 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { BRAND } from "../src/PiDesktop.Tauri/dist/electron/brand.js";
 import { createExternalMcpToolsExtension, EXTERNAL_TOOL_OUTPUT_LIMIT, ExternalMcpPool, externalToolNames, mcpServerConfigs, toolParameters } from "../src/PiDesktop.Tauri/dist/electron/services/external-mcp-tools.js";
 import { McpStdioClient } from "../src/PiDesktop.Tauri/dist/electron/services/mcp-stdio-client.js";
 
-const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "external-mcp-server.mjs");
+const testDirectory = dirname(fileURLToPath(import.meta.url));
+const fixture = join(testDirectory, "fixtures", "external-mcp-server.mjs");
 const LONG_NAME = "weird tool/name.with:odd chars and a very long suffix that keeps going far beyond any provider limit";
 const TOOL_NAME = /^[a-zA-Z0-9_-]{1,64}$/;
+const FIXTURE_TOOLS = 10;
+// Pi validates tool arguments with this before execute; its install location depends on npm hoisting.
+const piValidation = ["packages/agent-runtime/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai", "packages/agent-runtime/node_modules/@earendil-works/pi-ai", "node_modules/@earendil-works/pi-ai"]
+  .map(path => join(testDirectory, "..", path, "dist", "utils", "validation.js")).find(path => existsSync(path));
 
 const server = (id, name, ...flags) => ({ id, name, command: process.execPath, args: [fixture, "--name", id, ...flags], enabled: true });
+const idHash = id => createHash("sha256").update(id).digest("hex").slice(0, 4);
 const output = result => result.content.map(block => block.text).join("");
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
 async function waitDead(pid, ms = 8_000) { const end = Date.now() + ms; while (alive(pid) && Date.now() < end) await delay(50); return !alive(pid); }
@@ -37,25 +45,27 @@ test("registers sanitized, collision-safe tool names and provider-safe schemas a
   try {
     const session = await open(pool, [server("a", "Fixture", "--page-size", "2"), server("b", "Fixture")]);
     const names = [...session.tools.keys()];
-    assert.equal(names.length, 18, "both servers' nine tools must survive pagination");
+    assert.equal(names.length, FIXTURE_TOOLS * 2, "both servers' tools must survive pagination");
     for (const name of names) assert.match(name, TOOL_NAME);
-    assert.ok(session.tools.has("mcp__fixture__read_status"));
-    assert.ok(session.tools.has("mcp__fixture__read_status_2"), "the second server with the same slug gets a deterministic suffix");
-    const long = names.filter(name => name.startsWith("mcp__fixture__weird_tool_name_with_odd_chars"));
+    const a = `mcp__fixture_${idHash("a")}__`, b = `mcp__fixture_${idHash("b")}__`;
+    assert.ok(session.tools.has(`${a}read_status`) && session.tools.has(`${b}read_status`), "servers sharing a slug are told apart by a hash of their id");
+    assert.ok(!session.tools.has("mcp__fixture__read_status"));
+    const long = names.filter(name => name.startsWith(a) || name.startsWith(b)).filter(name => name.includes(LONG_NAME.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 20)));
     assert.equal(long.length, 2);
-    assert.ok(long.every(name => name.length <= 64));
-    const shape = session.tools.get("mcp__fixture__choose_shape");
+    assert.ok(long.every(name => name.length <= 64 && /_[0-9a-f]{8}$/.test(name)), "truncated names end in a hash of the original");
+    const shape = session.tools.get(`${a}choose_shape`);
     assert.equal(shape.parameters.type, "object");
     assert.equal(shape.parameters.oneOf, undefined, "top-level oneOf would make the Anthropic API reject the session");
     assert.deepEqual(Object.keys(shape.parameters.properties).sort(), ["circle", "square"]);
-    assert.deepEqual(session.tools.get("mcp__fixture__write_note").parameters, { type: "object", properties: { text: { type: "string" } }, required: ["text"] });
-    const statusTool = session.tools.get("mcp__fixture__read_status");
+    assert.equal(shape.parameters.required, undefined, "neither key is required by every variant");
+    assert.deepEqual(session.tools.get(`${a}write_note`).parameters, { type: "object", properties: { text: { type: "string" } }, required: ["text"] });
+    const statusTool = session.tools.get(`${a}read_status`);
     assert.equal(statusTool.label, "Read status");
     assert.equal(statusTool.executionMode, "sequential");
     assert.match(statusTool.description, /^\[Fixture\] Report fixture state\.$/);
-    assert.match(session.tools.get("mcp__fixture__write_note").description, /Solo mode/);
+    assert.match(session.tools.get(`${a}write_note`).description, /Solo mode/);
     assert.match(output(await session.run(long[0])), /long name ok/);
-    const state = await status(session);
+    const state = await status(session, `${a}read_status`);
     assert.deepEqual(state.clientInfo, { name: BRAND.slug, version: "9.9.9" });
     assert.equal(state.protocolVersion, "2025-06-18");
     assert.equal(state.initialized, true);
@@ -64,7 +74,7 @@ test("registers sanitized, collision-safe tool names and provider-safe schemas a
   } finally { await pool.dispose(); }
 });
 
-test("tool names are stable and schema sanitizing keeps definitions", () => {
+test("tool names are stable and never move to another server when one fails to connect", () => {
   const servers = [{ id: "x", name: "我的服务", tools: [{ name: "b" }, { name: "a" }, { name: "工具" }] }, { id: "y-1", name: "My Server!", tools: [{ name: "a" }, { name: "A" }] }];
   const first = externalToolNames(servers), second = externalToolNames(structuredClone(servers).reverse().reverse());
   assert.deepEqual([...first.values()], [...second.values()]);
@@ -72,12 +82,65 @@ test("tool names are stable and schema sanitizing keeps definitions", () => {
   assert.match(first.get("x\u0000工具"), /^mcp__x__tool_[0-9a-f]{8}$/);
   assert.equal(first.get("y-1\u0000A"), "mcp__my_server__A");
   assert.equal(first.get("y-1\u0000a"), "mcp__my_server__a_2", "names differing only by case still collide for case-insensitive providers");
+  // A failed server lists no tools; its namesake must not inherit names a saved transcript may still use for the failed one.
+  const notes = (tools) => [{ id: "a", name: "Notes", tools }, { id: "b", name: "Notes", tools: [{ name: "delete_all" }] }];
+  const healthy = externalToolNames(notes([{ name: "delete_all" }])), degraded = externalToolNames(notes([]));
+  assert.equal(healthy.get("a\u0000delete_all"), `mcp__notes_${idHash("a")}__delete_all`);
+  assert.equal(healthy.get("b\u0000delete_all"), `mcp__notes_${idHash("b")}__delete_all`);
+  assert.equal(degraded.get("b\u0000delete_all"), healthy.get("b\u0000delete_all"));
+  assert.equal(externalToolNames([{ id: "b", name: "Notes", tools: [{ name: "delete_all" }] }]).get("b\u0000delete_all"), "mcp__notes__delete_all", "a unique slug stays readable");
+  assert.deepEqual(mcpServerConfigs([{ id: "a", name: " A ", command: " node ", args: ["x", 1], enabled: true }, { id: "", command: "node" }, null]), [{ id: "a", name: "A", command: "node", args: ["x"], enabled: true }]);
+});
+
+test("schema sanitizing keeps definitions, requirements and resolvable references", () => {
   assert.deepEqual(toolParameters(undefined), { type: "object", properties: {} });
   assert.deepEqual(toolParameters({ type: "string" }), { type: "object", properties: {}, additionalProperties: true });
   const wrapped = toolParameters({ anyOf: [{ type: "object", properties: { item: { $ref: "#/$defs/Item" } } }], $defs: { Item: { type: "number" } } });
   assert.deepEqual(wrapped.$defs, { Item: { type: "number" } });
   assert.deepEqual(wrapped.properties, { item: { $ref: "#/$defs/Item" } });
-  assert.deepEqual(mcpServerConfigs([{ id: "a", name: " A ", command: " node ", args: ["x", 1], enabled: true }, { id: "", command: "node" }, null]), [{ id: "a", name: "A", command: "node", args: ["x"], enabled: true }]);
+  assert.deepEqual(toolParameters({ anyOf: [{ type: "object", properties: { item: { $ref: "#/$defs/Item" } }, $defs: { Item: { type: "string" } } }] }).$defs, { Item: { type: "string" } }, "definitions inside a variant are hoisted");
+  assert.deepEqual(toolParameters({ $ref: "#/$defs/Args", $defs: { Args: { type: "object", properties: { q: { type: "string" } }, required: ["q"] } } }), { $defs: { Args: { type: "object", properties: { q: { type: "string" } }, required: ["q"] } }, type: "object", properties: { q: { type: "string" } }, required: ["q"] });
+  const constrained = toolParameters({ type: "object", properties: { q: { type: "string" }, id: { type: "string" }, name: { type: "string" } }, required: ["q"], anyOf: [{ required: ["id", "scope"] }, { required: ["name", "scope"] }] });
+  assert.deepEqual(constrained.required, ["q", "scope"], "own requirements stay; a variant requirement stays only when every variant has it");
+  assert.deepEqual(toolParameters({ allOf: [{ type: "object", properties: { a: { type: "string" } }, required: ["a"] }, { properties: { b: { type: "string" } }, required: ["b"] }] }).required, ["a", "b"]);
+  const union = toolParameters({ anyOf: [{ $ref: "#/$defs/Circle" }, { $ref: "#/$defs/Square" }], $defs: { Circle: { type: "object", properties: { kind: { const: "circle" }, r: { type: "number" } }, required: ["kind", "r"] }, Square: { type: "object", properties: { kind: { const: "square" }, side: { type: "number" } }, required: ["kind", "side"] } } });
+  assert.deepEqual(union.properties, { kind: { anyOf: [{ const: "circle" }, { const: "square" }] }, r: { type: "number" }, side: { type: "number" } });
+  assert.deepEqual(union.required, ["kind"]);
+  const dangling = toolParameters({ anyOf: [{ type: "object", properties: { a: { $ref: "#/anyOf/0/$defs/A", description: "an A" }, b: { $ref: "#/$defs/B" }, c: { type: "number" } } }], $defs: { B: { type: "object", properties: { x: { $ref: "#/$defs/Missing" } } } } });
+  assert.deepEqual(dangling.properties, { a: { description: "an A" }, b: {}, c: { type: "number" } }, "properties reaching a dangling $ref become unconstrained hints");
+  assert.equal(dangling.$defs, undefined, "definitions reaching a dangling $ref are dropped");
+  assert.equal(JSON.stringify(dangling).includes("$ref"), false);
+  const plain = { type: "object", properties: { text: { type: "string", default: { $ref: "not a reference" } } } };
+  assert.equal(toolParameters(plain), plain, "a valid object schema passes through untouched");
+});
+
+test("sanitized schemas accept every valid shape in Pi's argument validator", { skip: piValidation ? false : "pi-ai is not installed" }, async () => {
+  const { validateToolArguments } = await import(pathToFileURL(piValidation).href);
+  const accepts = (schema, args) => validateToolArguments({ name: "t", parameters: toolParameters(schema) }, { name: "t", arguments: args });
+  const union = { anyOf: [{ $ref: "#/$defs/Circle" }, { $ref: "#/$defs/Square" }], $defs: { Circle: { type: "object", properties: { kind: { const: "circle" }, r: { type: "number" } }, required: ["kind", "r"] }, Square: { type: "object", properties: { kind: { const: "square" }, side: { type: "number" } }, required: ["kind", "side"] } } };
+  assert.deepEqual(accepts(union, { kind: "square", side: 2 }), { kind: "square", side: 2 });
+  assert.deepEqual(accepts(union, { kind: "circle", r: 1 }), { kind: "circle", r: 1 });
+  assert.deepEqual(accepts({ anyOf: [{ type: "object", properties: { item: { $ref: "#/$defs/Item" } }, $defs: { Item: { type: "string" } } }] }, { item: "x" }), { item: "x" });
+  assert.deepEqual(accepts({ anyOf: [{ type: "object", properties: { a: { $ref: "#/anyOf/0/$defs/A" } } }] }, { a: 1 }), { a: 1 });
+  assert.deepEqual(accepts({ anyOf: [{ type: "object", properties: { tree: { $ref: "#/$defs/Node" } } }], $defs: { Node: { type: "object", properties: { children: { type: "array", items: { $ref: "#/$defs/Node" } } } } } }, { tree: { children: [{ children: [] }] } }), { tree: { children: [{ children: [] }] } });
+  const args = { $ref: "#/$defs/Args", $defs: { Args: { type: "object", properties: { q: { type: "string" } }, required: ["q"] } } };
+  assert.deepEqual(accepts(args, { q: "hi" }), { q: "hi" });
+  assert.throws(() => accepts(args, {}), /q/);
+});
+
+test("framing survives split lines, coalesced and batched messages and UTF-8 split across chunks", async () => {
+  const logs = [];
+  const client = new McpStdioClient({ command: process.execPath, args: [fixture, "--fragmented"], label: "Fragmented", onNotification: (method, params) => { if (method === "notifications/message") logs.push(params.data); } });
+  try {
+    await client.connect();
+    assert.equal((await client.listTools()).length, FIXTURE_TOOLS);
+    const [unicode, shape, state] = await Promise.all([client.callTool("unicode", {}), client.callTool("choose_shape", { circle: 1 }), client.callTool("read_status", {})]);
+    assert.equal(output(unicode), "音符 🎵 ok");
+    assert.deepEqual(JSON.parse(output(shape)), { circle: 1 });
+    assert.equal(JSON.parse(output(state)).name, "fixture");
+    // initialize, four tools/list pages and three calls each arrived with one log notification.
+    assert.deepEqual(logs, Array(8).fill("log ✓"));
+  } finally { await client.close(); }
 });
 
 test("read-only tools run in Edit mode; other tools are refused until Solo mode", async () => {
@@ -131,8 +194,8 @@ test("abort sends notifications/cancelled and the client stays usable", async ()
     let after = await status(session);
     for (let attempt = 0; attempt < 20 && after.cancelled.length === 0; attempt++) { await delay(50); after = await status(session); }
     assert.equal(after.pid, before.pid, "aborting must not restart the server");
-    assert.equal(after.cancelled.length, 1);
-    assert.equal(typeof after.cancelled[0].requestId, "number");
+    assert.equal(after.slowCalls.length, 1);
+    assert.deepEqual(after.cancelled, [{ requestId: after.slowCalls[0], reason: "The user cancelled the request." }], "the cancellation names the aborted call's request id");
     assert.equal(output(await session.run("mcp__fixture__slow", { ms: 10 })), "slow done");
   } finally { await pool.dispose(); }
 });
@@ -145,7 +208,7 @@ test("a crashing server is reported in the prompt without hiding a healthy one",
     assert.ok(![...session.tools.keys()].some(name => name.startsWith("mcp__broken__")));
     const prompt = session.prompt();
     assert.match(prompt, /- Broken: unavailable \(MCP server "Broken" exited with code 3\..*fixture crashed on purpose.*\)/);
-    assert.match(prompt, /- Fixture: 9 tools\./);
+    assert.match(prompt, new RegExp(`- Fixture: ${FIXTURE_TOOLS} tools\\.`));
     const { servers } = await pool.tools();
     assert.match(servers[0].error, /fixture crashed on purpose/);
     assert.equal(servers[1].error, undefined);
@@ -233,5 +296,39 @@ test("Windows batch shims resolve through PATH and receive arguments verbatim", 
     assert.deepEqual(state.argv, args);
     await pool.dispose();
     assert.ok(await waitDead(state.pid, 2_000), "the node process behind cmd.exe must exit with the shim");
+  } finally { await pool.dispose(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a server that outlives its cmd.exe launcher is reaped, and the pool reconnects", { skip: process.platform !== "win32" }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "toneshuttle mcp orphan "));
+  const pool = new ExternalMcpPool({ retryAfterMs: 0 });
+  try {
+    await writeFile(join(directory, "fixture-shim.cmd"), `@echo off\r\n"${process.execPath}" "${fixture}" %*\r\n`, "utf8");
+    const config = { id: "shim", name: "Shim", command: "fixture-shim", args: ["--name", "shim", "--ignore-eof"], enabled: true, env: { PATH: `${directory}${delimiter}${process.env.PATH ?? process.env.Path ?? ""}` } };
+    const session = await open(pool, [config]);
+    const first = await status(session, "mcp__shim__read_status");
+    assert.notEqual(first.ppid, process.pid, "the fixture must run behind cmd.exe");
+    // Only the launcher dies; the server keeps the pipes open and ignores EOF, so taskkill /T from the dead launcher finds nothing.
+    process.kill(first.ppid);
+    await delay(300);
+    const second = await status(session, "mcp__shim__read_status");
+    assert.notEqual(second.pid, first.pid, "the next call reconnects");
+    assert.ok(await waitDead(first.pid, 20_000), `orphaned server ${first.pid} survived its launcher`);
+    await pool.dispose();
+    assert.ok(await waitDead(second.pid, 3_000), `server ${second.pid} survived dispose`);
+    assert.ok(await waitDead(second.ppid, 3_000), `launcher ${second.ppid} survived dispose`);
+  } finally { await pool.dispose(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("dispose reaps a server whose launcher already died", { skip: process.platform !== "win32" }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "toneshuttle mcp orphan "));
+  const pool = new ExternalMcpPool({ retryAfterMs: 0 });
+  try {
+    await writeFile(join(directory, "fixture-shim.cmd"), `@echo off\r\n"${process.execPath}" "${fixture}" %*\r\n`, "utf8");
+    const config = { id: "shim", name: "Shim", command: "fixture-shim", args: ["--name", "shim", "--ignore-eof"], enabled: true, env: { PATH: `${directory}${delimiter}${process.env.PATH ?? process.env.Path ?? ""}` } };
+    const state = await status(await open(pool, [config]), "mcp__shim__read_status");
+    process.kill(state.ppid);
+    await pool.dispose();
+    assert.ok(await waitDead(state.pid, 3_000), `orphaned server ${state.pid} survived dispose`);
   } finally { await pool.dispose(); await rm(directory, { recursive: true, force: true }); }
 });
