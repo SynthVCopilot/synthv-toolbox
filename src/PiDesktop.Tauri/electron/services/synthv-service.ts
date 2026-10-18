@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
-import { access, cp, lstat, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { access, cp, lstat, mkdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import type { EmbeddedBridge } from "./synthv-bridge.js";
 import type { DreamtonicsWebAccounts, WebAccountSnapshot } from "./dreamtonics-web.js";
@@ -121,14 +122,32 @@ export class SynthVService {
     return this.profileState();
   }
 
+  async importCurrentProfile(displayName: string): Promise<Record<string, unknown>> {
+    requireText(displayName, "displayName"); const canonical = this.canonicalPath();
+    const running = await this.runningSv2(); if (running.length) throw sv2RunningError(running, "importing its current data");
+    if (!(await exists(canonical))) throw new Error("No current Synthesizer V Studio 2 data was found to import.");
+    const store = await this.readStore(); const now = new Date().toISOString(); const slot: Slot = { id: randomUUID(), displayName, createdAtUtc: now, lastActivatedAtUtc: now };
+    const previous = this.activeSlotId(store); if (previous) await replaceDirectory(canonical, this.slotPath(previous));
+    await replaceDirectory(canonical, this.slotPath(slot.id));
+    store.slots.push(slot); store.activeSlotId = slot.id; await this.writeStore(store); return this.profileState();
+  }
+
   async renameProfile(slotId: string, displayName: string): Promise<Record<string, unknown>> { const store = await this.readStore(); const slot = this.slot(store, slotId); requireText(displayName, "displayName"); slot.displayName = displayName; await this.writeStore(store); return this.profileState(); }
   async deleteProfile(slotId: string): Promise<Record<string, unknown>> { const store = await this.readStore(); this.slot(store, slotId); if (store.activeSlotId === slotId) throw new Error("The active profile cannot be deleted."); await this.webAccounts?.forget(slotId); store.slots = store.slots.filter(slot => slot.id !== slotId); await rm(this.slotPath(slotId), { recursive: true, force: true }); await this.writeStore(store); return this.profileState(); }
 
   async activateProfile(slotId: string): Promise<Record<string, unknown>> {
-    const store = await this.readStore(); const slot = this.slot(store, slotId);
-    await mkdir(dirname(this.canonicalPath()), { recursive: true });
-    if (await exists(this.canonicalPath())) await rm(this.canonicalPath(), { recursive: true, force: true });
-    await cp(this.slotPath(slotId), this.canonicalPath(), { recursive: true, force: true });
+    const store = await this.readStore(); const slot = this.slot(store, slotId); const canonical = this.canonicalPath(); const target = this.slotPath(slotId);
+    const previous = this.activeSlotId(store); const hasCanonical = await exists(canonical); const replace = previous !== slotId || !hasCanonical;
+    // A running SV2 owns canonical, so re-activating its own slot touches neither copy and the next switch saves it.
+    const running = await this.runningSv2(); if (running.length && replace) throw sv2RunningError(running, "switching account slots");
+    if (replace && !(await exists(target))) throw new Error("The profile data folder was not found.");
+    if (!running.length && hasCanonical && previous) await replaceDirectory(canonical, this.slotPath(previous));
+    if (replace) {
+      // Cleared while canonical is swapped, so an interrupted switch is backed up next time instead of being saved over the previous slot.
+      if (previous) { store.activeSlotId = null; await this.writeStore(store); }
+      try { await replaceDirectory(target, canonical, hasCanonical && !previous ? await this.backupPath() : undefined); }
+      catch (error) { store.activeSlotId = previous; await this.writeStore(store); throw error; }
+    }
     slot.lastActivatedAtUtc = new Date().toISOString(); store.activeSlotId = slotId; await this.writeStore(store); return this.profileState();
   }
 
@@ -184,6 +203,9 @@ export class SynthVService {
   private async assertProcess(processId: number, identity: string): Promise<void> { if (!Number.isSafeInteger(processId) || processId <= 0 || !identity) throw new Error("Invalid SynthV process target."); if (!(await this.listProcesses()).some(process => process.processId === processId && process.processIdentity === identity)) throw new Error("SynthV process identity changed."); }
   private async assertSlot(slotId: string): Promise<void> { this.slot(await this.readStore(), slotId); }
   private slot(store: ProfileStore, id: string): Slot { if (!isUuid(id)) throw new Error("Invalid profile id."); const slot = store.slots.find(item => item.id === id); if (!slot) throw new Error("Profile was not found."); return slot; }
+  private activeSlotId(store: ProfileStore): string | null { return store.slots.some(item => item.id === store.activeSlotId) ? store.activeSlotId : null; }
+  private async runningSv2(): Promise<ProcessInfo[]> { try { return (await this.listProcesses()).filter(process => process.isSv2); } catch (error) { throw new Error(`Unable to confirm that Synthesizer V Studio 2 is closed: ${error instanceof Error ? error.message : String(error)}`); } }
+  private async backupPath(): Promise<string> { const path = join(this.vaultPath(), "backups", new Date().toISOString().replace(/[:.]/g, "-")); return await exists(path) ? `${path}-${randomUUID().slice(0, 8)}` : path; }
   private async readStore(): Promise<ProfileStore> { try { const value = JSON.parse(await readFile(this.storePath(), "utf8")); return { activeSlotId: typeof value.activeSlotId === "string" ? value.activeSlotId : null, slots: Array.isArray(value.slots) ? value.slots.filter((slot: unknown): slot is Slot => isSlot(slot)) : [] }; } catch { return { activeSlotId: null, slots: [] }; } }
   private async writeStore(store: ProfileStore): Promise<void> { await mkdir(dirname(this.storePath()), { recursive: true }); await writeFile(this.storePath(), JSON.stringify(store), "utf8"); }
   private dataRoot(): string { return dataRootFor(platform(), this.platformDataRoot, this.env.APPDATA, homedir(), this.root); }
@@ -214,6 +236,24 @@ function parseMacProcesses(text: string): ProcessInfo[] { return text.split(/\r?
 function processFrom(pidValue: string, name: string, command: string): ProcessInfo[] { const processId = Number(pidValue); if (!Number.isSafeInteger(processId) || !/synthesizer v|synthv/i.test(`${name} ${command}`)) return []; return [{ processId, processIdentity: `${processId}:${sha256(Buffer.from(command)).slice(0, 16)}`, name, productName: name, version: "", command, windowTitle: "", isSv2: /studio 2/i.test(`${name} ${command}`), sandboxed: /sandbox/i.test(command) }]; }
 async function runCommand(command: string, args: string[], env?: NodeJS.ProcessEnv): Promise<{ stdout: string; stderr: string; code: number }> { return new Promise(resolveResult => { const child = spawn(command, args, { shell: false, windowsHide: true, env: env ?? process.env }); let stdout = ""; let stderr = ""; child.stdout?.on("data", chunk => { stdout += String(chunk); }); child.stderr?.on("data", chunk => { stderr += String(chunk); }); child.on("error", error => resolveResult({ stdout, stderr: error.message, code: -1 })); child.on("close", code => resolveResult({ stdout, stderr, code: code ?? -1 })); }); }
 async function exists(path: string): Promise<boolean> { try { await access(path); return true; } catch { return false; } }
+// Copies beside the target and swaps by rename, so an interruption leaves the old or the new tree whole (plus a stray sibling), never a half-written one.
+async function replaceDirectory(source: string, target: string, keepPreviousAt?: string): Promise<void> {
+  const suffix = randomUUID().slice(0, 8); const incoming = `${target}.toolbox-incoming-${suffix}`; const outgoing = keepPreviousAt ?? `${target}.toolbox-outgoing-${suffix}`;
+  await mkdir(dirname(target), { recursive: true });
+  try { await cp(source, incoming, { recursive: true }); } catch (error) { await discard(incoming); throw error; }
+  const hadTarget = await exists(target);
+  if (hadTarget) { try { await mkdir(dirname(outgoing), { recursive: true }); await moveDirectory(target, outgoing); } catch (error) { await discard(incoming); throw error; } }
+  try { await moveDirectory(incoming, target); } catch (error) {
+    if (hadTarget) { try { await moveDirectory(outgoing, target); } catch { throw new Error(`Unable to replace ${target}; its previous content was kept at ${outgoing}.`); } }
+    await discard(incoming); throw error;
+  }
+  // A cleanup failure must not report the completed swap as failed, or callers would roll their bookkeeping back over new data.
+  if (hadTarget && !keepPreviousAt) await discard(outgoing);
+}
+// Windows briefly locks freshly written trees (indexer, antivirus), so a directory rename is retried before it counts as a failure.
+async function moveDirectory(from: string, to: string): Promise<void> { for (let attempt = 1; ; attempt += 1) { try { return await rename(from, to); } catch (error) { if (attempt >= 10 || !["EPERM", "EACCES", "EBUSY"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error; await delay(50 * attempt); } } }
+async function discard(path: string): Promise<void> { await rm(path, { recursive: true, force: true }).catch(() => undefined); }
+function sv2RunningError(processes: ProcessInfo[], action: string): Error { return new Error(`Synthesizer V Studio 2 is running (PID ${processes.map(item => item.processId).join(", ")}). Close it before ${action}.`); }
 async function firstFile(paths: string[]): Promise<string | null> { for (const path of paths) { try { if ((await stat(path)).isFile()) return path; } catch {} } return null; }
 async function firstDirectory(paths: string[]): Promise<string | null> { for (const path of paths) { try { if ((await stat(path)).isDirectory()) return path; } catch {} } return null; }
 function sha256(value: Buffer): string { return createHash("sha256").update(value).digest("hex"); }

@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { cp, lstat, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import test from "node:test";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 
 const servicePath = new URL("../src/PiDesktop.Tauri/electron/services/synthv-service.ts", import.meta.url);
 const { SynthVService, dataRootFor, canonicalPathFor } = await import(servicePath.href);
+const { registerSynthVCommands } = await import(new URL("../src/PiDesktop.Tauri/electron/services/synthv-commands.ts", import.meta.url).href);
 const bridgeDirectory = fileURLToPath(new URL("../src/PiDesktop.Tauri/components/synthv-agent-bridge/", import.meta.url));
 const noBridge = { status: async () => ({ connected: false }), requestStop: async () => {} };
 
@@ -220,4 +221,157 @@ test("save shortcut sends the platform save key and reports operating system fai
     denied = true;
     await assert.rejects(service.sendShortcut(target.processId, target.processIdentity, "save"), /Accessibility denied/);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+// A temp data root whose process scan reports one SV2 instance only while `running` is set, on either host platform.
+async function slotFixture(prefix) {
+  const root = await mkdtemp(join(tmpdir(), prefix));
+  const fixture = { root, running: false, scanFails: false };
+  const runner = async command => {
+    if (fixture.scanFails) return { stdout: "", stderr: "process scan denied", code: 1 };
+    if (!fixture.running) return { stdout: "", stderr: "", code: 0 };
+    return command === "ps"
+      ? { stdout: "4242 /Applications/Synthesizer V Studio 2.app/Contents/MacOS/Synthesizer V Studio 2 --started\n", stderr: "", code: 0 }
+      : { stdout: JSON.stringify([{ ProcessId: 4242, Name: "synthv-studio.exe", CommandLine: "\"C:\\Program Files\\Dreamtonics\\Synthesizer V Studio 2\\synthv-studio.exe\"" }]), stderr: "", code: 0 };
+  };
+  fixture.service = new SynthVService(root, root, noBridge, root, runner, undefined, root, {});
+  fixture.canonical = canonicalPathFor(process.platform, root);
+  fixture.vault = `${fixture.canonical}.toolbox-slots`;
+  fixture.slot = id => join(fixture.vault, "slots", id);
+  return fixture;
+}
+async function writeTree(directory, files) { for (const [path, content] of Object.entries(files)) { await mkdir(dirname(join(directory, path)), { recursive: true }); await writeFile(join(directory, path), content, "utf8"); } }
+async function readTree(directory, prefix = "") {
+  const tree = {};
+  for (const entry of await readdir(join(directory, prefix), { withFileTypes: true })) {
+    const path = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) Object.assign(tree, await readTree(directory, path)); else tree[path] = await readFile(join(directory, path), "utf8");
+  }
+  return tree;
+}
+const created = async (service, displayName) => (await service.createProfile(displayName)).slots.find(slot => slot.displayName === displayName).id;
+
+test("switching slots saves the live SV2 data into the active slot before replacing it", async () => {
+  const fixture = await slotFixture("synthv-switch-"); const { service, canonical } = fixture;
+  try {
+    const a = await created(service, "A"); const b = await created(service, "B");
+    await writeTree(fixture.slot(a), { "license/session": "a-session", "voices/old.bin": "old voice" });
+    await writeTree(fixture.slot(b), { "license/session": "b-session" });
+    await service.activateProfile(a);
+    assert.deepEqual(await readTree(canonical), { "license/session": "a-session", "voices/old.bin": "old voice" });
+
+    // What SV2 did while A was active: renewed the session, installed the Bridge, and removed a voice.
+    const live = { "license/session": "a-renewed", "scripts/SynthV Agent Bridge/SynthVAgentBridge.lua": "bridge" };
+    await rm(join(canonical, "voices"), { recursive: true }); await writeTree(canonical, live);
+    assert.equal((await service.activateProfile(b)).activeSlotId, b);
+    assert.deepEqual(await readTree(fixture.slot(a)), live, "the slot is replaced by the live data, not merged with its stale copy");
+    assert.deepEqual(await readTree(canonical), { "license/session": "b-session" });
+
+    await service.activateProfile(a);
+    assert.deepEqual(await readTree(canonical), live);
+    assert.deepEqual(await readTree(fixture.slot(b)), { "license/session": "b-session" });
+    assert.deepEqual((await readdir(dirname(canonical))).sort(), [basename(canonical), basename(fixture.vault)].sort(), "no staging siblings are left beside the official folder");
+    assert.deepEqual((await readdir(join(fixture.vault, "slots"))).sort(), [a, b].sort(), "no staging siblings are left beside the slots");
+    assert.deepEqual(await readdir(join(fixture.vault, "backups")).catch(() => []), [], "switching away from an active slot needs no backup");
+  } finally { await rm(fixture.root, { recursive: true, force: true }); }
+});
+
+test("re-activating the active slot keeps the live SV2 data and refreshes the slot copy", async () => {
+  const fixture = await slotFixture("synthv-reactivate-"); const { service, canonical } = fixture;
+  try {
+    const main = await created(service, "Main");
+    await writeTree(fixture.slot(main), { "license/session": "saved" });
+    await service.activateProfile(main);
+    const live = { "license/session": "renewed", "settings/settings.xml": "<changed/>" };
+    await writeTree(canonical, live);
+    assert.equal((await service.activateProfile(main)).activeSlotId, main);
+    assert.deepEqual(await readTree(canonical), live, "the older slot copy never replaces the live folder");
+    assert.deepEqual(await readTree(fixture.slot(main)), live);
+  } finally { await rm(fixture.root, { recursive: true, force: true }); }
+});
+
+test("the first activation without an active slot backs the official folder up under the vault", async () => {
+  const fixture = await slotFixture("synthv-backup-"); const { service, canonical } = fixture;
+  try {
+    const original = { "license/session": "real-session", "scripts/SynthV Agent Bridge/SynthVAgentBridge.lua": "bridge", "voices/Voice/voice.bin": "voice" };
+    await writeTree(canonical, original);
+    const fresh = await created(service, "Fresh");
+    assert.equal((await service.activateProfile(fresh)).activeSlotId, fresh);
+    assert.deepEqual(await readTree(canonical), {}, "the empty slot is now the official folder");
+    const backups = await readdir(join(fixture.vault, "backups"));
+    assert.equal(backups.length, 1);
+    assert.match(backups[0], /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/, "the timestamp is safe as a Windows folder name");
+    assert.deepEqual(await readTree(join(fixture.vault, "backups", backups[0])), original);
+
+    await service.activateProfile(await created(service, "Second"));
+    assert.deepEqual(await readdir(join(fixture.vault, "backups")), backups, "later switches save into the active slot instead");
+    assert.deepEqual(await readTree(join(fixture.vault, "backups", backups[0])), original, "backups are never pruned");
+  } finally { await rm(fixture.root, { recursive: true, force: true }); }
+});
+
+test("importing the current SV2 data copies it into a new slot that becomes active", async () => {
+  const fixture = await slotFixture("synthv-import-"); const { service, canonical } = fixture;
+  try {
+    const original = { "license/session": "real-session", "settings/settings.xml": "<settings/>", "scripts/SynthV Agent Bridge/SynthVAgentBridge.lua": "bridge" };
+    await writeTree(canonical, original);
+    const handlers = new Map(); registerSynthVCommands({ register: (name, handler) => handlers.set(name, handler) }, service);
+    const state = await handlers.get("import_current_sv2_profile")({ displayName: "Current" });
+    const [imported] = state.slots;
+    assert.equal(state.activeSlotId, imported.id); assert.equal(imported.isActive, true); assert.equal(typeof imported.lastActivatedAtUtc, "string");
+    assert.deepEqual(await readTree(fixture.slot(imported.id)), original);
+    assert.deepEqual(await readTree(canonical), original);
+
+    // The reported data loss: activating an imported slot replaced the official folder with an empty one.
+    await service.activateProfile(imported.id);
+    assert.deepEqual(await readTree(canonical), original);
+
+    const live = { ...original, "license/session": "renewed" }; await writeTree(canonical, live);
+    const again = await service.importCurrentProfile("Copy"); const copy = again.slots.find(slot => slot.displayName === "Copy");
+    assert.equal(again.activeSlotId, copy.id);
+    assert.deepEqual(await readTree(fixture.slot(imported.id)), live, "the previously active slot keeps what SV2 wrote before the import");
+    assert.deepEqual(await readTree(fixture.slot(copy.id)), live);
+  } finally { await rm(fixture.root, { recursive: true, force: true }); }
+});
+
+test("importing without current SV2 data fails without creating a slot", async () => {
+  const fixture = await slotFixture("synthv-import-missing-"); const { service } = fixture;
+  try {
+    await assert.rejects(service.importCurrentProfile("Nothing"), /^Error: No current Synthesizer V Studio 2 data was found to import\.$/);
+    assert.deepEqual((await service.profileState()).slots, []);
+    assert.deepEqual(await readdir(join(fixture.vault, "slots")).catch(() => []), []);
+  } finally { await rm(fixture.root, { recursive: true, force: true }); }
+});
+
+test("a running SV2 blocks switching and importing but not re-activating its own slot", async () => {
+  const fixture = await slotFixture("synthv-running-"); const { service, canonical } = fixture;
+  try {
+    await writeTree(canonical, { "license/session": "live" });
+    const current = (await service.importCurrentProfile("Current")).slots[0].id; const other = await created(service, "Other");
+    fixture.running = true;
+    await writeTree(canonical, { "license/session": "written-while-running" });
+    await assert.rejects(service.activateProfile(other), /Synthesizer V Studio 2 is running \(PID 4242\)\. Close it before switching account slots\./);
+    await assert.rejects(service.importCurrentProfile("Again"), /Synthesizer V Studio 2 is running \(PID 4242\)\. Close it before importing its current data\./);
+    assert.equal((await service.profileState()).slots.length, 2);
+    assert.equal((await service.activateProfile(current)).activeSlotId, current);
+    assert.deepEqual(await readTree(canonical), { "license/session": "written-while-running" });
+    assert.deepEqual(await readTree(fixture.slot(current)), { "license/session": "live" }, "the slot copy waits until SV2 releases the official folder");
+
+    fixture.running = false; fixture.scanFails = true;
+    await assert.rejects(service.activateProfile(other), /Unable to confirm that Synthesizer V Studio 2 is closed: process scan denied/);
+    fixture.scanFails = false;
+    await service.activateProfile(other);
+    assert.deepEqual(await readTree(fixture.slot(current)), { "license/session": "written-while-running" });
+  } finally { await rm(fixture.root, { recursive: true, force: true }); }
+});
+
+test("activating a slot whose folder is missing fails before touching the official folder", async () => {
+  const fixture = await slotFixture("synthv-missing-slot-"); const { service, canonical } = fixture;
+  try {
+    await writeTree(canonical, { "license/session": "live" });
+    const current = (await service.importCurrentProfile("Current")).slots[0].id; const gone = await created(service, "Gone");
+    await rm(fixture.slot(gone), { recursive: true });
+    await assert.rejects(service.activateProfile(gone), /The profile data folder was not found\./);
+    assert.deepEqual(await readTree(canonical), { "license/session": "live" });
+    assert.equal((await service.profileState()).activeSlotId, current);
+  } finally { await rm(fixture.root, { recursive: true, force: true }); }
 });
