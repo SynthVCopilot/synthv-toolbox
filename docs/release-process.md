@@ -31,6 +31,8 @@ Notes:
 - The disk image carries no license agreement dialog. The terms of use stay in `src/PiDesktop.Tauri/electron/assets/TERMS-OF-USE.txt`.
 - The signed app has the RunAsNode fuse turned off, so shipped code must not start the app binary as Node; a contract test guards this.
 - Squirrel.Mac only installs an update whose signing identity matches the installed app. The signing center signs with Team ID `76DMUAK6J5`. If the macOS build installed today was signed by another team, those users must reinstall manually once; say so in the release notes of the first center-signed release.
+- Release files are named `Toneshuttle-<version>-setup.exe`, `Toneshuttle-<version>.dmg` and `Toneshuttle-<version>-arm64-mac.zip`, and the app bundle is `Toneshuttle.app`. The app and bundle id `com.synthvcopilot.toolbox`, the pinned NSIS GUID, this repository and the signing center project `synthv-toolbox-arm64` keep the identifiers chosen under the Synthesizer V Toolbox name, because installed apps and the center's provisioning depend on them.
+- The Windows executable keeps its old name, `Synthesizer V Toolbox.exe` (`win.executableName`), inside the unchanged per-user install directory `synthv-toolbox`. Launch-at-login entries, the desktop and Start menu shortcuts the installer keeps on upgrade, taskbar pins and the installer's running-app check all name that path, so renaming the executable would leave them pointing at a deleted file. Task Manager still shows Toneshuttle because the file description carries the product name.
 
 ## 中文
 
@@ -63,3 +65,5 @@ Notes:
 - 磁盘映像不再弹出许可协议，使用条款保留在 `src/PiDesktop.Tauri/electron/assets/TERMS-OF-USE.txt`。
 - 已签名应用的 RunAsNode 熔丝为关闭状态，发布代码不能再把应用可执行文件当作 Node 启动，契约测试会检查这一点。
 - Squirrel.Mac 只安装签名身份与已安装应用一致的更新。签名中心使用 Team ID `76DMUAK6J5`；如果当前已安装的 macOS 版本由其他团队签名，这些用户需要手动重装一次，并应在首个由签名中心签名的版本的发布说明中注明。
+- 发布文件名为 `Toneshuttle-<版本>-setup.exe`、`Toneshuttle-<版本>.dmg` 和 `Toneshuttle-<版本>-arm64-mac.zip`，应用包为 `Toneshuttle.app`。应用与 bundle id `com.synthvcopilot.toolbox`、固定的 NSIS GUID、本仓库以及签名中心项目 `synthv-toolbox-arm64` 沿用 Synthesizer V Toolbox 时期的标识，因为已安装的应用和签名中心的配置依赖它们。
+- Windows 可执行文件沿用旧名 `Synthesizer V Toolbox.exe`（`win.executableName`），安装目录仍为当前用户下的 `synthv-toolbox`。开机自启动项、升级时保留的桌面和开始菜单快捷方式、固定到任务栏的图标以及安装器的运行中检测都指向这个路径；改名会让它们指向已删除的文件。任务管理器仍显示 Toneshuttle，因为文件说明使用产品名称。

@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, describe, test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const { ensureDraft, main, promote, requiredAssets } = await import(path.join(root, ".github", "scripts", "release-draft.mjs"));
+const { ensureDraft, main, promote, requiredAssets } = await import(pathToFileURL(path.join(root, ".github", "scripts", "release-draft.mjs")).href);
+const yaml = createRequire(path.join(root, "src/PiDesktop.Tauri/node_modules/electron-updater/package.json"))("js-yaml");
+const builder = yaml.load(readFileSync(path.join(root, "electron-builder.yml"), "utf8"));
 
 const temps = [];
 after(() => { for (const dir of temps) rmSync(dir, { recursive: true, force: true }); });
@@ -51,8 +54,14 @@ const env = { INPUT_TAG: "v1.2.3" };
 describe("assets required before a release is announced", () => {
   test("cover the Windows installer and update metadata and the macOS image, updater zip and update metadata", () => {
     assert.deepEqual(requiredAssets("1.2.3").sort(), [
-      "Synthesizer-V-Toolbox-1.2.3-arm64-mac.zip", "Synthesizer-V-Toolbox-1.2.3-setup.exe", "Synthesizer-V-Toolbox-1.2.3.dmg", "latest-mac.yml", "latest.yml",
+      "Toneshuttle-1.2.3-arm64-mac.zip", "Toneshuttle-1.2.3-setup.exe", "Toneshuttle-1.2.3.dmg", "latest-mac.yml", "latest.yml",
     ]);
+  });
+
+  test("use the names electron-builder gives the Windows installer and the disk image", () => {
+    const named = (pattern, ext) => pattern.replace("${version}", "1.2.3").replace("${ext}", ext);
+    assert.ok(requiredAssets("1.2.3").includes(named(builder.win.artifactName, "exe")));
+    assert.ok(requiredAssets("1.2.3").includes(named(builder.dmg.artifactName, "dmg")));
   });
 });
 
@@ -64,7 +73,7 @@ describe("promoting the draft release", () => {
     assert.equal(fake.state().isDraft, false);
   });
 
-  for (const missing of ["latest.yml", "Synthesizer-V-Toolbox-1.2.3-setup.exe", "latest-mac.yml", "Synthesizer-V-Toolbox-1.2.3.dmg", "Synthesizer-V-Toolbox-1.2.3-arm64-mac.zip"]) {
+  for (const missing of ["latest.yml", "Toneshuttle-1.2.3-setup.exe", "latest-mac.yml", "Toneshuttle-1.2.3.dmg", "Toneshuttle-1.2.3-arm64-mac.zip"]) {
     test(`keeps the draft while ${missing} is missing`, () => {
       const fake = fakeGh({ release: { isDraft: true, assets: assets(requiredAssets("1.2.3").filter((name) => name !== missing)) } });
       const lines = [];

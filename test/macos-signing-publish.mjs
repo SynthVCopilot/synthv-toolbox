@@ -7,17 +7,17 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, describe, test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const publish = await import(path.join(root, ".github", "scripts", "publish-macos.mjs"));
+const publish = await import(pathToFileURL(path.join(root, ".github", "scripts", "publish-macos.mjs")).href);
 const { assertStagedSet, assetNames, awaitSigning, fetchSigned, latestMacYml, main, readContext, resolve, validateVerification, verifyMacos } = publish;
 // The updater reads latest-mac.yml with this parser, so the generated file must load through it.
 const yaml = createRequire(path.join(root, "src/PiDesktop.Tauri/node_modules/electron-updater/package.json"))("js-yaml");
 
 const PROJECT = "synthv-toolbox-arm64";
 const BUNDLE_ID = "com.synthvcopilot.toolbox";
-const APP = "Synthesizer V Toolbox.app";
+const APP = "Toneshuttle.app";
 const TEAM_ID = "76DMUAK6J5";
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 const REQUEST_ID = "6f1d0c2e-3b4a-4c5d-8e9f-a0b1c2d3e4f5";
@@ -261,7 +261,7 @@ function macTools({ team = TEAM_ID, gatekeeper = "source=Notarized Developer ID"
       return "";
     }
     if (tool === "hdiutil") return "";
-    if (tool === "plutil") return { CFBundleIdentifier: BUNDLE_ID, CFBundleShortVersionString: version, CFBundleExecutable: "Synthesizer V Toolbox" }[args[1]] ?? "";
+    if (tool === "plutil") return { CFBundleIdentifier: BUNDLE_ID, CFBundleShortVersionString: version, CFBundleExecutable: "Toneshuttle" }[args[1]] ?? "";
     if (tool === "lipo") return `${archs}\n`;
     if (tool === "ditto" && args[0] === "-c") { writeFileSync(target, "updater-zip-bytes"); return ""; }
     if (tool === "ditto" && args[0] === "-x") { mkdirSync(path.join(target, APP), { recursive: true }); return ""; }
@@ -324,8 +324,8 @@ describe("macOS verification of the signed image", () => {
 
 describe("latest-mac.yml", () => {
   test("loads through the updater's yaml parser with the signed zip first", () => {
-    const zip = { name: "Synthesizer-V-Toolbox-1.2.3-arm64-mac.zip", version: "1.2.3", size: 17, sha512: "zipsha+/==" };
-    const dmg = { name: "Synthesizer-V-Toolbox-1.2.3.dmg", version: "1.2.3", size: 14, sha512: "dmgsha+/==" };
+    const zip = { name: "Toneshuttle-1.2.3-arm64-mac.zip", version: "1.2.3", size: 17, sha512: "zipsha+/==" };
+    const dmg = { name: "Toneshuttle-1.2.3.dmg", version: "1.2.3", size: 14, sha512: "dmgsha+/==" };
     const info = yaml.load(latestMacYml({ zip, dmg, now: () => Date.UTC(2026, 9, 11, 10, 0, 0) }));
     assert.equal(info.version, "1.2.3");
     assert.deepEqual(info.files, [{ url: zip.name, sha512: zip.sha512, size: 17 }, { url: dmg.name, sha512: dmg.sha512, size: 14 }]);
@@ -450,7 +450,7 @@ describe("staged release set", () => {
   });
 
   test("uses the artifact names the app and the nightly channel already publish", () => {
-    assert.deepEqual(assetNames("1.2.3"), { dmg: "Synthesizer-V-Toolbox-1.2.3.dmg", zip: "Synthesizer-V-Toolbox-1.2.3-arm64-mac.zip", metadata: "latest-mac.yml" });
+    assert.deepEqual(assetNames("1.2.3"), { dmg: "Toneshuttle-1.2.3.dmg", zip: "Toneshuttle-1.2.3-arm64-mac.zip", metadata: "latest-mac.yml" });
   });
 });
 

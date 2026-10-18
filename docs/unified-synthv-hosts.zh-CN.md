@@ -1,6 +1,6 @@
 # 统一 SynthV 宿主接口
 
-Synthesizer V Toolbox 将官方 Synthesizer V Studio Pro、Synthesizer V Flat 和官方 Synthesizer V Studio 2 Pro 收敛为同一套内置 Agent 工具。Agent 不需要判断底层使用脚本 Bridge 还是本机 MCP，也不会看到宿主的原始工具列表。
+Toneshuttle（声梭）将官方 Synthesizer V Studio Pro、Synthesizer V Flat 和官方 Synthesizer V Studio 2 Pro 收敛为同一套内置 Agent 工具。Agent 不需要判断底层使用脚本 Bridge 还是本机 MCP，也不会看到宿主的原始工具列表。
 
 ## 标准工具
 
@@ -20,8 +20,8 @@ Synthesizer V Toolbox 将官方 Synthesizer V Studio Pro、Synthesizer V Flat �
 
 Agent 先调用 `synthv_hosts`。只有一个已连接宿主时，后续读写可省略 `hostId`；存在多个连接时必须明确选择。
 
-- 官方 SV1 和 SV2：Toolbox 聚焦对应 PID，默认发送 F13 启动或重连 Bridge；断开时发送 F14。原始快捷键和 Bridge 工具不会进入 Agent 工具表。
-- Flat：先尝试 Flat 声明并经严格校验的 `127.0.0.1` 本机 MCP endpoint。endpoint 缺失、握手失败或无法列出工具时，Toolbox 自动改用兼容 Bridge；只有这一回退路径才发送 F13/F14。Agent 的工具、连接结果和能力数据不暴露所选后端。
+- 官方 SV1 和 SV2：Toneshuttle 聚焦对应 PID，默认发送 F13 启动或重连 Bridge；断开时发送 F14。原始快捷键和 Bridge 工具不会进入 Agent 工具表。
+- Flat：先尝试 Flat 声明并经严格校验的 `127.0.0.1` 本机 MCP endpoint。endpoint 缺失、握手失败或无法列出工具时，Toneshuttle 自动改用兼容 Bridge；只有这一回退路径才发送 F13/F14。Agent 的工具、连接结果和能力数据不暴露所选后端。
 - 官方 SV1 首次安装兼容扩展后需要宿主完成脚本重扫。之后连接和断开均由 Agent 自动执行。
 
 ## 真实能力差异
@@ -41,7 +41,7 @@ Agent 先调用 `synthv_hosts`。只有一个已连接宿主时，后续读写�
 3. 调用 `synthv_capabilities`，依据操作清单规划工作。
 4. 使用 `synthv_read` 获取当前数据。官方 SV2 写入前按返回要求使用 `writeIntent: true` 获取 `contextId`。
 5. 使用 `synthv_write` 写入；每次写入只使用标准操作名和零基索引。
-6. 需要可移植记录时调用 `synthv_export`。快照写入 Toolbox 的受管 `synthv-snapshots` 目录。
+6. 需要可移植记录时调用 `synthv_export`。快照写入 Toneshuttle 的受管 `synthv-snapshots` 目录。
 7. 完成后调用 `synthv_disconnect`。
 
 连接失败时先重新调用 `synthv_hosts`：进程退出、PID 变化或宿主扩展未就绪都会反映在标准状态中。不要直接调用或缓存底层宿主工具。
