@@ -297,8 +297,8 @@ async function initializeServices(): Promise<void> {
     onAgentProgress: (progress) => { agentTasks?.recordProgress(progress); emitToRenderer("agent.run.progress", progress); },
   });
   await runtimeHost.load();
-  ai = new AiService({ metadataPath: join(userData, "ai", "metadata.json"), runtime: agentRuntimePort(runtimeHost.runtime), catalog: modelCatalog(), approvals, usage: { query: async (provider, credentialIds) => ({ queriedAt: new Date().toISOString(), accounts: credentialIds.map(credentialId => ({ providerId: provider, credentialId, status: "unknown", plan: null, windows: [], balance: null, error: null })) }) }, authorizer: { authorize: authorizeProvider }, systemPrompt: () => agentSystemPrompt({ synthv: desktop.synthvEnabled() }) });
-  capabilities = new HostCapabilities(synthv, creative, ai, () => desktop.synthvEnabled());
+  ai = new AiService({ metadataPath: join(userData, "ai", "metadata.json"), runtime: agentRuntimePort(runtimeHost.runtime), catalog: modelCatalog(), approvals, usage: { query: async (provider, credentialIds) => ({ queriedAt: new Date().toISOString(), accounts: credentialIds.map(credentialId => ({ providerId: provider, credentialId, status: "unknown", plan: null, windows: [], balance: null, error: null })) }) }, authorizer: { authorize: authorizeProvider }, systemPrompt: () => agentSystemPrompt({ synthv: desktop.synthvEnabled(), mcpServers: desktop.aiModeEnabled() ? mcpServerConfigs(desktop.enabledMcpServers()) : [] }) });
+  capabilities = new HostCapabilities(synthv, creative, ai, () => desktop.synthvEnabled(), () => desktop.aiModeEnabled());
   desktop = new DesktopStateService(userData, app.getVersion(), runtimeHost, ai, synthv, channel => { updateChannel = channel; updater.setChannel(channel); }, creativeRuntime, bridgeLoadError, () => { void externalMcp.reconcile(desktop.aiModeEnabled() ? mcpServerConfigs(desktop.enabledMcpServers()) : []); });
   await desktop.load();
   const coverChildren = async (conversationId: string) => (await cover.invoke("media_tasks", {}) as Array<Record<string, any>>).filter(job => job.parentConversationId === conversationId);

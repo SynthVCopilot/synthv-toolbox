@@ -54,7 +54,7 @@ addMessages("zh-CN", {
     ok: "{name} 可用，提供 {count} 个工具。",
     tools: "工具：{tools}",
   },
-  home: { checkComponents: "检查组件", localService: "本地服务", serviceRunning: "运行中", serviceOff: "未开启", serviceClients: "MCP 客户端可接入", serviceDisabled: "在“连接”页开启" },
+  home: { checkComponents: "检查组件", localService: "本地服务", serviceRunning: "运行中", serviceOff: "未开启", serviceClients: "MCP 客户端可接入", serviceDisabled: "在“连接”页开启", externalMcp: "外部 MCP 服务器", externalMcpAgent: "已启用并提供给 Agent", externalMcpAiOnly: "仅在 AI 模式提供给 Agent" },
   copilot: {
     emptyDescriptionGeneric: "可以从分析音频、整理歌词或规划工作流开始。",
     planPromptGeneric: "帮我规划从演唱音频到 MIDI 的工作流",
@@ -122,7 +122,7 @@ addMessages("en", {
     ok: "{name} responded with {count} tools.",
     tools: "Tools: {tools}",
   },
-  home: { checkComponents: "Check components", localService: "Local service", serviceRunning: "Running", serviceOff: "Off", serviceClients: "MCP clients can connect", serviceDisabled: "Turn on in Connections" },
+  home: { checkComponents: "Check components", localService: "Local service", serviceRunning: "Running", serviceOff: "Off", serviceClients: "MCP clients can connect", serviceDisabled: "Turn on in Connections", externalMcp: "External MCP servers", externalMcpAgent: "Enabled for the agent", externalMcpAiOnly: "Used by the agent in AI mode" },
   copilot: {
     emptyDescriptionGeneric: "Start by analyzing audio, working on lyrics, or planning a workflow.",
     planPromptGeneric: "Help me plan a workflow from vocal audio to MIDI",

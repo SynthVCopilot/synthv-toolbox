@@ -1943,7 +1943,7 @@ function renderHome(): string {
       <article class="stat-card"><span>${t("home.mode")}</span><strong>${app.mode === "ai" ? t("home.ai") : t("home.toolbox")}</strong><small>${app.mode === "ai" ? aiConnectionSummary() : t("home.runtimeOff")}</small></article>
       <article class="stat-card"><span>${t("home.components")}</span><strong>${ready} / ${app.components.length}</strong><small>${t("home.available")}</small></article>
       ${synthvOn() ? `<article class="stat-card"><span>SynthV</span><strong>${app.installations.length ? t("home.discovered") : t("home.notDiscovered")}</strong><small>${app.installations[0]?.displayName ?? t("home.manualScripts")}</small></article>` : `<article class="stat-card"><span>${t("home.localService")}</span><strong>${httpApiStatus.running ? t("home.serviceRunning") : t("home.serviceOff")}</strong><small>${httpApiStatus.running ? t("home.serviceClients") : t("home.serviceDisabled")}</small></article>`}
-      <article class="stat-card"><span>${t("home.toolConnections")}</span><strong>${app.bridgeConnected ? t("home.online") : t("home.offline")}</strong><small>${app.mode === "ai" ? t("home.enabledMcp", { count: app.mcpServers.filter((server) => server.enabled).length }) : t("home.independentBridge")}</small></article>
+      ${synthvOn() ? `<article class="stat-card"><span>${t("home.toolConnections")}</span><strong>${app.bridgeConnected ? t("home.online") : t("home.offline")}</strong><small>${app.mode === "ai" ? t("home.enabledMcp", { count: app.mcpServers.filter((server) => server.enabled).length }) : t("home.independentBridge")}</small></article>` : `<article class="stat-card"><span>${t("home.externalMcp")}</span><strong>${app.mcpServers.filter((server) => server.enabled).length}</strong><small>${app.mode === "ai" ? t("home.externalMcpAgent") : t("home.externalMcpAiOnly")}</small></article>`}
     </div>
     <section class="section-block"><div class="section-heading"><div><h2>${t("home.quickStart")}</h2><p>${t("home.quickDescription")}</p></div></div>
       <div class="quick-grid">${features.filter((feature) => feature.homePriority !== undefined && featureVisible(feature, current)).sort((left, right) => (left.homePriority ?? 0) - (right.homePriority ?? 0)).slice(0, 3).map((feature) => {
@@ -2065,9 +2065,9 @@ function renderToolCategory(groupId: ToolGroup["id"]): string {
   const group = toolGroups.find((item) => item.id === groupId);
   if (!group) return "";
   const groupFeatureList = groupFeatures(group);
-  const selected = activeWorkflow && group.featureIds.includes(activeWorkflow)
-    ? groupFeatureList.find((feature) => feature.id === activeWorkflow)
-    : groupFeatureList.find((feature) => featureAvailability(feature, current).tone === "ready") ?? groupFeatureList[0];
+  // A remembered tool may be hidden now (for example after turning SynthV off), so only visible tools can stay selected.
+  const selected = (activeWorkflow ? groupFeatureList.find((feature) => feature.id === activeWorkflow) : undefined)
+    ?? groupFeatureList.find((feature) => featureAvailability(feature, current).tone === "ready") ?? groupFeatureList[0];
   const tabs = groupFeatureList.length > 1 ? groupFeatureList.map((feature) => {
     const availability = featureAvailability(feature, current);
     return `<button class="tool-tab ${selected?.id === feature.id ? "active" : ""} ${availability.tone}" data-feature="${escapeHtml(feature.id)}" ${selected?.id === feature.id ? 'aria-current="page"' : ""}><span>${escapeHtml(feature.title)}</span><small>${escapeHtml(availability.label)}</small></button>`;

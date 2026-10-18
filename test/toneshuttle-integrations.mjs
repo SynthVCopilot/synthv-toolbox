@@ -166,8 +166,9 @@ test("generic agent tools route to existing host commands and reject untrusted a
   assert.match(prompt, /## Toolbox tools/);
   assert.deepEqual([...tools.keys()], TOOLBOX_AGENT_TOOLS.map(spec => spec.name));
   for (const tool of tools.values()) assert.equal(tool.parameters.type, "object");
-  const features = await tools.get("toolbox_audio_features").execute("1", { path: "C:\a.wav", notes: true });
-  assert.deepEqual(calls.at(-1), ["run_audio_probe", { audioPath: "C:\a.wav", advanced: true }]);
+  const take = process.platform === "win32" ? "C:\\takes\\a.wav" : "/takes/a.wav";
+  const features = await tools.get("toolbox_audio_features").execute("1", { path: take, notes: true });
+  assert.deepEqual(calls.at(-1), ["run_audio_probe", { audioPath: take, advanced: true }]);
   assert.equal(features.content[0].text, JSON.stringify({ ok: true }));
   await tools.get("toolbox_history").execute("2", {});
   assert.deepEqual(calls.at(-1), ["list_creative_history", { limit: 20 }]);
@@ -191,4 +192,57 @@ test("MCP and plugin callers cannot reach SynthV operations while the integratio
   enabled = true;
   assert.deepEqual(await capabilities.invoke("host.internal", "synthv", "scan", {}), []);
   assert.deepEqual(calls, ["list_creative_history", "scan"]);
+});
+
+test("SynthV-backed creative operations and Cover are refused through MCP and plugins when their gate is closed", async () => {
+  const { HostCapabilities } = await import("../src/PiDesktop.Tauri/dist/electron/services/host-capabilities.js");
+  let synthv = false, ai = true;
+  const calls = [];
+  const creative = { invoke: async (operation, params) => { calls.push(operation); return operation === "media_tasks" ? [{ id: "c1", kind: "cover" }, { id: "s1", kind: "source-separation" }] : { ok: true, params }; } };
+  const capabilities = new HostCapabilities({}, creative, {}, () => synthv, () => ai);
+  for (const [operation, params] of [["run_score_to_synthv", {}], ["confirm_lyric_bridge_fit", {}], ["run_retake_workbench", {}], ["run_audio_to_project", { importToSynthv: true }], ["queue_cover", { request: {} }], ["retry_media_task", { id: "c1" }]]) {
+    await assert.rejects(capabilities.invoke("host.internal", "creative", operation, params), (error) => error.clientSafe === true && /turned off/.test(error.message), operation);
+  }
+  assert.deepEqual(await capabilities.invoke("host.internal", "creative", "run_audio_to_project", { importToSynthv: false }), { ok: true, params: { importToSynthv: false } }, "MIDI export alone needs no SynthV");
+  assert.deepEqual(await capabilities.invoke("host.internal", "creative", "retry_media_task", { id: "s1" }), { ok: true, params: { id: "s1" } }, "retrying a non-Cover job is not a Cover");
+  synthv = true; ai = false;
+  await assert.rejects(capabilities.invoke("host.internal", "creative", "queue_cover", { request: {} }), (error) => error.clientSafe === true && /AI mode/.test(error.message));
+  await assert.rejects(capabilities.invoke("host.internal", "creative", "retry_media_task", { id: "c1" }), /AI mode/);
+  assert.deepEqual(await capabilities.invoke("host.internal", "creative", "run_score_to_synthv", {}), { ok: true, params: {} });
+  ai = true;
+  assert.deepEqual(await capabilities.invoke("host.internal", "creative", "queue_cover", { request: {} }), { ok: true, params: { request: {} } });
+  assert.ok(!calls.some((operation) => ["confirm_lyric_bridge_fit", "run_retake_workbench"].includes(operation)), "refused operations never reach the creative service");
+});
+
+test("changing the external MCP server set changes the agent prompt, so the runtime builds a new session", () => {
+  const base = agentSystemPrompt({ synthv: false, mcpServers: [] });
+  const one = agentSystemPrompt({ synthv: false, mcpServers: [{ id: "a", name: "Files", command: "npx", args: ["server-a"] }] });
+  const changed = agentSystemPrompt({ synthv: false, mcpServers: [{ id: "a", name: "Files", command: "npx", args: ["server-b"] }] });
+  assert.doesNotMatch(base, /External MCP servers/);
+  assert.match(one, /External MCP servers: Files \(configuration [0-9a-f]{8}\)\./);
+  assert.notEqual(one, changed, "a changed command must recreate the session even when the name is unchanged");
+  assert.doesNotMatch(one, /toolbox_|sv_\*|toolbox_cover/, "tool names stay out of the base prompt; Cover repair and tuning sessions have different tools");
+});
+
+test("agent tools only accept absolute paths on a local drive", async () => {
+  const { TOOLBOX_AGENT_TOOLS, validate } = await import("../src/PiDesktop.Tauri/dist/electron/services/toolbox-agent-tools.js");
+  const probe = TOOLBOX_AGENT_TOOLS.find((spec) => spec.name === "toolbox_audio_probe");
+  for (const path of ["\\\\attacker\\share\\x.wav", "//attacker/share/x.wav", "\\\\?\\UNC\\attacker\\share\\x.wav", "relative.wav"]) assert.throws(() => validate(probe, { path }), /local drive/, path);
+  const local = process.platform === "win32" ? "C:\\Music\\take.wav" : "/home/me/take.wav";
+  assert.deepEqual(validate(probe, { path: local }), { path: local });
+});
+
+test("an autostart entry whose path did not survive decoding is never treated as stale", () => {
+  const entries = [{ name: "electron.app.synthv-toolbox", command: "\"C:\\Users\\\uFFFD\uFFFD\\AppData\\Local\\Programs\\synthv-toolbox\\Synthesizer V Toolbox.exe\" --toolbox-autostart" }];
+  assert.deepEqual(staleAutostartEntries(entries, "C:\Other\Toneshuttle.exe", () => false), []);
+});
+
+test("a loaded bridge is reported as loaded even when SynthV is off and was never probed", async () => {
+  const probe = synthvProbe();
+  await withState({ integrations: { synthv: "off" } }, probe, async (state) => {
+    const app = await state.bootstrap();
+    assert.equal(app.integrations.synthv.bridgeLoaded, true);
+    assert.equal(app.bridgeBundled, true);
+    assert.deepEqual(probe.calls, []);
+  });
 });

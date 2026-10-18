@@ -3,20 +3,31 @@ import { spawn } from "node:child_process";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { JsonValue } from "@synthv-toolbox/runtime-protocol";
 import type { AiService, AiProviderId } from "./ai-service.js";
+import { CREATIVE_BRIDGE_COMMANDS } from "./creative-bridge.js";
 import type { CreativeService } from "./creative-service.js";
 import type { SynthVService } from "./synthv-service.js";
 
 type Data = Record<string, unknown>;
 
 export class HostCapabilities {
-  constructor(private readonly synthv: SynthVService, private readonly creative: CreativeService, private readonly ai: AiService, private readonly synthvEnabled: () => boolean = () => true) {}
+  constructor(private readonly synthv: SynthVService, private readonly creative: CreativeService, private readonly ai: AiService, private readonly synthvEnabled: () => boolean = () => true, private readonly aiModeEnabled: () => boolean = () => true) {}
 
   async invoke(permission: "host.internal" | "host.advanced", capability: string, operation: string, params: JsonValue): Promise<JsonValue> {
     if (!isObject(params)) throw new Error("Host capability parameters must be an object.");
-    // Turning the integration off promises the app stops probing SynthV; MCP clients and plugins must not bypass that.
-    if (capability === "synthv" && !this.synthvEnabled()) throw Object.assign(new Error("The Synthesizer V integration is turned off in Settings > Integrations."), { clientSafe: true });
+    // The UI hides these paths when SynthV is off or the app is in toolbox mode; MCP clients and plugins must not reopen them.
+    const cover = capability === "creative" && await this.startsCover(operation, params);
+    if (!this.synthvEnabled() && (capability === "synthv" || cover || (capability === "creative" && drivesSynthV(operation, params)))) throw clientSafe("The Synthesizer V integration is turned off in Settings > Integrations.");
+    if (cover && !this.aiModeEnabled()) throw clientSafe("Cover runs the internal agent, which is only available in AI mode.");
     if (permission === "host.internal") return this.internal(capability, operation, params);
     return this.advanced(capability, operation, params);
+  }
+
+  /** Cover drives the agent and writes into SynthV; a retry counts only when the job being retried is a Cover job. */
+  private async startsCover(operation: string, params: Data): Promise<boolean> {
+    if (operation === "queue_cover") return true;
+    if (operation !== "retry_media_task") return false;
+    const jobs = await this.creative.invoke("media_tasks", {});
+    return Array.isArray(jobs) && jobs.some(job => isObject(job) && job.id === params.id && job.kind === "cover");
   }
 
   private async internal(capability: string, operation: string, params: Data): Promise<JsonValue> {
@@ -65,6 +76,8 @@ export class HostCapabilities {
   }
 }
 
+function drivesSynthV(operation: string, params: Data): boolean { return CREATIVE_BRIDGE_COMMANDS.includes(operation) || operation.includes("lyric_bridge") || (operation === "run_audio_to_project" && params.importToSynthv === true); }
+function clientSafe(message: string): Error { return Object.assign(new Error(message), { clientSafe: true }); }
 function isObject(value: unknown): value is Data { return value !== null && typeof value === "object" && !Array.isArray(value); }
 function text(params: Data, key: string): string { const value = params[key]; if (typeof value !== "string" || !value) throw new Error(`${key} must be a non-empty string.`); return value; }
 function boolean(params: Data, key: string): boolean { if (typeof params[key] !== "boolean") throw new Error(`${key} must be a boolean.`); return params[key] as boolean; }

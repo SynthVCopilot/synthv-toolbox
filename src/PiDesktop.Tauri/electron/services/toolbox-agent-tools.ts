@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import type { PiInlineExtension, PiToolResult } from "@synthv-toolbox/agent-runtime";
 
 /**
@@ -69,6 +70,8 @@ export function validate(spec: ToolSpec, raw: unknown): Record<string, unknown> 
   for (const [key, value] of Object.entries(input)) {
     const schema = spec.properties[key] as { type: string; minLength?: number; maxLength?: number; enum?: string[]; minimum?: number; maximum?: number };
     if (schema.type === "string" && (typeof value !== "string" || value.length < (schema.minLength ?? 0) || value.length > (schema.maxLength ?? Infinity) || (schema.enum && !schema.enum.includes(value)))) throw new Error(`${spec.name}: ${key} is invalid.`);
+    // A UNC or device path makes the host open a network share; a prompt-injected model could use that to leak Windows credentials.
+    if (key === "path" && (!isAbsolute(value as string) || /^[\\/]{2}/.test(value as string))) throw new Error(`${spec.name}: path must be an absolute path on a local drive.`);
     if (schema.type === "boolean" && typeof value !== "boolean") throw new Error(`${spec.name}: ${key} must be a boolean.`);
     if (schema.type === "integer" && (!Number.isInteger(value) || (value as number) < (schema.minimum ?? -Infinity) || (value as number) > (schema.maximum ?? Infinity))) throw new Error(`${spec.name}: ${key} is out of range.`);
   }

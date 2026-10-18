@@ -32,7 +32,8 @@ export function executableOf(command: string): string {
 
 export function staleAutostartEntries(entries: RunKeyEntry[], execPath: string, fileExists: (path: string) => boolean): RunKeyEntry[] {
   return entries.filter(entry => {
-    if (!entry.command.includes(AUTOSTART_ARGUMENT)) return false;
+    // reg.exe prints in the OEM code page; a path that did not survive decoding cannot be judged, so it is never treated as stale.
+    if (!entry.command.includes(AUTOSTART_ARGUMENT) || /\uFFFD/.test(entry.command + entry.name)) return false;
     const executable = executableOf(entry.command);
     return executable.toLowerCase() !== execPath.toLowerCase() && !fileExists(executable);
   });
