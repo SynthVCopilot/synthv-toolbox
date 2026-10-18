@@ -32,7 +32,7 @@ const defaults = (): DesktopSettings => ({ onboardingCompleted: false, mode: "to
 export class DesktopStateService {
   private settings = defaults();
   private synthvEvidence: SynthVEvidence = { installations: 0, profiles: 0, bridgeConnected: false, bridgeLoaded: false };
-  constructor(private readonly root: string, private readonly appVersion: string, private readonly runtime: ElectronRuntimeHost, private readonly ai: AiService, private readonly synthv: SynthVProbe, private readonly applyUpdateChannel?: (channel: "stable" | "nightly") => void, private readonly creativeRuntime?: { status(): Promise<{ready: boolean; detail: string}> }, private readonly bridgeLoadError?: string) {}
+  constructor(private readonly root: string, private readonly appVersion: string, private readonly runtime: ElectronRuntimeHost, private readonly ai: AiService, private readonly synthv: SynthVProbe, private readonly applyUpdateChannel?: (channel: "stable" | "nightly") => void, private readonly creativeRuntime?: { status(): Promise<{ready: boolean; detail: string}> }, private readonly bridgeLoadError?: string, private readonly onSettingsChanged?: () => void) {}
 
   async load(): Promise<void> {
     try {
@@ -63,7 +63,7 @@ export class DesktopStateService {
     return { ...this.settings, integrations: { synthv: integration }, platform: process.platform, appVersion: this.appVersion, configPath: this.path(), settingsLoadError: null, model, bridgeBundled: this.synthvEvidence.bridgeLoaded, bridgeConnected: synthv.bridgeConnected, installations: synthv.installations, components: componentCatalog(synthv.profiles, creativeRuntime, ffmpeg, enabled), downloads: [], pluginInternalFunctionsEnabled: runtime.pluginInternalFunctionsEnabled, pluginAdvancedFunctionsEnabled: runtime.pluginAdvancedFunctionsEnabled, autostartEnabled: autostart.enabled, autostartError: autostart.error, svpAssociation: { supported: enabled && process.platform === "win32", registered: false, isDefault: false, detail: "Electron launch routing is available after the application is installed." }, sv2Profiles: synthv.profiles, agentBudgets };
   }
 
-  async update(values: Partial<DesktopSettings>): Promise<Data> { this.settings = { ...this.settings, ...values }; if (values.updateChannel) this.applyUpdateChannel?.(values.updateChannel); await this.persist(); return this.bootstrap(); }
+  async update(values: Partial<DesktopSettings>): Promise<Data> { this.settings = { ...this.settings, ...values }; if (values.updateChannel) this.applyUpdateChannel?.(values.updateChannel); await this.persist(); this.onSettingsChanged?.(); return this.bootstrap(); }
   async setIntegration(id: IntegrationId, preference: IntegrationPreference): Promise<Data> { return this.update({ integrations: { ...this.settings.integrations, [id]: preference } }); }
   async saveMcpServer(server: Data): Promise<Data> { const id = requiredText(server.id, "server.id"); const next = this.settings.mcpServers.filter(item => item.id !== id); next.push({ ...server, id }); return this.update({ mcpServers: next }); }
   async deleteMcpServer(id: string): Promise<Data> { return this.update({ mcpServers: this.settings.mcpServers.filter(item => item.id !== id) }); }

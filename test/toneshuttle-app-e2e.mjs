@@ -229,6 +229,46 @@ test("Toneshuttle app: branding, SynthV integration switch and authenticated MCP
       } finally { await mock.close(); }
     });
 
+    await t.test("an external stdio MCP server added in Connections is testable and reaches the agent with the Edit-mode policy", async () => {
+      const { createMockAnthropicServer, systemText } = await import("./fixtures/mock-anthropic-server.mjs");
+      const mock = createMockAnthropicServer({ turns: [] });
+      const mockPort = await mock.listen();
+      await writeFile(join(homeDir, ".pi", "agent", "models.json"), JSON.stringify({ providers: { anthropic: { baseUrl: `http://127.0.0.1:${mockPort}` } } }), "utf8");
+      const fixture = fileURLToPath(new URL("./fixtures/external-mcp-server.mjs", import.meta.url));
+      try {
+        // The previous subtest switched to AI mode through the raw bridge; reload so the renderer bootstraps that state.
+        await evaluate(page, "window.location.reload()");
+        await waitFor(() => evaluate(page, "!!document.querySelector('[data-page=\"connections\"]')"), { label: "the nav after reload" });
+        await click(page, "[data-page=\"connections\"]");
+        await waitFor(() => evaluate(page, "!!document.querySelector('#mcp-form')"), { label: "the external MCP form (AI mode)" });
+        await evaluate(page, `(() => { document.querySelector('#mcp-name').value = 'Fixture tools'; document.querySelector('#mcp-command').value = ${JSON.stringify(process.execPath)}; document.querySelector('#mcp-args').value = ${JSON.stringify(fixture)}; document.querySelector('#mcp-enabled').checked = true; document.querySelector('#mcp-form').requestSubmit(); return true; })()`);
+        await waitFor(() => evaluate(page, "!!document.querySelector('[data-test-mcp]')"), { label: "the saved server row" });
+        await click(page, "[data-test-mcp]");
+        const feedback = await waitFor(async () => { const text = await evaluate(page, "document.querySelector('.feedback-stack')?.innerText ?? ''"); return /read_status/.test(text) ? text : undefined; }, { label: "the real probe result listing the fixture's tools" });
+        assert.match(feedback, /write_note/);
+        await shot("06-external-mcp");
+
+        mock.push({ content: [{ type: "tool_use", id: "toolu_ext_read", name: "mcp__fixture_tools__read_status", input: {} }, { type: "tool_use", id: "toolu_ext_write", name: "mcp__fixture_tools__write_note", input: { text: "hello" } }], stopReason: "tool_use", usage: { input: 100, output: 10, cacheWrite: 0 } });
+        mock.push({ content: [{ type: "tool_use", id: "toolu_ext_ask", name: "request_input", input: { question: "Done?", missing: ["confirmation"] } }], stopReason: "tool_use", usage: { input: 100, output: 10, cacheWrite: 0 } });
+        const conversation = await invoke(page, "new_conversation");
+        const messages = await invoke(page, "send_message", { conversationId: conversation.id, input: "Check the fixture.", runId: "run-external" });
+        assert.equal(messages.at(-1).outcome.status, "needs_input", JSON.stringify(messages.at(-1).outcome));
+        const first = mock.requests.at(-2);
+        const names = first.tools.map((tool) => tool.name);
+        for (const name of ["mcp__fixture_tools__read_status", "mcp__fixture_tools__write_note", "mcp__fixture_tools__choose_shape"]) assert.ok(names.includes(name), `missing ${name} in ${names}`);
+        for (const tool of first.tools) assert.ok(!["oneOf", "anyOf", "allOf"].some((key) => key in (tool.input_schema ?? {})), `${tool.name} sends a top-level combinator`);
+        assert.match(systemText(first.system), /## External MCP servers[\s\S]*Fixture tools/);
+        const results = mock.requests.at(-1).messages.flatMap((message) => Array.isArray(message.content) ? message.content : []).filter((block) => block.type === "tool_result");
+        const text = (block) => typeof block.content === "string" ? block.content : (block.content ?? []).map((part) => part.text ?? "").join("");
+        const read = results.find((block) => block.tool_use_id === "toolu_ext_read");
+        const write = results.find((block) => block.tool_use_id === "toolu_ext_write");
+        assert.ok(read && !read.is_error, `the read-only tool must run in Edit mode: ${read && text(read)}`);
+        assert.match(text(read), /initialized/);
+        assert.ok(write?.is_error, "a tool that may change data must be refused in Edit mode");
+        assert.match(text(write), /Solo mode/);
+      } finally { await mock.close(); }
+    });
+
     await t.test("About carries the license, links and non-affiliation notice", async () => {
       await click(page, "[data-page=\"about\"]");
       await waitFor(() => evaluate(page, "!!document.querySelector('.about-notice')"), { label: "about page" });

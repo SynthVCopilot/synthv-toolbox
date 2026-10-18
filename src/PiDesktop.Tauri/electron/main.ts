@@ -32,6 +32,7 @@ import { migrateAutostart, RUN_KEY } from "./services/autostart-migration.js";
 import { loadEmbeddedBridge, unavailableBridge, type EmbeddedBridge } from "./services/synthv-bridge.js";
 import { createSynthVDeliveryRegistry, createSynthVToolsExtension } from "./services/synthv-agent-tools.js";
 import { createToolboxAgentToolsExtension } from "./services/toolbox-agent-tools.js";
+import { createExternalMcpToolsExtension, ExternalMcpPool, mcpServerConfigs } from "./services/external-mcp-tools.js";
 import { SynthVService } from "./services/synthv-service.js";
 import { DreamtonicsWebAccounts, type WebAccountBrowser } from "./services/dreamtonics-web.js";
 import { createDreamtonicsBrowser } from "./services/dreamtonics-browser.js";
@@ -266,6 +267,8 @@ async function initializeServices(): Promise<void> {
   let capabilities: HostCapabilities;
   let desktop: DesktopStateService;
   const delivery = createSynthVDeliveryRegistry();
+  // One process per enabled external server, shared by all sessions; nothing spawns until a session needs it.
+  const externalMcp = new ExternalMcpPool({ clientVersion: app.getVersion() });
   const approvals = new AgentApprovalBroker(
     (snapshot) => emitToRenderer("agent.approvals.changed", snapshot),
     { execute: async (item) => bridge.tools.find(tool => tool.name === item.tool)?.call(item.params) ?? { text: "", isError: true }, deliver: (resolution) => delivery.deliver(resolution) },
@@ -285,8 +288,9 @@ async function initializeServices(): Promise<void> {
           return [createSynthVToolsExtension({ bridge: coverHost.forTuning(target, monitor), approvals, sessionId, guards, runState, registry: delivery, workMode: () => "solo" })];
         }
         const toolbox = createToolboxAgentToolsExtension({ invoke: (command, args) => { if (!commandRegistry) throw new Error("Electron services are not ready."); return commandRegistry.invoke(command, args); } });
-        if (!desktop.synthvEnabled()) return [toolbox];
-        return [toolbox, createSynthVToolsExtension({ bridge, approvals, sessionId, guards, runState, registry: delivery, workMode: () => desktop.agentWorkMode() }), createCoverAgentToolsExtension({ sessionId, guards, runState, invoke: (command, args) => cover.invoke(command, args) })];
+        const external = desktop.aiModeEnabled() && desktop.enabledMcpServers().length > 0 ? [createExternalMcpToolsExtension({ pool: externalMcp, servers: () => mcpServerConfigs(desktop.enabledMcpServers()), workMode: () => desktop.agentWorkMode() })] : [];
+        if (!desktop.synthvEnabled()) return [toolbox, ...external];
+        return [toolbox, ...external, createSynthVToolsExtension({ bridge, approvals, sessionId, guards, runState, registry: delivery, workMode: () => desktop.agentWorkMode() }), createCoverAgentToolsExtension({ sessionId, guards, runState, invoke: (command, args) => cover.invoke(command, args) })];
       },
       persistTranscripts: () => desktop.agentTranscriptsEnabled(),
     }),
@@ -295,7 +299,7 @@ async function initializeServices(): Promise<void> {
   await runtimeHost.load();
   ai = new AiService({ metadataPath: join(userData, "ai", "metadata.json"), runtime: agentRuntimePort(runtimeHost.runtime), catalog: modelCatalog(), approvals, usage: { query: async (provider, credentialIds) => ({ queriedAt: new Date().toISOString(), accounts: credentialIds.map(credentialId => ({ providerId: provider, credentialId, status: "unknown", plan: null, windows: [], balance: null, error: null })) }) }, authorizer: { authorize: authorizeProvider }, systemPrompt: () => agentSystemPrompt({ synthv: desktop.synthvEnabled() }) });
   capabilities = new HostCapabilities(synthv, creative, ai, () => desktop.synthvEnabled());
-  desktop = new DesktopStateService(userData, app.getVersion(), runtimeHost, ai, synthv, channel => { updateChannel = channel; updater.setChannel(channel); }, creativeRuntime, bridgeLoadError);
+  desktop = new DesktopStateService(userData, app.getVersion(), runtimeHost, ai, synthv, channel => { updateChannel = channel; updater.setChannel(channel); }, creativeRuntime, bridgeLoadError, () => { void externalMcp.reconcile(desktop.aiModeEnabled() ? mcpServerConfigs(desktop.enabledMcpServers()) : []); });
   await desktop.load();
   const coverChildren = async (conversationId: string) => (await cover.invoke("media_tasks", {}) as Array<Record<string, any>>).filter(job => job.parentConversationId === conversationId);
   agentTasks = createAgentTaskService({
@@ -329,7 +333,7 @@ async function initializeServices(): Promise<void> {
       return result.canceled ? undefined : result.filePath;
     },
   }, approvals }, emitToRenderer);
-  registerQuitCleanup(async () => { approvals.dispose(); creative.dispose?.(); await cover.dispose(); await runtimeHost.runtime.dispose(); await agentTasks?.dispose(); await httpServer.stop(); await bridge.close(); });
+  registerQuitCleanup(async () => { approvals.dispose(); creative.dispose?.(); await cover.dispose(); await runtimeHost.runtime.dispose(); await externalMcp.dispose(); await agentTasks?.dispose(); await httpServer.stop(); await bridge.close(); });
 }
 
 let quitCleanupDone = false;
