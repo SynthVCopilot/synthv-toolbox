@@ -23,10 +23,13 @@ assert.match(messages, /downloads, installs, and restarts automatically/);
 const context = vm.createContext({});
 const moduleSource = stripTypeScriptTypes(source.replace(/^import type .*;\n/gm, "").replace("export function renderAboutPage", "function renderAboutPage"), { mode: "transform" });
 vm.runInContext(moduleSource, context);
-const html = vm.runInContext("renderAboutPage", context)({ app: { appVersion: "0.2.0" }, update: { updateAvailable: true, releaseName: "Version 0.2.1" }, busy: false, translate: key => key, escapeHtml: String, icon: () => "" });
+const html = vm.runInContext("renderAboutPage", context)({ app: { appVersion: "0.2.0", platform: "windows" }, product: { name: "Toneshuttle", alternate: "声梭", logo: "./assets/brand-logo.svg" }, update: { updateAvailable: true, releaseName: "Version 0.2.1" }, busy: false, translate: key => key, escapeHtml: String, icon: () => "" });
 const document = new JSDOM(html).window.document;
 assert.ok(document.querySelector("[data-check-toolbox-update]"));
 assert.equal(document.querySelectorAll("[data-download-toolbox-update], [data-cancel-toolbox-update], [data-install-toolbox-update]").length, 0);
 assert.match(document.body.textContent, /Version 0\.2\.1/);
+assert.match(document.querySelector("h2").textContent, /^Toneshuttle 声梭$/);
+assert.deepEqual([...document.querySelectorAll("[data-open-toolbox-project]")].map((button) => button.dataset.openToolboxProject), ["project", "issues", "terms"]);
+assert.equal(document.querySelector(".about-notice")?.textContent, "brand.notAffiliated", "the About page must carry the Dreamtonics non-affiliation notice");
 
 console.log("About page exposes one automatic update action.");

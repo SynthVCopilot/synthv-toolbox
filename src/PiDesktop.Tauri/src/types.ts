@@ -167,6 +167,27 @@ export interface HttpApiStatus {
   endpoint: string | null;
   agentEndpoint: string | null;
   lastError: string | null;
+  /** Present once the host enforces bearer authentication; shown so users can configure clients. */
+  token?: string;
+  authRequired?: boolean;
+  serverName?: string;
+  protocolVersions?: string[];
+  tools?: string[];
+}
+
+export type IntegrationPreference = "auto" | "on" | "off";
+
+export interface IntegrationState {
+  preference: IntegrationPreference;
+  enabled: boolean;
+  detected: boolean;
+  bridgeLoaded: boolean;
+  errors: string[];
+}
+
+export interface McpProbeResult extends OperationResult {
+  tools?: string[];
+  serverInfo?: { name: string; version?: string };
 }
 
 export interface SynthVInstallation {
@@ -476,6 +497,8 @@ export interface BootstrapState {
   autostartEnabled?: boolean | null;
   autostartError?: string | null;
   svpAssociation: SvpAssociationState;
+  /** Older hosts omit this; treat a missing value as SynthV enabled, which was the only behavior then. */
+  integrations?: { synthv: IntegrationState };
 }
 
 export interface ConversationSummary {

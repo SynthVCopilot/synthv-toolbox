@@ -7,6 +7,9 @@ import "./styles.css";
 import "@platform-kit/fluent/style.css";
 import "./i18nCommon";
 import "./i18nLyrics";
+import "./i18nIntegrations";
+import { BRAND, productName } from "./brand";
+import { maskToken, mcpClientSnippets } from "./mcpClientConfig";
 import { hasDesktopBridge, listenDesktop, listenForDesktopFileDrops } from "../electron/bridge";
 import { registerModelAuthElement, registerModelConnectionPanelElement } from "@model-auth/vue/custom-element";
 import { FluentSelect } from "@platform-kit/fluent/vue";
@@ -85,6 +88,7 @@ import type {
   MediaTaskSnapshot,
   McpServerConfig,
   HttpApiStatus,
+  IntegrationPreference,
   InstalledPlugin,
   OperationResult,
   ProjectCheckpoint,
@@ -141,6 +145,7 @@ let app: BootstrapState | undefined;
 let page: Page = "home";
 let busy = false;
 let notice = "";
+let mcpTokenRevealed = false;
 let error = "";
 let conversations: ConversationSummary[] = [];
 let conversation: ConversationSnapshot | undefined;
@@ -1050,22 +1055,22 @@ function navItem(target: Page, label: string, glyph: IconName): string {
 function renderSidebar(): string {
   if (!app) return "";
   return `<div class="brand" data-page="home" title="${t("onboardingDetails.home")}">
-      <div class="brand-mark small"><img class="brand-logo" src="./assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div>
-      <div><strong>Synthesizer V Toolbox</strong><span>Creative utility suite</span></div>
+      <div class="brand-mark small"><img class="brand-logo" src="${BRAND.logo}" alt="${BRAND.productName}" /></div>
+      <div><strong>${productName(locale())}</strong><span>${t("brand.tagline")}</span></div>
     </div>
     <nav class="nav" aria-label="${t("onboardingDetails.navigation")}">
       <span class="nav-label">${t("nav.workspace")}</span>
       ${navItem("home", t("nav.home"), "home")}
-      ${app.platform === "windows" || app.platform === "macos" || app.platform === "preview" ? navItem("accounts", t("nav.accounts"), "users") : ""}
+      ${synthvOn() && (app.platform === "windows" || app.platform === "macos" || app.platform === "preview") ? navItem("accounts", t("nav.accounts"), "users") : ""}
       ${toolGroups.map((group) => navItem(group.id, group.title, group.icon)).join("")}
       ${navItem("lyrics", t("nav.lyrics"), "lyrics")}
       ${navItem("history", t("nav.history"), "history")}
       ${app.mode === "ai" ? navItem("copilot", t("nav.copilot"), "bot") : ""}
       ${app.mode === "ai" ? navItem("ai", t("nav.ai"), "sparkles") : ""}
-      ${pluginRegistry.pages().length ? `<span class="nav-label">Plugins</span>${pluginRegistry.pages().map((pluginPage) => navItem(pluginPage.pageId, escapeHtml(pluginPage.title), pluginPage.icon ?? "plug")).join("")}` : ""}
+      ${pluginRegistry.pages().length ? `<span class="nav-label">${t("nav.pluginPages")}</span>${pluginRegistry.pages().map((pluginPage) => navItem(pluginPage.pageId, escapeHtml(pluginPage.title), pluginPage.icon ?? "plug")).join("")}` : ""}
       <span class="nav-label">${t("nav.system")}</span>
       ${navItem("components", t("nav.components"), "boxes")}
-      ${navItem("bridge", t("nav.bridge"), "bridge")}
+      ${synthvOn() ? navItem("bridge", t("nav.bridge"), "bridge") : ""}
       ${navItem("connections", t("nav.connections"), "server")}
       ${navItem("plugins", t("nav.plugins"), "plug")}
     </nav>
@@ -1097,7 +1102,7 @@ function renderApp(): void {
   if (!app) return;
   if (app.settingsLoadError) {
     root.innerHTML = `<main class="fatal settings-recovery" role="alert">
-      <div class="brand-mark"><img class="brand-logo" src="./assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div>
+      <div class="brand-mark"><img class="brand-logo" src="${BRAND.logo}" alt="${BRAND.productName}" /></div>
       <span class="eyebrow">${t("system.recovery")}</span>
       <h1>${t("system.recoveryTitle")}</h1>
       <p>${t("system.recoveryDescription")}</p>
@@ -1645,7 +1650,7 @@ function renderOnboarding(): void {
   root.innerHTML = `<main class="onboarding">
     <div class="onboarding-glow one"></div><div class="onboarding-glow two"></div>
     <section class="onboarding-card">
-      <div class="onboarding-brand"><div class="brand-mark"><img class="brand-logo" src="./assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div><span>Synthesizer V Toolbox</span></div>
+      <div class="onboarding-brand"><div class="brand-mark"><img class="brand-logo" src="${BRAND.logo}" alt="${BRAND.productName}" /></div><span>${productName(locale())}</span></div>
       <div class="eyebrow">${t("onboarding.eyebrow")}</div>
       <h1>${t("onboarding.title")}</h1>
       <p class="lead">${t("onboarding.lead")}</p>
@@ -1676,7 +1681,7 @@ function renderPage(): string {
   if (isPluginPageId(page)) return "";
   switch (page) {
     case "home": return renderHome();
-    case "accounts": return renderAccounts();
+    case "accounts": return synthvOn() ? renderAccounts() : renderIntegrationOff();
     case "import": return renderToolCategory("import");
     case "convert": return renderToolCategory("convert");
     case "analysis": return renderToolCategory("analysis");
@@ -1686,12 +1691,16 @@ function renderPage(): string {
     case "copilot": return renderCopilot();
     case "ai": return renderAiPage();
     case "components": return renderComponents();
-    case "bridge": return renderBridge();
+    case "bridge": return synthvOn() ? renderBridge() : renderIntegrationOff();
     case "connections": return renderMcp();
     case "plugins": return renderPlugins();
     case "settings": return renderSettings();
-    case "about": return renderAboutPage({ app: app!, update: toolboxUpdate, download: toolboxUpdateDownload, busy, locale: locale(), translate: t, escapeHtml, icon });
+    case "about": return renderAboutPage({ app: app!, product: { name: productName(locale()), alternate: productName(locale()) === BRAND.productName ? BRAND.productNameZh : BRAND.productName, logo: BRAND.logo }, update: toolboxUpdate, download: toolboxUpdateDownload, busy, locale: locale(), translate: t, escapeHtml, icon });
   }
+}
+
+function renderIntegrationOff(): string {
+  return `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("bridge", 24)}</span><div><h2>${t("integrations.offTitle")}</h2><p>${t("integrations.offDescription")}</p><button class="primary" data-set-integration="synthv:on" ${busy ? "disabled" : ""}>${t("integrations.turnOn")}</button></div></section>`;
 }
 
 function renderPlugins(): string {
@@ -1926,18 +1935,18 @@ function renderHome(): string {
       <div><span class="eyebrow">${app.mode === "ai" ? t("home.aiWorkspace") : t("home.localWorkspace")}</span>
         <h2>${app.mode === "ai" ? t("home.aiTitle") : t("home.localTitle")}</h2>
         <p>${app.mode === "ai" ? t("home.aiDescription") : t("home.localDescription")}</p>
-        <div class="hero-actions"><button class="primary" data-page="${app.mode === "ai" ? "copilot" : "import"}">${icon(app.mode === "ai" ? "bot" : "pipeline", 18)} ${app.mode === "ai" ? t("home.openCopilot") : t("home.openImport")}</button><button class="secondary" data-page="bridge">${t("home.checkBridge")}</button></div>
+        <div class="hero-actions"><button class="primary" data-page="${app.mode === "ai" ? "copilot" : "import"}">${icon(app.mode === "ai" ? "bot" : "pipeline", 18)} ${app.mode === "ai" ? t("home.openCopilot") : t("home.openImport")}</button>${synthvOn() ? `<button class="secondary" data-page="bridge">${t("home.checkBridge")}</button>` : `<button class="secondary" data-page="components">${t("home.checkComponents")}</button>`}</div>
       </div>
-      <div class="hero-orb"><div><img class="brand-logo" src="./assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div><span>${app.mode === "ai" ? "COPILOT READY" : "LOCAL FIRST"}</span></div>
+      <div class="hero-orb"><div><img class="brand-logo" src="${BRAND.logo}" alt="${BRAND.productName}" /></div><span>${app.mode === "ai" ? "COPILOT READY" : "LOCAL FIRST"}</span></div>
     </div>
     <div class="stats-grid">
       <article class="stat-card"><span>${t("home.mode")}</span><strong>${app.mode === "ai" ? t("home.ai") : t("home.toolbox")}</strong><small>${app.mode === "ai" ? aiConnectionSummary() : t("home.runtimeOff")}</small></article>
       <article class="stat-card"><span>${t("home.components")}</span><strong>${ready} / ${app.components.length}</strong><small>${t("home.available")}</small></article>
-      <article class="stat-card"><span>SynthV</span><strong>${app.installations.length ? t("home.discovered") : t("home.notDiscovered")}</strong><small>${app.installations[0]?.displayName ?? t("home.manualScripts")}</small></article>
+      ${synthvOn() ? `<article class="stat-card"><span>SynthV</span><strong>${app.installations.length ? t("home.discovered") : t("home.notDiscovered")}</strong><small>${app.installations[0]?.displayName ?? t("home.manualScripts")}</small></article>` : `<article class="stat-card"><span>${t("home.localService")}</span><strong>${httpApiStatus.running ? t("home.serviceRunning") : t("home.serviceOff")}</strong><small>${httpApiStatus.running ? t("home.serviceClients") : t("home.serviceDisabled")}</small></article>`}
       <article class="stat-card"><span>${t("home.toolConnections")}</span><strong>${app.bridgeConnected ? t("home.online") : t("home.offline")}</strong><small>${app.mode === "ai" ? t("home.enabledMcp", { count: app.mcpServers.filter((server) => server.enabled).length }) : t("home.independentBridge")}</small></article>
     </div>
     <section class="section-block"><div class="section-heading"><div><h2>${t("home.quickStart")}</h2><p>${t("home.quickDescription")}</p></div></div>
-      <div class="quick-grid">${features.filter((feature) => feature.homePriority !== undefined).sort((left, right) => (left.homePriority ?? 0) - (right.homePriority ?? 0)).slice(0, 3).map((feature) => {
+      <div class="quick-grid">${features.filter((feature) => feature.homePriority !== undefined && featureVisible(feature, current)).sort((left, right) => (left.homePriority ?? 0) - (right.homePriority ?? 0)).slice(0, 3).map((feature) => {
         const availability = featureAvailability(feature, current);
         const target = availability.route ? `data-page="${availability.route}"` : `data-feature="${feature.id}"`;
         const detail = availability.tone === "ready" ? `${feature.base[0]} · ${feature.base[1]}` : availability.label;
@@ -2032,11 +2041,21 @@ function featureAvailability(feature: Feature, current: BootstrapState): Feature
   };
 }
 
+/** Hosts that predate integrations omit the field; they always behaved as if SynthV were on. */
+function synthvOn(current: BootstrapState | undefined = app): boolean {
+  return current?.integrations?.synthv.enabled ?? true;
+}
+
+/** One rule for tool tabs and home quick-start, so a hidden tool is never offered as a shortcut. */
+function featureVisible(feature: Feature, current: BootstrapState): boolean {
+  if (feature.id === "cover" && current.mode !== "ai") return false;
+  return feature.integration !== "synthv" || synthvOn(current);
+}
+
 function groupFeatures(group: ToolGroup): Feature[] {
   return group.featureIds.flatMap((id) => {
-    if (id === "cover" && app?.mode !== "ai") return [];
     const feature = features.find((item) => item.id === id);
-    return feature ? [feature] : [];
+    return feature && app && featureVisible(feature, app) ? [feature] : [];
   });
 }
 
@@ -2873,7 +2892,7 @@ function renderCopilot(): string {
     <section class="chat-panel">
       <div class="chat-header"><div class="chat-title"><strong>${escapeHtml(conversation?.title ?? t("copilot.newChat"))}</strong><small>${escapeHtml(t("copilot.enabledToolsOnly"))}</small></div><div class="chat-header-actions" aria-label="${escapeHtml(t("copilot.toolbar"))}"><button type="button" class="chat-model-button" data-open-ai-provider-picker aria-label="${escapeHtml(t("copilot.chooseProviderModel", { provider: providerName, model: providerModel }))}"><span class="chat-model-mark">${icon("sparkles", 14)}</span><span><strong>${escapeHtml(providerName)}</strong><small>${escapeHtml(providerModel)} · ${providerStatus}</small></span>${icon("arrow", 14)}</button><div class="chat-work-mode" role="group" aria-label="${escapeHtml(t("copilot.workMode"))}"><button type="button" class="${app?.agentWorkMode === "edit" ? "active" : ""}" data-agent-work-mode="edit" aria-pressed="${app?.agentWorkMode === "edit"}">Edit</button><button type="button" class="${app?.agentWorkMode === "solo" ? "active" : ""}" data-agent-work-mode="solo" aria-pressed="${app?.agentWorkMode === "solo"}">Solo</button></div>${renderAgentEffortGroup()}</div></div>
       <div id="agent-approvals-slot" class="agent-approvals-slot">${approvalsSlotHtml}</div>
-      <div class="messages"><div id="agent-goal-slot">${goalSlotHtml}</div>${messages.length ? messages.map(renderMessage).join("") : `<div class="empty-chat"><span class="mode-icon purple">${icon("bot", 30)}</span><h2>${escapeHtml(t("copilot.emptyTitle"))}</h2><p>${escapeHtml(t("copilot.emptyDescription"))}</p><div class="prompt-chips"><button data-prompt="${escapeHtml(t("copilot.audioPrompt"))}">${escapeHtml(t("copilot.audioAction"))}</button><button data-prompt="${escapeHtml(t("copilot.projectPrompt"))}">${escapeHtml(t("copilot.projectAction"))}</button><button data-prompt="${escapeHtml(t("copilot.planPrompt"))}">${escapeHtml(t("copilot.planAction"))}</button></div></div>`}<div id="agent-live-run">${liveRunSlotHtml}</div></div>
+      <div class="messages"><div id="agent-goal-slot">${goalSlotHtml}</div>${messages.length ? messages.map(renderMessage).join("") : `<div class="empty-chat"><span class="mode-icon purple">${icon("bot", 30)}</span><h2>${escapeHtml(t("copilot.emptyTitle"))}</h2><p>${escapeHtml(t(synthvOn() ? "copilot.emptyDescription" : "copilot.emptyDescriptionGeneric"))}</p><div class="prompt-chips"><button data-prompt="${escapeHtml(t("copilot.audioPrompt"))}">${escapeHtml(t("copilot.audioAction"))}</button>${synthvOn() ? `<button data-prompt="${escapeHtml(t("copilot.projectPrompt"))}">${escapeHtml(t("copilot.projectAction"))}</button><button data-prompt="${escapeHtml(t("copilot.planPrompt"))}">${escapeHtml(t("copilot.planAction"))}</button>` : `<button data-prompt="${escapeHtml(t("copilot.planPromptGeneric"))}">${escapeHtml(t("copilot.planActionGeneric"))}</button>`}</div></div>`}<div id="agent-live-run">${liveRunSlotHtml}</div></div>
       <form id="chat-form" class="composer"><div class="composer-shell"><textarea id="chat-input" rows="1" placeholder="${t("copilot.placeholder")}"></textarea><span id="agent-composer-action">${composerActionHtml}</span></div><span>${t("copilot.review")}</span></form>
     </section>
   </div>`;
@@ -3126,6 +3145,25 @@ function renderBridge(): string {
     </section>${processControls}</div>`;
 }
 
+/** Client configs carry the real token when copied but show it masked unless the user reveals it. */
+function renderMcpClientSetup(): string {
+  const status = httpApiStatus;
+  if (!status.endpoint || !status.token) return `<section class="panel mcp-client-setup"><div class="section-heading"><div><h2>${t("mcpClient.title")}</h2><p>${t("mcpClient.needsMcp")}</p></div></div></section>`;
+  const token = status.token;
+  const shown = (text: string) => mcpTokenRevealed ? text : text.replaceAll(token, maskToken(token));
+  const snippets = mcpClientSnippets(status.endpoint, token).map((snippet) => `<article class="mcp-snippet"><header><strong>${escapeHtml(snippet.label)}</strong><small>${escapeHtml(t("mcpClient.target", { target: snippet.target === "terminal" ? t("mcpClient.terminal") : snippet.target }))}</small><button class="secondary" data-copy-mcp="${snippet.id}">${t("mcpClient.copy")}</button></header><pre><code>${escapeHtml(shown(snippet.text))}</code></pre></article>`).join("");
+  const tools = status.tools ?? [];
+  return `<section class="panel mcp-client-setup"><div class="section-heading"><div><h2>${t("mcpClient.title")}</h2><p>${t("mcpClient.description")}</p></div></div><div class="mcp-token-row"><strong>${t("mcpClient.token")}</strong><code data-mcp-token>${escapeHtml(shown(token))}</code><button class="secondary" data-toggle-mcp-token>${mcpTokenRevealed ? t("mcpClient.hide") : t("mcpClient.show")}</button><button class="secondary" data-copy-mcp="token">${t("mcpClient.copy")}</button><button class="secondary danger" data-rotate-mcp-token ${busy ? "disabled" : ""}>${t("mcpClient.rotate")}</button></div><p class="mcp-client-meta">${t("mcpClient.authRequired")} ${t("mcpClient.server")}: <code>${escapeHtml(status.serverName ?? BRAND.slug)}</code>${status.protocolVersions?.length ? ` · ${t("mcpClient.protocols")}: ${escapeHtml(status.protocolVersions.join(", "))}` : ""}</p><div class="mcp-snippets">${snippets}</div><div class="mcp-tools"><strong>${t("mcpClient.tools")}</strong>${tools.length ? `<ul>${tools.map((tool) => `<li><code>${escapeHtml(tool)}</code></li>`).join("")}</ul>` : `<p>${t("mcpClient.noTools")}</p>`}</div></section>`;
+}
+
+function copyMcpText(id: string): void {
+  const token = httpApiStatus.token;
+  if (!token || !httpApiStatus.endpoint) return;
+  const snippet = mcpClientSnippets(httpApiStatus.endpoint, token).find((item) => item.id === id);
+  const label = snippet?.label ?? t("mcpClient.token");
+  void navigator.clipboard.writeText(snippet?.text ?? token).then(() => { notice = t("mcpClient.copied", { label }); }).catch((reason) => { notice = t("mcpClient.copyFailed", { error: formatError(reason) }); }).finally(render);
+}
+
 function renderMcp(): string {
   if (!app) return "";
   const externalMcp = app.mode === "ai"
@@ -3133,7 +3171,7 @@ function renderMcp(): string {
       <div class="mcp-layout"><section class="panel"><div class="section-heading"><div><h2>${t("connections.external")}</h2><p>${t("connections.configurations", { count: app.mcpServers.length })}</p></div></div><div class="mcp-list">${app.mcpServers.length ? app.mcpServers.map((server) => `<article><span class="server-icon">${icon("server", 20)}</span><div><strong>${escapeHtml(server.name)}</strong><code>${escapeHtml([server.command, ...server.args].join(" "))}</code></div><span class="availability">${server.enabled ? t("connections.enabled") : t("connections.disabledServer")}</span><button class="icon-plain" data-test-mcp="${escapeHtml(server.id)}" title="${t("system.testConnection")}">${icon("sync", 17)}</button><button class="icon-plain danger" data-delete-mcp="${escapeHtml(server.id)}" title="${t("system.deleteConnection")}">${icon("trash", 17)}</button></article>`).join("") : `<div class="empty-inline">${t("connections.noServers")}</div>`}</div></section>
       <section class="panel"><div class="section-heading"><div><h2>${t("connections.addStdio")}</h2><p>${t("connections.stdioDescription")}</p></div></div><form id="mcp-form" class="form-stack"><label>${t("connections.name")}<input id="mcp-name" required placeholder="Filesystem tools" /></label><label>${t("connections.command")}<input id="mcp-command" required placeholder="npx, node, or an absolute path" /></label><label>${t("connections.arguments")}<textarea id="mcp-args" rows="4" placeholder="-y\n@modelcontextprotocol/server-filesystem\n/path/to/workspace"></textarea></label><label class="checkbox"><input id="mcp-enabled" type="checkbox" checked /> ${t("connections.enableOnSave")}</label><button class="primary">${t("connections.addServer")}</button></form></section></div>`
     : `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("server", 24)}</span><div><h2>${t("connections.aiOnly")}</h2><p>${t("connections.aiOnlyDescription")}</p></div></section>`;
-  return `<div class="connections-layout"><section class="panel http-api-settings"><div class="section-heading"><div><h2>${t("connections.localService")}</h2><p>${t("connections.localServiceDescription")}</p></div><span class="availability ${httpApiStatus.running ? "ready" : httpApiStatus.enabled || httpApiStatus.agentEnabled ? "warning" : ""}">${httpApiStatus.running ? t("connections.running") : httpApiStatus.enabled || httpApiStatus.agentEnabled ? t("connections.failed") : t("connections.off")}</span></div><form id="http-api-form" class="http-api-form"><section class="http-api-access-group" aria-labelledby="http-api-endpoint-heading"><div class="http-api-group-heading"><h3 id="http-api-endpoint-heading">${t("connections.endpointAccess")}</h3><p>${t("connections.endpointAccessDescription")}</p></div><div class="http-api-endpoint-grid"><label class="toolbox-switch large"><input id="http-api-enabled" name="enabled" type="checkbox" ${httpApiStatus.enabled ? "checked" : ""} aria-label="${t("connections.mcpTools")}" aria-describedby="http-api-help" /><span></span>${t("connections.mcpTools")}</label><label class="toolbox-switch large"><input id="http-agent-enabled" name="agentEnabled" type="checkbox" ${httpApiStatus.agentEnabled ? "checked" : ""} aria-label="${t("connections.agentChat")}" aria-describedby="http-api-help" /><span></span>${t("connections.agentChat")}</label></div></section><section class="http-api-access-group" aria-labelledby="http-api-privilege-heading"><div class="http-api-group-heading"><h3 id="http-api-privilege-heading">${t("connections.privilegedAccess")}</h3><p>${t("connections.privilegesRequireMcp")}</p></div><div class="http-api-privilege-grid"><label class="toolbox-switch large http-api-privilege"><input id="http-internal-functions-enabled" name="internalFunctionsEnabled" type="checkbox" ${httpApiStatus.internalFunctionsEnabled ? "checked" : ""} aria-label="${t("connections.internalFunctions")}" aria-describedby="http-api-help" /><span></span><span><strong>${t("connections.internalFunctions")}</strong><small>${t("connections.internalFunctionsDescription")}</small></span></label><label class="toolbox-switch large http-api-privilege danger"><input id="http-advanced-functions-enabled" name="advancedFunctionsEnabled" type="checkbox" ${httpApiStatus.advancedFunctionsEnabled ? "checked" : ""} aria-label="${t("connections.advancedFunctions")}" aria-describedby="http-api-help" /><span></span><span><strong>${t("connections.advancedFunctions")}</strong><small>${t("connections.advancedFunctionsDescription")}</small></span></label></div></section><div class="http-api-actions"><label class="http-api-port">${t("connections.port")}<input id="http-api-port" name="port" type="number" min="1" max="65535" step="1" value="${httpApiStatus.port || 17831}" inputmode="numeric" required aria-describedby="http-api-help" /></label><button class="primary" type="submit" ${busy ? "disabled" : ""}>${t("connections.apply")}</button></div></form><div id="http-api-help" class="http-api-status"><span><strong>${t("connections.listening")}</strong>${httpApiStatus.running ? t("connections.active") : httpApiStatus.enabled || httpApiStatus.agentEnabled ? t("connections.inactive") : t("connections.disabled")}</span>${httpApiStatus.endpoint ? `<span><strong>MCP</strong><code>${escapeHtml(httpApiStatus.endpoint)}</code></span>` : ""}${httpApiStatus.agentEndpoint ? `<span><strong>Agent</strong><code>${escapeHtml(httpApiStatus.agentEndpoint)}</code></span>` : ""}${httpApiStatus.lastError ? `<span class="error-text"><strong>${t("connections.error")}</strong>${escapeHtml(httpApiStatus.lastError)}</span>` : ""}</div></section>${externalMcp}</div>`;
+  return `<div class="connections-layout"><section class="panel http-api-settings"><div class="section-heading"><div><h2>${t("connections.localService")}</h2><p>${t("connections.localServiceDescription")}</p></div><span class="availability ${httpApiStatus.running ? "ready" : httpApiStatus.enabled || httpApiStatus.agentEnabled ? "warning" : ""}">${httpApiStatus.running ? t("connections.running") : httpApiStatus.enabled || httpApiStatus.agentEnabled ? t("connections.failed") : t("connections.off")}</span></div><form id="http-api-form" class="http-api-form"><section class="http-api-access-group" aria-labelledby="http-api-endpoint-heading"><div class="http-api-group-heading"><h3 id="http-api-endpoint-heading">${t("connections.endpointAccess")}</h3><p>${t("connections.endpointAccessDescription")}</p></div><div class="http-api-endpoint-grid"><label class="toolbox-switch large"><input id="http-api-enabled" name="enabled" type="checkbox" ${httpApiStatus.enabled ? "checked" : ""} aria-label="${t("connections.mcpTools")}" aria-describedby="http-api-help" /><span></span>${t("connections.mcpTools")}</label><label class="toolbox-switch large"><input id="http-agent-enabled" name="agentEnabled" type="checkbox" ${httpApiStatus.agentEnabled ? "checked" : ""} aria-label="${t("connections.agentChat")}" aria-describedby="http-api-help" /><span></span>${t("connections.agentChat")}</label></div></section><section class="http-api-access-group" aria-labelledby="http-api-privilege-heading"><div class="http-api-group-heading"><h3 id="http-api-privilege-heading">${t("connections.privilegedAccess")}</h3><p>${t("connections.privilegesRequireMcp")}</p></div><div class="http-api-privilege-grid"><label class="toolbox-switch large http-api-privilege"><input id="http-internal-functions-enabled" name="internalFunctionsEnabled" type="checkbox" ${httpApiStatus.internalFunctionsEnabled ? "checked" : ""} aria-label="${t("connections.internalFunctions")}" aria-describedby="http-api-help" /><span></span><span><strong>${t("connections.internalFunctions")}</strong><small>${t("connections.internalFunctionsDescription")}</small></span></label><label class="toolbox-switch large http-api-privilege danger"><input id="http-advanced-functions-enabled" name="advancedFunctionsEnabled" type="checkbox" ${httpApiStatus.advancedFunctionsEnabled ? "checked" : ""} aria-label="${t("connections.advancedFunctions")}" aria-describedby="http-api-help" /><span></span><span><strong>${t("connections.advancedFunctions")}</strong><small>${t("connections.advancedFunctionsDescription")}</small></span></label></div></section><div class="http-api-actions"><label class="http-api-port">${t("connections.port")}<input id="http-api-port" name="port" type="number" min="1024" max="65535" step="1" value="${httpApiStatus.port || 17831}" inputmode="numeric" required aria-describedby="http-api-help" /></label><button class="primary" type="submit" ${busy ? "disabled" : ""}>${t("connections.apply")}</button></div></form><div id="http-api-help" class="http-api-status"><span><strong>${t("connections.listening")}</strong>${httpApiStatus.running ? t("connections.active") : httpApiStatus.enabled || httpApiStatus.agentEnabled ? t("connections.inactive") : t("connections.disabled")}</span>${httpApiStatus.endpoint ? `<span><strong>MCP</strong><code>${escapeHtml(httpApiStatus.endpoint)}</code></span>` : ""}${httpApiStatus.agentEndpoint ? `<span><strong>Agent</strong><code>${escapeHtml(httpApiStatus.agentEndpoint)}</code></span>` : ""}${httpApiStatus.lastError ? `<span class="error-text"><strong>${t("connections.error")}</strong>${escapeHtml(httpApiStatus.lastError)}</span>` : ""}</div></section>${renderMcpClientSetup()}${externalMcp}</div>`;
 }
 
 function aiProviders(): AiProviderSummary[] {
@@ -3334,7 +3372,7 @@ async function executeModelAuthAction(action: ModelAuthAction, detail: unknown[]
 
 function renderSettings(): string {
   if (!app) return "";
-  const showSvpRouting = app.platform === "windows" || app.platform === "preview";
+  const showSvpRouting = synthvOn() && (app.platform === "windows" || app.platform === "preview");
   const association = app.svpAssociation;
   const associationLabel = !association.supported
     ? t("settings.unsupported")
@@ -3346,10 +3384,21 @@ function renderSettings(): string {
   return `<div class="settings-layout"><section class="panel language-settings"><div class="section-heading"><div><h2>${t("settings.language")}</h2></div><div id="language-select-host" class="kit-fluent-select-host"></div></div></section>
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.autostart")}</h2><p>${t("settings.autostartDescription")}</p>${app.autostartError ? `<p class="error-text">${escapeHtml(app.autostartError)}</p>` : ""}</div><label class="toolbox-switch large"><input id="autostart-enabled" type="checkbox" ${app.autostartEnabled === true ? "checked" : ""} ${busy || app.autostartEnabled == null ? "disabled" : ""} aria-label="${t("settings.autostart")}" /><span></span>${app.autostartEnabled == null ? t("settings.unknown") : app.autostartEnabled ? t("settings.enabled") : t("settings.disabled")}</label></div></section>
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.mode")}</h2><p>${t("settings.modeDescription")}</p></div></div><div class="mode-setting"><button class="setting-choice ${app.mode === "toolbox" ? "active" : ""}" data-set-mode="toolbox"><span class="mode-icon slate">${icon("toolbox", 23)}</span><span><strong>${t("settings.toolbox")}</strong><small>${t("settings.toolboxDescription")}</small></span>${app.mode === "toolbox" ? icon("check", 20) : ""}</button><button class="setting-choice ${app.mode === "ai" ? "active" : ""}" data-set-mode="ai"><span class="mode-icon purple">${icon("sparkles", 23)}</span><span><strong>${t("settings.ai")}</strong><small>${t("settings.aiDescription")}</small></span>${app.mode === "ai" ? icon("check", 20) : ""}</button></div></section>
+    ${renderIntegrationSettings()}
     ${showSvpRouting ? `<section class="panel smart-route-settings"><div class="section-heading"><div><h2>${t("settings.smartRoute")}</h2><p>${t("settings.smartRouteDescription")}</p></div><label class="toolbox-switch large"><input id="svp-routing-enabled" type="checkbox" ${app.smartSvpLaunchEnabled ? "checked" : ""} ${association.supported ? "" : "disabled"} aria-label="${t("settings.smartRoute")}" /><span></span>${app.smartSvpLaunchEnabled ? t("settings.enabled") : t("settings.disabled")}</label></div><label class="toolbox-switch large"><input id="svp-routing-always-ask" type="checkbox" ${app.smartSvpAlwaysAsk ? "checked" : ""} ${app.smartSvpLaunchEnabled && association.supported && !busy ? "" : "disabled"} aria-label="${t("settings.alwaysAsk")}" /><span></span>${t("settings.alwaysAsk")}</label><div class="smart-route-state ${association.isDefault ? "ready" : "pending"}"><span class="feature-icon ${association.isDefault ? "emerald" : "blue"}">${icon("file", 20)}</span><div><strong>${escapeHtml(associationLabel)}</strong><p>${escapeHtml(association.detail)}</p></div><button class="secondary compact" data-open-svp-default-apps ${association.supported ? "" : "disabled"}>${t("settings.openDefaults")}</button></div></section>` : ""}
     <section class="panel plugin-privilege-settings"><div class="section-heading"><div><h2>${t("settings.pluginPrivileges")}</h2><p>${t("settings.pluginPrivilegesDescription")}</p></div></div><label class="toolbox-switch"><input id="plugin-internal-functions-enabled" type="checkbox" ${app.pluginInternalFunctionsEnabled ? "checked" : ""} /><span></span><span><strong>${t("settings.pluginInternalFunctions")}</strong><small>${t("settings.pluginInternalFunctionsDescription")}</small></span></label><label class="toolbox-switch"><input id="plugin-advanced-functions-enabled" type="checkbox" ${app.pluginAdvancedFunctionsEnabled ? "checked" : ""} /><span></span><span><strong>${t("settings.pluginAdvancedFunctions")}</strong><small>${t("settings.pluginAdvancedFunctionsDescription")}</small></span></label></section>
     ${app.mode === "ai" ? `<section class="panel agent-transcripts-settings"><div class="section-heading"><div><h2>${t("settings.agentTranscripts")}</h2><p>${t("settings.agentTranscriptsDescription")}</p></div></div><label class="toolbox-switch"><input id="agent-transcripts-enabled" type="checkbox" ${app.agentTranscriptsEnabled ? "checked" : ""} /><span></span><span><strong>${t("settings.agentTranscripts")}</strong><small>${app.agentTranscriptsEnabled ? t("settings.enabled") : t("settings.disabled")}</small></span></label></section>` : ""}
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.dataPlatform")}</h2><p>${t("settings.dataPlatformDescription")}</p></div></div><dl class="detail-list"><div><dt>${t("settings.platform")}</dt><dd>${escapeHtml(app.platform)}</dd></div><div><dt>${t("settings.config")}</dt><dd><code>${escapeHtml(app.configPath)}</code></dd></div><div><dt>${t("settings.appVersion")}</dt><dd>${escapeHtml(app.appVersion)}</dd></div></dl></section></div>`;
+}
+
+function renderIntegrationSettings(): string {
+  if (!app) return "";
+  const state = app.integrations?.synthv;
+  const preference = state?.preference ?? "on";
+  const status = [synthvOn() ? t("integrations.enabled") : t("integrations.disabled"), state?.detected ? t("integrations.detected") : t("integrations.notDetected"), ...(state && !state.bridgeLoaded ? [t("integrations.bridgeMissing")] : [])].join(" · ");
+  const choices = (["auto", "on", "off"] as const).map((value) => `<button class="${preference === value ? "active" : ""}" data-set-integration="synthv:${value}" aria-pressed="${preference === value}" ${busy ? "disabled" : ""}>${t(`integrations.${value}`)}</button>`).join("");
+  const errors = (state?.errors ?? []).map((error) => `<small class="error-text">${escapeHtml(error)}</small>`).join("");
+  return `<section class="panel integration-settings"><div class="section-heading"><div><h2>${t("integrations.title")}</h2><p>${t("integrations.description")}</p></div></div><div class="integration-row"><span class="mode-icon slate">${icon("bridge", 22)}</span><div class="integration-copy"><strong>${t("integrations.synthvName")}</strong><small>${t("integrations.synthvDescription")}</small><small class="integration-status">${escapeHtml(status)}</small>${errors}</div><div class="segmented" role="group" aria-label="${t("integrations.synthvName")}">${choices}</div></div>${preference === "auto" ? `<p class="integration-hint">${t("integrations.autoHint")}</p>` : ""}</section>`;
 }
 
 async function refreshAutostartStatus(): Promise<void> {
@@ -4820,13 +4869,22 @@ document.addEventListener("click", (event) => {
   }
   const onboarding = target.dataset.onboarding as AppMode | undefined;
   if (onboarding) { void run(async () => { app = await api.completeOnboarding(onboarding); page = "home"; }); return; }
+  const integrationChoice = target.dataset.setIntegration?.split(":")[1] as IntegrationPreference | undefined;
+  if (integrationChoice) { void run(async () => { app = await api.setIntegration("synthv", integrationChoice); notice = t("integrations.changed", { state: t(`integrations.${integrationChoice}`) }); }); return; }
+  if (target.hasAttribute("data-toggle-mcp-token")) { mcpTokenRevealed = !mcpTokenRevealed; render(); return; }
+  if (target.dataset.copyMcp) { copyMcpText(target.dataset.copyMcp); return; }
+  if (target.hasAttribute("data-rotate-mcp-token")) {
+    if (!window.confirm(t("mcpClient.rotateConfirm"))) return;
+    void run(async () => { httpApiStatus = await api.rotateHttpApiToken(); notice = t("mcpClient.rotated"); });
+    return;
+  }
   const mode = target.dataset.setMode as AppMode | undefined;
   if (mode) { void run(async () => { app = await api.setMode(mode); notice = t("system.modeChanged", { mode: t(mode === "ai" ? "settings.ai" : "settings.toolbox") }); }); return; }
   const agentWorkMode = target.dataset.agentWorkMode as AgentWorkMode | undefined;
   if (agentWorkMode) { void run(async () => { app = await api.setAgentWorkMode(agentWorkMode); notice = t("system.agentModeChanged", { mode: agentWorkMode === "solo" ? "Solo" : "Edit" }); }); return; }
   const agentEffort = target.dataset.agentEffort as AgentEffortLevel | undefined;
   if (agentEffort) { if (agentRunInFlight) return; void run(async () => { app = await api.setAgentEffort(agentEffort); notice = t("system.agentEffortChanged", { level: agentEffortLabel(agentEffort) }); }); return; }
-  const toolboxProjectTarget = target.dataset.openToolboxProject as "project" | "issues" | "guide" | undefined;
+  const toolboxProjectTarget = target.dataset.openToolboxProject as "project" | "issues" | "guide" | "terms" | undefined;
   if (toolboxProjectTarget) {
     void run(async () => { setOpenFeedback(await api.openToolboxProject(toolboxProjectTarget)); });
     return;
@@ -5118,7 +5176,7 @@ document.addEventListener("click", (event) => {
   if (target.dataset.approveAgent) { void decideApproval(target.dataset.approveAgent, true, target); return; }
   if (target.dataset.denyAgent) { void decideApproval(target.dataset.denyAgent, false, target); return; }
   if (target.dataset.prompt) { void sendPrompt(target.dataset.prompt); return; }
-  if (target.dataset.testMcp) { void run(async () => { setFeedback(await api.testMcpServer(target.dataset.testMcp ?? "")); }); return; }
+  if (target.dataset.testMcp) { void run(async () => { const result = await api.testMcpServer(target.dataset.testMcp ?? ""); setFeedback(result.succeeded && result.tools?.length ? { ...result, detail: [result.detail, t("mcpTest.tools", { tools: result.tools.join(", ") })].filter(Boolean).join("\n") } : result); }); return; }
   if (target.dataset.deleteMcp) { void run(async () => { app = await api.deleteMcpServer(target.dataset.deleteMcp ?? ""); notice = t("connections.deleted"); }); }
 });
 
@@ -5218,6 +5276,6 @@ void (async () => {
     render();
     refreshAiCatalogLive();
   } catch (reason) {
-    root.innerHTML = `<div class="fatal"><div class="brand-mark"><img class="brand-logo" src="./assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div><h1>${t("system.startupFailed")}</h1><pre>${escapeHtml(formatError(reason))}</pre><p>${t("system.startupHelp")}</p></div>`;
+    root.innerHTML = `<div class="fatal"><div class="brand-mark"><img class="brand-logo" src="${BRAND.logo}" alt="${BRAND.productName}" /></div><h1>${t("system.startupFailed")}</h1><pre>${escapeHtml(formatError(reason))}</pre><p>${t("system.startupHelp")}</p></div>`;
   }
 })();
