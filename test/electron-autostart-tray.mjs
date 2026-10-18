@@ -18,7 +18,8 @@ test("Electron tray opens the hidden window and supplies an explicit exit action
   assert.match(main, /new Tray\(image\)/);
   assert.match(main, /tray\.on\("click", \(\) => void showMainWindow\(\)\)/);
   assert.match(main, /Menu\.buildFromTemplate\(\[/);
-  assert.match(main, /label: "打开 Toolbox"/);
-  assert.match(main, /label: "退出"/);
+  assert.match(main, /tray\.setToolTip\(BRAND\.productName\)/);
+  assert.match(main, /label: chinese \? `打开\$\{BRAND\.productNameZh\}` : `Open \$\{BRAND\.productName\}`/);
+  assert.match(main, /label: chinese \? "退出" : "Quit"/);
   assert.match(main, /mainWindow\?\.hide\(\)/);
 });
