@@ -34,6 +34,8 @@ export type AutostartController = {
 export class SynthVService {
   private pendingRoute: Record<string, unknown> | null = null;
   private readonly syncPreviews = new Map<string, { targetSlotId: string; categories: string[] }>();
+  // One chain for everything that rewrites the store, a slot or the official folder: two overlapping switches would each save the official folder over the slot they both read as active.
+  private slotLock: Promise<unknown> = Promise.resolve();
   constructor(private readonly root: string, private readonly bridgeDirectory: string, private readonly bridge: Pick<EmbeddedBridge, "status" | "requestStop">, private readonly bridgeIpcDirectory: string, private readonly runner: Runner = runCommand, private readonly autostart?: AutostartController, private readonly platformDataRoot?: string, private readonly env: NodeJS.ProcessEnv = process.env, private readonly webAccounts?: DreamtonicsWebAccounts) {}
 
   async sessionSize(slotId: string): Promise<SessionSizeInspection> { const store = await this.readStore(); this.slot(store, slotId); return inspectSessionSize(this.sessionPath(slotId, store.activeSlotId === slotId)); }
@@ -113,35 +115,41 @@ export class SynthVService {
   }
 
   async createProfile(displayName: string): Promise<Record<string, unknown>> {
-    requireText(displayName, "displayName");
-    const store = await this.readStore();
-    const slot: Slot = { id: randomUUID(), displayName, createdAtUtc: new Date().toISOString(), lastActivatedAtUtc: null };
-    await mkdir(this.slotPath(slot.id), { recursive: true });
-    store.slots.push(slot);
-    await this.writeStore(store);
-    return this.profileState();
+    return this.exclusive(async () => {
+      requireText(displayName, "displayName");
+      const store = await this.readStore();
+      const slot: Slot = { id: randomUUID(), displayName, createdAtUtc: new Date().toISOString(), lastActivatedAtUtc: null };
+      await mkdir(this.slotPath(slot.id), { recursive: true });
+      store.slots.push(slot);
+      await this.writeStore(store);
+      return this.profileState();
+    });
   }
 
   async importCurrentProfile(displayName: string): Promise<Record<string, unknown>> {
-    requireText(displayName, "displayName"); const canonical = this.canonicalPath();
-    const running = await this.runningSv2(); if (running.length) throw sv2RunningError(running, "importing its current data");
-    if (!(await exists(canonical))) throw new Error("No current Synthesizer V Studio 2 data was found to import.");
-    const store = await this.readStore(); const now = new Date().toISOString(); const slot: Slot = { id: randomUUID(), displayName, createdAtUtc: now, lastActivatedAtUtc: now };
-    const previous = this.activeSlotId(store); if (previous) await replaceDirectory(canonical, this.slotPath(previous));
-    await replaceDirectory(canonical, this.slotPath(slot.id));
-    store.slots.push(slot); store.activeSlotId = slot.id; await this.writeStore(store); return this.profileState();
+    return this.exclusive(async () => {
+      requireText(displayName, "displayName"); const canonical = this.canonicalPath();
+      const running = await this.runningSv2(); if (running.length) throw sv2RunningError(running, "importing its current data");
+      if (!(await exists(canonical))) throw new Error("No current Synthesizer V Studio 2 data was found to import.");
+      const store = await this.readStore(); const now = new Date().toISOString(); const slot: Slot = { id: randomUUID(), displayName, createdAtUtc: now, lastActivatedAtUtc: now };
+      const previous = this.activeSlotId(store); if (previous) await replaceDirectory(canonical, this.slotPath(previous));
+      await replaceDirectory(canonical, this.slotPath(slot.id));
+      store.slots.push(slot); store.activeSlotId = slot.id; await this.writeStore(store); return this.profileState();
+    });
   }
 
-  async renameProfile(slotId: string, displayName: string): Promise<Record<string, unknown>> { const store = await this.readStore(); const slot = this.slot(store, slotId); requireText(displayName, "displayName"); slot.displayName = displayName; await this.writeStore(store); return this.profileState(); }
-  async deleteProfile(slotId: string): Promise<Record<string, unknown>> { const store = await this.readStore(); this.slot(store, slotId); if (store.activeSlotId === slotId) throw new Error("The active profile cannot be deleted."); await this.webAccounts?.forget(slotId); store.slots = store.slots.filter(slot => slot.id !== slotId); await rm(this.slotPath(slotId), { recursive: true, force: true }); await this.writeStore(store); return this.profileState(); }
+  async renameProfile(slotId: string, displayName: string): Promise<Record<string, unknown>> { return this.exclusive(async () => { const store = await this.readStore(); const slot = this.slot(store, slotId); requireText(displayName, "displayName"); slot.displayName = displayName; await this.writeStore(store); return this.profileState(); }); }
+  async deleteProfile(slotId: string): Promise<Record<string, unknown>> { return this.exclusive(async () => { const store = await this.readStore(); this.slot(store, slotId); if (store.activeSlotId === slotId) throw new Error("The active profile cannot be deleted."); await this.webAccounts?.forget(slotId); store.slots = store.slots.filter(slot => slot.id !== slotId); await rm(this.slotPath(slotId), { recursive: true, force: true }); await this.writeStore(store); return this.profileState(); }); }
 
-  async activateProfile(slotId: string): Promise<Record<string, unknown>> {
+  async activateProfile(slotId: string): Promise<Record<string, unknown>> { return this.exclusive(() => this.switchTo(slotId)); }
+  private async switchTo(slotId: string): Promise<Record<string, unknown>> {
     const store = await this.readStore(); const slot = this.slot(store, slotId); const canonical = this.canonicalPath(); const target = this.slotPath(slotId);
     const previous = this.activeSlotId(store); const hasCanonical = await exists(canonical); const replace = previous !== slotId || !hasCanonical;
-    // A running SV2 owns canonical, so re-activating its own slot touches neither copy and the next switch saves it.
-    const running = await this.runningSv2(); if (running.length && replace) throw sv2RunningError(running, "switching account slots");
+    // A running SV2 owns canonical, so re-activating its own slot touches neither copy and the next switch saves it. That path replaces nothing, so a failed scan counts as running there instead of blocking a normal launch.
+    const running = await this.runningSv2().catch((error: unknown) => { if (replace) throw error; return null; });
+    if (running?.length && replace) throw sv2RunningError(running, "switching account slots");
     if (replace && !(await exists(target))) throw new Error("The profile data folder was not found.");
-    if (!running.length && hasCanonical && previous) await replaceDirectory(canonical, this.slotPath(previous));
+    if (running?.length === 0 && hasCanonical && previous) await replaceDirectory(canonical, this.slotPath(previous));
     if (replace) {
       // Cleared while canonical is swapped, so an interrupted switch is backed up next time instead of being saved over the previous slot.
       if (previous) { store.activeSlotId = null; await this.writeStore(store); }
@@ -151,8 +159,12 @@ export class SynthVService {
     slot.lastActivatedAtUtc = new Date().toISOString(); store.activeSlotId = slotId; await this.writeStore(store); return this.profileState();
   }
 
-  async prepareConcurrentProfile(slotId: string): Promise<Record<string, unknown>> {
-    const store = await this.readStore(); this.slot(store, slotId); const sandbox = await this.sandboxie(); if (!sandbox) throw new Error("Sandboxie Start.exe and SbieIni.exe were not found.");
+  async prepareConcurrentProfile(slotId: string): Promise<Record<string, unknown>> { return this.exclusive(() => this.prepareIsolated(slotId)); }
+  private async prepareIsolated(slotId: string): Promise<Record<string, unknown>> {
+    const store = await this.readStore(); this.slot(store, slotId);
+    // The isolated instance writes straight into the slot folder, and the next switch saves the official folder over the active slot's folder.
+    if (store.activeSlotId === slotId) throw new Error("The active account slot cannot run in an isolated instance, because switching slots saves the official Synthesizer V Studio 2 folder over it. Launch it normally, or activate another slot first.");
+    const sandbox = await this.sandboxie(); if (!sandbox) throw new Error("Sandboxie Start.exe and SbieIni.exe were not found.");
     const compact = slotId.replaceAll("-", ""); const box = `SV2TB${compact.slice(0, 24)}`; const root = join(this.vaultPath(), "instances", compact.slice(0, 16)); const slot = this.slotPath(slotId);
     const overlay = join(root, "user", "current", "AppData", "Roaming", "Dreamtonics", "Synthesizer V Studio 2"); await mkdir(dirname(overlay), { recursive: true });
     if (await exists(overlay)) { const metadata = await lstat(overlay); if (!metadata.isSymbolicLink() || normalizePath(await realpath(overlay)) !== normalizePath(await realpath(slot))) throw new Error("The Sandboxie account-data junction points to an unexpected directory."); }
@@ -166,12 +178,20 @@ export class SynthVService {
   }
   async openProfileFolder(slotId: string): Promise<OperationResult> { await this.assertSlot(slotId); await this.reveal(this.slotPath(slotId)); return ok("Profile folder opened."); }
 
-  async syncProfile(slotId: string, categories: string[]): Promise<Record<string, unknown>> { await this.assertSlot(slotId); if (!Array.isArray(categories) || !categories.every(value => ["settings", "database", "voice"].includes(value))) throw new Error("Unsupported sync category."); for (const category of categories) { const source = join(this.canonicalPath(), category); if (await exists(source)) await cp(source, join(this.slotPath(slotId), category), { recursive: true, force: true }); } return { slotId, categories, succeeded: true }; }
+  async syncProfile(slotId: string, categories: string[]): Promise<Record<string, unknown>> { return this.exclusive(async () => { await this.assertSlot(slotId); if (!Array.isArray(categories) || !categories.every(value => ["settings", "database", "voice"].includes(value))) throw new Error("Unsupported sync category."); for (const category of categories) { const source = join(this.canonicalPath(), category); if (await exists(source)) await cp(source, join(this.slotPath(slotId), category), { recursive: true, force: true }); } return { slotId, categories, succeeded: true }; }); }
   async previewSelectiveSync(sourceSlotId: string, targetSlotId: string, categories: string[], overwrite: boolean): Promise<Record<string, unknown>> { await this.assertSlot(sourceSlotId); await this.assertSlot(targetSlotId); if (!Array.isArray(categories) || !categories.every(value => ["settings", "database", "voice"].includes(value)) || typeof overwrite !== "boolean") throw new Error("Invalid selective sync request."); const token = randomUUID(); this.syncPreviews.set(token, { targetSlotId, categories }); return { token, sourceSlotId, targetSlotId, categories, overwrite, entries: [] }; }
-  async executeSelectiveSync(sourceSlotId: string, targetSlotId: string, categories: string[], token: string): Promise<Record<string, unknown>> { const preview = this.syncPreviews.get(token); if (!preview || preview.targetSlotId !== targetSlotId || JSON.stringify(preview.categories) !== JSON.stringify(categories)) throw new Error("Selective sync preview is no longer valid."); await this.assertSlot(sourceSlotId); for (const category of categories) { const source = join(this.slotPath(sourceSlotId), category); if (await exists(source)) await cp(source, join(this.slotPath(targetSlotId), category), { recursive: true, force: true }); } this.syncPreviews.delete(token); return { sourceSlotId, targetSlotId, categories, succeeded: true }; }
+  async executeSelectiveSync(sourceSlotId: string, targetSlotId: string, categories: string[], token: string): Promise<Record<string, unknown>> {
+    return this.exclusive(async () => {
+      const preview = this.syncPreviews.get(token); if (!preview || preview.targetSlotId !== targetSlotId || JSON.stringify(preview.categories) !== JSON.stringify(categories)) throw new Error("Selective sync preview is no longer valid."); await this.assertSlot(sourceSlotId);
+      // The next switch saves the official folder over the active slot's folder, so syncing into the active slot has to write the official folder, which SV2 must not hold.
+      const live = (await this.readStore()).activeSlotId === targetSlotId && await exists(this.canonicalPath()); if (live) { const running = await this.runningSv2(); if (running.length) throw sv2RunningError(running, "syncing into the active account slot"); }
+      const targetRoot = live ? this.canonicalPath() : this.slotPath(targetSlotId);
+      for (const category of categories) { const source = join(this.slotPath(sourceSlotId), category); if (await exists(source)) await cp(source, join(targetRoot, category), { recursive: true, force: true }); } this.syncPreviews.delete(token); return { sourceSlotId, targetSlotId, categories, succeeded: true };
+    });
+  }
   async previewSvpRoute(projectPath: string): Promise<Record<string, unknown>> { requireText(projectPath, "projectPath"); const store = await this.readStore(); const route = { projectPath, selectedSlotId: store.activeSlotId, mode: "active", executablePath: (await this.scanInstallations()).find(item => item.bridgeProfile === "sv2")?.executablePath ?? null }; this.pendingRoute = route; return route; }
-  async launchProfile(slotId: string, projectPath?: string): Promise<OperationResult> { await this.activateProfile(slotId); const executable = (await this.scanInstallations()).find(item => item.bridgeProfile === "sv2")?.executablePath; if (typeof executable !== "string") return unavailable("No SynthV Studio 2 executable was found."); spawn(executable, projectPath ? [projectPath] : [], { detached: true, stdio: "ignore", windowsHide: true }).unref(); return ok("SynthV profile launched."); }
-  async launchConcurrentProfile(slotId: string, projectPath?: string): Promise<OperationResult> { await this.prepareConcurrentProfile(slotId); const sandbox = await this.sandboxie(); if (!sandbox) return unavailable("Sandboxie Start.exe and SbieIni.exe were not found."); const executable = (await this.scanInstallations()).find(item => item.bridgeProfile === "sv2")?.executablePath; if (typeof executable !== "string") return unavailable("No SynthV Studio 2 executable was found."); const box = `SV2TB${slotId.replaceAll("-", "").slice(0, 24)}`; const result = await this.run(sandbox.start, [`/box:${box}`, "/silent", executable, ...(projectPath ? [resolve(projectPath)] : [])]); return result.code === 0 ? ok("SynthV profile launched in Sandboxie.") : fail("Sandboxie failed to launch SynthV.", result.stderr); }
+  async launchProfile(slotId: string, projectPath?: string): Promise<OperationResult> { return this.exclusive(async () => { await this.switchTo(slotId); const executable = (await this.scanInstallations()).find(item => item.bridgeProfile === "sv2")?.executablePath; if (typeof executable !== "string") return unavailable("No SynthV Studio 2 executable was found."); spawn(executable, projectPath ? [projectPath] : [], { detached: true, stdio: "ignore", windowsHide: true }).unref(); return ok("SynthV profile launched."); }); }
+  async launchConcurrentProfile(slotId: string, projectPath?: string): Promise<OperationResult> { return this.exclusive(async () => { await this.prepareIsolated(slotId); const sandbox = await this.sandboxie(); if (!sandbox) return unavailable("Sandboxie Start.exe and SbieIni.exe were not found."); const executable = (await this.scanInstallations()).find(item => item.bridgeProfile === "sv2")?.executablePath; if (typeof executable !== "string") return unavailable("No SynthV Studio 2 executable was found."); const box = `SV2TB${slotId.replaceAll("-", "").slice(0, 24)}`; const result = await this.run(sandbox.start, [`/box:${box}`, "/silent", executable, ...(projectPath ? [resolve(projectPath)] : [])]); return result.code === 0 ? ok("SynthV profile launched in Sandboxie.") : fail("Sandboxie failed to launch SynthV.", result.stderr); }); }
   async launchSvpRoute(slotId: string, projectPath: string, _mode: string): Promise<OperationResult> { await this.assertSlot(slotId); requireText(projectPath, "projectPath"); return this.launchProfile(slotId, projectPath); }
   async accountPrecheck(slotId?: string): Promise<Record<string, unknown>> { const state = await this.profileState(); const selected = slotId ?? (state as { activeSlotId?: string }).activeSlotId; const size = selected ? await this.sessionSize(selected) : undefined; return { supported: true, checkedAtUtc: new Date().toISOString(), slotId: selected, localUse: false, localProcesses: [], concurrentPids: [], remoteUse: "unknown", sessionStatus: size?.sizeBytes != null ? "ready" : "missing", authorizationStatus: "unknown", authorizedVoiceCount: 0, sessionCached: size?.sizeBytes != null, recoveryPending: false, summary: "Local session file metadata was checked.", detail: "" }; }
   async voiceCatalog(): Promise<unknown[]> { return []; }
@@ -204,6 +224,7 @@ export class SynthVService {
   private async assertSlot(slotId: string): Promise<void> { this.slot(await this.readStore(), slotId); }
   private slot(store: ProfileStore, id: string): Slot { if (!isUuid(id)) throw new Error("Invalid profile id."); const slot = store.slots.find(item => item.id === id); if (!slot) throw new Error("Profile was not found."); return slot; }
   private activeSlotId(store: ProfileStore): string | null { return store.slots.some(item => item.id === store.activeSlotId) ? store.activeSlotId : null; }
+  private exclusive<T>(task: () => Promise<T>): Promise<T> { const next = this.slotLock.then(task); this.slotLock = next.catch(() => undefined); return next; }
   private async runningSv2(): Promise<ProcessInfo[]> { try { return (await this.listProcesses()).filter(process => process.isSv2); } catch (error) { throw new Error(`Unable to confirm that Synthesizer V Studio 2 is closed: ${error instanceof Error ? error.message : String(error)}`); } }
   private async backupPath(): Promise<string> { const path = join(this.vaultPath(), "backups", new Date().toISOString().replace(/[:.]/g, "-")); return await exists(path) ? `${path}-${randomUUID().slice(0, 8)}` : path; }
   private async readStore(): Promise<ProfileStore> { try { const value = JSON.parse(await readFile(this.storePath(), "utf8")); return { activeSlotId: typeof value.activeSlotId === "string" ? value.activeSlotId : null, slots: Array.isArray(value.slots) ? value.slots.filter((slot: unknown): slot is Slot => isSlot(slot)) : [] }; } catch { return { activeSlotId: null, slots: [] }; } }
@@ -244,7 +265,7 @@ async function replaceDirectory(source: string, target: string, keepPreviousAt?:
   const hadTarget = await exists(target);
   if (hadTarget) { try { await mkdir(dirname(outgoing), { recursive: true }); await moveDirectory(target, outgoing); } catch (error) { await discard(incoming); throw error; } }
   try { await moveDirectory(incoming, target); } catch (error) {
-    if (hadTarget) { try { await moveDirectory(outgoing, target); } catch { throw new Error(`Unable to replace ${target}; its previous content was kept at ${outgoing}.`); } }
+    if (hadTarget) { try { await moveDirectory(outgoing, target); } catch { await discard(incoming); throw new Error(`Unable to replace ${target}; its previous content was kept at ${outgoing}.`); } }
     await discard(incoming); throw error;
   }
   // A cleanup failure must not report the completed swap as failed, or callers would roll their bookkeeping back over new data.
