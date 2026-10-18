@@ -2,7 +2,7 @@
 
 ## 目标
 
-片段 A/B 检查用于替代调声迭代中的重复完整渲染。用户选择短时间范围后，Toolbox 自动定位、播放、停止并恢复 SynthV 播放头，同时捕获该次播放的音频。基线 A 可以保留不动；每次修改后只捕获候选 B，再做快速对齐比较。
+片段 A/B 检查用于替代调声迭代中的重复完整渲染。用户选择短时间范围后，Toneshuttle（声梭）自动定位、播放、停止并恢复 SynthV 播放头，同时捕获该次播放的音频。基线 A 可以保留不动；每次修改后只捕获候选 B，再做快速对齐比较。
 
 这条路径不会启动 `pi-audio`、PANNs 或模型推理。它只执行短时本机捕获、单声道 WAV 裁切和确定性指标计算，因此适合作为连续片段优化与 Copilot 复检的默认方式。
 
@@ -10,7 +10,7 @@
 
 - 当前捕获后端为 Windows WASAPI Application Loopback，目标是所选 SynthV standalone PID 及其子进程；不录制系统混音，也不捕获 DAW 中的 SynthV 插件。
 - 需要 Windows 10 build 20348 或更高版本。其他平台会返回明确的 capability 不可用状态；A/B WAV 比较逻辑本身仍是跨平台的。
-- Bridge 的公共 MCP 表面仍保持六工具不变。片段捕获通过 Toolbox 的统一 SynthV 宿主层控制播放，不把任何宿主原始工具暴露给内置 Agent。
+- Bridge 的公共 MCP 表面仍保持六工具不变。片段捕获通过 Toneshuttle 的统一 SynthV 宿主层控制播放，不把任何宿主原始工具暴露给内置 Agent。
 - 单次目标片段最长 30 秒，前后保护区各最多 2 秒。捕获开始前 SynthV 必须处于 stopped 状态，避免中断用户正在进行的试听。
 - 输出写入 `~/.SynthVcopilot/output/ab-captures/`。最终片段是 48 kHz 单声道 PCM16 WAV，并带有 JSON 元数据、SHA-256、边界不确定度与快速电平指标。
 

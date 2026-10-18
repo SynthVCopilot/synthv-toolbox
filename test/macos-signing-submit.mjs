@@ -7,15 +7,15 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, describe, test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scripts = path.join(root, ".github", "scripts");
-const { main, prepare, submitSource, assertTemplateLayout, runIdentity } = await import(path.join(scripts, "submit-macos.mjs"));
+const { main, prepare, submitSource, assertTemplateLayout, runIdentity } = await import(pathToFileURL(path.join(scripts, "submit-macos.mjs")).href);
 
 const PROJECT = "synthv-toolbox-arm64";
 const BUNDLE_ID = "com.synthvcopilot.toolbox";
-const APP = "Synthesizer V Toolbox.app";
+const APP = "Toneshuttle.app";
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 const REQUEST_ID = "6f1d0c2e-3b4a-4c5d-8e9f-a0b1c2d3e4f5";
 const posix = process.platform !== "win32";
@@ -342,15 +342,15 @@ async function bundleFixture({ packageVersion = "1.2.3", plistVersion = "1.2.3",
   await mkdir(path.join(macos, "MacOS"), { recursive: true });
   await mkdir(path.join(macos, "Resources"), { recursive: true });
   await writeFile(path.join(macos, "Info.plist"), "plist");
-  await writeFile(path.join(macos, "MacOS", "Synthesizer V Toolbox"), "binary");
+  await writeFile(path.join(macos, "MacOS", "Toneshuttle"), "binary");
   await writeFile(path.join(macos, "Resources", "app.asar"), "asar");
-  await writeFile(path.join(workspace, "release", "Synthesizer-V-Toolbox-1.2.3.dmg"), "template-image");
+  await writeFile(path.join(workspace, "release", "Toneshuttle-1.2.3.dmg"), "template-image");
   const calls = [];
   const hash = "a".repeat(64);
   const plist = {
     CFBundleIdentifier: BUNDLE_ID,
     CFBundleShortVersionString: plistVersion,
-    CFBundleExecutable: "Synthesizer V Toolbox",
+    CFBundleExecutable: "Toneshuttle",
     ElectronAsarIntegrity: JSON.stringify({ "Resources/app.asar": { algorithm: "SHA256", hash } }),
   };
   const exec = (file, args, options = {}) => {

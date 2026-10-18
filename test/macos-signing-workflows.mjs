@@ -177,17 +177,32 @@ describe("electron-builder macOS configuration", () => {
     assert.deepEqual(builder.mac.target, ["dmg"]);
     assert.equal(builder.mac.hardenedRuntime, true);
     assert.equal(builder.asar, true);
-    assert.equal(builder.productName, "Synthesizer V Toolbox");
+    assert.equal(builder.productName, "Toneshuttle");
     assert.equal(builder.appId, "com.synthvcopilot.toolbox");
   });
 
   test("the template disk image has no license agreement the center cannot mount", () => {
     assert.equal(builder.dmg.license, undefined);
-    assert.equal(builder.dmg.artifactName, "Synthesizer-V-Toolbox-${version}.${ext}");
+    assert.equal(builder.dmg.artifactName, "Toneshuttle-${version}.${ext}");
   });
 
   test("windows signing is not configured", () => {
     assert.doesNotMatch(builderText, /CSC_|certificate/i);
+  });
+});
+
+// Installs made under the Synthesizer V Toolbox name must keep upgrading in place after the rename to Toneshuttle.
+describe("upgrade continuity across the product rename", () => {
+  test("the installer and update feed keep the identifiers existing installs know", () => {
+    assert.equal(builder.appId, "com.synthvcopilot.toolbox");
+    assert.equal(builder.nsis.guid, "361d7bfe-b0de-50d8-b042-ed469511f1fa");
+    assert.equal(builder.nsis.oneClick, true);
+    assert.equal(builder.nsis.perMachine, false);
+    assert.deepEqual({ provider: builder.publish.provider, owner: builder.publish.owner, repo: builder.publish.repo, channel: builder.publish.channel }, { provider: "github", owner: "SynthVCopilot", repo: "synthv-toolbox", channel: "latest" });
+  });
+
+  test("the installer carries the new product name", () => {
+    assert.equal(builder.win.artifactName, "Toneshuttle-${version}-setup.${ext}");
   });
 });
 

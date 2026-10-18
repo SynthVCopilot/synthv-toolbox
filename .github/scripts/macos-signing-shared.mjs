@@ -2,9 +2,11 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 
+// The signing center project and the bundle id predate the Toneshuttle name: the center is provisioned for them and
+// Squirrel.Mac only installs updates whose bundle id matches the installed app, so they keep their original values.
 export const PROJECT_ID = 'synthv-toolbox-arm64';
 export const BUNDLE_ID = 'com.synthvcopilot.toolbox';
-export const APP = 'Synthesizer V Toolbox.app';
+export const APP = 'Toneshuttle.app';
 export const ARCH = 'arm64';
 export const TEAM_ID = '76DMUAK6J5';
 export const STABLE_TAG = /^v(\d+\.\d+\.\d+)$/;

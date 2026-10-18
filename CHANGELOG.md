@@ -4,6 +4,13 @@
 
 ## 未发布
 
+- 产品更名为 Toneshuttle（声梭），定位为通用的人声与音频创作工具箱。数据目录、应用标识、Windows 安装注册和更新源保持不变，现有安装原位升级并保留设置、账号和插件。
+- 安装包和更新文件改名为 `Toneshuttle-<版本>-setup.exe`、`Toneshuttle-<版本>.dmg` 和 `Toneshuttle-<版本>-arm64-mac.zip`。
+- Synthesizer V 支持改为可选集成，包括 Bridge、SV2 账号槽位和 .svp 工具，可在「设置 > 集成」中关闭。
+- 本地 MCP 端点需要 Bearer 令牌；「连接」页显示令牌，并可为 Claude Code、Codex 和 Cursor / VS Code 生成客户端配置。
+- 修正与外部 MCP 客户端的协议兼容性问题。
+- 修复激活 SV2 账号槽位时可能丢失数据的问题。
+- 使用条款按新名称更新，Synthesizer V 相关条款归入独立章节；Windows 安装器不显示条款确认页，安装或使用即表示接受条款。
 - macOS 正式版安装包改由签名中心签名并公证，下载后可直接通过 Gatekeeper。
 - macOS 应用内更新使用由已签名应用生成的 zip 和 `latest-mac.yml`。
 - Windows 安装包不再要求代码签名环境。

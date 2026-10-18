@@ -1,5 +1,5 @@
 appId: com.synthvcopilot.toolbox
-productName: Synthesizer V Toolbox
+productName: Toneshuttle
 electronVersion: 39.2.7
 directories:
   app: src/PiDesktop.Tauri
@@ -34,8 +34,10 @@ win:
   icon: src/PiDesktop.Tauri/electron/assets/icon.ico
   target:
     - nsis
-  artifactName: "Synthesizer-V-Toolbox-${version}-setup.${ext}"
+  artifactName: "Toneshuttle-${version}-setup.${ext}"
 nsis:
+  # Upgrade code electron-builder derived from the unchanged appId; pinned so installs made under the old product name upgrade in place.
+  guid: 361d7bfe-b0de-50d8-b042-ed469511f1fa
   oneClick: true
   perMachine: false
   allowToChangeInstallationDirectory: false
@@ -48,7 +50,7 @@ mac:
   gatekeeperAssess: false
   identity: null
 dmg:
-  artifactName: "Synthesizer-V-Toolbox-${version}.${ext}"
+  artifactName: "Toneshuttle-${version}.${ext}"
 publish:
   provider: github
   channel: latest
