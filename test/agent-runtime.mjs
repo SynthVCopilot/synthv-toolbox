@@ -1751,3 +1751,20 @@ test("stdio worker answers session.steer immediately while an earlier request is
     await new Promise((resolve) => child.once("exit", resolve));
   }
 });
+
+test("a Stop that tears down an in-flight model request ends the run cancelled, not as an error", async () => {
+  // Whitebox: the abort can surface from the provider as stopReason "error" ("This operation was aborted"), which
+  // used to outrank the cancellation and report the user's Stop as a model failure.
+  const loop = await import(`${pathToFileURL(join(packageRoot, "dist", "task-loop.js")).href}?stop=${Date.now()}`);
+  const { AGENT_EFFORT_PROFILES, estimateAgentRunBudget } = await import(pathToFileURL(join(root, "packages", "runtime-protocol", "dist", "index.js")).href);
+  const budget = estimateAgentRunBudget("mid", []);
+  const cancelledMidRequest = loop.createTaskLoopState(null, budget);
+  const cancelled = await loop.runTaskLoop(cancelledMidRequest, AGENT_EFFORT_PROFILES.mid, "go", async () => {
+    cancelledMidRequest.cancelled = true;
+    cancelledMidRequest.roundError = { message: "This operation was aborted", aborted: false };
+  });
+  assert.equal(cancelled.status, "cancelled");
+  const failed = loop.createTaskLoopState(null, budget);
+  const error = await loop.runTaskLoop(failed, AGENT_EFFORT_PROFILES.mid, "go", async () => { failed.roundError = { message: "HTTP 500", aborted: false }; });
+  assert.equal(error.status, "error", "a real provider failure without a Stop still reports an error");
+});

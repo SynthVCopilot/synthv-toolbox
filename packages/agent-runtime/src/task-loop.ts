@@ -482,10 +482,13 @@ export async function runTaskLoop(
     idleStreak = state.roundProgress === 0 ? idleStreak + 1 : 0;
   }
 
+  // A user's Stop outranks a round error: when the abort lands mid-request the provider call can surface as
+  // stopReason "error" ("This operation was aborted") instead of "aborted", and that is fallout of the cancel.
   const status: AgentRunOutcome["status"] = state.signal
     ? state.signal.kind === "completed" ? "completed" : "needs_input"
+    : state.cancelled ? "cancelled"
     : state.roundError && !state.roundError.aborted ? "error"
-    : state.cancelled ? "cancelled" : isBudgetExhausted(state) ? "budget_exhausted" : "incomplete";
+    : isBudgetExhausted(state) ? "budget_exhausted" : "incomplete";
   return { status };
 }
 
