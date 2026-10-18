@@ -9,10 +9,12 @@ import type { SynthVService } from "./synthv-service.js";
 type Data = Record<string, unknown>;
 
 export class HostCapabilities {
-  constructor(private readonly synthv: SynthVService, private readonly creative: CreativeService, private readonly ai: AiService) {}
+  constructor(private readonly synthv: SynthVService, private readonly creative: CreativeService, private readonly ai: AiService, private readonly synthvEnabled: () => boolean = () => true) {}
 
   async invoke(permission: "host.internal" | "host.advanced", capability: string, operation: string, params: JsonValue): Promise<JsonValue> {
     if (!isObject(params)) throw new Error("Host capability parameters must be an object.");
+    // Turning the integration off promises the app stops probing SynthV; MCP clients and plugins must not bypass that.
+    if (capability === "synthv" && !this.synthvEnabled()) throw Object.assign(new Error("The Synthesizer V integration is turned off in Settings > Integrations."), { clientSafe: true });
     if (permission === "host.internal") return this.internal(capability, operation, params);
     return this.advanced(capability, operation, params);
   }

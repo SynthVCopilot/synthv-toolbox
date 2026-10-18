@@ -177,3 +177,18 @@ test("generic agent tools route to existing host commands and reject untrusted a
   await assert.rejects(tools.get("toolbox_history").execute("6", { limit: 500 }), /out of range/);
   assert.equal(calls.length, 2, "rejected calls must never reach the host");
 });
+
+test("MCP and plugin callers cannot reach SynthV operations while the integration is off", async () => {
+  const { HostCapabilities } = await import("../src/PiDesktop.Tauri/dist/electron/services/host-capabilities.js");
+  let enabled = false;
+  const calls = [];
+  const synthv = { scanInstallations: async () => { calls.push("scan"); return []; } };
+  const creative = { invoke: async (operation) => { calls.push(operation); return { ok: true }; } };
+  const capabilities = new HostCapabilities(synthv, creative, {}, () => enabled);
+  await assert.rejects(capabilities.invoke("host.internal", "synthv", "scan", {}), (error) => error.clientSafe === true && /turned off/.test(error.message));
+  await assert.rejects(capabilities.invoke("host.advanced", "synthv", "activate-profile", { slotId: "a" }), /turned off/);
+  assert.deepEqual(await capabilities.invoke("host.internal", "creative", "list_creative_history", {}), { ok: true });
+  enabled = true;
+  assert.deepEqual(await capabilities.invoke("host.internal", "synthv", "scan", {}), []);
+  assert.deepEqual(calls, ["list_creative_history", "scan"]);
+});
