@@ -1,5 +1,6 @@
+import { randomBytes } from "node:crypto";
 import { cp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { AgentRuntimeWorker, type PiSessionFactory } from "@synthv-toolbox/agent-runtime";
 import {
   AGENT_RUN_PROGRESS_EVENT,
@@ -11,7 +12,7 @@ import {
   type PluginPermission,
   type RpcNotification,
 } from "@synthv-toolbox/runtime-protocol";
-import { ClientError, type HttpMcpServer } from "./http-mcp-server.js";
+import { ClientError, MCP_SERVER_NAME, SUPPORTED_MCP_PROTOCOL_VERSIONS, type HttpMcpServer } from "./http-mcp-server.js";
 
 export interface ElectronRuntimeHostOptions {
   sessionFactory?: PiSessionFactory;
@@ -26,6 +27,8 @@ export interface RuntimeHostSettings {
   httpApiEnabled: boolean;
   httpAgentEnabled: boolean;
   httpApiPort: number;
+  /** Bearer token for the local HTTP MCP and agent endpoints; generated on first load. */
+  httpApiToken: string;
 }
 
 export interface PluginState {
@@ -47,7 +50,10 @@ const defaultSettings = (): RuntimeHostSettings => ({
   httpApiEnabled: false,
   httpAgentEnabled: false,
   httpApiPort: 17831,
+  httpApiToken: "",
 });
+/** Same rule validatePluginManifest applies to manifest ids, so a valid id is always a single safe path segment. */
+const pluginIdPattern = /^[a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)+$/;
 
 export class ElectronRuntimeHost {
   private settings = defaultSettings();
@@ -88,21 +94,33 @@ export class ElectronRuntimeHost {
   }
 
   async load(): Promise<RuntimeHostSettings> {
+    let readable = true;
     try {
       this.settings = { ...defaultSettings(), ...JSON.parse(await readFile(this.settingsPath(), "utf8")) };
-    } catch {
+    } catch (error) {
+      // A locked or damaged file must not be overwritten with defaults just to store a token.
+      readable = (error as NodeJS.ErrnoException).code === "ENOENT";
       this.settings = defaultSettings();
+    }
+    if (typeof this.settings.httpApiToken !== "string" || !this.settings.httpApiToken) {
+      this.settings.httpApiToken = createApiToken();
+      // An unsaved token still protects this session; MCP clients only need re-pairing after the next start.
+      if (readable) await this.persist().catch((error) => console.error("Could not save the HTTP API token:", error));
     }
     return this.settings;
   }
 
   async configure(next: RuntimeHostSettings): Promise<void> {
-    this.settings = { ...next };
-    await mkdir(this.root, { recursive: true });
-    const temporary = `${this.settingsPath()}.tmp`;
-    await writeFile(temporary, JSON.stringify(this.settings), "utf8");
-    await rename(temporary, this.settingsPath());
+    this.settings = { ...next, httpApiToken: next.httpApiToken || this.settings.httpApiToken || createApiToken() };
+    await this.persist();
     await this.syncHttpServer();
+  }
+
+  async rotateHttpApiToken(): Promise<JsonValue> {
+    this.settings = { ...this.settings, httpApiToken: createApiToken() };
+    await this.persist();
+    await this.syncHttpServer();
+    return this.httpMcpStatus();
   }
 
   async attachHttpServer(server: HttpMcpServer): Promise<void> { this.httpServer = server; await this.syncHttpServer(); }
@@ -122,11 +140,25 @@ export class ElectronRuntimeHost {
       endpoint: server?.endpoint ?? null,
       agentEndpoint: server?.agentEndpoint ?? null,
       lastError: server?.lastError ?? null,
+      token: this.settings.httpApiToken,
+      authRequired: true,
+      serverName: server?.serverName ?? MCP_SERVER_NAME,
+      protocolVersions: [...SUPPORTED_MCP_PROTOCOL_VERSIONS],
       tools,
     };
   }
 
-  private async syncHttpServer(): Promise<void> { if (this.httpServer) await this.httpServer.restart({ enabled: this.settings.httpApiEnabled, agentEnabled: this.settings.httpAgentEnabled, internalEnabled: this.settings.mcpInternalFunctionsEnabled, advancedEnabled: this.settings.mcpAdvancedFunctionsEnabled, port: this.settings.httpApiPort }); }
+  // start() keeps a running server whose config is unchanged, so open MCP sessions survive unrelated settings saves.
+  private async syncHttpServer(): Promise<void> { if (this.httpServer) await this.httpServer.start({ enabled: this.settings.httpApiEnabled, agentEnabled: this.settings.httpAgentEnabled, internalEnabled: this.settings.mcpInternalFunctionsEnabled, advancedEnabled: this.settings.mcpAdvancedFunctionsEnabled, port: this.settings.httpApiPort, token: this.settings.httpApiToken }); }
+
+  /** The file holds the HTTP API bearer token, so it is created owner-only (rm first: writeFile keeps an existing file's mode). */
+  private async persist(): Promise<void> {
+    await mkdir(this.root, { recursive: true });
+    const temporary = `${this.settingsPath()}.tmp`;
+    await rm(temporary, { force: true });
+    await writeFile(temporary, JSON.stringify(this.settings), { encoding: "utf8", mode: 0o600 });
+    await rename(temporary, this.settingsPath());
+  }
 
   async invokePlugin(pluginId: string, method: string, params: JsonValue): Promise<JsonValue> {
     return this.runtimeRequest("runtime.plugin.invoke", { pluginId, method, params });
@@ -155,7 +187,7 @@ export class ElectronRuntimeHost {
   }
 
   async setPluginGrant(id: string, kind: "internal" | "advanced", enabled: boolean): Promise<PluginState> {
-    const manifest = await this.readManifest(join(this.pluginsRoot(), id));
+    const manifest = await this.readManifest(await this.installedPluginDirectory(id));
     const permission = kind === "internal" ? "host.internal" : "host.advanced";
     if (enabled && pluginPermissionLevel(manifest, permission) === "none") throw new Error("Plugin did not declare this permission.");
     const state = await this.readPluginState(id);
@@ -166,13 +198,14 @@ export class ElectronRuntimeHost {
   }
 
   async setPluginEnabled(id: string, enabled: boolean): Promise<PluginState> {
+    await this.installedPluginDirectory(id);
     const state = await this.readPluginState(id);
     state.enabled = enabled;
     await this.writePluginState(id, state);
     return state;
   }
 
-  async uninstallPlugin(id: string): Promise<void> { await rm(join(this.pluginsRoot(), id), { recursive: true, force: false }); }
+  async uninstallPlugin(id: string): Promise<void> { await rm(await this.installedPluginDirectory(id), { recursive: true, force: false }); }
 
   async mcpTools(): Promise<string[]> {
     return [
@@ -193,7 +226,7 @@ export class ElectronRuntimeHost {
   }
 
   private async assertPluginPermission(id: string, permission: "host.internal" | "host.advanced"): Promise<void> {
-    const manifest = await this.readManifest(join(this.pluginsRoot(), id));
+    const manifest = await this.readManifest(await this.installedPluginDirectory(id));
     if (pluginPermissionLevel(manifest, permission) === "none") throw new Error("Plugin did not declare this permission.");
     const globalEnabled = permission === "host.internal" ? this.settings.pluginInternalFunctionsEnabled : this.settings.pluginAdvancedFunctionsEnabled;
     const state = await this.readPluginState(id);
@@ -215,6 +248,13 @@ export class ElectronRuntimeHost {
   private async writePluginState(id: string, state: PluginState): Promise<void> { await writeFile(this.statePath(id), JSON.stringify(state), "utf8"); }
   private async pluginIds(): Promise<string[]> {
     try { return await readdir(this.pluginsRoot()); } catch { return []; }
+  }
+  /** Plugin ids arrive from renderer commands and plugin requests; only an installed plugin's own directory may be touched. */
+  private async installedPluginDirectory(id: string): Promise<string> {
+    const directory = resolve(this.pluginsRoot(), String(id));
+    if (typeof id !== "string" || !pluginIdPattern.test(id) || relative(this.pluginsRoot(), directory) !== id) throw new Error("Plugin id is invalid.");
+    if (!(await this.pluginIds()).includes(id)) throw new Error("Plugin is not installed.");
+    return directory;
   }
   private async readManifest(directory: string): Promise<PluginManifest> {
     const manifest = validatePluginManifest(JSON.parse(await readFile(resolve(directory, "manifest.json"), "utf8")));
@@ -247,3 +287,4 @@ export class ElectronRuntimeHost {
 }
 
 function isObject(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === "object" && !Array.isArray(value); }
+function createApiToken(): string { return randomBytes(32).toString("base64url"); }

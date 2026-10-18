@@ -5,6 +5,7 @@ import type { CreativeService } from "./creative-service.js";
 import { registerComponentAudioCommands, type ComponentAudioOptions } from "./component-audio-commands.js";
 import type { DesktopStateService } from "./desktop-state.js";
 import { INTEGRATION_IDS, INTEGRATION_PREFERENCES } from "./integrations.js";
+import { probeStdioMcpServer, stdioMcpServerConfig, type StdioMcpServerConfig } from "./mcp-stdio-probe.js";
 import type { ElectronRuntimeHost } from "./runtime-host.js";
 import { registerSynthVCommands } from "./synthv-commands.js";
 import type { SynthVService } from "./synthv-service.js";
@@ -38,6 +39,7 @@ export class ElectronCommandRegistry {
     this.register("invoke_agent_plugin", async p => this.host.invokePlugin(stringParam(p, "pluginId"), stringParam(p, "method"), jsonParam(p, "params")));
     this.register("get_http_api_status", async () => this.host.httpMcpStatus());
     this.register("configure_http_api", async p => { const current = this.host.settingsSnapshot(); await this.host.configure({ ...current, httpApiEnabled: boolParam(p, "enabled"), httpAgentEnabled: boolParam(p, "agentEnabled"), mcpInternalFunctionsEnabled: boolParam(p, "internalFunctionsEnabled"), mcpAdvancedFunctionsEnabled: boolParam(p, "advancedFunctionsEnabled"), httpApiPort: portParam(p, "port") }); return this.host.httpMcpStatus(); });
+    this.register("rotate_http_api_token", async () => this.host.rotateHttpApiToken());
   }
 
   private registerServices(s: ElectronServices): void {
@@ -59,7 +61,7 @@ export class ElectronCommandRegistry {
     this.register("set_plugin_advanced_functions_enabled", async p => { await this.host.configure({ ...this.host.settingsSnapshot(), pluginAdvancedFunctionsEnabled: boolParam(p, "enabled") }); return state(); });
     this.register("save_mcp_server", async p => s.desktop.saveMcpServer(objectParam(p, "server")));
     this.register("delete_mcp_server", async p => s.desktop.deleteMcpServer(stringParam(p, "id")));
-    this.register("test_mcp_server", async p => ({ succeeded: true, summary: "MCP server configuration is valid.", detail: stringParam(p, "id") }));
+    this.register("test_mcp_server", async p => this.testMcpServer(stringParam(p, "id"), await state()));
     this.registerAi(s.ai, s.desktop, state);
     registerSynthVCommands(this, s.synthv);
     registerComponentAudioCommands(this, s.componentAudio);
@@ -83,6 +85,16 @@ export class ElectronCommandRegistry {
 
   private async installedPlugins(): Promise<Array<{ manifest: Record<string, unknown>; enabled: boolean; internalFunctionsEnabled: boolean; advancedFunctionsEnabled: boolean }>> { return (await this.host.contributions()).map(({ manifest, state }) => ({ manifest: manifest as unknown as Record<string, unknown>, ...state })); }
   private async pluginMutation(id: string, mutate: () => Promise<unknown>): Promise<unknown> { await mutate(); return (await this.installedPlugins()).find(item => item.manifest.id === id) ?? null; }
+  /** Launches the saved stdio server for a real initialize + tools/list handshake; failures are results, not errors, so the settings page can show them. */
+  private async testMcpServer(id: string, state: Record<string, unknown>): Promise<unknown> {
+    const failed = (summary: string) => ({ succeeded: false, summary, detail: id, tools: [], serverInfo: null });
+    const server = (Array.isArray(state.mcpServers) ? state.mcpServers : []).find((item): item is Record<string, unknown> => isObject(item) && item.id === id);
+    if (!server) return failed("MCP server was not found.");
+    let config: StdioMcpServerConfig;
+    try { config = stdioMcpServerConfig(server); } catch (error) { return failed(error instanceof Error ? error.message : String(error)); }
+    const result = await probeStdioMcpServer(config, { clientVersion: typeof state.appVersion === "string" ? state.appVersion : undefined });
+    return { succeeded: result.succeeded, summary: result.summary, detail: result.detail, tools: result.tools, serverInfo: result.serverInfo ?? null };
+  }
 }
 
 function isObject(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === "object" && !Array.isArray(value); }

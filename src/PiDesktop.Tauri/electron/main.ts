@@ -27,6 +27,7 @@ import { DesktopStateService } from "./services/desktop-state.js";
 import { HostCapabilities } from "./services/host-capabilities.js";
 import { ClientError, HttpMcpServer } from "./services/http-mcp-server.js";
 import { agentSystemPrompt } from "./services/agent-identity.js";
+import { hostResultToToolResult, toolboxMcpTools } from "./services/mcp-tools.js";
 import { migrateAutostart, RUN_KEY } from "./services/autostart-migration.js";
 import { loadEmbeddedBridge, unavailableBridge, type EmbeddedBridge } from "./services/synthv-bridge.js";
 import { createSynthVDeliveryRegistry, createSynthVToolsExtension } from "./services/synthv-agent-tools.js";
@@ -310,11 +311,11 @@ async function initializeServices(): Promise<void> {
     },
   });
   const httpServer = new HttpMcpServer({
-    mcpTools: async () => (await runtimeHost.mcpTools()).map(name => ({ name, description: name === "toolbox_internal" ? "Invoke an authorized internal Toolbox operation." : "Invoke an authorized advanced Toolbox operation.", inputSchema: { type: "object", properties: { capability: { type: "string" }, operation: { type: "string" }, params: { type: "object" } }, required: ["capability", "operation", "params"], additionalProperties: false }, permission: name === "toolbox_internal" ? "internal" : "advanced" })),
-    callMcpTool: async (name, arguments_) => ({ content: await runtimeHost.callMcpTool(name, arguments_ as never) }),
+    mcpTools: async () => toolboxMcpTools(await runtimeHost.mcpTools()),
+    callMcpTool: async (name, arguments_) => hostResultToToolResult(await runtimeHost.callMcpTool(name, arguments_ as JsonValue)),
     agentTask: args => { requireAiMode(desktop); return agentTasks!.invoke(args); },
     agentChat: async (input, conversationId) => { requireAiMode(desktop); const conversation = conversationId ? await ai.open_conversation(conversationId) : await ai.new_conversation(); return ai.send_message(conversation.id, input, { effort: desktop.agentEffort() }); },
-  });
+  }, { name: BRAND.slug, title: BRAND.productName, version: app.getVersion() });
   await runtimeHost.attachHttpServer(httpServer);
   commandRegistry = new ElectronCommandRegistry(runtimeHost, { ai, creative, desktop, synthv, componentAudio: {
     dataRoot: join(userData, "components"),
