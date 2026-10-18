@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -198,4 +198,86 @@ test("ElectronRuntimeHost enables long Pi prompt caching unless the user already
   process.env.PI_CACHE_RETENTION = "short";
   new ElectronRuntimeHost(join(tmpdir(), "runtime-host-cache"), host);
   assert.equal(process.env.PI_CACHE_RETENTION, "short");
+});
+
+const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const httpMcpServerUrl = pathToFileURL(join(repositoryRoot, "src/PiDesktop.Tauri/dist/electron/services/http-mcp-server.js")).href;
+const unusedCapabilities = { invoke: () => { throw new Error("not used in this test"); } };
+async function loadRuntimeHost() {
+  const text = source
+    .replace('from "@synthv-toolbox/runtime-protocol";', `from "${pathToFileURL(join(repositoryRoot, "packages/runtime-protocol/dist/index.js")).href}";`)
+    .replace('from "@synthv-toolbox/agent-runtime";', `from "${pathToFileURL(join(repositoryRoot, "packages/agent-runtime/dist/index.js")).href}";`)
+    .replace('from "./http-mcp-server.js";', `from "${httpMcpServerUrl}";`);
+  return import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(text, { mode: "transform" })).toString("base64")}`);
+}
+
+test("the HTTP API bearer token is generated once, stored owner-only, kept by configure and rotated with a restart", async (t) => {
+  const { ElectronRuntimeHost } = await loadRuntimeHost();
+  const { HttpMcpServer } = await import(httpMcpServerUrl);
+  const directory = await mkdtemp(join(tmpdir(), "runtime-host-token-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const settingsPath = join(directory, "runtime-settings.json");
+  const ownerOnly = async () => { if (process.platform !== "win32") assert.equal((await stat(settingsPath)).mode & 0o777, 0o600); };
+  const runtimeHost = new ElectronRuntimeHost(directory, unusedCapabilities);
+  const token = (await runtimeHost.load()).httpApiToken;
+  assert.match(token, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(JSON.parse(await readFile(settingsPath, "utf8")).httpApiToken, token);
+  await ownerOnly();
+  assert.equal((await new ElectronRuntimeHost(directory, unusedCapabilities).load()).httpApiToken, token, "a restart keeps the stored token");
+
+  const server = new HttpMcpServer({ async mcpTools() { return []; }, async callMcpTool() { return { content: null }; } });
+  t.after(() => server.stop());
+  await runtimeHost.attachHttpServer(server);
+  await runtimeHost.configure({ ...runtimeHost.settingsSnapshot(), httpApiEnabled: true, httpApiPort: 0, httpApiToken: "" });
+  assert.equal(runtimeHost.settingsSnapshot().httpApiToken, token, "configure keeps the token unless one is supplied");
+  let status = await runtimeHost.httpMcpStatus();
+  assert.equal(status.running, true);
+  assert.equal(status.token, token);
+  assert.equal(status.authRequired, true);
+  assert.equal(status.serverName, "toneshuttle");
+  assert.deepEqual(status.protocolVersions, ["2025-11-25", "2025-06-18", "2025-03-26"]);
+  const listener = server.server;
+  await runtimeHost.configure(runtimeHost.settingsSnapshot());
+  assert.equal(server.server, listener, "saving unchanged settings keeps the running server");
+  const ping = (endpoint, bearer) => fetch(endpoint, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }) });
+  assert.equal((await ping(status.endpoint, token)).status, 200);
+
+  status = await runtimeHost.rotateHttpApiToken();
+  assert.match(status.token, /^[A-Za-z0-9_-]{43}$/);
+  assert.notEqual(status.token, token);
+  assert.notEqual(server.server, listener, "a new token restarts the server");
+  assert.equal(JSON.parse(await readFile(settingsPath, "utf8")).httpApiToken, status.token);
+  await ownerOnly();
+  assert.equal((await ping(status.endpoint, token)).status, 401);
+  assert.equal((await ping(status.endpoint, status.token)).status, 200);
+});
+
+test("plugin commands only touch installed plugin directories", async (t) => {
+  const { ElectronRuntimeHost } = await loadRuntimeHost();
+  const directory = await mkdtemp(join(tmpdir(), "runtime-host-plugin-ids-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const pluginSource = join(directory, "source");
+  await mkdir(pluginSource, { recursive: true });
+  await writeFile(join(pluginSource, "manifest.json"), JSON.stringify({ schemaVersion: 1, id: "example.plugin", name: "Example", version: "1.0.0", hostApi: { min: "1.0", max: "1.0" } }));
+  const runtimeRoot = join(directory, "runtime");
+  const runtimeHost = new ElectronRuntimeHost(runtimeRoot, unusedCapabilities);
+  await runtimeHost.load();
+  await runtimeHost.installPlugin(pluginSource);
+  await mkdir(join(runtimeRoot, "victim.dir"), { recursive: true });
+  const attempts = (id) => [() => runtimeHost.uninstallPlugin(id), () => runtimeHost.setPluginEnabled(id, true), () => runtimeHost.setPluginGrant(id, "internal", false)];
+  for (const id of ["..", "../victim.dir", "..\\victim.dir", "example.plugin/..", "example.plugin\\..", "Example.Plugin", "plugins", "", 42]) {
+    for (const attempt of attempts(id)) await assert.rejects(attempt, /Plugin id is invalid/, `rejects ${JSON.stringify(id)}`);
+  }
+  for (const attempt of attempts("other.plugin")) await assert.rejects(attempt, /Plugin is not installed/);
+  assert.ok(existsSync(join(runtimeRoot, "victim.dir")));
+  assert.ok(existsSync(join(runtimeRoot, "runtime-settings.json")));
+  assert.equal((await runtimeHost.setPluginEnabled("example.plugin", false)).enabled, false);
+  await runtimeHost.uninstallPlugin("example.plugin");
+  assert.equal(existsSync(join(runtimeRoot, "plugins", "example.plugin")), false);
+  await assert.rejects(() => runtimeHost.setPluginEnabled("example.plugin", true), /Plugin is not installed/);
+});
+
+test("the runtime host plugin id rule matches validatePluginManifest", () => {
+  const protocol = readFileSync(new URL("../packages/runtime-protocol/src/index.ts", import.meta.url), "utf8");
+  assert.equal(/const pluginIdPattern = (\/.+\/);/.exec(source)[1], /const identifierPattern = (\/.+\/);/.exec(protocol)[1]);
 });

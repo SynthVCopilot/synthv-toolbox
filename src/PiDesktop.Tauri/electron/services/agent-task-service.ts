@@ -86,7 +86,7 @@ export function createAgentTaskService(options: AgentTaskServiceOptions) {
       const temporary = `${file}.${id()}.tmp`;
       const contents = JSON.stringify(retained);
       await writeFile(temporary, contents, { encoding: "utf8", mode: 0o600 });
-      await rename(temporary, file);
+      await replaceFile(temporary, file);
     });
     const queued = operation.catch(() => undefined);
     writeQueue = queued;
@@ -197,7 +197,7 @@ export function createAgentTaskService(options: AgentTaskServiceOptions) {
     switch (args.action) {
       case "start": return begin(requiredInput(args.input));
       case "continue": return continueTask(requiredInput(args.input), requiredString(args.conversationId, "conversationId"), args.taskId);
-      case "list": return Promise.all(retainHistory(tasks).reverse().map(enriched));
+      case "list": return { tasks: await Promise.all(retainHistory(tasks).reverse().map(enriched)) };
       case "status": {
         const task = findTask(args.taskId, args.conversationId);
         if (!task) throw new ClientError("Agent task was not found.");
@@ -280,8 +280,9 @@ function validateRequest(value: unknown): AgentTaskRequest {
     : action === "continue" ? ["action", "input", "conversationId", "taskId"]
     : action === "status" || action === "cancel" ? ["action", "taskId", "conversationId"]
     : action === "list" ? ["action"] : [];
-  if (allowed.length === 0) throw new ClientError("Agent task action is invalid.");
-  if (Object.keys(request).some((key) => !allowed.includes(key))) throw new ClientError("Agent task request contains an unsupported field.");
+  if (allowed.length === 0) throw new ClientError("Agent task action is invalid; use start, continue, status, cancel or list.");
+  const unsupported = Object.keys(request).filter((key) => !allowed.includes(key));
+  if (unsupported.length) throw new ClientError(`Agent task request contains an unsupported field for ${String(action)}: ${unsupported.join(", ")}. It accepts ${allowed.join(", ")}.`);
   if (action === "start" && typeof request.input !== "string") throw new ClientError("Agent task input is required.");
   if (action === "continue" && (typeof request.input !== "string" || typeof request.conversationId !== "string" || (request.taskId !== undefined && typeof request.taskId !== "string"))) throw new ClientError("Continue requires input and conversationId.");
   if ((action === "status" || action === "cancel") && request.taskId !== undefined && typeof request.taskId !== "string") throw new ClientError("taskId must be a string.");
@@ -291,6 +292,14 @@ function validateRequest(value: unknown): AgentTaskRequest {
 }
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function isMissingFile(error: unknown): boolean { return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT"; }
+/** Windows refuses to replace a file while another handle (a status reader, antivirus) has it open; those locks are brief, so retry. */
+async function replaceFile(temporary: string, file: string): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try { return await rename(temporary, file); }
+    catch (error) { if (attempt >= 20 || !isTransientLock(error)) throw error; await new Promise((resolve) => setTimeout(resolve, attempt * 10)); }
+  }
+}
+function isTransientLock(error: unknown): boolean { return typeof error === "object" && error !== null && "code" in error && (error.code === "EPERM" || error.code === "EACCES" || error.code === "EBUSY"); }
 function isStoredTask(value: unknown): value is StoredTask {
   return typeof value === "object" && value !== null && "taskId" in value && typeof value.taskId === "string" && "conversationId" in value && typeof value.conversationId === "string" && "runId" in value && typeof value.runId === "string" && "status" in value && typeof value.status === "string" && "startedAt" in value && typeof value.startedAt === "string" && "updatedAt" in value && typeof value.updatedAt === "string";
 }
