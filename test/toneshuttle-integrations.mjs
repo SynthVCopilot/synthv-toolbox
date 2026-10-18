@@ -147,3 +147,33 @@ test("product identity is consistent and the stable identifiers keep their legac
   assert.ok(main.indexOf("app.setPath(\"userData\"") < main.indexOf("requestSingleInstanceLock"), "userData must be pinned before the single-instance lock reads it");
   assert.match(main, /hasSwitch\("user-data-dir"\)/, "an explicit --user-data-dir must still win over the pinned folder");
 });
+
+test("generic agent tools route to existing host commands and reject untrusted arguments", async () => {
+  const { createToolboxAgentToolsExtension, TOOLBOX_AGENT_TOOLS } = await import("../src/PiDesktop.Tauri/dist/electron/services/toolbox-agent-tools.js");
+  const registry = await readFile(join(root, "src/PiDesktop.Tauri/electron/services/command-registry.ts"), "utf8");
+  const audio = await readFile(join(root, "src/PiDesktop.Tauri/electron/services/component-audio-commands.ts"), "utf8");
+  for (const spec of TOOLBOX_AGENT_TOOLS) {
+    assert.ok(registry.includes(`"${spec.command}"`) || audio.includes(`registry.register("${spec.command}"`), `${spec.name} targets an unregistered command ${spec.command}`);
+    assert.match(spec.name, /^toolbox_[a-z_]+$/, "tool names must satisfy the Anthropic and OpenAI name pattern");
+  }
+  const calls = [];
+  const tools = new Map();
+  let prompt = "base";
+  createToolboxAgentToolsExtension({ invoke: async (command, args) => { calls.push([command, args]); return { ok: true }; } }).factory({
+    on: (event, handler) => { if (event === "before_agent_start") prompt = handler({ systemPrompt: prompt }).systemPrompt; },
+    registerTool: (tool) => tools.set(tool.name, tool),
+  });
+  assert.match(prompt, /## Toolbox tools/);
+  assert.deepEqual([...tools.keys()], TOOLBOX_AGENT_TOOLS.map(spec => spec.name));
+  for (const tool of tools.values()) assert.equal(tool.parameters.type, "object");
+  const features = await tools.get("toolbox_audio_features").execute("1", { path: "C:\a.wav", notes: true });
+  assert.deepEqual(calls.at(-1), ["run_audio_probe", { audioPath: "C:\a.wav", advanced: true }]);
+  assert.equal(features.content[0].text, JSON.stringify({ ok: true }));
+  await tools.get("toolbox_history").execute("2", {});
+  assert.deepEqual(calls.at(-1), ["list_creative_history", { limit: 20 }]);
+  await assert.rejects(tools.get("toolbox_audio_probe").execute("3", {}), /requires path/);
+  await assert.rejects(tools.get("toolbox_audio_probe").execute("4", { path: "x", command: "rm" }), /does not accept command/);
+  await assert.rejects(tools.get("toolbox_lyrics_rhymes").execute("5", { query: "风", matchMode: "fuzzy" }), /matchMode is invalid/);
+  await assert.rejects(tools.get("toolbox_history").execute("6", { limit: 500 }), /out of range/);
+  assert.equal(calls.length, 2, "rejected calls must never reach the host");
+});

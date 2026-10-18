@@ -30,6 +30,7 @@ import { agentSystemPrompt } from "./services/agent-identity.js";
 import { migrateAutostart, RUN_KEY } from "./services/autostart-migration.js";
 import { loadEmbeddedBridge, unavailableBridge, type EmbeddedBridge } from "./services/synthv-bridge.js";
 import { createSynthVDeliveryRegistry, createSynthVToolsExtension } from "./services/synthv-agent-tools.js";
+import { createToolboxAgentToolsExtension } from "./services/toolbox-agent-tools.js";
 import { SynthVService } from "./services/synthv-service.js";
 import { DreamtonicsWebAccounts, type WebAccountBrowser } from "./services/dreamtonics-web.js";
 import { createDreamtonicsBrowser } from "./services/dreamtonics-browser.js";
@@ -282,8 +283,9 @@ async function initializeServices(): Promise<void> {
           guards.completion(() => monitor.readNotes.size !== target.notes.length ? `Read the entire Cover group: ${monitor.readNotes.size}/${target.notes.length} notes inspected.` : monitor.writes < 1 ? "Apply and verify real tuning changes before completing the Cover." : null);
           return [createSynthVToolsExtension({ bridge: coverHost.forTuning(target, monitor), approvals, sessionId, guards, runState, registry: delivery, workMode: () => "solo" })];
         }
-        if (!desktop.synthvEnabled()) return [];
-        return [createSynthVToolsExtension({ bridge, approvals, sessionId, guards, runState, registry: delivery, workMode: () => desktop.agentWorkMode() }), createCoverAgentToolsExtension({ sessionId, guards, runState, invoke: (command, args) => cover.invoke(command, args) })];
+        const toolbox = createToolboxAgentToolsExtension({ invoke: (command, args) => { if (!commandRegistry) throw new Error("Electron services are not ready."); return commandRegistry.invoke(command, args); } });
+        if (!desktop.synthvEnabled()) return [toolbox];
+        return [toolbox, createSynthVToolsExtension({ bridge, approvals, sessionId, guards, runState, registry: delivery, workMode: () => desktop.agentWorkMode() }), createCoverAgentToolsExtension({ sessionId, guards, runState, invoke: (command, args) => cover.invoke(command, args) })];
       },
       persistTranscripts: () => desktop.agentTranscriptsEnabled(),
     }),

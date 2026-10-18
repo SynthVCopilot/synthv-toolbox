@@ -2606,6 +2606,13 @@ const AGENT_TOOL_DISPLAY_NAME_KEYS: Record<string, string> = {
   sv_query: "copilot.toolNameSvQuery",
   sv_describe: "copilot.toolNameSvDescribe",
   sv_review: "copilot.toolNameSvReview",
+  toolbox_audio_probe: "copilot.toolNameAudioProbe",
+  toolbox_audio_loudness: "copilot.toolNameAudioLoudness",
+  toolbox_audio_features: "copilot.toolNameAudioFeatures",
+  toolbox_lyrics_rhymes: "copilot.toolNameLyricsRhymes",
+  toolbox_lyrics_check: "copilot.toolNameLyricsCheck",
+  toolbox_history: "copilot.toolNameHistory",
+  toolbox_cover: "copilot.toolNameCover",
 };
 
 function agentToolDisplayName(name: string): string {
