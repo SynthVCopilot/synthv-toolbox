@@ -48,6 +48,7 @@ addMessages("zh-CN", {
     protocols: "协议版本",
     server: "服务名",
     authRequired: "所有请求都需要 Authorization: Bearer 令牌。",
+    agentNeedsAi: "仅在 AI 模式下可用",
   },
   mcpTest: {
     ok: "{name} 可用，提供 {count} 个工具。",
@@ -115,6 +116,7 @@ addMessages("en", {
     protocols: "Protocol versions",
     server: "Server name",
     authRequired: "Every request needs an Authorization: Bearer token.",
+    agentNeedsAi: "works in AI mode only",
   },
   mcpTest: {
     ok: "{name} responded with {count} tools.",

@@ -1210,6 +1210,7 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .mcp-tools { margin-top: 12px; font-size: 12px; }
 .mcp-tools ul { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; padding: 0; list-style: none; }
 .mcp-tools p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+.mcp-tools li small { margin-left: 5px; color: var(--muted); font-size: 10px; }
 .integration-row { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 12px; }
 .integration-copy { display: grid; gap: 3px; min-width: 0; }
 .integration-copy small { color: var(--muted); font-size: 11px; line-height: 1.45; }
