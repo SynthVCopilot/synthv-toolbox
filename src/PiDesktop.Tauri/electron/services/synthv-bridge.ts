@@ -36,3 +36,15 @@ export function loadEmbeddedBridge(bridgeDirectory: string, clientLabel: string)
   return import(pathToFileURL(join(bridgeDirectory, "dist/src/embedded.js")).href)
     .then((module: { createEmbeddedBridge(options: { clientLabel: string }): EmbeddedBridge }) => module.createEmbeddedBridge({ clientLabel }));
 }
+
+/** Stands in for a bridge component that failed to load, so the rest of the app still starts without SynthV. */
+export function unavailableBridge(reason: string): EmbeddedBridge {
+  return {
+    tools: [],
+    instructions: "",
+    classify: () => ({ category: "read", risk: "normal" }),
+    status: async () => ({ connected: false, ipcDirectory: "", reason }),
+    requestStop: async () => {},
+    close: async () => {},
+  };
+}

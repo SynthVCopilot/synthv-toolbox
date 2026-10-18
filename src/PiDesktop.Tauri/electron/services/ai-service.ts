@@ -118,6 +118,8 @@ export interface AiServiceOptions {
   files?: MetadataFilePort;
   now?: () => Date;
   id?: () => string;
+  /** Base agent prompt; a changed value recreates the Pi session, so it can carry the active integrations. */
+  systemPrompt?: () => string;
 }
 
 const providers: readonly AiProviderId[] = ["anthropic", "openai-codex", "workbuddy", "traecode"];
@@ -476,7 +478,8 @@ export class AiService {
       const conversation = metadata.conversations.find((item) => item.id === conversationId);
       if (!conversation) throw new Error("Conversation was not found.");
       const seedOutcome = latestOutcome(conversation);
-      await this.options.runtime.request("session.initialize", { sessionId: conversation.id, ...(options.cwd ? { cwd: options.cwd } : {}), ...(seedOutcome ? { outcome: seedOutcome } : {}) });
+      const systemPrompt = this.options.systemPrompt?.();
+      await this.options.runtime.request("session.initialize", { sessionId: conversation.id, ...(options.cwd ? { cwd: options.cwd } : {}), ...(systemPrompt ? { systemPrompt } : {}), ...(seedOutcome ? { outcome: seedOutcome } : {}) });
       const { assistant, outcome } = active.cancelRequested
         ? { assistant: "", outcome: cancelledOutcome(effort, this.agentUsageSamples()) }
         : await this.runSend(conversation.id, text, effort, active);

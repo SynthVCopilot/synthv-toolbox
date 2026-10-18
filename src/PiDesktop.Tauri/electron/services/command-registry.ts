@@ -4,6 +4,7 @@ import type { AiService, AiProviderId, AiLoadStrategy } from "./ai-service.js";
 import type { CreativeService } from "./creative-service.js";
 import { registerComponentAudioCommands, type ComponentAudioOptions } from "./component-audio-commands.js";
 import type { DesktopStateService } from "./desktop-state.js";
+import { INTEGRATION_IDS, INTEGRATION_PREFERENCES } from "./integrations.js";
 import type { ElectronRuntimeHost } from "./runtime-host.js";
 import { registerSynthVCommands } from "./synthv-commands.js";
 import type { SynthVService } from "./synthv-service.js";
@@ -53,6 +54,7 @@ export class ElectronCommandRegistry {
     this.register("set_svp_launch_routing", async p => s.desktop.update({ smartSvpLaunchEnabled: boolParam(p, "enabled") }));
     this.register("set_svp_always_ask", async p => s.desktop.update({ smartSvpAlwaysAsk: boolParam(p, "alwaysAsk") }));
     this.register("accept_sv2_concurrent_disclaimer", async () => s.desktop.update({ concurrentDisclaimerAccepted: true }));
+    this.register("set_integration", async p => s.desktop.setIntegration(enumParam(p, "integration", INTEGRATION_IDS), enumParam(p, "preference", INTEGRATION_PREFERENCES)));
     this.register("set_plugin_internal_functions_enabled", async p => { await this.host.configure({ ...this.host.settingsSnapshot(), pluginInternalFunctionsEnabled: boolParam(p, "enabled") }); return state(); });
     this.register("set_plugin_advanced_functions_enabled", async p => { await this.host.configure({ ...this.host.settingsSnapshot(), pluginAdvancedFunctionsEnabled: boolParam(p, "enabled") }); return state(); });
     this.register("save_mcp_server", async p => s.desktop.saveMcpServer(objectParam(p, "server")));

@@ -1,7 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
+import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import type { OpenDialogOptions } from "./bridge.js";
+import { BRAND, STABLE_IDENTIFIERS } from "./brand.js";
 import { createUpdaterService } from "./updater.js";
 import { ElectronRuntimeHost } from "./services/runtime-host.js";
 import { ElectronCommandRegistry } from "./services/command-registry.js";
@@ -21,8 +25,10 @@ import { createCreativeService } from "./services/creative-service.js";
 import { createComponentExecutor } from "./services/component-executor.js";
 import { DesktopStateService } from "./services/desktop-state.js";
 import { HostCapabilities } from "./services/host-capabilities.js";
-import { HttpMcpServer } from "./services/http-mcp-server.js";
-import { loadEmbeddedBridge } from "./services/synthv-bridge.js";
+import { ClientError, HttpMcpServer } from "./services/http-mcp-server.js";
+import { agentSystemPrompt } from "./services/agent-identity.js";
+import { migrateAutostart, RUN_KEY } from "./services/autostart-migration.js";
+import { loadEmbeddedBridge, unavailableBridge, type EmbeddedBridge } from "./services/synthv-bridge.js";
 import { createSynthVDeliveryRegistry, createSynthVToolsExtension } from "./services/synthv-agent-tools.js";
 import { SynthVService } from "./services/synthv-service.js";
 import { DreamtonicsWebAccounts, type WebAccountBrowser } from "./services/dreamtonics-web.js";
@@ -35,6 +41,9 @@ import { authorizeTrae } from "@model-auth/providers/trae";
 import { authorizeWorkBuddy } from "@model-auth/providers/workbuddy";
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
+// The data folder predates the Toneshuttle name. Pinning it keeps sealed credentials, settings and plugins in place
+// whatever the package or product is called; an explicit --user-data-dir (tests, side-by-side runs) still wins.
+if (!app.commandLine.hasSwitch("user-data-dir")) app.setPath("userData", join(app.getPath("appData"), STABLE_IDENTIFIERS.userDataDirectory));
 const developmentUrl = process.env.ELECTRON_RENDERER_URL ?? process.argv.find((argument) => argument.startsWith("--dev-server-url="))?.slice("--dev-server-url=".length);
 let mainWindow: BrowserWindow | undefined;
 let tray: Tray | undefined;
@@ -65,13 +74,13 @@ handlers.register("updater.restart", async () => updater.restart());
 handlers.register("updater.state", async () => updater.state());
 handlers.register("check_toolbox_update", async () => {
   const state = await updater.check();
-  return { channel: updateChannel, currentVersion: app.getVersion(), latestVersion: state.version ?? app.getVersion(), updateAvailable: state.phase !== "idle" && state.phase !== "error", releaseName: state.version ? `Version ${state.version}` : "", releaseUrl: "https://github.com/SynthVCopilot/synthv-toolbox/releases", releaseNotes: "", checkedAtUtc: new Date().toISOString(), installer: null };
+  return { channel: updateChannel, currentVersion: app.getVersion(), latestVersion: state.version ?? app.getVersion(), updateAvailable: state.phase !== "idle" && state.phase !== "error", releaseName: state.version ? `Version ${state.version}` : "", releaseUrl: `${BRAND.repositoryUrl}/releases`, releaseNotes: "", checkedAtUtc: new Date().toISOString(), installer: null };
 });
 handlers.register("get_toolbox_update_download", async () => updaterDownloadState());
 handlers.register("download_toolbox_update", async () => { await updater.check(); return updaterDownloadState(); });
 handlers.register("cancel_toolbox_update_download", async () => updaterDownloadState());
 handlers.register("install_toolbox_update", async () => { await updater.restart(); return { succeeded: true, summary: "Installing update.", detail: "" }; });
-handlers.register("open_toolbox_releases", async args => openExternal(optionalUrl(args.releaseUrl, "https://github.com/SynthVCopilot/synthv-toolbox/releases")));
+handlers.register("open_toolbox_releases", async args => openExternal(optionalUrl(args.releaseUrl, `${BRAND.repositoryUrl}/releases`)));
 handlers.register("open_toolbox_project", async args => openExternal(projectUrl(args.target)));
 let commandRegistry: ElectronCommandRegistry | undefined;
 
@@ -107,6 +116,20 @@ function autostartController() {
   };
 }
 
+/** Windows only: a rename of the executable leaves the old login entry behind (see autostart-migration.ts). */
+async function migrateLegacyAutostart(): Promise<void> {
+  if (process.platform !== "win32" || !app.isPackaged) return;
+  const run = promisify(execFile);
+  const migrated = await migrateAutostart({
+    execPath: process.execPath,
+    queryRunKey: async () => (await run("reg", ["query", RUN_KEY], { windowsHide: true })).stdout,
+    removeRunValue: async name => { await run("reg", ["delete", RUN_KEY, "/v", name, "/f"], { windowsHide: true }); },
+    enableAutostart: () => autostartController().set(true),
+    fileExists: existsSync,
+  }).catch((reason: unknown) => { console.error("Unable to migrate the launch-at-login entry", reason); return []; });
+  if (migrated.length) console.info(`Launch at login now points at ${process.execPath} (replaced ${migrated.join(", ")}).`);
+}
+
 async function showMainWindow(): Promise<void> {
   if (!mainWindow) {
     await createMainWindow(false);
@@ -122,11 +145,12 @@ function createTray(): void {
   if (tray) return;
   const image = nativeImage.createFromPath(desktopIconPath());
   tray = new Tray(image);
-  tray.setToolTip("Synthesizer V Toolbox");
+  const chinese = app.getLocale().startsWith("zh");
+  tray.setToolTip(BRAND.productName);
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: "打开 Toolbox", click: () => void showMainWindow() },
+    { label: chinese ? `打开${BRAND.productNameZh}` : `Open ${BRAND.productName}`, click: () => void showMainWindow() },
     { type: "separator" },
-    { label: "退出", click: () => { quitting = true; app.quit(); } },
+    { label: chinese ? "退出" : "Quit", click: () => { quitting = true; app.quit(); } },
   ]));
   tray.on("click", () => void showMainWindow());
 }
@@ -206,7 +230,13 @@ async function createMainWindow(startHidden: boolean): Promise<void> {
 async function initializeServices(): Promise<void> {
   const userData = app.getPath("userData");
   const bridgeDirectory = app.isPackaged ? join(process.resourcesPath, "components", "synthv-agent-bridge") : resolve(currentDirectory, "../../components/synthv-agent-bridge");
-  const bridge = await loadEmbeddedBridge(bridgeDirectory, "synthv-toolbox");
+  // The bridge only serves the optional SynthV integration; a broken component must not stop the whole app.
+  let bridgeLoadError: string | undefined;
+  const bridge: EmbeddedBridge = await loadEmbeddedBridge(bridgeDirectory, BRAND.slug).catch((reason: unknown) => {
+    bridgeLoadError = `The Synthesizer V bridge component could not be loaded: ${reason instanceof Error ? reason.message : String(reason)}`;
+    console.error(bridgeLoadError);
+    return unavailableBridge(bridgeLoadError);
+  });
   const bridgeIpcDirectory = (await bridge.status()).ipcDirectory;
   const accountBrowsers = new Map<string, WebAccountBrowser>();
   const webAccounts = new DreamtonicsWebAccounts((slotId) => {
@@ -252,6 +282,7 @@ async function initializeServices(): Promise<void> {
           guards.completion(() => monitor.readNotes.size !== target.notes.length ? `Read the entire Cover group: ${monitor.readNotes.size}/${target.notes.length} notes inspected.` : monitor.writes < 1 ? "Apply and verify real tuning changes before completing the Cover." : null);
           return [createSynthVToolsExtension({ bridge: coverHost.forTuning(target, monitor), approvals, sessionId, guards, runState, registry: delivery, workMode: () => "solo" })];
         }
+        if (!desktop.synthvEnabled()) return [];
         return [createSynthVToolsExtension({ bridge, approvals, sessionId, guards, runState, registry: delivery, workMode: () => desktop.agentWorkMode() }), createCoverAgentToolsExtension({ sessionId, guards, runState, invoke: (command, args) => cover.invoke(command, args) })];
       },
       persistTranscripts: () => desktop.agentTranscriptsEnabled(),
@@ -259,9 +290,9 @@ async function initializeServices(): Promise<void> {
     onAgentProgress: (progress) => { agentTasks?.recordProgress(progress); emitToRenderer("agent.run.progress", progress); },
   });
   await runtimeHost.load();
-  ai = new AiService({ metadataPath: join(userData, "ai", "metadata.json"), runtime: agentRuntimePort(runtimeHost.runtime), catalog: modelCatalog(), approvals, usage: { query: async (provider, credentialIds) => ({ queriedAt: new Date().toISOString(), accounts: credentialIds.map(credentialId => ({ providerId: provider, credentialId, status: "unknown", plan: null, windows: [], balance: null, error: null })) }) }, authorizer: { authorize: authorizeProvider } });
+  ai = new AiService({ metadataPath: join(userData, "ai", "metadata.json"), runtime: agentRuntimePort(runtimeHost.runtime), catalog: modelCatalog(), approvals, usage: { query: async (provider, credentialIds) => ({ queriedAt: new Date().toISOString(), accounts: credentialIds.map(credentialId => ({ providerId: provider, credentialId, status: "unknown", plan: null, windows: [], balance: null, error: null })) }) }, authorizer: { authorize: authorizeProvider }, systemPrompt: () => agentSystemPrompt({ synthv: desktop.synthvEnabled() }) });
   capabilities = new HostCapabilities(synthv, creative, ai);
-  desktop = new DesktopStateService(userData, app.getVersion(), runtimeHost, ai, synthv, channel => { updateChannel = channel; updater.setChannel(channel); }, creativeRuntime);
+  desktop = new DesktopStateService(userData, app.getVersion(), runtimeHost, ai, synthv, channel => { updateChannel = channel; updater.setChannel(channel); }, creativeRuntime, bridgeLoadError);
   await desktop.load();
   const coverChildren = async (conversationId: string) => (await cover.invoke("media_tasks", {}) as Array<Record<string, any>>).filter(job => job.parentConversationId === conversationId);
   agentTasks = createAgentTaskService({
@@ -279,8 +310,8 @@ async function initializeServices(): Promise<void> {
   const httpServer = new HttpMcpServer({
     mcpTools: async () => (await runtimeHost.mcpTools()).map(name => ({ name, description: name === "toolbox_internal" ? "Invoke an authorized internal Toolbox operation." : "Invoke an authorized advanced Toolbox operation.", inputSchema: { type: "object", properties: { capability: { type: "string" }, operation: { type: "string" }, params: { type: "object" } }, required: ["capability", "operation", "params"], additionalProperties: false }, permission: name === "toolbox_internal" ? "internal" : "advanced" })),
     callMcpTool: async (name, arguments_) => ({ content: await runtimeHost.callMcpTool(name, arguments_ as never) }),
-    agentTask: args => agentTasks!.invoke(args),
-    agentChat: async (input, conversationId) => { const conversation = conversationId ? await ai.open_conversation(conversationId) : await ai.new_conversation(); return ai.send_message(conversation.id, input, { effort: desktop.agentEffort() }); },
+    agentTask: args => { requireAiMode(desktop); return agentTasks!.invoke(args); },
+    agentChat: async (input, conversationId) => { requireAiMode(desktop); const conversation = conversationId ? await ai.open_conversation(conversationId) : await ai.new_conversation(); return ai.send_message(conversation.id, input, { effort: desktop.agentEffort() }); },
   });
   await runtimeHost.attachHttpServer(httpServer);
   commandRegistry = new ElectronCommandRegistry(runtimeHost, { ai, creative, desktop, synthv, componentAudio: {
@@ -302,10 +333,12 @@ let quitCleanupDone = false;
 let quitCleanup: (() => Promise<void>) | undefined;
 function registerQuitCleanup(cleanup: () => Promise<void>): void { quitCleanup = cleanup; }
 
-function updaterDownloadState(): Record<string, unknown> { const state = updater.state(); return { status: state.phase === "ready" ? "ready" : state.phase === "error" ? "failed" : state.phase === "idle" ? "idle" : "downloading", downloadedBytes: 0, totalBytes: null, error: state.error ?? null, fileName: state.version ? `Synthesizer V Toolbox ${state.version}` : null }; }
+function updaterDownloadState(): Record<string, unknown> { const state = updater.state(); return { status: state.phase === "ready" ? "ready" : state.phase === "error" ? "failed" : state.phase === "idle" ? "idle" : "downloading", downloadedBytes: 0, totalBytes: null, error: state.error ?? null, fileName: state.version ? `${BRAND.productName} ${state.version}` : null }; }
+/** The UI promises that toolbox mode makes no model requests; external MCP/HTTP callers must honour that too. */
+function requireAiMode(desktop: DesktopStateService): void { if (!desktop.aiModeEnabled()) throw new ClientError("The internal agent is only available in AI mode. Switch the toolbox to AI mode in Settings first."); }
 async function openExternal(url: string): Promise<Record<string, unknown>> { await shell.openExternal(url); return { succeeded: true, summary: "Opened in browser.", detail: url }; }
 function optionalUrl(value: unknown, fallback: string): string { return typeof value === "string" && /^https:\/\//.test(value) ? value : fallback; }
-function projectUrl(value: unknown): string { const base = "https://github.com/SynthVCopilot/synthv-toolbox"; return value === "issues" ? `${base}/issues` : value === "guide" ? `${base}#readme` : base; }
+function projectUrl(value: unknown): string { const base = BRAND.repositoryUrl; return value === "issues" ? `${base}/issues` : value === "guide" ? `${base}#readme` : base; }
 function modelCatalog() { const values: Record<AiProviderId, string[]> = { anthropic: [["cla", "ude-sonnet-4-6"].join(""), ["cla", "ude-opus-4-6"].join("")], "openai-codex": [["g", "pt-5.6-terra"].join(""), ["g", "pt-6-astra"].join("")], workbuddy: ["glm-5.2"], traecode: [] }; return { models: async (provider: AiProviderId) => values[provider], opencode: async () => ({ generatedAt: Date.now(), providers: Object.entries(values).map(([id, models]) => ({ id, name: id, modelCount: models.length, package: "@model-auth/providers", models })) }) }; }
 async function authorizeProvider(provider: AiProviderId, signal: AbortSignal) { const options = { openExternal: (url: string) => shell.openExternal(url), signal }; const credential = provider === "anthropic" ? await authorizeAnthropic(options) : provider === "openai-codex" ? await authorizeOpenAI(options) : provider === "workbuddy" ? await authorizeWorkBuddy(options) : await authorizeTrae(options); const value = credential as { accountId?: string; label?: string; expires?: number }; return { id: value.accountId, label: value.label ?? provider, secret: JSON.stringify(credential), expiresAt: value.expires }; }
 
@@ -316,6 +349,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     Menu.setApplicationMenu(null);
     await initializeServices();
+    void migrateLegacyAutostart();
     createTray();
     await createMainWindow(isLoginLaunch());
   }).catch((reason: unknown) => {
