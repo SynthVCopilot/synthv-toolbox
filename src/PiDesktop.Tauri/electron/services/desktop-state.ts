@@ -49,6 +49,8 @@ export class DesktopStateService {
   agentWorkMode(): "edit" | "solo" { return this.settings.agentWorkMode; }
   agentTranscriptsEnabled(): boolean { return this.settings.agentTranscriptsEnabled; }
   aiModeEnabled(): boolean { return this.settings.mode === "ai"; }
+  /** External stdio MCP servers the user enabled for the built-in agent (Connections page). */
+  enabledMcpServers(): Data[] { return this.settings.mcpServers.filter(server => server.enabled === true); }
   /** Synchronous so agent session composition can read it; reflects the most recent SynthV probe. */
   synthvEnabled(): boolean { return resolveSynthVIntegration(this.settings.integrations.synthv, this.synthvEvidence); }
 
