@@ -6,7 +6,7 @@ addMessages("zh-CN", {
   brand: {
     name: BRAND.productNameZh,
     tagline: "人声与音频创作工具箱",
-    notAffiliated: "@:{'brand.name'} 与 Dreamtonics 无关联，也未获其认可。Synthesizer V 是 Dreamtonics 的商标，此处仅用于标明兼容的软件。",
+    notAffiliated: "@:{'brand.name'}与 Dreamtonics 无关联，也未获其认可。Synthesizer V 是 Dreamtonics 的商标，此处仅用于标明兼容的软件。",
   },
   nav: { pluginPages: "插件页面" },
   integrations: {
