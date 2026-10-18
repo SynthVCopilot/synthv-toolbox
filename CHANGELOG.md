@@ -10,6 +10,11 @@
 - 本地 MCP 端点需要 Bearer 令牌；「连接」页显示令牌，并可为 Claude Code、Codex 和 Cursor / VS Code 生成客户端配置。
 - 修正与外部 MCP 客户端的协议兼容性问题。
 - 修复激活 SV2 账号槽位时可能丢失数据的问题。
+- 内置 Agent 以声梭身份工作，并新增只读的音频与歌词工具（媒体信息、响度、音频特征、押韵、歌词发音检查、工作流历史），关闭 Synthesizer V 集成时也能使用；集成关闭后 Agent 不再获得 sv_* 工具与一键 Cover。
+- 关闭 Synthesizer V 集成后，MCP 客户端与插件也无法再调用 SynthV 相关操作，应用不再探测 SynthV。
+- 在审批等待期间停止 Agent 运行时，结果正确显示为“已取消”，不再误报为模型错误。
+- 修复 Windows 上 MCP Agent 任务保存偶发失败、已完成任务被标为失败的问题。
+- Bridge 组件加载失败时应用仍可启动，并在「设置 > 集成」中显示原因。
 - 使用条款按新名称更新，Synthesizer V 相关条款归入独立章节；Windows 安装器不显示条款确认页，安装或使用即表示接受条款。
 - macOS 正式版安装包改由签名中心签名并公证，下载后可直接通过 Gatekeeper。
 - macOS 应用内更新使用由已签名应用生成的 zip 和 `latest-mac.yml`。
