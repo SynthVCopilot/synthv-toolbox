@@ -1,8 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { stat } from "node:fs/promises";
-import { delimiter, extname, isAbsolute, join, resolve } from "node:path";
 import { BRAND } from "../brand.js";
-import { MAX_MESSAGE_LENGTH, reapProcessTree, serverEnvironment, STDIO_MCP_PROTOCOL_VERSIONS } from "./mcp-stdio-client.js";
+import { MAX_MESSAGE_LENGTH, reapProcessTree, serverEnvironment, spawnPlan, STDIO_MCP_PROTOCOL_VERSIONS } from "./mcp-stdio-client.js";
 
 export interface StdioMcpServerConfig {
   command: string;
@@ -28,7 +26,6 @@ export interface StdioMcpProbeResult {
   tools: string[];
 }
 
-interface Launch { file: string; args: string[]; verbatim: boolean }
 
 const probeProtocolVersion = "2025-06-18";
 const maxToolPages = 50;
@@ -49,7 +46,8 @@ export async function probeStdioMcpServer(config: StdioMcpServerConfig, options:
   const timeoutMs = options.timeoutMs ?? 15_000;
   const maxMessageLength = options.maxMessageLength ?? MAX_MESSAGE_LENGTH;
   const env = serverEnvironment(config.env);
-  const launch = await launchFor(command, config.args ?? [], env, config.cwd);
+  // The same launch plan as the agent's client, so a test exercises exactly the command line the agent will run.
+  const launch = spawnPlan(command, config.args ?? [], env, config.cwd);
   let child: ChildProcessWithoutNullStreams;
   const spawnedAt = Date.now();
   try {
@@ -145,40 +143,6 @@ export async function probeStdioMcpServer(config: StdioMcpServerConfig, options:
 
 function failure(summary: string, detail: string): StdioMcpProbeResult {
   return { succeeded: false, summary, detail, tools: [] };
-}
-
-/**
- * Windows cannot spawn .cmd/.bat shims (npx, uvx wrappers) without cmd.exe, and cmd.exe re-parses the whole line,
- * so those go through cmd with every argument quoted and its metacharacters caret-escaped (the cross-spawn rules).
- */
-async function launchFor(command: string, args: string[], env: Record<string, string>, cwd: string | undefined): Promise<Launch> {
-  if (process.platform !== "win32") return { file: command, args, verbatim: false };
-  const resolved = await resolveWindowsCommand(command, env, cwd);
-  if (!resolved || !/\.(?:cmd|bat)$/i.test(resolved)) return { file: resolved ?? command, args, verbatim: false };
-  const doubleEscape = /node_modules[\\/]\.bin[\\/][^\\/]+\.cmd$/i.test(resolved);
-  const line = [escapeCommand(resolved), ...args.map((arg) => escapeArgument(arg, doubleEscape))].join(" ");
-  return { file: env.COMSPEC || process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", `"${line}"`], verbatim: true };
-}
-
-async function resolveWindowsCommand(command: string, env: Record<string, string>, cwd: string | undefined): Promise<string | undefined> {
-  const extensions = (env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
-  const names = extensions.some((extension) => extension.toLowerCase() === extname(command).toLowerCase()) ? [command] : extensions.map((extension) => `${command}${extension}`);
-  const hasDirectory = /[\\/]/.test(command);
-  const directories = hasDirectory ? [isAbsolute(command) ? "" : resolve(cwd ?? process.cwd())] : (env.PATH ?? "").split(delimiter).filter(Boolean);
-  for (const directory of directories) {
-    for (const name of names) {
-      const candidate = directory ? join(directory, name) : name;
-      try { if ((await stat(candidate)).isFile()) return candidate; } catch {}
-    }
-  }
-  return undefined;
-}
-
-const metaCharacters = /([()\][%!^"`<>&|;, *?])/g;
-function escapeCommand(command: string): string { return command.replace(metaCharacters, "^$1"); }
-function escapeArgument(argument: string, doubleEscape: boolean): string {
-  const quoted = `"${argument.replace(/(\\*)"/g, "$1$1\\\"").replace(/(\\*)$/, "$1$1")}"`.replace(metaCharacters, "^$1");
-  return doubleEscape ? quoted.replace(metaCharacters, "^$1") : quoted;
 }
 
 /** Ends the server and anything it spawned; npx and cmd.exe shims leave the real server as a grandchild, even after they exit. */

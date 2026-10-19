@@ -139,9 +139,11 @@ test("Windows .cmd shims run through cmd.exe with metacharacters kept literal an
   t.after(() => rm(directory, { recursive: true, force: true }));
   await writeFile(join(directory, "fixture-mcp.cmd"), `@"${process.execPath}" "${fixture}" %*\r\n`);
   const env = { PATH: `${directory};${process.env.PATH}` };
-  const result = await probeStdioMcpServer({ command: "fixture-mcp", args: ["ok", "a b", "c&d", "x|y", "(z)"], env });
+  // A shim outside node_modules/.bin re-parses %* too, so an unmatched quote must not let "& echo injected &" escape.
+  const args = ["a b", "c&d", "x|y", "(z)", "x\" & echo injected & \"y", "100% ^caret"];
+  const result = await probeStdioMcpServer({ command: "fixture-mcp", args: ["ok", ...args], env });
   assert.equal(result.succeeded, true, `${result.summary}\n${result.detail}`);
-  assert.deepEqual(result.tools, ["echo", "args:a b|c&d|x|y|(z)"]);
+  assert.deepEqual(result.tools, ["echo", `args:${args.join("|")}`], "the probe passes the same arguments the agent's client would");
   const hung = await probeStdioMcpServer({ command: "fixture-mcp", args: ["hang"], env }, { timeoutMs: 1_500 });
   assert.equal(hung.succeeded, false);
   const pid = pidFrom(hung.detail);

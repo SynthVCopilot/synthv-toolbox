@@ -124,6 +124,12 @@ test("the agent's SynthV tools check the integration on every call, so turning i
   assert.match(main, /invoke: \(command, args\) => desktop\.synthvEnabled\(\) \? cover\.invoke\(command, args\) : Promise\.reject/);
 });
 
+test("toolbox-only mode stops agent runs in progress and refuses new ones", async () => {
+  const main = await readFile(join(root, "src/PiDesktop.Tauri/electron/main.ts"), "utf8");
+  assert.match(main, /agentAllowed: \(\) => desktop\.aiModeEnabled\(\)/u, "every run checks the mode before it starts");
+  assert.match(main, /if \(!desktop\.aiModeEnabled\(\)\) void ai\.cancel_all_agent_runs\(\)/u, "leaving AI mode stops toolbox_agent tasks, chats and Cover phases already running");
+});
+
 test("the agent introduces itself as the toolbox and names only active integrations", () => {
   const on = agentSystemPrompt({ synthv: true });
   const off = agentSystemPrompt({ synthv: false });

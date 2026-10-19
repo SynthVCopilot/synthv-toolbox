@@ -57,6 +57,7 @@ export class McpStdioClient {
   private drained?: Promise<void>;
   private closing?: Promise<void>;
   private spawnedAt = 0;
+  private offersTools = true;
   private reason?: string;
   private nextId = 0;
   private stdout = "";
@@ -81,6 +82,8 @@ export class McpStdioClient {
 
   async listTools(options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<McpToolInfo[]> {
     await this.connect();
+    // Servers that only offer resources or prompts may reject tools/list; the Connections probe treats them as having none too.
+    if (!this.offersTools) return [];
     const tools: McpToolInfo[] = [], seen = new Set<string>();
     let cursor: string | undefined;
     // A server that keeps returning cursors would otherwise hold session creation forever.
@@ -133,6 +136,7 @@ export class McpStdioClient {
       if (!isRecord(result) || typeof result.protocolVersion !== "string") throw this.error("answered initialize without a protocolVersion");
       if (!STDIO_MCP_PROTOCOL_VERSIONS.includes(result.protocolVersion)) throw this.error(`answered with MCP protocol version ${result.protocolVersion}, which is not supported (${STDIO_MCP_PROTOCOL_VERSIONS.join(", ")})`);
       if (this.state !== "connecting") throw this.error(this.reason ?? "is closed");
+      this.offersTools = isRecord(result.capabilities) && result.capabilities.tools !== undefined;
       if (isRecord(result.serverInfo)) this.serverInfo = { ...(typeof result.serverInfo.name === "string" ? { name: result.serverInfo.name } : {}), ...(typeof result.serverInfo.version === "string" ? { version: result.serverInfo.version } : {}) };
       this.state = "ready";
       this.notify("notifications/initialized");

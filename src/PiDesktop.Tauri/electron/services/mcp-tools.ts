@@ -59,9 +59,9 @@ export function toolboxMcpTools(names: string[]): McpTool[] {
         required: ["capability", "operation", "params"],
         additionalProperties: false,
       },
-      annotations: name === "toolbox_internal"
-        ? { title: toolText[name].title, readOnlyHint: false, destructiveHint: false, openWorldHint: false }
-        : { title: toolText[name].title, readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+      // Both tools can overwrite files (checkpoint restore, confirmed SynthV writes) and reach the network (media preview and
+      // import, fetch), so clients that ask for confirmation by these hints must treat both as such.
+      annotations: { title: toolText[name].title, readOnlyHint: false, destructiveHint: true, openWorldHint: true },
       permission: name === "toolbox_internal" ? "internal" : "advanced",
     };
   });

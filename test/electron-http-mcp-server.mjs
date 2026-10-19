@@ -277,7 +277,8 @@ test("toolbox tool definitions describe every supported operation and carry anno
     additionalProperties: false,
   });
   assert.deepEqual(advanced.inputSchema.properties.capability.enum, ["network", "filesystem", "sandbox", "authorization", "synthv"]);
-  assert.deepEqual(internal.annotations, { title: internal.title, readOnlyHint: false, destructiveHint: false, openWorldHint: false });
+  // Checkpoint restore and confirmed SynthV writes overwrite files; media preview and import reach the network.
+  assert.deepEqual(internal.annotations, { title: internal.title, readOnlyHint: false, destructiveHint: true, openWorldHint: true });
   assert.deepEqual(advanced.annotations, { title: advanced.title, readOnlyHint: false, destructiveHint: true, openWorldHint: true });
   assert.match(internal.description, /- synthv: profile-state, session-size \{slotId\}, scan, processes/);
   assert.match(advanced.description, /- filesystem: read \{path\}, write \{path, content\}, mkdir \{path\}, delete \{path\}/);

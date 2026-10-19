@@ -73,7 +73,7 @@ function handle(message) {
   if (method === "initialize") {
     if (flag("--hang")) return;
     state.clientInfo = params.clientInfo; state.protocolVersion = params.protocolVersion;
-    return reply(id, { protocolVersion: option("--answer-protocol", params.protocolVersion), capabilities: { tools: { listChanged: false } }, serverInfo: { name: "external-mcp-fixture", version: "1.0.0" } });
+    return reply(id, { protocolVersion: option("--answer-protocol", params.protocolVersion), capabilities: flag("--no-tools") ? { resources: {} } : { tools: { listChanged: false } }, serverInfo: { name: "external-mcp-fixture", version: "1.0.0" } });
   }
   if (method === "notifications/initialized") { state.initialized = true; return; }
   if (method === "notifications/cancelled") {
@@ -83,6 +83,8 @@ function handle(message) {
     return;
   }
   if (method === "ping") return reply(id, {});
+  // A resources-only server: it never offered tools, so asking for them is an error.
+  if (method === "tools/list" && flag("--no-tools")) return send({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } });
   if (method === "tools/list") {
     const start = Number(params?.cursor ?? 0);
     const next = start + pageSize;

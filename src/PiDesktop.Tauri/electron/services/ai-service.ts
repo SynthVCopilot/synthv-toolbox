@@ -123,6 +123,8 @@ export interface AiServiceOptions {
   id?: () => string;
   /** Base agent prompt; a changed value recreates the Pi session, so it can carry the active integrations. */
   systemPrompt?: () => string;
+  /** False in toolbox-only mode, which promises no model requests; checked before every run. */
+  agentAllowed?: () => boolean;
 }
 
 const providers: readonly AiProviderId[] = ["anthropic", "openai-codex", "workbuddy", "traecode"];
@@ -473,6 +475,7 @@ export class AiService {
     if (!text) throw new Error("Message is required.");
     if (text.length > AGENT_INPUT_MAX_LENGTH) throw new Error("Message exceeds the 32,000 character limit.");
     if (this.activeRuns.has(conversationId)) throw new Error("A run is already in progress.");
+    if (this.options.agentAllowed && !this.options.agentAllowed()) throw new Error("The internal agent is only available in AI mode. Switch the toolbox to AI mode in Settings first.");
     const effort = options.effort ?? DEFAULT_AGENT_EFFORT;
     const active: ActiveRun = { runId: options.runId ?? this.id(), cancelRequested: false, sendIssued: false, steers: [] };
     this.activeRuns.set(conversationId, active);
@@ -525,6 +528,13 @@ export class AiService {
       .then(() => ({ role: "user", content: text, createdAt: this.now().toISOString() }));
     active.steers.push(pending);
     return { ...await pending };
+  }
+
+  /** Stops every run in progress (chat, toolbox_agent tasks, Cover phases); used when the app leaves AI mode. */
+  async cancel_all_agent_runs(): Promise<string[]> {
+    const conversations = [...this.activeRuns.keys()];
+    await Promise.allSettled(conversations.map(conversationId => this.cancel_agent_run(conversationId)));
+    return conversations;
   }
 
   async cancel_agent_run(conversationId: string): Promise<void> {

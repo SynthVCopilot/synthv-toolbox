@@ -370,3 +370,30 @@ test("persisted run results retain their plan and usage when no cache measuremen
   await reopened.new_conversation();
   assert.deepEqual(JSON.parse(await readFile(taskPath, "utf8")).conversations[0].messages[0].outcome, outcome);
 });
+
+test("toolbox-only mode refuses new agent runs and leaving AI mode stops the runs in progress", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "ai-mode-gate-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const releases = new Map();
+  const requests = [];
+  const held = { async request(method, params) {
+    requests.push({ method, params });
+    if (method === "session.send") await new Promise((resolve) => { releases.set(params.sessionId, resolve); });
+    if (method === "session.send") return { message: "Stopped.", outcome: { status: "completed", summary: "Stopped.", evidence: ["e"], missing: [], plan: { goal: "G", doneCriteria: ["e"], todos: [{ id: "t1", title: "T", status: "completed" }] }, budget: { level: "mid", maxTurns: 5, maxTokens: 1000, turns: 1, tokens: 10, uncachedInputTokens: 0, cacheReadTokens: 0 } } };
+    if (method === "session.cancel") { releases.get(params.sessionId)?.(); return { cancelled: true }; }
+    return {};
+  } };
+  let aiMode = true;
+  const cancelled = [];
+  const service = new AiService({ metadataPath: join(directory, "ai.json"), runtime: held, catalog, approvals: { cancelConversation(id) { cancelled.push(id); } }, agentAllowed: () => aiMode });
+  const first = await service.new_conversation();
+  const second = await service.new_conversation();
+  const runs = [service.send_message(first.id, "one"), service.send_message(second.id, "two")];
+  while (requests.filter((request) => request.method === "session.send").length < 2) await new Promise((resolve) => setImmediate(resolve));
+  aiMode = false;
+  assert.deepEqual((await service.cancel_all_agent_runs()).sort(), [first.id, second.id].sort());
+  assert.deepEqual(requests.filter((request) => request.method === "session.cancel").map((request) => request.params.sessionId).sort(), [first.id, second.id].sort());
+  await Promise.all(runs);
+  await assert.rejects(service.send_message(first.id, "again"), /only available in AI mode/, "no new model request starts while the app is in toolbox-only mode");
+  assert.deepEqual(await service.cancel_all_agent_runs(), [], "nothing left to stop");
+});

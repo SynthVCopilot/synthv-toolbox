@@ -322,6 +322,20 @@ test("a server answering with an unsupported protocol version is refused; an old
   } finally { await older.close(); }
 });
 
+test("a server without a tools capability has no tools and is not reported as unavailable", async () => {
+  const client = new McpStdioClient({ command: process.execPath, args: [fixture, "--no-tools"], label: "Resources" });
+  try {
+    await client.connect();
+    assert.deepEqual(await client.listTools(), [], "tools/list is not sent to a server that never offered tools");
+  } finally { await client.close(); }
+  const pool = new ExternalMcpPool({ retryAfterMs: 0 });
+  try {
+    const session = await open(pool, [{ ...server("r", "Resources"), args: [fixture, "--no-tools"] }]);
+    assert.ok(![...session.tools.keys()].some((name) => name.startsWith("mcp__resources__")));
+    assert.doesNotMatch(session.prompt(), /Resources: unavailable/u);
+  } finally { await pool.dispose(); }
+});
+
 test("a missing command fails with a clear error", async () => {
   const client = new McpStdioClient({ command: "toneshuttle-definitely-missing-mcp-server", label: "Missing" });
   await assert.rejects(client.connect(), /Missing.*(not found|ENOENT)/s);
