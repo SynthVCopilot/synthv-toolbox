@@ -119,8 +119,8 @@ test("the agent's SynthV tools check the integration on every call, so turning i
   assert.deepEqual(calls, [{ notes: 1 }], "nothing reaches SynthV once the integration is off");
   assert.equal((await bridge.status()).connected, true, "status and install stay available");
   const main = await readFile(join(root, "src/PiDesktop.Tauri/electron/main.ts"), "utf8");
-  assert.match(main, /const agentBridge = gatedBridge\(bridge, \(\) => desktop\.synthvEnabled\(\)\)/);
-  for (const use of ["createCoverHost(agentBridge", "execute: async (item) => agentBridge.tools", "createSynthVToolsExtension({ bridge: agentBridge"]) assert.ok(main.includes(use), use);
+  assert.match(main, /const gatedSynthvBridge = gatedBridge\(bridge, \(\) => desktop\.synthvEnabled\(\)\)/);
+  for (const use of ["createCoverHost(gatedSynthvBridge", "execute: async (item) => gatedSynthvBridge.tools", "createSynthVToolsExtension({ bridge: gatedSynthvBridge", "}, gatedSynthvBridge, cover);"]) assert.ok(main.includes(use), use);
   assert.match(main, /invoke: \(command, args\) => desktop\.synthvEnabled\(\) \? cover\.invoke\(command, args\) : Promise\.reject/);
 });
 
@@ -236,6 +236,18 @@ test("generic agent tools route to existing host commands and reject untrusted a
   await assert.rejects(tools.get("toolbox_lyrics_rhymes").execute("5", { query: "风", matchMode: "fuzzy" }), /matchMode is invalid/);
   await assert.rejects(tools.get("toolbox_history").execute("6", { limit: 500 }), /out of range/);
   assert.equal(calls.length, 2, "rejected calls must never reach the host");
+});
+
+test("toolbox_history gives the agent summaries, and every toolbox tool result is bounded", async () => {
+  const { createToolboxAgentToolsExtension, TOOLBOX_TOOL_OUTPUT_LIMIT } = await import("../src/PiDesktop.Tauri/dist/electron/services/toolbox-agent-tools.js");
+  const history = [{ id: "h1", kind: "batch", title: "Batch", summary: "3 files", createdAtUtc: "2026-10-19T00:00:00Z", outputPath: "C:\\out\\report.json", parameters: { files: ["x".repeat(5_000)] }, result: { rows: "y".repeat(5_000) } }];
+  const tools = new Map();
+  createToolboxAgentToolsExtension({ invoke: async (command, args) => command === "list_creative_history" ? history : { text: "z".repeat(TOOLBOX_TOOL_OUTPUT_LIMIT + 10) } }).factory({ on: () => {}, registerTool: (tool) => tools.set(tool.name, tool) });
+  const listed = JSON.parse((await tools.get("toolbox_history").execute("1", {})).content[0].text);
+  assert.deepEqual(listed, [{ id: "h1", kind: "batch", title: "Batch", summary: "3 files", createdAtUtc: "2026-10-19T00:00:00Z", outputPath: "C:\\out\\report.json" }], "parameters and full results stay out of the model context");
+  const huge = (await tools.get("toolbox_lyrics_check").execute("2", { lyrics: "你好" })).content[0].text;
+  assert.ok(huge.length < TOOLBOX_TOOL_OUTPUT_LIMIT + 200);
+  assert.match(huge, /\[Output truncated: showing 50000 of \d+ characters\.\]$/u);
 });
 
 test("MCP and plugin callers cannot reach SynthV operations while the integration is off", async () => {

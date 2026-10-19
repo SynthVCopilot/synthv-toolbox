@@ -1,6 +1,6 @@
 // Minimal newline-delimited JSON-RPC MCP server for test/mcp-stdio-probe.mjs.
 // argv[2] selects the behaviour: ok (default), exit, hang, error, flood (stdout without line breaks), oldversion (answers
-// initialize with an unsupported protocol version). Remaining args are echoed back as a tool name.
+// initialize with an unsupported protocol version), endless (tools/list never stops paging). Remaining args are echoed back as a tool name.
 import { writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
@@ -33,6 +33,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     return send({ id: "server-ping", method: "ping" });
   }
   if (message.method === "tools/list") {
+    if (mode === "endless") return send({ id: message.id, result: { tools: [{ name: `page-${message.params?.cursor ?? 0}`, inputSchema: { type: "object" } }], nextCursor: String(Number(message.params?.cursor ?? 0) + 1) } });
     if (!message.params?.cursor) return send({ id: message.id, result: { tools: [{ name: "echo", inputSchema: { type: "object" } }], nextCursor: "page-2" } });
     return send({ id: message.id, result: { tools: [{ name: `args:${extra.join("|")}`, inputSchema: { type: "object" } }] } });
   }

@@ -66,8 +66,10 @@ export function resolveUserDataDirectory(options: DataDirectoryOptions): DataDir
   const target = join(options.appData, options.name);
   const legacy = findLegacy(options);
   if (!options.migrate) return { path: holdsAppData(target) || !legacy ? target : legacy };
-  const pending = readMarker(target)?.fixups === "pending";
-  if (holdsAppData(target) && !pending) return { path: target, ...(legacy ? { legacyRemaining: legacy } : {}) };
+  const marker = readMarker(target);
+  const pending = marker?.fixups === "pending";
+  // Records whose paths could not be rewritten stay broken, so Settings keeps listing them on every start.
+  if (holdsAppData(target) && !pending) return { path: target, ...(legacy ? { legacyRemaining: legacy } : {}), ...(marker?.errors?.length ? { fixupErrors: marker.errors } : {}) };
   if (!legacy && !pending) return { path: target };
   return withMigrationLock(options, target, () => migrate(options, target));
 }
@@ -201,7 +203,7 @@ function writeMarker(folder: string, marker: MigrationMarker, options: DataDirec
 
 function resumeFixups(folder: string, options: DataDirectoryOptions): string[] {
   const marker = readMarker(folder);
-  if (marker?.fixups !== "pending") return [];
+  if (marker?.fixups !== "pending") return marker?.errors ?? [];
   const { errors, retryable } = rewriteStoredPaths(folder, marker.from, marker.to, options);
   const attempts = (marker.attempts ?? 0) + 1;
   // A record held open by an indexer or antivirus is retried on later starts; a broken record is not.

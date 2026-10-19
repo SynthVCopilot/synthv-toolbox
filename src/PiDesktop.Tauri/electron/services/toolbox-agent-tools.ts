@@ -18,6 +18,21 @@ interface ToolSpec {
   required: string[];
   /** Maps validated tool arguments onto the command's parameter names. */
   args(input: Record<string, unknown>): Record<string, unknown>;
+  /** Reduces the command's result to what the description promises, keeping bulky payloads out of the model context. */
+  present?(result: unknown): unknown;
+}
+
+/** Longest tool result handed to the model; anything longer is cut with a note rather than overflowing the next round. */
+export const TOOLBOX_TOOL_OUTPUT_LIMIT = 50_000;
+
+/** History entries keep full parameters and results (batch reports, lyric payloads); the agent gets the summary fields. */
+function historySummaries(result: unknown): unknown {
+  if (!Array.isArray(result)) return result;
+  return result.map((entry) => {
+    if (!entry || typeof entry !== "object") return entry;
+    const { id, kind, title, summary, createdAtUtc, outputPath } = entry as Record<string, unknown>;
+    return { id, kind, title, summary, createdAtUtc, outputPath };
+  });
 }
 
 const path = { type: "string", minLength: 1, maxLength: 4096, description: "Absolute path of a local audio file." };
@@ -28,7 +43,7 @@ export const TOOLBOX_AGENT_TOOLS: readonly ToolSpec[] = [
   { name: "toolbox_audio_features", label: "Analyze audio features", command: "run_audio_probe", description: "Estimate BPM, key, energy and spectral trends of a local audio file with the pi-audio component. Set notes to also extract a monophonic note estimate. Requires the local audio runtime from the Components page.", properties: { path, notes: { type: "boolean" } }, required: ["path"], args: input => ({ audioPath: input.path, advanced: input.notes === true }) },
   { name: "toolbox_lyrics_rhymes", label: "Find Chinese rhymes", command: "lookup_chinese_rhyme", description: "List Chinese words that rhyme with the last character of the query. matchMode family groups near rhymes; exact requires the same final.", properties: { query: { type: "string", minLength: 1, maxLength: 256 }, matchMode: { type: "string", enum: ["family", "exact"] } }, required: ["query"], args: input => ({ query: input.query, ...(input.matchMode ? { matchMode: input.matchMode } : {}) }) },
   { name: "toolbox_lyrics_check", label: "Check lyric pronunciation", command: "run_pronunciation_diagnostics", description: "Check pasted lyrics for empty syllables, crowded syllables and mixed scripts that tend to sing poorly.", properties: { lyrics: { type: "string", minLength: 1, maxLength: 100000 } }, required: ["lyrics"], args: input => ({ lyrics: input.lyrics }) },
-  { name: "toolbox_history", label: "Read workflow history", command: "list_creative_history", description: "List the most recent toolbox workflow runs with their summaries and output files.", properties: { limit: { type: "integer", minimum: 1, maximum: 50 } }, required: [], args: input => ({ limit: input.limit ?? 20 }) },
+  { name: "toolbox_history", label: "Read workflow history", command: "list_creative_history", description: "List the most recent toolbox workflow runs with their summaries and output files.", properties: { limit: { type: "integer", minimum: 1, maximum: 50 } }, required: [], args: input => ({ limit: input.limit ?? 20 }), present: historySummaries },
 ];
 
 const GUIDANCE = [
@@ -53,7 +68,8 @@ export function createToolboxAgentToolsExtension(options: ToolboxAgentToolsOptio
             signal?.throwIfAborted();
             const input = validate(spec, raw);
             const result = await options.invoke(spec.command, spec.args(input));
-            return { content: [{ type: "text", text: JSON.stringify(result) }] };
+            const text = JSON.stringify(spec.present ? spec.present(result) : result) ?? "null";
+            return { content: [{ type: "text", text: text.length > TOOLBOX_TOOL_OUTPUT_LIMIT ? `${text.slice(0, TOOLBOX_TOOL_OUTPUT_LIMIT)}\n[Output truncated: showing ${TOOLBOX_TOOL_OUTPUT_LIMIT} of ${text.length} characters.]` : text }] };
           },
         });
       }

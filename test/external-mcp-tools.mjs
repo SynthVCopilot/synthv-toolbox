@@ -8,7 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { BRAND } from "../src/PiDesktop.Tauri/dist/electron/brand.js";
-import { createExternalMcpToolsExtension, EXTERNAL_TOOL_OUTPUT_LIMIT, ExternalMcpPool, externalToolNames, mcpServerConfigs, toolParameters } from "../src/PiDesktop.Tauri/dist/electron/services/external-mcp-tools.js";
+import { createExternalMcpToolsExtension, EXTERNAL_TOOL_OUTPUT_LIMIT, ExternalMcpPool, externalToolNames, mcpServerConfigs, renderMcpResult, toolParameters } from "../src/PiDesktop.Tauri/dist/electron/services/external-mcp-tools.js";
 import { McpStdioClient } from "../src/PiDesktop.Tauri/dist/electron/services/mcp-stdio-client.js";
 
 const testDirectory = dirname(fileURLToPath(import.meta.url));
@@ -237,10 +237,18 @@ test("tools/list_changed bumps the pool revision, and the next session sees the 
   } finally { await pool.dispose(); }
 });
 
+test("structured results reach the agent next to a text summary, without repeating JSON the text already holds", () => {
+  const records = { rows: [{ id: 1, name: "take" }] };
+  assert.equal(renderMcpResult({ content: [{ type: "text", text: "1 row found." }], structuredContent: records }), `1 row found.\nStructured result:\n${JSON.stringify(records)}`);
+  assert.equal(renderMcpResult({ content: [{ type: "text", text: JSON.stringify(records, null, 2) }], structuredContent: records }), JSON.stringify(records, null, 2), "a text block that already carries the JSON is not duplicated");
+  assert.equal(renderMcpResult({ content: [], structuredContent: records }), JSON.stringify(records));
+});
+
 test("a server whose process died is respawned on the next call", async () => {
   const pool = new ExternalMcpPool({ retryAfterMs: 0 });
   try {
     const session = await open(pool, [server("a", "Fixture")]);
+    const revision = pool.revision;
     const first = (await status(session)).pid;
     process.kill(first);
     assert.ok(await waitDead(first));
@@ -248,6 +256,7 @@ test("a server whose process died is respawned on the next call", async () => {
     const second = (await status(session)).pid;
     assert.notEqual(second, first);
     assert.ok(alive(second));
+    assert.equal(pool.revision, revision + 1, "the new process may offer other tools, so conversations rebuild their sessions");
   } finally { await pool.dispose(); }
 });
 

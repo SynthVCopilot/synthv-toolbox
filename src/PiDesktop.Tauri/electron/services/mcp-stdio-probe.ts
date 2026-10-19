@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { BRAND } from "../brand.js";
-import { MAX_MESSAGE_LENGTH, reapProcessTree, serverEnvironment, spawnPlan, STDIO_MCP_PROTOCOL_VERSIONS } from "./mcp-stdio-client.js";
+import { MAX_MESSAGE_LENGTH, MAX_TOOL_PAGES, reapProcessTree, serverEnvironment, spawnPlan, STDIO_MCP_PROTOCOL_VERSIONS } from "./mcp-stdio-client.js";
 
 export interface StdioMcpServerConfig {
   command: string;
@@ -28,7 +28,6 @@ export interface StdioMcpProbeResult {
 
 
 const probeProtocolVersion = "2025-06-18";
-const maxToolPages = 50;
 const stderrLimit = 8_192;
 /** Converts a saved MCP server entry (desktop settings) into a launch config, rejecting malformed fields. */
 export function stdioMcpServerConfig(server: Record<string, unknown>): StdioMcpServerConfig {
@@ -120,13 +119,15 @@ export async function probeStdioMcpServer(config: StdioMcpServerConfig, options:
       const capabilities = isRecord(initialized.capabilities) ? initialized.capabilities : {};
       if (capabilities.tools !== undefined) {
         let cursor: string | undefined;
-        for (let page = 0; page < maxToolPages; page++) {
+        for (let page = 0; page < MAX_TOOL_PAGES; page++) {
           const listed = await request("tools/list", cursor ? { cursor } : {});
           if (!Array.isArray(listed.tools)) throw new Error("tools/list did not return a tools array.");
           tools.push(...listed.tools.map((tool) => isRecord(tool) && typeof tool.name === "string" ? tool.name : "(unnamed)"));
           cursor = typeof listed.nextCursor === "string" && listed.nextCursor ? listed.nextCursor : undefined;
           if (!cursor) break;
         }
+        // The agent's client would give up here too, so this server must not pass the test with a partial list.
+        if (cursor) return { ...failure(`The server returned more than ${MAX_TOOL_PAGES} pages from tools/list.`, `${tools.length} tools listed before giving up.`), serverInfo: info };
       }
       const name = `${info.name}${info.version ? ` ${info.version}` : ""}`;
       return {

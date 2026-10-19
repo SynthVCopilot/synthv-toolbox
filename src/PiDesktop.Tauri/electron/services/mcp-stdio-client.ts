@@ -46,6 +46,8 @@ const STDERR_LINES = 20;
 const MAX_LINE_LENGTH = 500;
 /** A server that streams a single line beyond this is broken or hostile; it would otherwise grow main-process memory without bound. */
 export const MAX_MESSAGE_LENGTH = 64 * 1024 * 1024;
+/** tools/list pages a session reads before giving up on a server that keeps returning cursors. */
+export const MAX_TOOL_PAGES = 100;
 const CLOSE_GRACE_MS = 1_000;
 
 export class McpStdioClient {
@@ -87,14 +89,14 @@ export class McpStdioClient {
     const tools: McpToolInfo[] = [], seen = new Set<string>();
     let cursor: string | undefined;
     // A server that keeps returning cursors would otherwise hold session creation forever.
-    for (let page = 0; page < 100; page++) {
+    for (let page = 0; page < MAX_TOOL_PAGES; page++) {
       const result = await this.request("tools/list", cursor === undefined ? undefined : { cursor }, { signal: options.signal, timeoutMs: options.timeoutMs ?? this.connectTimeout() });
       if (!isRecord(result) || !Array.isArray(result.tools)) throw this.error("answered tools/list without a tools array");
       for (const raw of result.tools) { const tool = toolInfo(raw); if (tool && !seen.has(tool.name)) { seen.add(tool.name); tools.push(tool); } }
       cursor = typeof result.nextCursor === "string" && result.nextCursor ? result.nextCursor : undefined;
       if (cursor === undefined) return tools;
     }
-    throw this.error("returned more than 100 pages from tools/list");
+    throw this.error(`returned more than ${MAX_TOOL_PAGES} pages from tools/list`);
   }
 
   async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, timeoutMs = 120_000): Promise<McpCallToolResult> {

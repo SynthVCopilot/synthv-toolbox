@@ -99,6 +99,13 @@ test("stdout without line breaks is capped, and the flooding server is stopped",
   assert.equal(isRunning(pid), false);
 });
 
+test("a server that pages tools/list past the client's limit fails the test instead of passing with a partial list", async () => {
+  const result = await probeStdioMcpServer({ command: process.execPath, args: [fixture, "endless"] }, { timeoutMs: 30_000 });
+  assert.equal(result.succeeded, false);
+  assert.match(result.summary, /more than 100 pages from tools\/list/);
+  assert.match(result.detail, /^100 tools listed before giving up\.$/);
+});
+
 test("JSON-RPC errors and launch failures are reported as failed probes", async () => {
   const rejected = await probeStdioMcpServer({ command: process.execPath, args: [fixture, "error"] });
   assert.equal(rejected.succeeded, false);

@@ -145,8 +145,9 @@ export class ExternalMcpPool {
         });
         entry.client = client;
         await client.connect();
-        // A tool call revived a server that failed earlier; the next session must list its tools instead of the stale error.
-        if (entry.error) { delete entry.error; delete entry.failedAt; entry.tools = undefined; this.toolsRevision++; }
+        // A tool call revived a server that failed or died earlier. The new process may offer different tools, so the next
+        // session lists them again (instead of a stale error or list) and conversations rebuild their sessions.
+        if (entry.error || stale) { delete entry.error; delete entry.failedAt; entry.tools = undefined; this.toolsRevision++; }
         return client;
       } finally { entry.connecting = undefined; }
     })();
@@ -324,12 +325,23 @@ function pointer(document: Record<string, unknown>, ref: string): unknown {
   return node;
 }
 
-/** Text blocks are joined; binary content is summarized because the agent loop only carries text tool results. */
+/**
+ * Text blocks are joined; binary content is summarized because the agent loop only carries text tool results. Servers often
+ * put a short summary in text and the records in structuredContent, so it is added unless a text block already repeats it.
+ */
 export function renderMcpResult(result: McpCallToolResult): string {
   const parts = result.content.map(block => block.type === "text" && typeof block.text === "string" ? block.text : summarize(block));
-  if (!parts.length && result.structuredContent !== undefined) parts.push(JSON.stringify(result.structuredContent));
+  if (result.structuredContent !== undefined) {
+    const structured = JSON.stringify(result.structuredContent);
+    const repeated = result.content.some(block => block.type === "text" && typeof block.text === "string" && sameJson(block.text, structured));
+    if (!repeated) parts.push(parts.length ? `Structured result:\n${structured}` : structured);
+  }
   const text = parts.join("\n") || "(The tool returned no content.)";
   return text.length > EXTERNAL_TOOL_OUTPUT_LIMIT ? `${text.slice(0, EXTERNAL_TOOL_OUTPUT_LIMIT)}\n\n[Output truncated: showing ${EXTERNAL_TOOL_OUTPUT_LIMIT} of ${text.length} characters.]` : text;
+}
+
+function sameJson(text: string, serialized: string): boolean {
+  try { return JSON.stringify(JSON.parse(text)) === serialized; } catch { return false; }
 }
 
 function summarize(block: McpContent): string {

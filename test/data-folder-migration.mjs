@@ -218,7 +218,9 @@ test("path fix-ups interrupted by a crash resume on the next start", (t) => {
   assert.match(decision.fixupErrors[0], new RegExp(`cover-jobs.${JOB}\\.json`, "u"), "one unreadable record does not stop the others");
   assert.equal(JSON.parse(readFileSync(join(target, "creative", "creative-history", "entries.json"), "utf8"))[0].outputPath, join(target, "creative", "output", "x.mid"));
   assert.equal(JSON.parse(readFileSync(join(target, MIGRATION_MARKER), "utf8")).fixups, "done", "an unreadable record is a permanent failure and is not retried");
-  assert.deepEqual(resolveUserDataDirectory(options(appData)), { path: target }, "finished fix-ups are not repeated");
+  const later = resolveUserDataDirectory(options(appData));
+  assert.deepEqual(later.fixupErrors, decision.fixupErrors, "records that stayed broken are still reported on later starts");
+  assert.equal(JSON.parse(readFileSync(join(target, MIGRATION_MARKER), "utf8")).attempts, 1, "finished fix-ups are not repeated");
 });
 
 test("stored paths are matched by folder, case-insensitively on Windows only", () => {

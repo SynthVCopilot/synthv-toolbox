@@ -270,14 +270,15 @@ async function initializeServices(): Promise<void> {
   const componentsRoot = app.isPackaged ? join(process.resourcesPath, "components") : resolve(currentDirectory, "../../components");
   let capabilities: HostCapabilities;
   let desktop: DesktopStateService;
-  // Everything the agent does in SynthV goes through this, so switching the integration off also stops a run or an approval in progress.
-  const agentBridge = gatedBridge(bridge, () => desktop.synthvEnabled());
+  // Work that writes to SynthV (agent tools, approvals, Cover, creative workflows) goes through this, so switching the
+  // integration off also stops a run, an approval or a long workflow already in progress at its next Bridge call.
+  const gatedSynthvBridge = gatedBridge(bridge, () => desktop.synthvEnabled());
   let ai: AiService;
   let agentTasks: ReturnType<typeof createAgentTaskService> | undefined;
   const creativeRoot = join(userData, "creative");
   const creativeRuntime = createCreativeRuntime({ dataRoot: creativeRoot, componentsRoot });
   const coverScore = createCoverScoreService(creativeRoot);
-  const coverHost = createCoverHost(agentBridge, synthv);
+  const coverHost = createCoverHost(gatedSynthvBridge, synthv);
   const cover = createCoverService({
     dataRoot: creativeRoot, runtime: creativeRuntime, score: coverScore, host: coverHost, ai: () => ai,
     importer: async python => createMediaImporter({ dataRoot: creativeRoot, python, ffmpegPath: (await resolveFfmpegBinaries({ dataRoot: join(userData, "components") })).ffmpeg }),
@@ -286,13 +287,13 @@ async function initializeServices(): Promise<void> {
   const creative = createCreativeService(creativeRoot, async (command, args) => {
     const runtime = await creativeRuntime.status();
     return createComponentExecutor(componentsRoot, runtime.ready ? runtime.pythonPath : undefined, undefined, { dataRoot: creativeRoot })(command, args);
-  }, bridge, cover);
+  }, gatedSynthvBridge, cover);
   const delivery = createSynthVDeliveryRegistry();
   // One process per enabled external server, shared by all sessions; nothing spawns until a session needs it.
   const externalMcp = new ExternalMcpPool({ clientVersion: app.getVersion() });
   const approvals = new AgentApprovalBroker(
     (snapshot) => emitToRenderer("agent.approvals.changed", snapshot),
-    { execute: async (item) => agentBridge.tools.find(tool => tool.name === item.tool)?.call(item.params) ?? { text: "", isError: true }, deliver: (resolution) => delivery.deliver(resolution) },
+    { execute: async (item) => gatedSynthvBridge.tools.find(tool => tool.name === item.tool)?.call(item.params) ?? { text: "", isError: true }, deliver: (resolution) => delivery.deliver(resolution) },
   );
   const runtimeHost = new ElectronRuntimeHost(join(userData, "runtime"), {
     invoke: (permission, capability, operation, params) => capabilities.invoke(permission, capability, operation, params),
@@ -311,7 +312,7 @@ async function initializeServices(): Promise<void> {
         const toolbox = createToolboxAgentToolsExtension({ invoke: (command, args) => { if (!commandRegistry) throw new Error("Electron services are not ready."); return commandRegistry.invoke(command, args); } });
         const external = desktop.aiModeEnabled() && desktop.enabledMcpServers().length > 0 ? [createExternalMcpToolsExtension({ pool: externalMcp, servers: () => mcpServerConfigs(desktop.enabledMcpServers()), workMode: () => desktop.agentWorkMode() })] : [];
         if (!desktop.synthvEnabled()) return [toolbox, ...external];
-        return [toolbox, ...external, createSynthVToolsExtension({ bridge: agentBridge, approvals, sessionId, guards, runState, registry: delivery, workMode: () => desktop.agentWorkMode() }), createCoverAgentToolsExtension({ sessionId, guards, runState, invoke: (command, args) => desktop.synthvEnabled() ? cover.invoke(command, args) : Promise.reject(new Error(SYNTHV_OFF_MESSAGE)) })];
+        return [toolbox, ...external, createSynthVToolsExtension({ bridge: gatedSynthvBridge, approvals, sessionId, guards, runState, registry: delivery, workMode: () => desktop.agentWorkMode() }), createCoverAgentToolsExtension({ sessionId, guards, runState, invoke: (command, args) => desktop.synthvEnabled() ? cover.invoke(command, args) : Promise.reject(new Error(SYNTHV_OFF_MESSAGE)) })];
       },
       persistTranscripts: () => desktop.agentTranscriptsEnabled(),
     }),
