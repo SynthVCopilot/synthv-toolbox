@@ -35,11 +35,14 @@ win:
   target:
     - nsis
   artifactName: "Toneshuttle-${version}-setup.${ext}"
-  # Kept from the old product name: launch-at-login entries, kept shortcuts, taskbar pins and the installer's running-app check all name this exe path.
-  executableName: "Synthesizer V Toolbox"
+  # Was "Synthesizer V Toolbox". The upgrade recreates the desktop and Start menu shortcuts for the new exe and the app
+  # moves its launch-at-login entry on first start (electron/services/autostart-migration.ts); taskbar pins need re-pinning.
+  executableName: Toneshuttle
 nsis:
   # Upgrade code electron-builder derived from the unchanged appId; pinned so installs made under the old product name upgrade in place.
   guid: 361d7bfe-b0de-50d8-b042-ed469511f1fa
+  # Moves installs from %LOCALAPPDATA%\Programs\synthv-toolbox (named after the unchanged package name) to ...\Toneshuttle.
+  include: src/PiDesktop.Tauri/electron/assets/installer.nsh
   oneClick: true
   perMachine: false
   allowToChangeInstallationDirectory: false

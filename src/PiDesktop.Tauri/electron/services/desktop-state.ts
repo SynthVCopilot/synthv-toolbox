@@ -6,6 +6,7 @@ import type { AiService } from "./ai-service.js";
 import { isIntegrationPreference, resolveSynthVIntegration, type IntegrationId, type IntegrationPreference, type SynthVEvidence } from "./integrations.js";
 import type { ElectronRuntimeHost } from "./runtime-host.js";
 import type { SynthVService } from "./synthv-service.js";
+import type { DataDirectoryDecision } from "./user-data-migration.js";
 
 type Data = Record<string, unknown>;
 type SynthVProbe = Pick<SynthVService, "scanInstallations" | "profileState" | "bridgeStatus" | "getAutostart">;
@@ -32,7 +33,7 @@ const defaults = (): DesktopSettings => ({ onboardingCompleted: false, mode: "to
 export class DesktopStateService {
   private settings = defaults();
   private synthvEvidence: SynthVEvidence = { installations: 0, profiles: 0, bridgeConnected: false, bridgeLoaded: false };
-  constructor(private readonly root: string, private readonly appVersion: string, private readonly runtime: ElectronRuntimeHost, private readonly ai: AiService, private readonly synthv: SynthVProbe, private readonly applyUpdateChannel?: (channel: "stable" | "nightly") => void, private readonly creativeRuntime?: { status(): Promise<{ready: boolean; detail: string}> }, private readonly bridgeLoadError?: string, private readonly onSettingsChanged?: () => void) {}
+  constructor(private readonly root: string, private readonly appVersion: string, private readonly runtime: ElectronRuntimeHost, private readonly ai: AiService, private readonly synthv: SynthVProbe, private readonly applyUpdateChannel?: (channel: "stable" | "nightly") => void, private readonly creativeRuntime?: { status(): Promise<{ready: boolean; detail: string}> }, private readonly bridgeLoadError?: string, private readonly onSettingsChanged?: () => void, private readonly dataDirectory?: DataDirectoryDecision) {}
 
   async load(): Promise<void> {
     try {
@@ -61,7 +62,7 @@ export class DesktopStateService {
     const synthv = enabled && probe ? probe : { installations: [], profiles: disabledProfiles(), bridgeConnected: false, errors: probe?.errors ?? [] };
     const bridgeLoaded = this.bridgeLoadError === undefined;
     const integration = { preference: this.settings.integrations.synthv, enabled, detected: this.synthvEvidence.installations > 0 || this.synthvEvidence.profiles > 0, bridgeLoaded, errors: synthv.errors };
-    return { ...this.settings, integrations: { synthv: integration }, platform: process.platform, appVersion: this.appVersion, configPath: this.path(), settingsLoadError: null, model, bridgeBundled: bridgeLoaded, bridgeConnected: synthv.bridgeConnected, installations: synthv.installations, components: componentCatalog(synthv.profiles, creativeRuntime, ffmpeg, enabled), downloads: [], pluginInternalFunctionsEnabled: runtime.pluginInternalFunctionsEnabled, pluginAdvancedFunctionsEnabled: runtime.pluginAdvancedFunctionsEnabled, autostartEnabled: autostart.enabled, autostartError: autostart.error, svpAssociation: { supported: enabled && process.platform === "win32", registered: false, isDefault: false, detail: "Electron launch routing is available after the application is installed." }, sv2Profiles: synthv.profiles, agentBudgets };
+    return { ...this.settings, integrations: { synthv: integration }, platform: process.platform, appVersion: this.appVersion, configPath: this.path(), dataDirectory: { path: this.root, migratedFrom: this.dataDirectory?.migratedFrom ?? null, deferred: this.dataDirectory?.deferred ?? null, legacyRemaining: this.dataDirectory?.legacyRemaining ?? null, setAside: this.dataDirectory?.setAside ?? null, fixupErrors: this.dataDirectory?.fixupErrors ?? [] }, settingsLoadError: null, model, bridgeBundled: bridgeLoaded, bridgeConnected: synthv.bridgeConnected, installations: synthv.installations, components: componentCatalog(synthv.profiles, creativeRuntime, ffmpeg, enabled), downloads: [], pluginInternalFunctionsEnabled: runtime.pluginInternalFunctionsEnabled, pluginAdvancedFunctionsEnabled: runtime.pluginAdvancedFunctionsEnabled, autostartEnabled: autostart.enabled, autostartError: autostart.error, svpAssociation: { supported: enabled && process.platform === "win32", registered: false, isDefault: false, detail: "Electron launch routing is available after the application is installed." }, sv2Profiles: synthv.profiles, agentBudgets };
   }
 
   async update(values: Partial<DesktopSettings>): Promise<Data> { this.settings = { ...this.settings, ...values }; if (values.updateChannel) this.applyUpdateChannel?.(values.updateChannel); await this.persist(); this.onSettingsChanged?.(); return this.bootstrap(); }

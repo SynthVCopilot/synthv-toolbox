@@ -1,11 +1,9 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
-import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import type { OpenDialogOptions } from "./bridge.js";
-import { BRAND, STABLE_IDENTIFIERS } from "./brand.js";
+import { BRAND, FILE_NAMES, LEGACY_FILE_NAMES, LEGACY_PRODUCT_NAME } from "./brand.js";
 import { createUpdaterService } from "./updater.js";
 import { ElectronRuntimeHost } from "./services/runtime-host.js";
 import { ElectronCommandRegistry } from "./services/command-registry.js";
@@ -28,7 +26,8 @@ import { HostCapabilities } from "./services/host-capabilities.js";
 import { ClientError, HttpMcpServer } from "./services/http-mcp-server.js";
 import { agentSystemPrompt } from "./services/agent-identity.js";
 import { hostResultToToolResult, toolboxMcpTools } from "./services/mcp-tools.js";
-import { migrateAutostart, RUN_KEY } from "./services/autostart-migration.js";
+import { AUTOSTART_ARGUMENT, legacyExecutableCandidates, loginItemLookupPath, migrateAutostart } from "./services/autostart-migration.js";
+import { resolveUserDataDirectory, type DataDirectoryDecision } from "./services/user-data-migration.js";
 import { loadEmbeddedBridge, unavailableBridge, type EmbeddedBridge } from "./services/synthv-bridge.js";
 import { createSynthVDeliveryRegistry, createSynthVToolsExtension } from "./services/synthv-agent-tools.js";
 import { createToolboxAgentToolsExtension } from "./services/toolbox-agent-tools.js";
@@ -44,9 +43,20 @@ import { authorizeTrae } from "@model-auth/providers/trae";
 import { authorizeWorkBuddy } from "@model-auth/providers/workbuddy";
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
-// The data folder predates the Toneshuttle name. Pinning it keeps sealed credentials, settings and plugins in place
-// whatever the package or product is called; an explicit --user-data-dir (tests, side-by-side runs) still wins.
-if (!app.commandLine.hasSwitch("user-data-dir")) app.setPath("userData", join(app.getPath("appData"), STABLE_IDENTIFIERS.userDataDirectory));
+// The data folder is named explicitly so it does not follow the package name, and a folder left under the old product
+// name is moved here first. This must finish before anything reads userData: Chromium creates the folder for the
+// single-instance lock. An explicit --user-data-dir (tests, side-by-side runs) still wins and is never migrated;
+// --toolbox-app-data-dir stands in for the OS app-data folder so tests can exercise the migration.
+const dataDirectory: DataDirectoryDecision | undefined = app.commandLine.hasSwitch("user-data-dir") ? undefined : resolveUserDataDirectory({
+  appData: app.commandLine.getSwitchValue("toolbox-app-data-dir") || app.getPath("appData"),
+  name: FILE_NAMES.userDataDirectory,
+  legacyNames: [LEGACY_FILE_NAMES.userDataDirectory],
+  migrate: app.isPackaged || app.commandLine.hasSwitch("toolbox-app-data-dir"),
+  appVersion: app.getVersion(),
+});
+if (dataDirectory) app.setPath("userData", dataDirectory.path);
+if (dataDirectory?.migratedFrom) console.info(`Moved the data folder from ${dataDirectory.migratedFrom} to ${dataDirectory.path}.`);
+if (dataDirectory?.deferred) console.warn(`The data folder stays at ${dataDirectory.path} for now: ${dataDirectory.deferred.detail}`);
 const developmentUrl = process.env.ELECTRON_RENDERER_URL ?? process.argv.find((argument) => argument.startsWith("--dev-server-url="))?.slice("--dev-server-url=".length);
 let mainWindow: BrowserWindow | undefined;
 let tray: Tray | undefined;
@@ -94,7 +104,7 @@ function emitToRenderer(event: string, payload: unknown): void {
 updater.onState((state) => { emitToRenderer("updater.state", state); });
 
 function isLoginLaunch(): boolean {
-  return process.argv.includes("--toolbox-autostart") || app.getLoginItemSettings().wasOpenedAtLogin;
+  return process.argv.includes(AUTOSTART_ARGUMENT) || app.getLoginItemSettings().wasOpenedAtLogin;
 }
 
 function desktopIconPath(): string {
@@ -104,14 +114,14 @@ function desktopIconPath(): string {
 function autostartController() {
   return {
     async set(enabled: boolean): Promise<boolean> {
-      app.setLoginItemSettings({ openAtLogin: enabled, openAsHidden: enabled, args: enabled ? ["--toolbox-autostart"] : [] });
-      const actual = app.getLoginItemSettings().openAtLogin;
+      app.setLoginItemSettings({ openAtLogin: enabled, openAsHidden: enabled, args: enabled ? [AUTOSTART_ARGUMENT] : [] });
+      const actual = launchAtLogin();
       if (actual !== enabled) throw new Error("The operating system did not apply the launch-at-login setting.");
       return actual;
     },
     async get(): Promise<{ enabled: boolean; error: string | null }> {
       try {
-        return { enabled: app.getLoginItemSettings().openAtLogin, error: null };
+        return { enabled: launchAtLogin(), error: null };
       } catch (reason) {
         return { enabled: false, error: reason instanceof Error ? reason.message : String(reason) };
       }
@@ -119,18 +129,27 @@ function autostartController() {
   };
 }
 
-/** Windows only: a rename of the executable leaves the old login entry behind (see autostart-migration.ts). */
-async function migrateLegacyAutostart(): Promise<void> {
+/** On Windows the entry only counts as ours when its arguments match too, so they must be passed when reading it back. */
+function launchAtLogin(): boolean {
+  return app.getLoginItemSettings({ args: [AUTOSTART_ARGUMENT] }).openAtLogin;
+}
+
+/** Windows only: the rename of the executable leaves the old login entry behind (see autostart-migration.ts). */
+function migrateLegacyAutostart(): void {
   if (process.platform !== "win32" || !app.isPackaged) return;
-  const run = promisify(execFile);
-  const migrated = await migrateAutostart({
-    execPath: process.execPath,
-    queryRunKey: async () => (await run("reg", ["query", RUN_KEY], { windowsHide: true })).stdout,
-    removeRunValue: async name => { await run("reg", ["delete", RUN_KEY, "/v", name, "/f"], { windowsHide: true }); },
-    enableAutostart: () => autostartController().set(true),
-    fileExists: existsSync,
-  }).catch((reason: unknown) => { console.error("Unable to migrate the launch-at-login entry", reason); return []; });
-  if (migrated.length) console.info(`Launch at login now points at ${process.execPath} (replaced ${migrated.join(", ")}).`);
+  try {
+    const replaced = migrateAutostart({
+      execPath: process.execPath,
+      legacyExecutables: legacyExecutableCandidates(process.execPath, LEGACY_FILE_NAMES, process.env.LOCALAPPDATA),
+      fileExists: existsSync,
+      launchItems: path => app.getLoginItemSettings({ path: loginItemLookupPath(path), args: [AUTOSTART_ARGUMENT] }).launchItems,
+      remove: name => app.setLoginItemSettings({ openAtLogin: false, name }),
+      register: enabled => app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true, args: [AUTOSTART_ARGUMENT], enabled }),
+    });
+    if (replaced.length) console.info(`Launch at login now points at ${process.execPath} (replaced ${replaced.join(", ")}).`);
+  } catch (reason) {
+    console.error("Unable to migrate the launch-at-login entry", reason);
+  }
 }
 
 async function showMainWindow(): Promise<void> {
@@ -299,7 +318,7 @@ async function initializeServices(): Promise<void> {
   await runtimeHost.load();
   ai = new AiService({ metadataPath: join(userData, "ai", "metadata.json"), runtime: agentRuntimePort(runtimeHost.runtime), catalog: modelCatalog(), approvals, usage: { query: async (provider, credentialIds) => ({ queriedAt: new Date().toISOString(), accounts: credentialIds.map(credentialId => ({ providerId: provider, credentialId, status: "unknown", plan: null, windows: [], balance: null, error: null })) }) }, authorizer: { authorize: authorizeProvider }, systemPrompt: () => agentSystemPrompt({ synthv: desktop.synthvEnabled(), mcpServers: desktop.aiModeEnabled() ? mcpServerConfigs(desktop.enabledMcpServers()) : [] }) });
   capabilities = new HostCapabilities(synthv, creative, ai, () => desktop.synthvEnabled(), () => desktop.aiModeEnabled());
-  desktop = new DesktopStateService(userData, app.getVersion(), runtimeHost, ai, synthv, channel => { updateChannel = channel; updater.setChannel(channel); }, creativeRuntime, bridgeLoadError, () => { void externalMcp.reconcile(desktop.aiModeEnabled() ? mcpServerConfigs(desktop.enabledMcpServers()) : []); });
+  desktop = new DesktopStateService(userData, app.getVersion(), runtimeHost, ai, synthv, channel => { updateChannel = channel; updater.setChannel(channel); }, creativeRuntime, bridgeLoadError, () => { void externalMcp.reconcile(desktop.aiModeEnabled() ? mcpServerConfigs(desktop.enabledMcpServers()) : []); }, dataDirectory);
   await desktop.load();
   const coverChildren = async (conversationId: string) => (await cover.invoke("media_tasks", {}) as Array<Record<string, any>>).filter(job => job.parentConversationId === conversationId);
   agentTasks = createAgentTaskService({
@@ -350,13 +369,19 @@ function modelCatalog() { const values: Record<AiProviderId, string[]> = { anthr
 async function authorizeProvider(provider: AiProviderId, signal: AbortSignal) { const options = { openExternal: (url: string) => shell.openExternal(url), signal }; const credential = provider === "anthropic" ? await authorizeAnthropic(options) : provider === "openai-codex" ? await authorizeOpenAI(options) : provider === "workbuddy" ? await authorizeWorkBuddy(options) : await authorizeTrae(options); const value = credential as { accountId?: string; label?: string; expires?: number }; return { id: value.accountId, label: value.label ?? provider, secret: JSON.stringify(credential), expiresAt: value.expires }; }
 
 if (!app.requestSingleInstanceLock()) {
+  // While the move is deferred this start shares the old folder, so the instance holding the lock is most likely the
+  // previous version. It only brings its own window forward and cannot say why, so say it here. Tests run unpackaged.
+  if (dataDirectory?.deferred && app.isPackaged) dialog.showErrorBox(`${BRAND.productNameZh} ${BRAND.productName}`, [
+    `旧版本（${LEGACY_PRODUCT_NAME}）仍在运行，数据目录暂时无法迁移。请从托盘图标退出旧版本，然后重新启动${BRAND.productNameZh}。`,
+    `The previous version (${LEGACY_PRODUCT_NAME}) is still running, so the data folder cannot be moved yet. Quit it from its tray icon, then start ${BRAND.productName} again.`,
+  ].join("\n\n"));
   app.quit();
 } else {
   app.on("second-instance", () => void showMainWindow());
   app.whenReady().then(async () => {
     Menu.setApplicationMenu(null);
+    migrateLegacyAutostart();
     await initializeServices();
-    void migrateLegacyAutostart();
     createTray();
     await createMainWindow(isLoginLaunch());
   }).catch((reason: unknown) => {

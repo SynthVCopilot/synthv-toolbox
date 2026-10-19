@@ -6,9 +6,11 @@ const main = readFileSync(new URL("../src/PiDesktop.Tauri/electron/main.ts", imp
 const synthv = readFileSync(new URL("../src/PiDesktop.Tauri/electron/services/synthv-service.ts", import.meta.url), "utf8");
 
 test("Electron launch-at-login uses the operating system setting and starts hidden", () => {
-  assert.match(main, /app\.setLoginItemSettings\(\{ openAtLogin: enabled, openAsHidden: enabled, args: enabled \? \["--toolbox-autostart"\] : \[\] \}\)/);
-  assert.match(main, /app\.getLoginItemSettings\(\)\.openAtLogin/);
-  assert.match(main, /process\.argv\.includes\("--toolbox-autostart"\) \|\| app\.getLoginItemSettings\(\)\.wasOpenedAtLogin/);
+  assert.match(main, /app\.setLoginItemSettings\(\{ openAtLogin: enabled, openAsHidden: enabled, args: enabled \? \[AUTOSTART_ARGUMENT\] : \[\] \}\)/);
+  // Windows only reports the entry as ours when the arguments it was written with are passed back.
+  assert.match(main, /app\.getLoginItemSettings\(\{ args: \[AUTOSTART_ARGUMENT\] \}\)\.openAtLogin/);
+  assert.doesNotMatch(main, /app\.getLoginItemSettings\(\)\.openAtLogin/);
+  assert.match(main, /process\.argv\.includes\(AUTOSTART_ARGUMENT\) \|\| app\.getLoginItemSettings\(\)\.wasOpenedAtLogin/);
   assert.match(main, /await createMainWindow\(isLoginLaunch\(\)\)/);
   assert.match(main, /if \(!startHidden\) mainWindow\?\.show\(\)/);
   assert.match(synthv, /private readonly autostart\?: AutostartController/);

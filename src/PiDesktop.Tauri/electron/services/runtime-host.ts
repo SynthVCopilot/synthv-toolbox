@@ -117,9 +117,12 @@ export class ElectronRuntimeHost {
   }
 
   async rotateHttpApiToken(): Promise<JsonValue> {
-    this.settings = { ...this.settings, httpApiToken: createApiToken() };
+    const next = { ...this.settings, httpApiToken: createApiToken() };
+    // The server switches first. Status reports the token from settings, so publishing it earlier would let the old
+    // token keep working after a client has already been shown the new one.
+    await this.syncHttpServer(next);
+    this.settings = next;
     await this.persist();
-    await this.syncHttpServer();
     return this.httpMcpStatus();
   }
 
@@ -149,7 +152,7 @@ export class ElectronRuntimeHost {
   }
 
   // start() keeps a running server whose config is unchanged, so open MCP sessions survive unrelated settings saves.
-  private async syncHttpServer(): Promise<void> { if (this.httpServer) await this.httpServer.start({ enabled: this.settings.httpApiEnabled, agentEnabled: this.settings.httpAgentEnabled, internalEnabled: this.settings.mcpInternalFunctionsEnabled, advancedEnabled: this.settings.mcpAdvancedFunctionsEnabled, port: this.settings.httpApiPort, token: this.settings.httpApiToken }); }
+  private async syncHttpServer(settings = this.settings): Promise<void> { if (this.httpServer) await this.httpServer.start({ enabled: settings.httpApiEnabled, agentEnabled: settings.httpAgentEnabled, internalEnabled: settings.mcpInternalFunctionsEnabled, advancedEnabled: settings.mcpAdvancedFunctionsEnabled, port: settings.httpApiPort, token: settings.httpApiToken }); }
 
   /** The file holds the HTTP API bearer token, so it is created owner-only (rm first: writeFile keeps an existing file's mode). */
   private async persist(): Promise<void> {

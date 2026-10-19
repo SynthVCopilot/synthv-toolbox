@@ -467,6 +467,15 @@ export interface InstalledPlugin {
   advancedFunctionsEnabled: boolean;
 }
 
+export interface DataDirectoryState {
+  path: string;
+  migratedFrom: string | null;
+  deferred: { reason: "running" | "in-use" | "error"; detail: string } | null;
+  legacyRemaining: string | null;
+  setAside: string | null;
+  fixupErrors: string[];
+}
+
 export interface BootstrapState {
   onboardingCompleted: boolean;
   mode: AppMode;
@@ -478,6 +487,8 @@ export interface BootstrapState {
   platform: string;
   appVersion: string;
   configPath: string;
+  /** Where the data folder is and whether this launch moved it from the pre-Toneshuttle name. */
+  dataDirectory?: DataDirectoryState;
   settingsLoadError?: string | null;
   model?: ModelSummary;
   scriptsPath?: string;

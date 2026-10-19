@@ -28,6 +28,16 @@ addMessages("zh-CN", {
     offDescription: "此页面属于 Synthesizer V 集成。开启后即可使用 Bridge、账号槽位与相关工具。",
     turnOn: "开启 Synthesizer V 集成",
   },
+  dataFolder: {
+    label: "数据目录",
+    migrated: "已从旧目录 {from} 迁移到这里。",
+    deferredRunning: "数据目录尚未迁移：旧版本仍在运行。退出旧版本后重新启动@:{'brand.name'}即可完成；在此之前继续使用旧目录。",
+    deferredInUse: "数据目录尚未迁移：旧目录中的文件正被占用（{detail}）。下次启动时会自动重试；在此之前继续使用旧目录。",
+    deferredError: "数据目录迁移失败：{detail}。继续使用当前目录，下次启动时会重试。",
+    legacyRemaining: "旧数据目录 {path} 仍然存在，没有自动合并。确认不再需要后可以手动删除。",
+    setAside: "迁移前这里已有一个同名目录，已改名为 {path}，其中的内容没有删除。",
+    fixupErrors: "以下记录中的旧路径未能更新：{files}",
+  },
   mcpClient: {
     title: "连接 MCP 客户端",
     description: "把下面任一配置粘贴到客户端，即可接入本机 MCP 服务。令牌仅在本机有效，请勿分享。",
@@ -95,6 +105,16 @@ addMessages("en", {
     offTitle: "The Synthesizer V integration is off",
     offDescription: "This page belongs to the Synthesizer V integration. Turn it on to use the bridge, account slots and related tools.",
     turnOn: "Turn on the Synthesizer V integration",
+  },
+  dataFolder: {
+    label: "Data folder",
+    migrated: "Moved here from the previous folder {from}.",
+    deferredRunning: "The data folder has not been moved yet because an older version is still running. Quit it and restart @:{'brand.name'} to finish; until then the old folder stays in use.",
+    deferredInUse: "The data folder has not been moved yet because files in the old folder are in use ({detail}). The move is retried on the next start; until then the old folder stays in use.",
+    deferredError: "Moving the data folder failed: {detail}. The current folder stays in use and the move is retried on the next start.",
+    legacyRemaining: "An older data folder, {path}, still exists and was not merged. You can delete it once you no longer need it.",
+    setAside: "A folder with the new name already existed; it was renamed to {path} and nothing in it was deleted.",
+    fixupErrors: "Stored paths in these records could not be updated: {files}",
   },
   mcpClient: {
     title: "Connect an MCP client",

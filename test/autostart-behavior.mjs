@@ -6,7 +6,7 @@ import vm from "node:vm";
 const require = createRequire(new URL("../src/PiDesktop.Tauri/package.json", import.meta.url));
 const { parse } = require("@babel/parser");
 const source = readFileSync(new URL("../src/PiDesktop.Tauri/src/main.ts", import.meta.url), "utf8");
-const names = new Set(["refreshAutostartStatus", "changeAutostart", "renderSettings", "synthvOn", "renderIntegrationSettings"]);
+const names = new Set(["refreshAutostartStatus", "changeAutostart", "renderSettings", "synthvOn", "renderIntegrationSettings", "renderDataFolderNotes"]);
 const functions = parse(source, { sourceType: "module", plugins: ["typescript"] }).program.body
   .filter(node => node.type === "FunctionDeclaration" && names.has(node.id.name));
 assert.equal(functions.length, names.size);

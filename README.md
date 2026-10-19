@@ -2,7 +2,7 @@
 
 Toneshuttle（声梭）是面向人声与音频创作的通用桌面工具箱，支持 Windows 和 macOS。它把音频准备、分析、音频转 MIDI、歌词处理和 AI Agent 集中在一个应用中，并通过本地 MCP 服务器和插件系统与其他工具协作。Synthesizer V 支持作为可选集成提供。
 
-本项目原名 Synthesizer V Toolbox。升级到 Toneshuttle 后沿用原有的数据目录、设置、账号和插件，应用内更新继续可用。
+本项目原名 Synthesizer V Toolbox。升级到 Toneshuttle 时，可执行文件、安装目录和数据目录会一并改为 Toneshuttle，设置、账号、插件和开机自启动自动迁移，应用内更新继续可用。
 
 ## 主要功能
 

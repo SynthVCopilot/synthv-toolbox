@@ -200,16 +200,17 @@ describe("upgrade continuity across the product rename", () => {
     assert.deepEqual({ provider: builder.publish.provider, owner: builder.publish.owner, repo: builder.publish.repo, channel: builder.publish.channel }, { provider: "github", owner: "SynthVCopilot", repo: "synthv-toolbox", channel: "latest" });
   });
 
-  test("the package name keeps the userData folder and the per-user install directory", () => {
-    // Electron names userData after productName || name, and a per-user one-click NSIS install names its directory after name.
+  test("the package name keeps app.name, which names the login item and the macOS keychain item", () => {
+    // Electron uses productName || name as app.name. The data and install folders are named explicitly instead
+    // (electron/main.ts, electron/assets/installer.nsh), so the package name never has to follow the product name.
     const app = JSON.parse(read("src/PiDesktop.Tauri/package.json"));
     assert.equal(app.name, "synthv-toolbox");
     assert.equal(app.productName, undefined);
     assert.equal(builder.extraMetadata, undefined);
   });
 
-  test("the Windows executable keeps its old file name", () => {
-    assert.equal(builder.win.executableName, "Synthesizer V Toolbox");
+  test("the Windows executable carries the new name", () => {
+    assert.equal(builder.win.executableName, "Toneshuttle");
     // A top-level executableName would also rename the macOS bundle.
     assert.equal(builder.executableName, undefined);
   });

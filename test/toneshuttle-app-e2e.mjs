@@ -3,7 +3,7 @@
 // exactly the token the Connections page shows. Requires `npm run build:electron` first.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { createRequire } from "node:module";
@@ -284,5 +284,174 @@ test("Toneshuttle app: branding, SynthV integration switch and authenticated MCP
     await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5000))]);
     if (process.env.TONESHUTTLE_E2E_KEEP !== "1") await Promise.all([profileDir, homeDir].map((directory) => rm(directory, { recursive: true, force: true }).catch(() => {})));
     if (process.env.TONESHUTTLE_E2E_DEBUG === "1") console.log(Buffer.concat(output).toString("utf8"));
+  }
+});
+
+// --- Data folder migration from the pre-Toneshuttle name -------------------------------------------------------------
+// The app normally finds its data under the OS app-data folder; --toolbox-app-data-dir stands in for it so these runs
+// never touch the real one. A run with --user-data-dir=<appData>/synthv-toolbox plays the part of the old build.
+
+function startApp(args, env) {
+  return freePort().then((port) => {
+    const child = spawn(electronBinary, [mainScript, ...args, `--remote-debugging-port=${port}`], { cwd: desktopRoot, stdio: ["ignore", "pipe", "pipe"], env });
+    const output = [];
+    child.stdout.on("data", (chunk) => output.push(chunk));
+    child.stderr.on("data", (chunk) => output.push(chunk));
+    const exited = new Promise((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
+    return { child, port, exited, log: () => Buffer.concat(output).toString("utf8") };
+  });
+}
+
+async function openPage(app) {
+  const target = await waitFor(async () => (await fetch(`http://127.0.0.1:${app.port}/json/list`).then((response) => response.json())).find((entry) => entry.type === "page"), { label: "the main window", timeoutMs: 30000 });
+  const page = new CdpClient(target.webSocketDebuggerUrl);
+  await page.connect();
+  await page.send("Runtime.enable");
+  await page.send("Page.enable");
+  await page.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 860, deviceScaleFactor: 1, mobile: false });
+  await waitFor(() => evaluate(page, "typeof window.toolboxDesktop === 'object' && !!(document.querySelector('[data-onboarding]') || document.querySelector('.brand strong'))"), { label: "the renderer" });
+  return page;
+}
+
+/** Closes the browser over CDP so Electron quits normally, flushing Chromium storage and releasing the profile. */
+async function quitApp(app, page) {
+  page?.close();
+  try {
+    const { webSocketDebuggerUrl } = await fetch(`http://127.0.0.1:${app.port}/json/version`).then((response) => response.json());
+    const browser = new CdpClient(webSocketDebuggerUrl);
+    await browser.connect();
+    void browser.send("Browser.close");
+  } catch { /* already gone */ }
+  const result = await Promise.race([app.exited, new Promise((resolve) => setTimeout(() => resolve(undefined), 15000))]);
+  if (!result) { app.child.kill(); await app.exited; }
+}
+
+function isolatedEnv(homeDir) {
+  const env = { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: "true", HOME: homeDir, APPDATA: homeDir, LOCALAPPDATA: homeDir, USERPROFILE: homeDir, PI_CODING_AGENT_DIR: join(homeDir, ".pi", "agent"), PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1" };
+  for (const key of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ELECTRON_RENDERER_URL"]) delete env[key];
+  return env;
+}
+
+/** Runs the app on the old folder name, as an installed pre-Toneshuttle build would have, and leaves real data behind. */
+async function seedLegacyFolder(legacy, env) {
+  const app = await startApp([`--user-data-dir=${legacy}`], env);
+  let page;
+  try {
+    page = await openPage(app);
+    await click(page, "[data-onboarding=\"toolbox\"]");
+    await waitFor(() => evaluate(page, "!!document.querySelector('.brand strong')"), { label: "sidebar" });
+    await invoke(page, "set_integration", { integration: "synthv", preference: "off" });
+    await invoke(page, "set_mode", { mode: "ai" });
+    await invoke(page, "add_ai_api_key", { provider: "anthropic", label: "Migrated key", apiKey: "test-api-key" });
+    await evaluate(page, "localStorage.setItem('synthv-toolbox.locale', 'en'), true");
+    const token = (await invoke(page, "get_http_api_status")).token;
+    return { token };
+  } finally {
+    await quitApp(app, page);
+  }
+}
+
+const anthropicKey = (state) => state.providers.find((provider) => provider.id === "anthropic")?.apiKeys?.find((key) => key.label === "Migrated key");
+
+test("Toneshuttle app: the data folder moves from its old name on the first start and keeps everything working", async (t) => {
+  assert.equal(existsSync(mainScript), true, "dist/electron/main.js must exist; run build:electron first");
+  const homeDir = await mkdtemp(join(tmpdir(), "toneshuttle-migrate-home-"));
+  const screenshotDir = process.env.TONESHUTTLE_E2E_SCREENSHOTS ?? await mkdtemp(join(tmpdir(), "toneshuttle-e2e-shots-"));
+  await mkdir(screenshotDir, { recursive: true });
+  const env = isolatedEnv(homeDir);
+  const sandboxes = [];
+  const sandbox = async () => { const appData = await mkdtemp(join(tmpdir(), "toneshuttle-appdata-")); sandboxes.push(appData); return { appData, legacy: join(appData, "synthv-toolbox"), target: join(appData, "Toneshuttle") }; };
+  const shot = async (page, name) => { const result = await page.send("Page.captureScreenshot", { format: "png" }); await writeFile(join(screenshotDir, `${name}.png`), Buffer.from(result.data, "base64")); };
+  try {
+    await t.test("settings, sealed credentials, the MCP token, browser storage and stored paths survive the move", async () => {
+      const { appData, legacy, target } = await sandbox();
+      const { token } = await seedLegacyFolder(legacy, env);
+      const job = "3f2b8f6e-1c2d-4e5f-8a9b-0c1d2e3f4a5b";
+      mkdirSync(join(legacy, "creative", "cover-jobs"), { recursive: true });
+      writeFileSync(join(legacy, "creative", "cover-jobs", `${job}.json`), JSON.stringify({ id: job, kind: "media-import", status: "failed", imported: { audioPath: join(legacy, "creative", "media", job, "source.wav") }, request: {} }));
+
+      const app = await startApp([`--toolbox-app-data-dir=${appData}`], env);
+      let page;
+      try {
+        page = await openPage(app);
+        const state = await invoke(page, "bootstrap");
+        assert.equal(state.dataDirectory.path, target);
+        assert.equal(state.dataDirectory.migratedFrom, legacy);
+        assert.equal(state.dataDirectory.deferred, null);
+        assert.equal(state.onboardingCompleted, true, "onboarding is not shown again");
+        assert.equal(state.integrations.synthv.preference, "off");
+        assert.equal(state.mode, "ai");
+        assert.equal((await invoke(page, "get_http_api_status")).token, token, "MCP clients keep working without re-pairing");
+        const key = anthropicKey(await invoke(page, "ai_provider_state"));
+        assert.equal(key?.healthy, true, "the credential key moved with the sealed credentials, so they still decrypt");
+        assert.equal(await evaluate(page, "localStorage.getItem('synthv-toolbox.locale')"), "en", "Chromium's Local Storage moved with the profile");
+        await click(page, "[data-page=\"settings\"]");
+        await waitFor(() => evaluate(page, "!!document.querySelector('.data-folder-notes')"), { label: "data folder notes" });
+        const panel = await evaluate(page, "document.querySelector('.data-folder-notes').closest('.panel').innerText");
+        assert.ok(panel.includes(target), "Settings shows the new data folder");
+        assert.ok(panel.includes(legacy), "Settings says where the data came from");
+        await evaluate(page, "document.querySelector('.data-folder-notes').closest('.panel').scrollIntoView({ block: 'center' }), true");
+        await shot(page, "10-settings-data-folder-migrated");
+      } finally {
+        await quitApp(app, page);
+      }
+      assert.equal(existsSync(legacy), false, "nothing recreates the old folder");
+      assert.ok(existsSync(join(target, "Local State")), "Chromium writes its own state to the new folder");
+      assert.equal(JSON.parse(readFileSync(join(target, "creative", "cover-jobs", `${job}.json`), "utf8")).imported.audioPath, join(target, "creative", "media", job, "source.wav"), "a retried job finds its earlier step's files");
+    });
+
+    await t.test("a file held open in the old folder keeps it in use for this start and Settings says why", { skip: process.platform !== "win32" && "only Windows refuses to rename a folder with open files" }, async () => {
+      const { appData, legacy, target } = await sandbox();
+      await seedLegacyFolder(legacy, env);
+      const handle = openSync(join(legacy, "desktop-settings.json"), "r");
+      let app, page;
+      try {
+        app = await startApp([`--toolbox-app-data-dir=${appData}`], env);
+        page = await openPage(app);
+        const state = await invoke(page, "bootstrap");
+        assert.equal(state.dataDirectory.path, legacy);
+        assert.equal(state.dataDirectory.deferred?.reason, "in-use");
+        assert.equal(state.onboardingCompleted, true, "the old folder's data is used meanwhile");
+        await click(page, "[data-page=\"settings\"]");
+        await waitFor(() => evaluate(page, "!!document.querySelector('.data-folder-notes .error-text')"), { label: "deferred notice" });
+        assert.match(await evaluate(page, "document.querySelector('.data-folder-notes .error-text').innerText"), /in use|被占用/u);
+        await evaluate(page, "document.querySelector('.data-folder-notes').closest('.panel').scrollIntoView({ block: 'center' }), true");
+        await shot(page, "11-settings-data-folder-deferred");
+      } finally {
+        await quitApp(app, page);
+        closeSync(handle);
+      }
+      assert.equal(existsSync(target), false);
+      const retry = await startApp([`--toolbox-app-data-dir=${appData}`], env);
+      let retryPage;
+      try {
+        retryPage = await openPage(retry);
+        assert.equal((await invoke(retryPage, "bootstrap")).dataDirectory.migratedFrom, legacy, "the next start completes the move");
+      } finally {
+        await quitApp(retry, retryPage);
+      }
+    });
+
+    await t.test("while an older instance still runs on the old folder, the new start hands over to it and moves nothing", async () => {
+      const { appData, legacy, target } = await sandbox();
+      await seedLegacyFolder(legacy, env);
+      const old = await startApp([`--user-data-dir=${legacy}`], env);
+      let oldPage;
+      try {
+        oldPage = await openPage(old);
+        const next = await startApp([`--toolbox-app-data-dir=${appData}`], env);
+        const result = await Promise.race([next.exited, new Promise((resolve) => setTimeout(() => resolve(undefined), 30000))]);
+        if (!result) next.child.kill();
+        assert.ok(result, `the second start must exit on its own; output:\n${next.log()}`);
+        assert.match(next.log(), /stays at/u, "the deferral is logged");
+        assert.equal(existsSync(target), false);
+        assert.ok((await invoke(oldPage, "bootstrap")).configPath.startsWith(legacy), "the running instance keeps serving from the old folder");
+        assert.ok(existsSync(join(legacy, "desktop-settings.json")));
+      } finally {
+        await quitApp(old, oldPage);
+      }
+    });
+  } finally {
+    if (process.env.TONESHUTTLE_E2E_KEEP !== "1") await Promise.all([homeDir, ...sandboxes].map((directory) => rm(directory, { recursive: true, force: true }).catch(() => {})));
   }
 });

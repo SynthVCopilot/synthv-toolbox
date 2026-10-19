@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { BRAND, STABLE_IDENTIFIERS } from "../src/PiDesktop.Tauri/dist/electron/brand.js";
+import { BRAND, FILE_NAMES, LEGACY_FILE_NAMES, STABLE_IDENTIFIERS } from "../src/PiDesktop.Tauri/dist/electron/brand.js";
 import { agentSystemPrompt } from "../src/PiDesktop.Tauri/dist/electron/services/agent-identity.js";
-import { executableOf, migrateAutostart, parseRunKey, staleAutostartEntries } from "../src/PiDesktop.Tauri/dist/electron/services/autostart-migration.js";
+import { legacyExecutableCandidates, loginItemLookupPath, migrateAutostart } from "../src/PiDesktop.Tauri/dist/electron/services/autostart-migration.js";
 import { DesktopStateService } from "../src/PiDesktop.Tauri/dist/electron/services/desktop-state.js";
 import { isIntegrationPreference, resolveSynthVIntegration } from "../src/PiDesktop.Tauri/dist/electron/services/integrations.js";
 import { unavailableBridge } from "../src/PiDesktop.Tauri/dist/electron/services/synthv-bridge.js";
@@ -114,38 +114,71 @@ test("the agent introduces itself as the toolbox and names only active integrati
   assert.doesNotMatch(on, /coding assistant/i);
 });
 
-test("stale launch-at-login entries from a renamed executable are replaced", async () => {
-  const output = [
-    "",
-    "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-    "    OneDrive    REG_SZ    \"C:\\Program Files\\OneDrive\\OneDrive.exe\" /background",
-    "    electron.app.synthv-toolbox    REG_SZ    \"C:\\Users\\me\\AppData\\Local\\Programs\\synthv-toolbox\\Synthesizer V Toolbox.exe\" --toolbox-autostart",
-    "",
-  ].join("\r\n");
-  const entries = parseRunKey(output);
-  assert.equal(entries.length, 2);
-  assert.equal(executableOf(entries[1].command), "C:\\Users\\me\\AppData\\Local\\Programs\\synthv-toolbox\\Synthesizer V Toolbox.exe");
-  const current = "C:\\Users\\me\\AppData\\Local\\Programs\\synthv-toolbox\\Toneshuttle.exe";
-  assert.deepEqual(staleAutostartEntries(entries, current, () => false).map(entry => entry.name), ["electron.app.synthv-toolbox"]);
-  assert.deepEqual(staleAutostartEntries(entries, current, () => true), [], "an entry whose executable still exists belongs to another install");
+test("launch-at-login entries of the renamed executable move to the new one and keep their enabled state", async () => {
+  // A non-ASCII profile path: `reg query` would have garbled it, Electron's login-item API does not.
+  const current = "C:\\Users\\张三\\AppData\\Local\\Programs\\Toneshuttle\\Toneshuttle.exe";
+  const candidates = legacyExecutableCandidates(current, LEGACY_FILE_NAMES, "C:\\Users\\张三\\AppData\\Local");
+  assert.deepEqual(candidates, ["C:\\Users\\张三\\AppData\\Local\\Programs\\Toneshuttle\\Synthesizer V Toolbox.exe", "C:\\Users\\张三\\AppData\\Local\\Programs\\synthv-toolbox\\Synthesizer V Toolbox.exe"], "the default old folder is listed once");
+  assert.deepEqual(legacyExecutableCandidates("E:\\Apps\\Toneshuttle\\Toneshuttle.exe", LEGACY_FILE_NAMES, "C:\\Users\\me\\AppData\\Local").at(-1), "C:\\Users\\me\\AppData\\Local\\Programs\\synthv-toolbox\\Synthesizer V Toolbox.exe", "an upgrade installed elsewhere with /D= still finds the default old folder");
+  const items = { [candidates[1]]: [
+    { name: "electron.app.synthv-toolbox", path: candidates[1].toUpperCase(), scope: "user", enabled: false },
+    { name: "Policy", path: candidates[1], scope: "machine", enabled: true },
+    // What an unquoted lookup returned on a real machine: another app's entry whose own path was cut at a space.
+    { name: "Docker Desktop", path: "C:\\Program", scope: "user", enabled: true },
+  ] };
   const actions = [];
-  const migrated = await migrateAutostart({ execPath: current, queryRunKey: async () => output, removeRunValue: async name => { actions.push(`remove:${name}`); }, enableAutostart: async () => { actions.push("enable"); }, fileExists: () => false });
-  assert.deepEqual(migrated, ["electron.app.synthv-toolbox"]);
-  assert.deepEqual(actions, ["remove:electron.app.synthv-toolbox", "enable"], "removal must precede re-registration because the value name may be reused");
-  assert.deepEqual(await migrateAutostart({ execPath: current, queryRunKey: async () => "", removeRunValue: async () => { throw new Error("unexpected"); }, enableAutostart: async () => { throw new Error("unexpected"); }, fileExists: () => false }), []);
+  const ports = (overrides = {}) => ({ execPath: current, legacyExecutables: candidates, fileExists: () => false, launchItems: (path) => items[path] ?? [], remove: (name) => actions.push(`remove:${name}`), register: (enabled) => actions.push(`register:${enabled}`), ...overrides });
+  assert.deepEqual(migrateAutostart(ports()), ["electron.app.synthv-toolbox"]);
+  assert.deepEqual(actions, ["remove:electron.app.synthv-toolbox", "register:false"], "removal comes first, other apps' and machine-wide entries are untouched, and an entry disabled in Task Manager stays disabled");
+  actions.length = 0;
+  assert.deepEqual(migrateAutostart(ports({ fileExists: () => true })), [], "an old executable that still exists belongs to another install");
+  assert.deepEqual(migrateAutostart(ports({ launchItems: () => [] })), []);
+  assert.deepEqual(actions, [], "nothing is registered when there was nothing to move");
+  assert.deepEqual(legacyExecutableCandidates("C:\\Programs\\synthv-toolbox\\Synthesizer V Toolbox.exe", LEGACY_FILE_NAMES), [], "the old build never migrates its own entry");
+  // Electron parses the lookup as a command line; unquoted, "...\\Synthesizer V Toolbox.exe" would be read as "...\\Synthesizer".
+  assert.equal(loginItemLookupPath(candidates[1]), `"${candidates[1]}"`);
+  const main = await readFile(join(root, "src/PiDesktop.Tauri/electron/main.ts"), "utf8");
+  assert.match(main, /launchItems: path => app\.getLoginItemSettings\(\{ path: loginItemLookupPath\(path\)/u);
 });
 
-test("product identity is consistent and the stable identifiers keep their legacy values", async () => {
+test("file names agree across brand.ts, the builder config and the installer hooks, and install identifiers are unchanged", async () => {
   const renderer = await readFile(join(root, "src/PiDesktop.Tauri/src/brand.ts"), "utf8");
   for (const value of [BRAND.productName, BRAND.productNameZh, BRAND.slug, BRAND.repositoryUrl]) assert.ok(renderer.includes(`"${value}"`), `src/brand.ts must mirror ${value}`);
   const builder = await readFile(join(root, "electron-builder.yml"), "utf8");
   assert.match(builder, new RegExp(`^productName: ${BRAND.productName}$`, "m"));
   assert.match(builder, new RegExp(`^appId: ${STABLE_IDENTIFIERS.appId.replaceAll(".", "\\.")}$`, "m"));
   assert.match(builder, new RegExp(`guid: ${STABLE_IDENTIFIERS.nsisGuid}`));
-  assert.equal(STABLE_IDENTIFIERS.userDataDirectory, "synthv-toolbox");
+  assert.match(builder, new RegExp(`^  executableName: ${FILE_NAMES.windowsExecutable.replace(/\.exe$/u, "")}$`, "m"));
+  const pkg = JSON.parse(await readFile(join(root, "src/PiDesktop.Tauri/package.json"), "utf8"));
+  assert.equal(pkg.name, STABLE_IDENTIFIERS.packageName, "the package name fixes app.name: the login-item value name and the macOS keychain item");
+  assert.equal(LEGACY_FILE_NAMES.windowsInstallDirectory, STABLE_IDENTIFIERS.packageName, "electron-builder names the default per-user folder after the package name");
+  const nsh = await readFile(join(root, "src/PiDesktop.Tauri/electron/assets/installer.nsh"), "utf8");
+  const define = (name) => new RegExp(`^!define ${name} "([^"]+)"$`, "m").exec(nsh)?.[1];
+  assert.equal(define("INSTALL_DIRECTORY"), FILE_NAMES.windowsInstallDirectory);
+  assert.equal(define("LEGACY_INSTALL_DIRECTORY"), LEGACY_FILE_NAMES.windowsInstallDirectory);
+  assert.equal(define("LEGACY_EXECUTABLE"), LEGACY_FILE_NAMES.windowsExecutable);
+  assert.equal(FILE_NAMES.userDataDirectory, BRAND.productName, "the NSIS --delete-app-data cleanup removes $APPDATA\\<product file name>");
   const main = await readFile(join(root, "src/PiDesktop.Tauri/electron/main.ts"), "utf8");
-  assert.ok(main.indexOf("app.setPath(\"userData\"") < main.indexOf("requestSingleInstanceLock"), "userData must be pinned before the single-instance lock reads it");
-  assert.match(main, /hasSwitch\("user-data-dir"\)/, "an explicit --user-data-dir must still win over the pinned folder");
+  const order = ["resolveUserDataDirectory({", "app.setPath(\"userData\"", "requestSingleInstanceLock"].map((marker) => main.indexOf(marker));
+  assert.ok(order.every((index, position) => index > 0 && (position === 0 || index > order[position - 1])), "the folder must be moved, then pinned, before the single-instance lock creates it");
+  assert.match(main, /hasSwitch\("user-data-dir"\) \? undefined/, "an explicit --user-data-dir wins and is never migrated");
+});
+
+test("the installer moves the install folder without touching the registry or the uninstaller", async () => {
+  const nsh = await readFile(join(root, "src/PiDesktop.Tauri/electron/assets/installer.nsh"), "utf8");
+  const code = nsh.split(/\r?\n/u).filter((line) => !line.trimStart().startsWith(";")).join("\n");
+  assert.doesNotMatch(code, /WriteReg/u, "writing InstallLocation before the old uninstaller runs would make it clean the new folder");
+  assert.doesNotMatch(code, /customUnInstall|customRemoveFiles|customUnInit|!macro un\./u, "the old build's stock uninstaller runs during this upgrade, so uninstaller hooks would not");
+  const guard = code.indexOf("!ifndef BUILD_UNINSTALLER");
+  assert.ok(guard >= 0 && code.indexOf("Var legacyInstallDir") > guard, "an installer-only variable would be an unused-variable error in the uninstaller pass");
+  assert.ok(code.lastIndexOf("!endif") > code.indexOf("!macroend", code.indexOf("!macro customInstall")), "the guard closes after the last installer hook");
+  assert.match(code, /\$\{AndIfNot\} \$\{isUpdated\}\n\s+!insertmacro FIND_LEGACY_APP\n\s+\$\{if\} \$R3 == 0\n\s+MessageBox MB_OKCANCEL/u, "a manual upgrade asks before the old app is closed");
+  assert.match(code, /!insertmacro FIND_LEGACY_APP\n\s+\$\{if\} \$R3 == 0\n\s+DetailPrint/u, "a still-running old copy is never half deleted");
+  assert.match(code, /!insertmacro GetDParameter \$R0\n\s+\$\{if\} \$R0 == ""/u, "an explicit /D= folder is kept");
+  assert.match(code, /RMDir \/r "\$legacyInstallDir"/u);
+  assert.match(code, /StrCpy \$legacyInstallDir "\$INSTDIR"/u, "only a folder that came from the registry is ever removed");
+  const builder = await readFile(join(root, "electron-builder.yml"), "utf8");
+  assert.match(builder, /^ {2}include: src\/PiDesktop\.Tauri\/electron\/assets\/installer\.nsh$/mu);
 });
 
 test("generic agent tools route to existing host commands and reject untrusted arguments", async () => {
@@ -230,11 +263,6 @@ test("agent tools only accept absolute paths on a local drive", async () => {
   for (const path of ["\\\\attacker\\share\\x.wav", "//attacker/share/x.wav", "\\\\?\\UNC\\attacker\\share\\x.wav", "relative.wav"]) assert.throws(() => validate(probe, { path }), /local drive/, path);
   const local = process.platform === "win32" ? "C:\\Music\\take.wav" : "/home/me/take.wav";
   assert.deepEqual(validate(probe, { path: local }), { path: local });
-});
-
-test("an autostart entry whose path did not survive decoding is never treated as stale", () => {
-  const entries = [{ name: "electron.app.synthv-toolbox", command: "\"C:\\Users\\\uFFFD\uFFFD\\AppData\\Local\\Programs\\synthv-toolbox\\Synthesizer V Toolbox.exe\" --toolbox-autostart" }];
-  assert.deepEqual(staleAutostartEntries(entries, "C:\Other\Toneshuttle.exe", () => false), []);
 });
 
 test("a loaded bridge is reported as loaded even when SynthV is off and was never probed", async () => {
