@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -38,6 +38,37 @@ test("a server that never answers times out and is stopped", async () => {
   const pid = pidFrom(result.detail);
   assert.ok(pid > 0, result.detail);
   assert.equal(isRunning(pid), false);
+});
+
+test("a server left running by a launcher that already exited is stopped when the probe ends", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "toneshuttle-probe-launcher-"));
+  const pidFile = join(directory, "server.pid");
+  const env = { FIXTURE_LINGER: "1", FIXTURE_PID_FILE: pidFile };
+  let config;
+  if (process.platform === "win32") {
+    // cmd.exe returns as soon as `start /b` has launched the server on its pipes, like an npx or uvx shim that exits early.
+    const shim = join(directory, "launch-and-exit.cmd");
+    await writeFile(shim, `@echo off\r\nstart "" /b "${process.execPath}" "${fixture}" ok\r\n`, "utf8");
+    config = { command: shim, args: [], env };
+  } else {
+    config = { command: process.execPath, args: [fileURLToPath(new URL("./fixtures/stdio-mcp-launcher.mjs", import.meta.url)), fixture, "ok"], env };
+  }
+  let pid = 0;
+  try {
+    // On POSIX the server answers on the inherited pipes. Behind `start /b` it holds them without using them for stdio, so the
+    // handshake times out; either way the probe ends with the launcher long gone and the server still holding the pipes.
+    const result = await probeStdioMcpServer(config, { timeoutMs: 5_000 });
+    assert.ok(result.succeeded || /did not complete the MCP handshake/.test(result.summary), `${result.summary} ${result.detail}`);
+    pid = Number(await readFile(pidFile, "utf8"));
+    assert.ok(pid > 0);
+    // The launcher was gone before the handshake ended; its server must not outlive the probe.
+    const deadline = Date.now() + 5_000;
+    while (isRunning(pid) && Date.now() < deadline) await new Promise((done) => setTimeout(done, 50));
+    assert.equal(isRunning(pid), false, `server ${pid} survived the probe`);
+  } finally {
+    if (pid && isRunning(pid)) process.kill(pid);
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("JSON-RPC errors and launch failures are reported as failed probes", async () => {

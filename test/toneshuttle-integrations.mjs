@@ -233,10 +233,13 @@ test("SynthV-backed creative operations and Cover are refused through MCP and pl
   const calls = [];
   const creative = { invoke: async (operation, params) => { calls.push(operation); return operation === "media_tasks" ? [{ id: "c1", kind: "cover" }, { id: "s1", kind: "source-separation" }] : { ok: true, params }; } };
   const capabilities = new HostCapabilities({}, creative, {}, () => synthv, () => ai);
-  for (const [operation, params] of [["run_score_to_synthv", {}], ["confirm_lyric_bridge_fit", {}], ["run_retake_workbench", {}], ["run_audio_to_project", { importToSynthv: true }], ["queue_cover", { request: {} }], ["retry_media_task", { id: "c1" }]]) {
+  const offlineProjectWork = ["get_project_backup_state", "create_project_checkpoint", "list_project_checkpoints", "restore_project_checkpoint", "run_project_probe", "run_project_doctor", "add_project_reference", "export_project_without_parameters", "export_project_lyrics", "run_batch_workflow"].map((operation) => [operation, { projectPath: "C:\\Songs\\a.svp" }]);
+  for (const [operation, params] of [["run_score_to_synthv", {}], ["confirm_lyric_bridge_fit", {}], ["run_retake_workbench", {}], ["run_audio_to_project", { importToSynthv: true }], ["queue_cover", { request: {} }], ["retry_media_task", { id: "c1" }], ...offlineProjectWork, ["run_pronunciation_diagnostics", { projectPath: "C:\\Songs\\a.svp" }]]) {
     await assert.rejects(capabilities.invoke("host.internal", "creative", operation, params), (error) => error.clientSafe === true && /turned off/.test(error.message), operation);
   }
   assert.deepEqual(await capabilities.invoke("host.internal", "creative", "run_audio_to_project", { importToSynthv: false }), { ok: true, params: { importToSynthv: false } }, "MIDI export alone needs no SynthV");
+  assert.deepEqual(await capabilities.invoke("host.internal", "creative", "run_pronunciation_diagnostics", { lyrics: "你好" }), { ok: true, params: { lyrics: "你好" } }, "plain lyrics stay checkable, as the agent's toolbox_lyrics_check does");
+  assert.ok(!calls.some((operation) => offlineProjectWork.some(([refused]) => refused === operation)), "offline .svp work, hidden in the UI with the integration, is refused for MCP and plugins too");
   assert.deepEqual(await capabilities.invoke("host.internal", "creative", "retry_media_task", { id: "s1" }), { ok: true, params: { id: "s1" } }, "retrying a non-Cover job is not a Cover");
   synthv = true; ai = false;
   await assert.rejects(capabilities.invoke("host.internal", "creative", "queue_cover", { request: {} }), (error) => error.clientSafe === true && /AI mode/.test(error.message));

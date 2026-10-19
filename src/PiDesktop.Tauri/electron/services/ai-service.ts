@@ -10,6 +10,9 @@ import {
   DEFAULT_AGENT_EFFORT,
   estimateAgentRunBudget,
   validateAgentRunOutcome,
+  AGENT_SESSION_HISTORY_MAX_MESSAGES,
+  AGENT_SESSION_HISTORY_MAX_TEXT_LENGTH,
+  type AgentSessionHistoryMessage,
   type AgentEffortLevel,
   type AgentRunBudget,
   type AgentRunOutcome,
@@ -479,7 +482,8 @@ export class AiService {
       if (!conversation) throw new Error("Conversation was not found.");
       const seedOutcome = latestOutcome(conversation);
       const systemPrompt = this.options.systemPrompt?.();
-      await this.options.runtime.request("session.initialize", { sessionId: conversation.id, ...(options.cwd ? { cwd: options.cwd } : {}), ...(systemPrompt ? { systemPrompt } : {}), ...(seedOutcome ? { outcome: seedOutcome } : {}) });
+      const history = sessionHistory(conversation.messages);
+      await this.options.runtime.request("session.initialize", { sessionId: conversation.id, ...(options.cwd ? { cwd: options.cwd } : {}), ...(systemPrompt ? { systemPrompt } : {}), ...(seedOutcome ? { outcome: seedOutcome } : {}), ...(history.length ? { history } : {}) });
       const { assistant, outcome } = active.cancelRequested
         ? { assistant: "", outcome: cancelledOutcome(effort, this.agentUsageSamples()) }
         : await this.runSend(conversation.id, text, effort, active);
@@ -645,6 +649,23 @@ function parseMetadata(raw: string): AiServiceMetadata {
 function cancelledOutcome(effort: AgentEffortLevel, samples: AgentUsageSample[]): AgentRunOutcome {
   const budget = estimateAgentRunBudget(effort, samples);
   return { status: "cancelled", summary: "", evidence: [], missing: [], plan: null, budget: { ...budget, turns: 0, tokens: 0, uncachedInputTokens: 0, cacheReadTokens: 0 } };
+}
+
+/** Characters of earlier turns replayed into a recreated session; older turns are dropped first. */
+const SESSION_HISTORY_BUDGET = 60_000;
+
+/** The most recent turns that fit the budget, oldest first, for a session the runtime has to create again. */
+function sessionHistory(messages: readonly ConversationMessage[]): AgentSessionHistoryMessage[] {
+  const history: AgentSessionHistoryMessage[] = [];
+  let used = 0;
+  for (let index = messages.length - 1; index >= 0 && history.length < AGENT_SESSION_HISTORY_MAX_MESSAGES; index--) {
+    const text = messages[index].content.slice(0, AGENT_SESSION_HISTORY_MAX_TEXT_LENGTH);
+    if (!text.trim()) continue;
+    if (used + text.length > SESSION_HISTORY_BUDGET) break;
+    used += text.length;
+    history.unshift({ role: messages[index].role, text });
+  }
+  return history;
 }
 
 function latestOutcome(conversation: ConversationSnapshot): AgentRunOutcome | undefined {

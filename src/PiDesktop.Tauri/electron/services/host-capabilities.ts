@@ -76,7 +76,14 @@ export class HostCapabilities {
   }
 }
 
-function drivesSynthV(operation: string, params: Data): boolean { return CREATIVE_BRIDGE_COMMANDS.includes(operation) || operation.includes("lyric_bridge") || (operation === "run_audio_to_project" && params.importToSynthv === true); }
+/** Offline .svp work belongs to the integration too: the renderer hides these tools with it, so non-UI callers lose them as well. */
+const SVP_PROJECT_OPERATIONS = ["get_project_backup_state", "create_project_checkpoint", "list_project_checkpoints", "restore_project_checkpoint", "run_project_probe", "run_project_doctor", "add_project_reference", "export_project_without_parameters", "export_project_lyrics", "run_batch_workflow"];
+function drivesSynthV(operation: string, params: Data): boolean {
+  return CREATIVE_BRIDGE_COMMANDS.includes(operation) || operation.includes("lyric_bridge") || SVP_PROJECT_OPERATIONS.includes(operation)
+    // Plain lyrics stay checkable without SynthV (the agent's toolbox_lyrics_check); a project file does not.
+    || (operation === "run_pronunciation_diagnostics" && params.projectPath !== undefined)
+    || (operation === "run_audio_to_project" && params.importToSynthv === true);
+}
 function clientSafe(message: string): Error { return Object.assign(new Error(message), { clientSafe: true }); }
 function isObject(value: unknown): value is Data { return value !== null && typeof value === "object" && !Array.isArray(value); }
 function text(params: Data, key: string): string { const value = params[key]; if (typeof value !== "string" || !value) throw new Error(`${key} must be a non-empty string.`); return value; }

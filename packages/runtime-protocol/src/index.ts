@@ -161,12 +161,25 @@ export interface AgentRunOutcome {
   budget: AgentBudgetUsage;
 }
 
-/** `outcome` is the conversation's latest run outcome, used to restore the plan and any pending question when a session is recreated. */
+/** One earlier turn of a conversation, as plain text. */
+export interface AgentSessionHistoryMessage {
+  role: "user" | "assistant";
+  text: string;
+}
+
+export const AGENT_SESSION_HISTORY_MAX_MESSAGES = 200;
+export const AGENT_SESSION_HISTORY_MAX_TEXT_LENGTH = 100_000;
+
+/**
+ * `outcome` is the conversation's latest run outcome, used to restore the plan and any pending question when a session is recreated.
+ * `history` is replayed into a newly created session so it keeps the context the user still sees; a reused session ignores it.
+ */
 export interface AgentSessionInitializeParams {
   sessionId: string;
   cwd?: string;
   systemPrompt?: string;
   outcome?: AgentRunOutcome;
+  history?: AgentSessionHistoryMessage[];
 }
 
 export interface AgentSessionCancelParams {

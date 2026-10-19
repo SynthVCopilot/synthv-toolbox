@@ -321,6 +321,18 @@ async function within(promise: Promise<unknown>, ms: number): Promise<boolean> {
   try { return await Promise.race([promise.then(() => true), timedOut]); } finally { clearTimeout(timer); }
 }
 
+/**
+ * Ends a child and everything it started, for callers that manage their own child (the Connections probe). A launcher (npx,
+ * cmd.exe) may already have exited while the real server keeps the pipes open; `closed` settles on the child's "close" event,
+ * once no process holds them any more.
+ */
+export async function reapProcessTree(child: ChildProcessWithoutNullStreams, spawnedAt: number, closed: Promise<unknown>): Promise<void> {
+  if (!child.pid) return;
+  if (child.exitCode === null && child.signalCode === null) await terminateTree(child);
+  if (process.platform !== "win32") await signalGroup(child.pid);
+  else if (!(await within(closed, 250))) { await killWindowsOrphans(child.pid, spawnedAt); await within(closed, 2_000); }
+}
+
 async function terminateTree(child: ChildProcessWithoutNullStreams): Promise<void> {
   if (!child.pid) return;
   if (process.platform === "win32") return taskkill(child.pid);

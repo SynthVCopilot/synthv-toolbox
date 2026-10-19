@@ -1,5 +1,6 @@
 // Minimal newline-delimited JSON-RPC MCP server for test/mcp-stdio-probe.mjs.
 // argv[2] selects the behaviour: ok (default), exit, hang, error. Remaining args are echoed back as a tool name.
+import { writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 const [mode = "ok", ...extra] = process.argv.slice(2);
@@ -12,6 +13,9 @@ if (mode === "exit") {
 }
 // Lets the timeout test check that the probe really ended this process.
 if (mode === "hang") process.stderr.write(`fixture pid ${process.pid}\n`);
+// Behind a launcher that exits early: report this process and keep running after stdin closes, so only a kill ends it.
+if (process.env.FIXTURE_PID_FILE) writeFileSync(process.env.FIXTURE_PID_FILE, String(process.pid));
+if (process.env.FIXTURE_LINGER === "1") setInterval(() => { }, 1_000);
 
 createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);

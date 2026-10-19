@@ -9,6 +9,8 @@ import {
   HOST_API_VERSION,
   HOST_HELLO_METHOD,
   PROTOCOL_VERSION_RANGE,
+  AGENT_SESSION_HISTORY_MAX_MESSAGES,
+  AGENT_SESSION_HISTORY_MAX_TEXT_LENGTH,
   encodeJsonl,
   estimateAgentRunBudget,
   isHostApiCompatible,
@@ -20,6 +22,7 @@ import {
   type AgentEffortProfile,
   type AgentRunBudget,
   type AgentRunOutcome,
+  type AgentSessionHistoryMessage,
   type AgentSessionSendResult,
   type ApiVersion,
   type CapabilityDescriptor,
@@ -79,7 +82,7 @@ export interface PiSession {
 export type AgentSteerResult = "steered" | "no-active-run" | "run-mismatch";
 
 export interface PiSessionFactory {
-  create(input: { sessionId: string; cwd?: string; systemPrompt?: string; model?: PiModelSelection; outcome?: AgentRunOutcome }): Promise<PiSession>;
+  create(input: { sessionId: string; cwd?: string; systemPrompt?: string; model?: PiModelSelection; outcome?: AgentRunOutcome; history?: readonly AgentSessionHistoryMessage[] }): Promise<PiSession>;
   /** API key changes rebuild a session; live OAuth token rotation keeps it. */
   credentialFingerprint?(model: PiModelSelection): string;
 }
@@ -177,6 +180,11 @@ export interface PiAgentSession {
   subscribe(listener: (event: unknown) => void): () => void;
 }
 
+/** The part of Pi's SessionManager used to seed a new session; createAgentSession loads the messages it holds. */
+export interface PiSessionManager {
+  appendMessage(message: unknown): string;
+}
+
 export interface PiSdk {
   getAgentDir(): string;
   DefaultResourceLoader: new (options: {
@@ -194,7 +202,7 @@ export interface PiSdk {
   }) => PiResourceLoader;
   ModelRuntime: { create(options: { refreshOnCreate: boolean; credentials?: PiCredentialStore }): Promise<{ setRuntimeApiKey(providerId: string, apiKey: string): Promise<void>; getModel(providerId: string, modelId: string): unknown }> };
   SettingsManager: { create(cwd: string, agentDir?: string): PiSettingsManager };
-  SessionManager: { inMemory(cwd: string): unknown; create(cwd: string): unknown };
+  SessionManager: { inMemory(cwd: string): PiSessionManager; create(cwd: string): PiSessionManager };
   createAgentSession(options: {
     cwd: string;
     noTools: "builtin";
@@ -301,6 +309,9 @@ export function createPiSessionFactory(options: PiSessionFactoryOptions = {}): P
       // Omitting sessionDir lets Pi resolve its own default under the agent dir (sessions/<encoded-cwd>/);
       // passing agentDir there would write transcripts flat into the agent dir root instead.
       const sessionManager = options.persistTranscripts?.() ? sdk.SessionManager.create(cwd) : sdk.SessionManager.inMemory(cwd);
+      // A session is recreated whenever its prompt or model changes (an integration or MCP server toggled, a restart);
+      // without this, a continued conversation would lose the turns the user still sees.
+      if (input.history?.length) seedHistory(sessionManager, input.history, model as PiModelIdentity);
       const result = await sdk.createAgentSession({
         cwd,
         noTools: "builtin",
@@ -363,6 +374,48 @@ export function createPiSessionFactory(options: PiSessionFactoryOptions = {}): P
       };
     },
   };
+}
+
+interface PiModelIdentity { api: string; provider: string; id: string }
+
+const EMPTY_USAGE = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+
+/**
+ * Model APIs expect non-empty turns that alternate between user and assistant and end before the next user prompt, so empty
+ * turns are dropped, neighbours with the same role are joined, and a trailing user turn (a run that produced no reply) is left out.
+ */
+export function normalizeSessionHistory(history: readonly AgentSessionHistoryMessage[]): AgentSessionHistoryMessage[] {
+  const turns: AgentSessionHistoryMessage[] = [];
+  for (const message of history) {
+    const text = message.text.trim();
+    if (!text) continue;
+    const last = turns.at(-1);
+    if (last?.role === message.role) last.text = `${last.text}\n\n${text}`;
+    else turns.push({ role: message.role, text });
+  }
+  while (turns[0]?.role === "assistant") turns.shift();
+  while (turns.at(-1)?.role === "user") turns.pop();
+  return turns;
+}
+
+function seedHistory(sessionManager: PiSessionManager, history: readonly AgentSessionHistoryMessage[], model: PiModelIdentity): void {
+  const timestamp = Date.now();
+  for (const turn of normalizeSessionHistory(history)) {
+    sessionManager.appendMessage(turn.role === "user"
+      ? { role: "user", content: turn.text, timestamp }
+      : { role: "assistant", content: [{ type: "text", text: turn.text }], api: model.api, provider: model.provider, model: model.id, usage: EMPTY_USAGE, stopReason: "stop", timestamp });
+  }
+}
+
+function readSessionHistory(value: JsonValue | undefined): AgentSessionHistoryMessage[] | undefined {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > AGENT_SESSION_HISTORY_MAX_MESSAGES) return undefined;
+  const history: AgentSessionHistoryMessage[] = [];
+  for (const item of value) {
+    if (!isRecord(item) || (item.role !== "user" && item.role !== "assistant") || typeof item.text !== "string" || item.text.length > AGENT_SESSION_HISTORY_MAX_TEXT_LENGTH) return undefined;
+    history.push({ role: item.role, text: item.text });
+  }
+  return history;
 }
 
 function pendingInputFrom(outcome: AgentRunOutcome | undefined): TaskLoopPendingInput | null {
@@ -451,13 +504,15 @@ export class AgentRuntimeWorker {
       outcome = validateAgentRunOutcome(params.outcome);
       if (!outcome) return this.failure(request, "session.invalid", "session.initialize outcome is invalid.");
     }
+    const history = readSessionHistory(params.history);
+    if (!history) return this.failure(request, "session.invalid", "session.initialize history is invalid.");
     const model = await this.hostModelSelection();
     const signature = JSON.stringify([params.cwd ?? "", params.systemPrompt ?? "", model.providerId, model.modelId, model.credentialId ?? "", this.sessionsFactory.credentialFingerprint?.(model) ?? ""]);
     const existing = this.sessions.get(params.sessionId);
     if (existing?.signature === signature) return this.success(request, { sessionId: params.sessionId, reused: true });
     if (existing?.session.running) return this.failure(request, "session.busy", "The session has a run in progress; wait for it to finish or cancel it first.");
     if (existing) await existing.session.dispose();
-    const session = await this.sessionsFactory.create({ sessionId: params.sessionId, cwd: params.cwd, systemPrompt: params.systemPrompt, model, ...(outcome ? { outcome } : {}) });
+    const session = await this.sessionsFactory.create({ sessionId: params.sessionId, cwd: params.cwd, systemPrompt: params.systemPrompt, model, ...(outcome ? { outcome } : {}), ...(history.length ? { history } : {}) });
     this.sessions.set(params.sessionId, { session, signature });
     return this.success(request, { sessionId: params.sessionId });
   }
@@ -635,7 +690,7 @@ function parseHostHello(value: JsonValue): HostHello | undefined {
   return { hostId: value.hostId, protocol: value.protocol, capabilities };
 }
 
-function readSessionParams(value: JsonValue, requiresInput: boolean): { sessionId: string; cwd?: string; systemPrompt?: string; input: string; outcome?: JsonValue; budget?: JsonValue; runId?: JsonValue } | undefined {
+function readSessionParams(value: JsonValue, requiresInput: boolean): { sessionId: string; cwd?: string; systemPrompt?: string; input: string; outcome?: JsonValue; history?: JsonValue; budget?: JsonValue; runId?: JsonValue } | undefined {
   if (!isRecord(value) || typeof value.sessionId !== "string" || value.sessionId.length === 0) return undefined;
   if (value.cwd !== undefined && typeof value.cwd !== "string") return undefined;
   if (value.systemPrompt !== undefined && (typeof value.systemPrompt !== "string" || value.systemPrompt.length === 0)) return undefined;
@@ -646,6 +701,7 @@ function readSessionParams(value: JsonValue, requiresInput: boolean): { sessionI
     ...(typeof value.systemPrompt === "string" ? { systemPrompt: value.systemPrompt } : {}),
     input: typeof value.input === "string" ? value.input : "",
     ...(value.outcome !== undefined ? { outcome: value.outcome } : {}),
+    ...(value.history !== undefined ? { history: value.history } : {}),
     ...(value.budget !== undefined ? { budget: value.budget } : {}),
     ...(value.runId !== undefined ? { runId: value.runId } : {}),
   };

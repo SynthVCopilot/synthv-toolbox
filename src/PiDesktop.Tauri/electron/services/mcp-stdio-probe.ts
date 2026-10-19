@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { delimiter, extname, isAbsolute, join, resolve } from "node:path";
 import { BRAND } from "../brand.js";
+import { reapProcessTree } from "./mcp-stdio-client.js";
 
 export interface StdioMcpServerConfig {
   command: string;
@@ -52,11 +53,14 @@ export async function probeStdioMcpServer(config: StdioMcpServerConfig, options:
   const env = probeEnvironment(config.env);
   const launch = await launchFor(command, config.args ?? [], env, config.cwd);
   let child: ChildProcessWithoutNullStreams;
+  const spawnedAt = Date.now();
   try {
     child = spawn(launch.file, launch.args, { cwd: config.cwd, env, stdio: "pipe", windowsHide: true, windowsVerbatimArguments: launch.verbatim, detached: process.platform !== "win32" });
   } catch (error) {
     return failure(`Could not start ${command}: ${errorMessage(error)}`, "");
   }
+  // Settles once no process holds the pipes, which can be long after a launcher exits and leaves the real server running.
+  const closed = new Promise<void>((done) => child.once("close", () => done()));
   return new Promise<StdioMcpProbeResult>((resolveProbe) => {
     let stderr = "";
     let stdout = "";
@@ -69,7 +73,7 @@ export async function probeStdioMcpServer(config: StdioMcpServerConfig, options:
       settled = true;
       clearTimeout(timer);
       for (const request of pending.values()) request.reject(new Error("The probe finished."));
-      void terminate(child).then(() => resolveProbe(result));
+      void terminate(child, spawnedAt, closed).then(() => resolveProbe(result));
     };
     const timer = setTimeout(() => finish(failure(`${command} did not complete the MCP handshake within ${Math.round(timeoutMs / 100) / 10} s.`, stderrTail())), timeoutMs);
     const write = (message: Record<string, unknown>) => { if (child.stdin.writable) child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`); };
@@ -184,27 +188,11 @@ function escapeArgument(argument: string, doubleEscape: boolean): string {
   return doubleEscape ? quoted.replace(metaCharacters, "^$1") : quoted;
 }
 
-/** Ends the server and anything it spawned; npx and cmd.exe shims leave the real server as a grandchild. */
-async function terminate(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
-  const exited = new Promise<void>((done) => child.once("close", () => done()));
-  child.stdin.end();
-  if (process.platform === "win32") {
-    const taskkill = spawn(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"), ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
-    taskkill.once("error", () => child.kill());
-  } else {
-    killGroup(child, "SIGTERM");
-  }
-  const stopped = await Promise.race([exited.then(() => true), delay(3_000).then(() => false)]);
-  if (stopped) return;
-  if (process.platform === "win32") child.kill(); else killGroup(child, "SIGKILL");
-  await Promise.race([exited, delay(1_000)]);
+/** Ends the server and anything it spawned; npx and cmd.exe shims leave the real server as a grandchild, even after they exit. */
+async function terminate(child: ChildProcessWithoutNullStreams, spawnedAt: number, closed: Promise<void>): Promise<void> {
+  try { child.stdin.end(); } catch { }
+  await reapProcessTree(child, spawnedAt, closed);
 }
 
-function killGroup(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
-  try { process.kill(-child.pid!, signal); } catch { child.kill(signal); }
-}
-
-function delay(ms: number): Promise<void> { return new Promise((done) => { setTimeout(done, ms).unref(); }); }
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
