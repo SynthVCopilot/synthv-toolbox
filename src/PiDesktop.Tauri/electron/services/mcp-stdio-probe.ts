@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { delimiter, extname, isAbsolute, join, resolve } from "node:path";
 import { BRAND } from "../brand.js";
-import { reapProcessTree, serverEnvironment } from "./mcp-stdio-client.js";
+import { MAX_MESSAGE_LENGTH, reapProcessTree, serverEnvironment, STDIO_MCP_PROTOCOL_VERSIONS } from "./mcp-stdio-client.js";
 
 export interface StdioMcpServerConfig {
   command: string;
@@ -15,6 +15,8 @@ export interface StdioMcpProbeOptions {
   timeoutMs?: number;
   /** Reported as clientInfo.version; the app passes its own version. */
   clientVersion?: string;
+  /** Longest unterminated stdout the probe buffers; defaults to the client's message limit. */
+  maxMessageLength?: number;
 }
 
 export interface StdioMcpProbeResult {
@@ -45,6 +47,7 @@ export async function probeStdioMcpServer(config: StdioMcpServerConfig, options:
   const command = typeof config.command === "string" ? config.command.trim() : "";
   if (!command) return failure("MCP server command is required.", "");
   const timeoutMs = options.timeoutMs ?? 15_000;
+  const maxMessageLength = options.maxMessageLength ?? MAX_MESSAGE_LENGTH;
   const env = serverEnvironment(config.env);
   const launch = await launchFor(command, config.args ?? [], env, config.cwd);
   let child: ChildProcessWithoutNullStreams;
@@ -105,11 +108,15 @@ export async function probeStdioMcpServer(config: StdioMcpServerConfig, options:
         stdout = stdout.slice(index + 1);
         if (line) receive(line);
       }
+      // A server that never ends a line would otherwise grow this buffer until the timeout, in the app's main process.
+      if (stdout.length > maxMessageLength) { stdout = ""; finish(failure(`${command} sent a message larger than ${Math.round(maxMessageLength / 1024 / 1024)} MiB without a line break.`, stderrTail())); }
     });
     void (async (): Promise<StdioMcpProbeResult> => {
       const initialized = await request("initialize", { protocolVersion: probeProtocolVersion, capabilities: {}, clientInfo: { name: BRAND.slug, version: options.clientVersion ?? "0.0.0" } });
       const info = isRecord(initialized.serverInfo) && typeof initialized.serverInfo.name === "string" ? { name: initialized.serverInfo.name, ...(typeof initialized.serverInfo.version === "string" ? { version: initialized.serverInfo.version } : {}) } : undefined;
       if (!info || typeof initialized.protocolVersion !== "string") return { ...failure("The server answered initialize without serverInfo or protocolVersion.", JSON.stringify(initialized)), ...(info ? { serverInfo: info } : {}) };
+      // The agent's client would refuse this server, so the test must not report it as working.
+      if (!STDIO_MCP_PROTOCOL_VERSIONS.includes(initialized.protocolVersion)) return { ...failure(`The server uses MCP protocol version ${initialized.protocolVersion}, which is not supported.`, `Supported: ${STDIO_MCP_PROTOCOL_VERSIONS.join(", ")}.`), serverInfo: info };
       write({ method: "notifications/initialized" });
       const tools: string[] = [];
       const capabilities = isRecord(initialized.capabilities) ? initialized.capabilities : {};

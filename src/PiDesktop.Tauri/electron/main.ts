@@ -28,7 +28,7 @@ import { agentSystemPrompt } from "./services/agent-identity.js";
 import { hostResultToToolResult, toolboxMcpTools } from "./services/mcp-tools.js";
 import { AUTOSTART_ARGUMENT, legacyExecutableCandidates, loginItemLookupPath, migrateAutostart } from "./services/autostart-migration.js";
 import { resolveUserDataDirectory, type DataDirectoryDecision } from "./services/user-data-migration.js";
-import { loadEmbeddedBridge, unavailableBridge, type EmbeddedBridge } from "./services/synthv-bridge.js";
+import { gatedBridge, loadEmbeddedBridge, SYNTHV_OFF_MESSAGE, unavailableBridge, type EmbeddedBridge } from "./services/synthv-bridge.js";
 import { createSynthVDeliveryRegistry, createSynthVToolsExtension } from "./services/synthv-agent-tools.js";
 import { createToolboxAgentToolsExtension } from "./services/toolbox-agent-tools.js";
 import { createExternalMcpToolsExtension, ExternalMcpPool, mcpServerConfigs } from "./services/external-mcp-tools.js";
@@ -268,12 +268,16 @@ async function initializeServices(): Promise<void> {
   });
   const synthv = new SynthVService(join(userData, "synthv"), bridgeDirectory, bridge, bridgeIpcDirectory, undefined, autostartController(), undefined, process.env, webAccounts);
   const componentsRoot = app.isPackaged ? join(process.resourcesPath, "components") : resolve(currentDirectory, "../../components");
+  let capabilities: HostCapabilities;
+  let desktop: DesktopStateService;
+  // Everything the agent does in SynthV goes through this, so switching the integration off also stops a run or an approval in progress.
+  const agentBridge = gatedBridge(bridge, () => desktop.synthvEnabled());
   let ai: AiService;
   let agentTasks: ReturnType<typeof createAgentTaskService> | undefined;
   const creativeRoot = join(userData, "creative");
   const creativeRuntime = createCreativeRuntime({ dataRoot: creativeRoot, componentsRoot });
   const coverScore = createCoverScoreService(creativeRoot);
-  const coverHost = createCoverHost(bridge, synthv);
+  const coverHost = createCoverHost(agentBridge, synthv);
   const cover = createCoverService({
     dataRoot: creativeRoot, runtime: creativeRuntime, score: coverScore, host: coverHost, ai: () => ai,
     importer: async python => createMediaImporter({ dataRoot: creativeRoot, python, ffmpegPath: (await resolveFfmpegBinaries({ dataRoot: join(userData, "components") })).ffmpeg }),
@@ -283,14 +287,12 @@ async function initializeServices(): Promise<void> {
     const runtime = await creativeRuntime.status();
     return createComponentExecutor(componentsRoot, runtime.ready ? runtime.pythonPath : undefined, undefined, { dataRoot: creativeRoot })(command, args);
   }, bridge, cover);
-  let capabilities: HostCapabilities;
-  let desktop: DesktopStateService;
   const delivery = createSynthVDeliveryRegistry();
   // One process per enabled external server, shared by all sessions; nothing spawns until a session needs it.
   const externalMcp = new ExternalMcpPool({ clientVersion: app.getVersion() });
   const approvals = new AgentApprovalBroker(
     (snapshot) => emitToRenderer("agent.approvals.changed", snapshot),
-    { execute: async (item) => bridge.tools.find(tool => tool.name === item.tool)?.call(item.params) ?? { text: "", isError: true }, deliver: (resolution) => delivery.deliver(resolution) },
+    { execute: async (item) => agentBridge.tools.find(tool => tool.name === item.tool)?.call(item.params) ?? { text: "", isError: true }, deliver: (resolution) => delivery.deliver(resolution) },
   );
   const runtimeHost = new ElectronRuntimeHost(join(userData, "runtime"), {
     invoke: (permission, capability, operation, params) => capabilities.invoke(permission, capability, operation, params),
@@ -309,14 +311,14 @@ async function initializeServices(): Promise<void> {
         const toolbox = createToolboxAgentToolsExtension({ invoke: (command, args) => { if (!commandRegistry) throw new Error("Electron services are not ready."); return commandRegistry.invoke(command, args); } });
         const external = desktop.aiModeEnabled() && desktop.enabledMcpServers().length > 0 ? [createExternalMcpToolsExtension({ pool: externalMcp, servers: () => mcpServerConfigs(desktop.enabledMcpServers()), workMode: () => desktop.agentWorkMode() })] : [];
         if (!desktop.synthvEnabled()) return [toolbox, ...external];
-        return [toolbox, ...external, createSynthVToolsExtension({ bridge, approvals, sessionId, guards, runState, registry: delivery, workMode: () => desktop.agentWorkMode() }), createCoverAgentToolsExtension({ sessionId, guards, runState, invoke: (command, args) => cover.invoke(command, args) })];
+        return [toolbox, ...external, createSynthVToolsExtension({ bridge: agentBridge, approvals, sessionId, guards, runState, registry: delivery, workMode: () => desktop.agentWorkMode() }), createCoverAgentToolsExtension({ sessionId, guards, runState, invoke: (command, args) => desktop.synthvEnabled() ? cover.invoke(command, args) : Promise.reject(new Error(SYNTHV_OFF_MESSAGE)) })];
       },
       persistTranscripts: () => desktop.agentTranscriptsEnabled(),
     }),
     onAgentProgress: (progress) => { agentTasks?.recordProgress(progress); emitToRenderer("agent.run.progress", progress); },
   });
   await runtimeHost.load();
-  ai = new AiService({ metadataPath: join(userData, "ai", "metadata.json"), runtime: agentRuntimePort(runtimeHost.runtime), catalog: modelCatalog(), approvals, usage: { query: async (provider, credentialIds) => ({ queriedAt: new Date().toISOString(), accounts: credentialIds.map(credentialId => ({ providerId: provider, credentialId, status: "unknown", plan: null, windows: [], balance: null, error: null })) }) }, authorizer: { authorize: authorizeProvider }, systemPrompt: () => agentSystemPrompt({ synthv: desktop.synthvEnabled(), mcpServers: desktop.aiModeEnabled() ? mcpServerConfigs(desktop.enabledMcpServers()) : [] }) });
+  ai = new AiService({ metadataPath: join(userData, "ai", "metadata.json"), runtime: agentRuntimePort(runtimeHost.runtime), catalog: modelCatalog(), approvals, usage: { query: async (provider, credentialIds) => ({ queriedAt: new Date().toISOString(), accounts: credentialIds.map(credentialId => ({ providerId: provider, credentialId, status: "unknown", plan: null, windows: [], balance: null, error: null })) }) }, authorizer: { authorize: authorizeProvider }, systemPrompt: () => agentSystemPrompt({ synthv: desktop.synthvEnabled(), mcpServers: desktop.aiModeEnabled() ? mcpServerConfigs(desktop.enabledMcpServers()) : [], mcpToolsRevision: externalMcp.revision }) });
   capabilities = new HostCapabilities(synthv, creative, ai, () => desktop.synthvEnabled(), () => desktop.aiModeEnabled());
   desktop = new DesktopStateService(userData, app.getVersion(), runtimeHost, ai, synthv, channel => { updateChannel = channel; updater.setChannel(channel); }, creativeRuntime, bridgeLoadError, () => { void externalMcp.reconcile(desktop.aiModeEnabled() ? mcpServerConfigs(desktop.enabledMcpServers()) : []); }, dataDirectory);
   await desktop.load();

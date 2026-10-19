@@ -56,6 +56,14 @@ export function mcpServerConfigs(raw: readonly unknown[]): McpServerConfig[] {
 }
 
 export class ExternalMcpPool {
+  private toolsRevision = 0;
+
+  /**
+   * Bumped when a server's tool list may differ from what sessions registered: it said so (tools/list_changed), or a server
+   * that had failed came back. The agent prompt includes it, so the next turn builds a session with the current tools.
+   */
+  get revision(): number { return this.toolsRevision; }
+
   private readonly entries = new Map<string, PoolEntry>();
   private readonly closing = new Set<Promise<void>>();
   private order: string[] = [];
@@ -133,12 +141,12 @@ export class ExternalMcpPool {
           command, args, ...(env ? { env } : {}), ...(cwd ? { cwd } : {}), label: name,
           ...(this.options.clientVersion ? { clientVersion: this.options.clientVersion } : {}),
           ...(this.options.connectTimeoutMs ? { connectTimeoutMs: this.options.connectTimeoutMs } : {}),
-          onNotification: method => { if (method === "notifications/tools/list_changed" && entry.client === client) entry.tools = undefined; },
+          onNotification: method => { if (method === "notifications/tools/list_changed" && entry.client === client) { entry.tools = undefined; this.toolsRevision++; } },
         });
         entry.client = client;
         await client.connect();
         // A tool call revived a server that failed earlier; the next session must list its tools instead of the stale error.
-        if (entry.error) { delete entry.error; delete entry.failedAt; entry.tools = undefined; }
+        if (entry.error) { delete entry.error; delete entry.failedAt; entry.tools = undefined; this.toolsRevision++; }
         return client;
       } finally { entry.connecting = undefined; }
     })();

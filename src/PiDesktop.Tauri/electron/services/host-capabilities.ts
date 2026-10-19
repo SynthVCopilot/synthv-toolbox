@@ -6,6 +6,7 @@ import type { AiService, AiProviderId } from "./ai-service.js";
 import { CREATIVE_BRIDGE_COMMANDS } from "./creative-bridge.js";
 import type { CreativeService } from "./creative-service.js";
 import type { SynthVService } from "./synthv-service.js";
+import { SYNTHV_OFF_MESSAGE } from "./synthv-bridge.js";
 
 type Data = Record<string, unknown>;
 
@@ -16,7 +17,7 @@ export class HostCapabilities {
     if (!isObject(params)) throw new Error("Host capability parameters must be an object.");
     // The UI hides these paths when SynthV is off or the app is in toolbox mode; MCP clients and plugins must not reopen them.
     const cover = capability === "creative" && await this.startsCover(operation, params);
-    if (!this.synthvEnabled() && (capability === "synthv" || cover || (capability === "creative" && drivesSynthV(operation, params)))) throw clientSafe("The Synthesizer V integration is turned off in Settings > Integrations.");
+    if (!this.synthvEnabled() && (capability === "synthv" || cover || (capability === "creative" && drivesSynthV(operation, params)))) throw clientSafe(SYNTHV_OFF_MESSAGE);
     if (cover && !this.aiModeEnabled()) throw clientSafe("Cover runs the internal agent, which is only available in AI mode.");
     if (permission === "host.internal") return this.internal(capability, operation, params);
     return this.advanced(capability, operation, params);

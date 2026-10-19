@@ -31,6 +31,7 @@ const tools = [
   { name: "huge_output", description: "Returns more text than the client keeps.", inputSchema: { type: "object", properties: {} }, annotations: readOnly },
   { name: "ask_client", description: "Sends roots/list and ping to the client and reports the answers.", inputSchema: { type: "object", properties: {} }, annotations: readOnly },
   { name: "unicode", description: "Returns multi-byte text.", inputSchema: { type: "object", properties: {} }, annotations: readOnly },
+  { name: "add_tool", description: "Adds a tool and announces tools/list_changed.", inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
 ];
 
 const LOG = { jsonrpc: "2.0", method: "notifications/message", params: { level: "info", data: "log ✓" } };
@@ -58,6 +59,11 @@ async function callTool(id, name, args) {
   if (name === "huge_output") return reply(id, text("x".repeat(150_000)));
   if (name === "ask_client") { const [roots, ping] = await Promise.all([askClient("roots/list"), askClient("ping")]); return reply(id, text({ roots, ping })); }
   if (name === "unicode") return reply(id, text("音符 🎵 ok"));
+  if (name === "add_tool") {
+    tools.push({ name: args.name, description: "Added at runtime.", inputSchema: { type: "object", properties: {} }, annotations: readOnly });
+    reply(id, text(`added ${args.name}`));
+    return send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+  }
   send({ jsonrpc: "2.0", id, error: { code: -32602, message: `Unknown tool: ${name}` } });
 }
 
@@ -67,7 +73,7 @@ function handle(message) {
   if (method === "initialize") {
     if (flag("--hang")) return;
     state.clientInfo = params.clientInfo; state.protocolVersion = params.protocolVersion;
-    return reply(id, { protocolVersion: params.protocolVersion, capabilities: { tools: { listChanged: false } }, serverInfo: { name: "external-mcp-fixture", version: "1.0.0" } });
+    return reply(id, { protocolVersion: option("--answer-protocol", params.protocolVersion), capabilities: { tools: { listChanged: false } }, serverInfo: { name: "external-mcp-fixture", version: "1.0.0" } });
   }
   if (method === "notifications/initialized") { state.initialized = true; return; }
   if (method === "notifications/cancelled") {

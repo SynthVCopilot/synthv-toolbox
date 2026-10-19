@@ -15,7 +15,7 @@ const testDirectory = dirname(fileURLToPath(import.meta.url));
 const fixture = join(testDirectory, "fixtures", "external-mcp-server.mjs");
 const LONG_NAME = "weird tool/name.with:odd chars and a very long suffix that keeps going far beyond any provider limit";
 const TOOL_NAME = /^[a-zA-Z0-9_-]{1,64}$/;
-const FIXTURE_TOOLS = 10;
+const FIXTURE_TOOLS = 11;
 // Pi validates tool arguments with this before execute; its install location depends on npm hoisting.
 const piValidation = ["packages/agent-runtime/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai", "packages/agent-runtime/node_modules/@earendil-works/pi-ai", "node_modules/@earendil-works/pi-ai"]
   .map(path => join(testDirectory, "..", path, "dist", "utils", "validation.js")).find(path => existsSync(path));
@@ -215,6 +215,21 @@ test("a crashing server is reported in the prompt without hiding a healthy one",
   } finally { await pool.dispose(); }
 });
 
+test("tools/list_changed bumps the pool revision, and the next session sees the new tool list", async () => {
+  const pool = new ExternalMcpPool({ retryAfterMs: 0 });
+  try {
+    // add_tool changes the server, so it only runs in Solo mode.
+    const before = await open(pool, [server("a", "Fixture")], "solo");
+    const revision = pool.revision;
+    assert.ok(!before.tools.has("mcp__fixture__added_later"));
+    await before.run("mcp__fixture__add_tool", { name: "added_later" });
+    for (let waited = 0; pool.revision === revision && waited < 3_000; waited += 25) await delay(25);
+    assert.equal(pool.revision, revision + 1, "the agent prompt digest changes with it, so the conversation's session is rebuilt");
+    const after = await open(pool, [server("a", "Fixture")]);
+    assert.ok(after.tools.has("mcp__fixture__added_later"), "a session built afterwards registers the new tool");
+  } finally { await pool.dispose(); }
+});
+
 test("a server whose process died is respawned on the next call", async () => {
   const pool = new ExternalMcpPool({ retryAfterMs: 0 });
   try {
@@ -287,6 +302,17 @@ test("a server inherits only the basic environment plus its own env, never the a
     delete process.env.TONESHUTTLE_TEST_SECRET;
     await client.close();
   }
+});
+
+test("a server answering with an unsupported protocol version is refused; an older supported one connects", async () => {
+  const refused = new McpStdioClient({ command: process.execPath, args: [fixture, "--answer-protocol", "2023-01-01"], label: "Old" });
+  await assert.rejects(refused.connect(), /protocol version 2023-01-01, which is not supported/);
+  await refused.close();
+  const older = new McpStdioClient({ command: process.execPath, args: [fixture, "--answer-protocol", "2025-03-26"], label: "Older" });
+  try {
+    await older.connect();
+    assert.ok((await older.listTools()).length > 0);
+  } finally { await older.close(); }
 });
 
 test("a missing command fails with a clear error", async () => {

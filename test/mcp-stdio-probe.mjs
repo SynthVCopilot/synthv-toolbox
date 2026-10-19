@@ -71,6 +71,24 @@ test("a server left running by a launcher that already exited is stopped when th
   }
 });
 
+test("a server with an unsupported protocol version fails the test, as the agent would refuse it", async () => {
+  const result = await probeStdioMcpServer({ command: process.execPath, args: [fixture, "oldversion"] });
+  assert.equal(result.succeeded, false);
+  assert.match(result.summary, /protocol version 2023-01-01, which is not supported/);
+  assert.deepEqual(result.serverInfo, { name: "fixture-stdio", version: "0.1.0" });
+});
+
+test("stdout without line breaks is capped, and the flooding server is stopped", async () => {
+  const started = Date.now();
+  const result = await probeStdioMcpServer({ command: process.execPath, args: [fixture, "flood"] }, { maxMessageLength: 1024 * 1024, timeoutMs: 15_000 });
+  assert.equal(result.succeeded, false);
+  assert.match(result.summary, /larger than 1 MiB without a line break/);
+  assert.ok(Date.now() - started < 10_000, "the probe does not wait for its timeout");
+  const pid = pidFrom(result.detail);
+  assert.ok(pid > 0, result.detail);
+  assert.equal(isRunning(pid), false);
+});
+
 test("JSON-RPC errors and launch failures are reported as failed probes", async () => {
   const rejected = await probeStdioMcpServer({ command: process.execPath, args: [fixture, "error"] });
   assert.equal(rejected.succeeded, false);

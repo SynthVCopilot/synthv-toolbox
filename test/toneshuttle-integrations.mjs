@@ -107,6 +107,23 @@ test("a bridge that failed to load is reported, not fatal", async () => {
   }, "missing dist/src/embedded.js");
 });
 
+test("the agent's SynthV tools check the integration on every call, so turning it off stops a run or approval in progress", async () => {
+  const { gatedBridge, SYNTHV_OFF_MESSAGE } = await import("../src/PiDesktop.Tauri/dist/electron/services/synthv-bridge.js");
+  let enabled = true;
+  const calls = [];
+  const raw = { tools: [{ name: "sv_write_notes", title: "Write", description: "", annotations: {}, inputSchema: {}, call: async (input) => { calls.push(input); return { text: "written", isError: false }; } }], instructions: "use sv_*", classify: () => ({ category: "projectWrite", risk: "normal" }), status: async () => ({ connected: true, ipcDirectory: "/ipc" }), requestStop: async () => {}, close: async () => {} };
+  const bridge = gatedBridge(raw, () => enabled);
+  assert.deepEqual(await bridge.tools[0].call({ notes: 1 }), { text: "written", isError: false });
+  enabled = false;
+  assert.deepEqual(await bridge.tools[0].call({ notes: 2 }), { text: SYNTHV_OFF_MESSAGE, isError: true });
+  assert.deepEqual(calls, [{ notes: 1 }], "nothing reaches SynthV once the integration is off");
+  assert.equal((await bridge.status()).connected, true, "status and install stay available");
+  const main = await readFile(join(root, "src/PiDesktop.Tauri/electron/main.ts"), "utf8");
+  assert.match(main, /const agentBridge = gatedBridge\(bridge, \(\) => desktop\.synthvEnabled\(\)\)/);
+  for (const use of ["createCoverHost(agentBridge", "execute: async (item) => agentBridge.tools", "createSynthVToolsExtension({ bridge: agentBridge"]) assert.ok(main.includes(use), use);
+  assert.match(main, /invoke: \(command, args\) => desktop\.synthvEnabled\(\) \? cover\.invoke\(command, args\) : Promise\.reject/);
+});
+
 test("the agent introduces itself as the toolbox and names only active integrations", () => {
   const on = agentSystemPrompt({ synthv: true });
   const off = agentSystemPrompt({ synthv: false });
@@ -260,6 +277,8 @@ test("changing the external MCP server set changes the agent prompt, so the runt
   assert.doesNotMatch(base, /External MCP servers/);
   assert.match(one, /External MCP servers: Files \(configuration [0-9a-f]{8}\)\./);
   assert.notEqual(one, changed, "a changed command must recreate the session even when the name is unchanged");
+  const servers = [{ id: "a", name: "Files", command: "npx", args: ["server-a"] }];
+  assert.notEqual(agentSystemPrompt({ synthv: false, mcpServers: servers, mcpToolsRevision: 1 }), agentSystemPrompt({ synthv: false, mcpServers: servers, mcpToolsRevision: 2 }), "a server announcing new tools must recreate the session too");
   assert.doesNotMatch(one, /toolbox_|sv_\*|toolbox_cover/, "tool names stay out of the base prompt; Cover repair and tuning sessions have different tools");
 });
 

@@ -38,6 +38,26 @@ export function loadEmbeddedBridge(bridgeDirectory: string, clientLabel: string)
     .then((module: { createEmbeddedBridge(options: { clientLabel: string }): EmbeddedBridge }) => module.createEmbeddedBridge({ clientLabel }));
 }
 
+export const SYNTHV_OFF_MESSAGE = "The Synthesizer V integration is turned off in Settings > Integrations.";
+
+/**
+ * Checks `enabled` when each tool call runs rather than when a session was built, so turning SynthV off in Settings also stops
+ * a run, or an approved write, that was already under way. Status, install and shutdown stay available.
+ */
+export function gatedBridge(bridge: EmbeddedBridge, enabled: () => boolean): EmbeddedBridge {
+  return {
+    tools: bridge.tools.map((tool) => ({
+      name: tool.name, title: tool.title, description: tool.description, annotations: tool.annotations, inputSchema: tool.inputSchema,
+      call: async (input: unknown) => enabled() ? tool.call(input) : { text: SYNTHV_OFF_MESSAGE, isError: true },
+    })),
+    instructions: bridge.instructions,
+    classify: (name, input) => bridge.classify(name, input),
+    status: () => bridge.status(),
+    requestStop: () => bridge.requestStop(),
+    close: () => bridge.close(),
+  };
+}
+
 /** Where the bridge component exchanges files with SynthV: the same rule as its loadConfig, so the scripts agree on it. */
 export function bridgeIpcDirectory(env: NodeJS.ProcessEnv = process.env): string {
   return resolve(env.SYNTHV_AGENT_BRIDGE_DIR?.trim() || tmpdir());

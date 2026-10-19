@@ -1,5 +1,6 @@
 // Minimal newline-delimited JSON-RPC MCP server for test/mcp-stdio-probe.mjs.
-// argv[2] selects the behaviour: ok (default), exit, hang, error. Remaining args are echoed back as a tool name.
+// argv[2] selects the behaviour: ok (default), exit, hang, error, flood (stdout without line breaks), oldversion (answers
+// initialize with an unsupported protocol version). Remaining args are echoed back as a tool name.
 import { writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
@@ -12,7 +13,8 @@ if (mode === "exit") {
   process.exit(3);
 }
 // Lets the timeout test check that the probe really ended this process.
-if (mode === "hang") process.stderr.write(`fixture pid ${process.pid}\n`);
+if (mode === "hang" || mode === "flood") process.stderr.write(`fixture pid ${process.pid}\n`);
+if (mode === "flood") { const chunk = "x".repeat(64 * 1024); const pump = () => process.stdout.write(chunk, pump); pump(); }
 // Behind a launcher that exits early: report this process and keep running after stdin closes, so only a kill ends it.
 if (process.env.FIXTURE_PID_FILE) writeFileSync(process.env.FIXTURE_PID_FILE, String(process.pid));
 if (process.env.FIXTURE_LINGER === "1") setInterval(() => { }, 1_000);
@@ -24,6 +26,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   if (message.id === "server-ping" && message.result) return send({ id: initialize.id, result: { protocolVersion: initialize.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "fixture-stdio", version: "1.2.3" }, instructions: `client ${initialize.params.clientInfo.name}` } });
   if (message.method === "initialize") {
     if (mode === "error") return send({ id: message.id, error: { code: -32602, message: "Unsupported client." } });
+    if (mode === "oldversion") return send({ id: message.id, result: { protocolVersion: "2023-01-01", capabilities: { tools: {} }, serverInfo: { name: "fixture-stdio", version: "0.1.0" } } });
     initialize = message;
     process.stdout.write("this line is not JSON-RPC and must be ignored\n");
     send({ method: "notifications/message", params: { level: "info", data: "starting" } });

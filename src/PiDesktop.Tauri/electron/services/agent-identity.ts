@@ -5,6 +5,8 @@ export interface AgentIdentityContext {
   synthv: boolean;
   /** Enabled external MCP servers as passed to the session; only names reach the model, the rest feeds the digest. */
   mcpServers?: ReadonlyArray<{ name: string }>;
+  /** ExternalMcpPool.revision: changes when a server's tool list does, which must also rebuild the session. */
+  mcpToolsRevision?: number;
 }
 
 /**
@@ -21,7 +23,7 @@ export function agentSystemPrompt(context: AgentIdentityContext): string {
     "When a request needs a capability that no available tool provides, say so plainly and use request_input to agree on a next step instead of guessing.",
     "Reply in the language the user writes in.",
     `Active integrations: ${context.synthv ? "Synthesizer V" : "none"}.`,
-    ...(servers.length ? [`External MCP servers: ${servers.map(server => server.name).join(", ")} (configuration ${digest(servers)}).`] : []),
+    ...(servers.length ? [`External MCP servers: ${servers.map(server => server.name).join(", ")} (configuration ${digest([servers, context.mcpToolsRevision ?? 0])}).`] : []),
   ].join("\n");
 }
 

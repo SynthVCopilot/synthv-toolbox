@@ -10,6 +10,11 @@ import { BRAND } from "../brand.js";
  * and the process tree is always torn down on close.
  */
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
+/**
+ * Versions a server may answer initialize with. Everything this client uses (tools/list and tools/call, ping, cancellation,
+ * tools/list_changed, roots/list) means the same in each; anything else is refused rather than half working.
+ */
+export const STDIO_MCP_PROTOCOL_VERSIONS: readonly string[] = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
 export interface McpToolAnnotations { title?: string; readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean; openWorldHint?: boolean; }
 export interface McpToolInfo { name: string; title?: string; description?: string; inputSchema?: Record<string, unknown>; annotations?: McpToolAnnotations; }
@@ -40,7 +45,7 @@ type State = "idle" | "connecting" | "ready" | "closed";
 const STDERR_LINES = 20;
 const MAX_LINE_LENGTH = 500;
 /** A server that streams a single line beyond this is broken or hostile; it would otherwise grow main-process memory without bound. */
-const MAX_MESSAGE_LENGTH = 64 * 1024 * 1024;
+export const MAX_MESSAGE_LENGTH = 64 * 1024 * 1024;
 const CLOSE_GRACE_MS = 1_000;
 
 export class McpStdioClient {
@@ -126,6 +131,7 @@ export class McpStdioClient {
       this.start();
       const result = await this.request("initialize", { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: BRAND.slug, version: this.options.clientVersion ?? "0.0.0" } }, { timeoutMs: this.connectTimeout() });
       if (!isRecord(result) || typeof result.protocolVersion !== "string") throw this.error("answered initialize without a protocolVersion");
+      if (!STDIO_MCP_PROTOCOL_VERSIONS.includes(result.protocolVersion)) throw this.error(`answered with MCP protocol version ${result.protocolVersion}, which is not supported (${STDIO_MCP_PROTOCOL_VERSIONS.join(", ")})`);
       if (this.state !== "connecting") throw this.error(this.reason ?? "is closed");
       if (isRecord(result.serverInfo)) this.serverInfo = { ...(typeof result.serverInfo.name === "string" ? { name: result.serverInfo.name } : {}), ...(typeof result.serverInfo.version === "string" ? { version: result.serverInfo.version } : {}) };
       this.state = "ready";
