@@ -289,7 +289,8 @@ test("toolbox tool definitions describe every supported operation and carry anno
 
 test("the documented operations match what HostCapabilities and the creative services dispatch", async () => {
   const services = join(root, "src/PiDesktop.Tauri/electron/services");
-  const capabilities = await readFile(join(services, "host-capabilities.ts"), "utf8");
+  // A Windows checkout has CRLF line ends; the method bodies below are cut at "\n  }\n".
+  const capabilities = (await readFile(join(services, "host-capabilities.ts"), "utf8")).replaceAll("\r\n", "\n");
   const dispatched = (method) => {
     const start = capabilities.indexOf(`private async ${method}(`);
     const body = capabilities.slice(start, capabilities.indexOf("\n  }\n", start));

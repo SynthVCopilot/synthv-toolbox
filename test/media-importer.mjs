@@ -72,9 +72,10 @@ else:
   shutil.copyfile(os.environ["MEDIA_IMPORT_FIXTURE_WAV"], output)
   print("[download] 100.0%", file=sys.stderr, flush=True)
 `);
+  // yt_dlp is faked through PYTHONPATH, so any interpreter works; a local audio venv is used when there is one.
   const venvPython = "/private/tmp/synthv-audio-venv/bin/python";
-  const python = venvPython;
-  await access(python);
+  const systemPython = process.platform === "win32" ? "python" : "python3";
+  const python = process.env.MEDIA_IMPORT_TEST_PYTHON ?? await access(venvPython).then(() => venvPython, () => systemPython);
   process.env.PYTHONPATH = [fakeModuleRoot, previousPythonPath].filter(Boolean).join(delimiter);
   process.env.MEDIA_IMPORT_FIXTURE_WAV = fixtureWave;
   process.env.MEDIA_IMPORT_TEST_MODE = "normal";
@@ -85,7 +86,7 @@ else:
   await assert.rejects(missingPython.preview("https://www.bilibili.com/video/BV1QQ4y1E73r/"), /Python executable was not found/u);
   const fakePythonPath = process.env.PYTHONPATH;
   process.env.PYTHONPATH = join(testRoot, "no-python-modules");
-  const missingYtDlp = createMediaImporter({ dataRoot: join(testRoot, "missing-ytdlp-data"), python: "python3" });
+  const missingYtDlp = createMediaImporter({ dataRoot: join(testRoot, "missing-ytdlp-data"), python: systemPython });
   await assert.rejects(missingYtDlp.preview("https://www.bilibili.com/video/BV1QQ4y1E73r/"), /yt-dlp is not installed/u);
   process.env.PYTHONPATH = fakePythonPath;
   await assert.rejects(importer.preview("http://www.bilibili.com/video/BV1QQ4y1E73r/"), /HTTPS/u);
