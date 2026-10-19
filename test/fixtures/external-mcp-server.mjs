@@ -13,7 +13,8 @@ if (flag("--crash")) { process.stderr.write("fatal: fixture crashed on purpose\n
 
 const LONG_NAME = "weird tool/name.with:odd chars and a very long suffix that keeps going far beyond any provider limit";
 const pageSize = Number(option("--page-size", "3"));
-const state = { name: option("--name", "fixture"), pid: process.pid, ppid: process.ppid, argv, notes: [], slowCalls: [], cancelled: [], initialized: false, clientInfo: null, protocolVersion: null };
+const state = { name: option("--name", "fixture"), pid: process.pid, ppid: process.ppid, argv, notes: [], slowCalls: [], cancelled: [], initialized: false, clientInfo: null, protocolVersion: null,
+  env: { secret: process.env.TONESHUTTLE_TEST_SECRET ?? null, configured: process.env.FIXTURE_CONFIGURED ?? null, path: Boolean(process.env.PATH ?? process.env.Path) } };
 const slow = new Map();
 const waiting = new Map();
 let serverRequestId = 0;

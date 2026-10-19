@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { delimiter, extname, isAbsolute, join, resolve } from "node:path";
 import { BRAND } from "../brand.js";
-import { reapProcessTree } from "./mcp-stdio-client.js";
+import { reapProcessTree, serverEnvironment } from "./mcp-stdio-client.js";
 
 export interface StdioMcpServerConfig {
   command: string;
@@ -31,11 +31,6 @@ interface Launch { file: string; args: string[]; verbatim: boolean }
 const probeProtocolVersion = "2025-06-18";
 const maxToolPages = 50;
 const stderrLimit = 8_192;
-/** Mirrors the official SDK's StdioClientTransport: user-configured servers inherit only these, plus their own env. */
-const inheritedEnvironment = process.platform === "win32"
-  ? ["APPDATA", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "PATH", "PATHEXT", "COMSPEC", "PROCESSOR_ARCHITECTURE", "PROGRAMFILES", "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP", "USERNAME", "USERPROFILE"]
-  : ["HOME", "LOGNAME", "PATH", "SHELL", "TERM", "USER", "TMPDIR", "LANG"];
-
 /** Converts a saved MCP server entry (desktop settings) into a launch config, rejecting malformed fields. */
 export function stdioMcpServerConfig(server: Record<string, unknown>): StdioMcpServerConfig {
   if (typeof server.command !== "string" || !server.command.trim()) throw new Error("MCP server command is required.");
@@ -50,7 +45,7 @@ export async function probeStdioMcpServer(config: StdioMcpServerConfig, options:
   const command = typeof config.command === "string" ? config.command.trim() : "";
   if (!command) return failure("MCP server command is required.", "");
   const timeoutMs = options.timeoutMs ?? 15_000;
-  const env = probeEnvironment(config.env);
+  const env = serverEnvironment(config.env);
   const launch = await launchFor(command, config.args ?? [], env, config.cwd);
   let child: ChildProcessWithoutNullStreams;
   const spawnedAt = Date.now();
@@ -143,15 +138,6 @@ export async function probeStdioMcpServer(config: StdioMcpServerConfig, options:
 
 function failure(summary: string, detail: string): StdioMcpProbeResult {
   return { succeeded: false, summary, detail, tools: [] };
-}
-
-function probeEnvironment(overrides: Record<string, string> | undefined): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const name of inheritedEnvironment) {
-    const value = process.env[name];
-    if (value !== undefined && !value.startsWith("()")) env[name] = value;
-  }
-  return { ...env, ...overrides };
 }
 
 /**

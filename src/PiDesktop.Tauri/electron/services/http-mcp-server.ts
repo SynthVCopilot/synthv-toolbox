@@ -12,6 +12,7 @@ const advancedTool = "toolbox_advanced";
 const agentTaskTool = "toolbox_agent";
 const requestTimeoutMs = 30_000;
 const headersTimeoutMs = 10_000;
+const closeGraceMs = 2_000;
 const maxBodyBytes = 1_048_576;
 const defaultInstructions = "toolbox_agent runs the app's own agent asynchronously: call action \"start\" with input, then poll action \"status\" with the returned taskId every few seconds until status is no longer running or cancelling; when it is needs_input, answer with action \"continue\" (conversationId, input). toolbox_internal and toolbox_advanced take {capability, operation, params}; their descriptions list the supported operations and params is always an object.";
 
@@ -97,6 +98,12 @@ export class HttpMcpServer {
       return this.status();
     }
     if (this.server && sameConfig(this.config, config)) return this.status();
+    // Only the token changed: requests read this.config as they arrive, so the old token stops working at once while
+    // requests already in flight (an agent run can take minutes) finish instead of holding up the rotation.
+    if (this.server?.listening && this.config && sameConfig({ ...this.config, token: config.token }, config)) {
+      this.config = { ...config };
+      return this.status();
+    }
     await this.stop();
     this.config = { ...config };
     try {
@@ -392,6 +399,11 @@ function listen(server: Server, port: number): Promise<void> {
   });
 }
 
+/** Stops listening, drops idle keep-alive sockets, and gives requests in flight a short grace period before cutting them off. */
 function close(server: Server): Promise<void> {
-  return new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  return new Promise((resolve, reject) => {
+    const cutoff = setTimeout(() => server.closeAllConnections(), closeGraceMs);
+    server.close((error) => { clearTimeout(cutoff); if (error) reject(error); else resolve(); });
+    server.closeIdleConnections();
+  });
 }

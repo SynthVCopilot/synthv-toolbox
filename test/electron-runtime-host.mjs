@@ -211,7 +211,7 @@ async function loadRuntimeHost() {
   return import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(text, { mode: "transform" })).toString("base64")}`);
 }
 
-test("the HTTP API bearer token is generated once, stored owner-only, kept by configure and rotated with a restart", async (t) => {
+test("the HTTP API bearer token is generated once, stored owner-only, kept by configure and rotated in place", async (t) => {
   const { ElectronRuntimeHost } = await loadRuntimeHost();
   const { HttpMcpServer } = await import(httpMcpServerUrl);
   const directory = await mkdtemp(join(tmpdir(), "runtime-host-token-"));
@@ -245,7 +245,7 @@ test("the HTTP API bearer token is generated once, stored owner-only, kept by co
   status = await runtimeHost.rotateHttpApiToken();
   assert.match(status.token, /^[A-Za-z0-9_-]{43}$/);
   assert.notEqual(status.token, token);
-  assert.notEqual(server.server, listener, "a new token restarts the server");
+  assert.equal(server.server, listener, "a new token is swapped into the running listener, so requests in flight are not cut off");
   assert.equal(JSON.parse(await readFile(settingsPath, "utf8")).httpApiToken, status.token);
   await ownerOnly();
   assert.equal((await ping(status.endpoint, token)).status, 401);

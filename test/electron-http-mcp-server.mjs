@@ -322,3 +322,34 @@ test("host results always become object structuredContent and valid content bloc
   assert.deepEqual(toToolContent([]), [{ type: "text", text: "[]" }]);
   assert.deepEqual(toToolContent([{ type: "text", text: 1 }]), [{ type: "text", text: "[{\"type\":\"text\",\"text\":1}]" }]);
 });
+
+test("rotating the token takes effect at once without waiting for requests in flight, and a stop is bounded", async () => {
+  let release;
+  const blocked = new Promise((resolve) => { release = resolve; });
+  const slow = new HttpMcpServer({ ...host, async callMcpTool(name, arguments_) { if (arguments_.wait === "release") await blocked; if (arguments_.wait === "forever") await new Promise(() => {}); return { content: `${name}:done` }; } });
+  const first = await slow.start(config());
+  const call = (bearer, wait) => fetch(first.endpoint, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "public_tool", arguments: { wait } } }) });
+  try {
+    const inFlight = call(token, "release");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const rotated = "rotated-token-0123456789abcdefghijklmnopq";
+    const started = Date.now();
+    const status = await slow.start(config({ token: rotated }));
+    assert.ok(Date.now() - started < 500, "rotation does not wait for the request in flight");
+    assert.equal(status.endpoint, first.endpoint, "the listener is kept");
+    assert.equal((await call(token, "none")).status, 401, "the old token stops working at once");
+    assert.equal((await call(rotated, "none")).status, 200);
+    release();
+    assert.equal((await inFlight).status, 200, "the request in flight still completes");
+
+    const stuck = call(rotated, "forever").catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const stopping = Date.now();
+    await slow.stop();
+    assert.ok(Date.now() - stopping < 5_000, "a stop cuts off a request that never finishes after a short grace period");
+    await stuck;
+  } finally {
+    release();
+    await slow.stop();
+  }
+});

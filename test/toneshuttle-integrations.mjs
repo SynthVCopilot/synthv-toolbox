@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { BRAND, FILE_NAMES, LEGACY_FILE_NAMES, STABLE_IDENTIFIERS } from "../src/PiDesktop.Tauri/dist/electron/brand.js";
@@ -93,9 +93,12 @@ test("a failing SynthV probe degrades to an error instead of failing bootstrap",
 });
 
 test("a bridge that failed to load is reported, not fatal", async () => {
-  const bridge = unavailableBridge("missing dist/src/embedded.js");
+  const bridge = unavailableBridge("missing dist/src/embedded.js", {});
   assert.deepEqual(bridge.tools, []);
   assert.equal((await bridge.status()).connected, false);
+  // Repairing the Bridge install needs no embedded client, only the folder the SynthV scripts and the component agree on.
+  assert.equal((await bridge.status()).ipcDirectory, resolve(tmpdir()));
+  assert.equal((await unavailableBridge("x", { SYNTHV_AGENT_BRIDGE_DIR: " /custom/ipc " }).status()).ipcDirectory, resolve("/custom/ipc"));
   await withState(undefined, synthvProbe({ bridgeStatus: () => bridge.status() }), async (state) => {
     const app = await state.bootstrap();
     assert.equal(app.bridgeBundled, false);

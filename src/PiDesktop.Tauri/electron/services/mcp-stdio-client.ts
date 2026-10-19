@@ -137,7 +137,7 @@ export class McpStdioClient {
   }
 
   private start(): void {
-    const env = mergeEnv(process.env, this.options.env);
+    const env = serverEnvironment(this.options.env);
     const plan = spawnPlan(this.options.command, this.options.args ?? [], env, this.options.cwd);
     // POSIX children lead their own process group so close() can take down grandchildren (npx -> node) too.
     const child = spawn(plan.file, plan.args, { cwd: this.options.cwd, env, windowsHide: true, shell: false, windowsVerbatimArguments: plan.verbatim, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"] });
@@ -304,6 +304,27 @@ function envValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
 }
 
 /** Windows environment names are case-insensitive; a configured PATH must replace the inherited Path, not sit beside it. */
+/** What a local MCP server inherits from the app, as the official MCP stdio transport does (plus what Windows shims need). */
+export function inheritedEnvironmentNames(platform: NodeJS.Platform = process.platform): readonly string[] {
+  return platform === "win32"
+    ? ["APPDATA", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "PATH", "PATHEXT", "COMSPEC", "PROCESSOR_ARCHITECTURE", "PROGRAMFILES", "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP", "USERNAME", "USERPROFILE"]
+    : ["HOME", "LOGNAME", "PATH", "SHELL", "TERM", "USER", "TMPDIR", "LANG"];
+}
+
+/**
+ * A third-party server sees only the basics plus its own configured `env`: the app may have been started with API keys or
+ * other secrets in its environment that no server should receive unasked.
+ */
+export function serverEnvironment(extra: Readonly<Record<string, string>> | undefined, base: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): Record<string, string> {
+  const inherited: Record<string, string> = {};
+  for (const name of inheritedEnvironmentNames(platform)) {
+    const value = base[name];
+    // Exported bash functions start with "()" and must not reach a child that may run a shell.
+    if (value !== undefined && !value.startsWith("()")) inherited[name] = value;
+  }
+  return mergeEnv(inherited, extra, platform) as Record<string, string>;
+}
+
 export function mergeEnv(base: NodeJS.ProcessEnv, extra: Readonly<Record<string, string>> | undefined, platform: NodeJS.Platform = process.platform): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base };
   for (const [key, value] of Object.entries(extra ?? {})) {

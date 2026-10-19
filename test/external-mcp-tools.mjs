@@ -277,6 +277,18 @@ test("a tool call that exceeds its timeout is cancelled without breaking the cli
   } finally { await client.close(); }
 });
 
+test("a server inherits only the basic environment plus its own env, never the app's secrets", async () => {
+  process.env.TONESHUTTLE_TEST_SECRET = "must-not-leak";
+  const client = new McpStdioClient({ command: process.execPath, args: [fixture], label: "Env", env: { FIXTURE_CONFIGURED: "yes" } });
+  try {
+    await client.connect();
+    assert.deepEqual(JSON.parse(output(await client.callTool("read_status", {}))).env, { secret: null, configured: "yes", path: true });
+  } finally {
+    delete process.env.TONESHUTTLE_TEST_SECRET;
+    await client.close();
+  }
+});
+
 test("a missing command fails with a clear error", async () => {
   const client = new McpStdioClient({ command: "toneshuttle-definitely-missing-mcp-server", label: "Missing" });
   await assert.rejects(client.connect(), /Missing.*(not found|ENOENT)/s);

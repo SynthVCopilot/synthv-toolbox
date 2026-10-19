@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export interface EmbeddedBridgeTool {
@@ -37,13 +38,22 @@ export function loadEmbeddedBridge(bridgeDirectory: string, clientLabel: string)
     .then((module: { createEmbeddedBridge(options: { clientLabel: string }): EmbeddedBridge }) => module.createEmbeddedBridge({ clientLabel }));
 }
 
-/** Stands in for a bridge component that failed to load, so the rest of the app still starts without SynthV. */
-export function unavailableBridge(reason: string): EmbeddedBridge {
+/** Where the bridge component exchanges files with SynthV: the same rule as its loadConfig, so the scripts agree on it. */
+export function bridgeIpcDirectory(env: NodeJS.ProcessEnv = process.env): string {
+  return resolve(env.SYNTHV_AGENT_BRIDGE_DIR?.trim() || tmpdir());
+}
+
+/**
+ * Stands in for a bridge component that failed to load, so the rest of the app still starts without SynthV. It keeps the real
+ * IPC folder: installing the SynthV scripts needs no embedded client and is how a user repairs this state.
+ */
+export function unavailableBridge(reason: string, env: NodeJS.ProcessEnv = process.env): EmbeddedBridge {
+  const ipcDirectory = bridgeIpcDirectory(env);
   return {
     tools: [],
     instructions: "",
     classify: () => ({ category: "read", risk: "normal" }),
-    status: async () => ({ connected: false, ipcDirectory: "", reason }),
+    status: async () => ({ connected: false, ipcDirectory, reason }),
     requestStop: async () => {},
     close: async () => {},
   };
