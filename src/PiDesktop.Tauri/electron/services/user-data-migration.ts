@@ -17,7 +17,10 @@ export const MIGRATION_MARKER = ".toneshuttle-migration.json";
 /** Serializes concurrent starts of the new version, which would otherwise race on the same move. */
 const LOCK_DIRECTORY = ".toneshuttle-migration.lock";
 const LOCK_WAIT_MS = 5000;
+/** A lock without a readable owner pid (its owner crashed before writing it) is stale after this. */
 const LOCK_STALE_MS = 30000;
+/** Even a live owner pid stops counting after this: a rename and a few JSON rewrites never take that long, but a reused pid could. */
+const LOCK_LIVE_OWNER_MAX_MS = 10 * 60 * 1000;
 /** Entries only this app writes. A folder holding none of them has no user data, whatever Chromium left in it. */
 const APP_DATA_ENTRIES = ["desktop-settings.json", "ai", "synthv", "runtime", "creative", "components", MIGRATION_MARKER];
 /** JSON files that store absolute paths inside the data folder and read them back (retry, resume, reveal). */
@@ -130,11 +133,13 @@ function withMigrationLock(options: DataDirectoryOptions, target: string, work: 
 }
 
 function staleLock(lock: string, options: DataDirectoryOptions): boolean {
-  try {
-    const owner = Number(readFileSync(join(lock, "owner"), "utf8"));
-    if (Number.isSafeInteger(owner) && owner > 0 && !(options.isProcessAlive ?? processAlive)(owner)) return true;
-  } catch { /* the owner may not have written its pid yet */ }
-  try { return Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS; } catch { return true; }
+  let age: number;
+  try { age = Date.now() - statSync(lock).mtimeMs; } catch { return true; }
+  let owner = 0;
+  try { owner = Number(readFileSync(join(lock, "owner"), "utf8")); } catch { /* the owner may not have written its pid yet */ }
+  // A live owner may be moving a large profile on a slow disk; breaking its lock would run two moves at once.
+  if (Number.isSafeInteger(owner) && owner > 0) return !(options.isProcessAlive ?? processAlive)(owner) || age > LOCK_LIVE_OWNER_MAX_MS;
+  return age > LOCK_STALE_MS;
 }
 
 function liveInstance(folder: string, options: DataDirectoryOptions): string | undefined {

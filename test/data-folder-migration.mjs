@@ -2,7 +2,7 @@
 // renamed build. These tests run the real rename against temporary folders, including a held file on Windows.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, linkSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, linkSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -230,4 +230,21 @@ test("stored paths are matched by folder, case-insensitively on Windows only", (
   assert.equal(relocatePath(`see ${from}\\a.wav`, from, to, "win32"), undefined);
   assert.equal(relocatePath("/Users/me/Library/Application Support/synthv-toolbox/a.wav", "/Users/me/Library/Application Support/synthv-toolbox", "/Users/me/Library/Application Support/Toneshuttle", "darwin"), "/Users/me/Library/Application Support/Toneshuttle/a.wav");
   assert.equal(relocatePath("/Users/me/Library/Application Support/SYNTHV-TOOLBOX/a.wav", "/Users/me/Library/Application Support/synthv-toolbox", "/x", "darwin"), undefined);
+});
+
+test("a lock held by a live owner is kept while it works, but not forever", (t) => {
+  const { appData, legacy } = sandbox(t);
+  seedLegacy(legacy);
+  const lock = join(appData, ".toneshuttle-migration.lock");
+  mkdirSync(lock);
+  writeFileSync(join(lock, "owner"), "4242");
+  // A live owner may still be moving a large profile on a slow disk: its lock is kept past the 30 s used for ownerless locks.
+  const minuteAgo = new Date(Date.now() - 60_000);
+  utimesSync(lock, minuteAgo, minuteAgo);
+  assert.equal(resolveUserDataDirectory(options(appData, { isProcessAlive: () => true })).deferred?.reason, "in-use");
+  assert.ok(existsSync(join(legacy, "desktop-settings.json")), "a slow but live migration is never run twice");
+  // A pid can be reused, so after ten minutes even a live-looking owner no longer holds the lock.
+  const longAgo = new Date(Date.now() - 11 * 60_000);
+  utimesSync(lock, longAgo, longAgo);
+  assert.equal(resolveUserDataDirectory(options(appData, { isProcessAlive: () => true })).migratedFrom, legacy);
 });

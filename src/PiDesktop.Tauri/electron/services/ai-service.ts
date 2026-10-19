@@ -663,15 +663,20 @@ function cancelledOutcome(effort: AgentEffortLevel, samples: AgentUsageSample[])
 
 /** Characters of earlier turns replayed into a recreated session; older turns are dropped first. */
 const SESSION_HISTORY_BUDGET = 60_000;
+/** No single turn may take more than this, so one long reply cannot crowd out every turn before it. */
+const SESSION_HISTORY_TURN_LIMIT = 20_000;
+const TRUNCATED = "\n[… shortened]";
 
 /** The most recent turns that fit the budget, oldest first, for a session the runtime has to create again. */
 function sessionHistory(messages: readonly ConversationMessage[]): AgentSessionHistoryMessage[] {
   const history: AgentSessionHistoryMessage[] = [];
   let used = 0;
   for (let index = messages.length - 1; index >= 0 && history.length < AGENT_SESSION_HISTORY_MAX_MESSAGES; index--) {
-    const text = messages[index].content.slice(0, AGENT_SESSION_HISTORY_MAX_TEXT_LENGTH);
-    if (!text.trim()) continue;
-    if (used + text.length > SESSION_HISTORY_BUDGET) break;
+    const limit = Math.min(SESSION_HISTORY_TURN_LIMIT, SESSION_HISTORY_BUDGET - used);
+    if (limit <= TRUNCATED.length) break;
+    const content = messages[index].content;
+    if (!content.trim()) continue;
+    const text = content.length > limit ? `${content.slice(0, limit - TRUNCATED.length)}${TRUNCATED}` : content;
     used += text.length;
     history.unshift({ role: messages[index].role, text });
   }

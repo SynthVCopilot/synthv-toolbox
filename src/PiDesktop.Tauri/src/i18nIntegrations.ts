@@ -27,6 +27,7 @@ addMessages("zh-CN", {
     offTitle: "Synthesizer V 集成已关闭",
     offDescription: "此页面属于 Synthesizer V 集成。开启后即可使用 Bridge、账号槽位与相关工具。",
     turnOn: "开启 Synthesizer V 集成",
+    pronunciationLyricsOnly: "Synthesizer V 集成已关闭，这里只检查粘贴的歌词。开启集成后可以直接检查 .svp 工程。",
   },
   dataFolder: {
     label: "数据目录",
@@ -106,6 +107,7 @@ addMessages("en", {
     offTitle: "The Synthesizer V integration is off",
     offDescription: "This page belongs to the Synthesizer V integration. Turn it on to use the bridge, account slots and related tools.",
     turnOn: "Turn on the Synthesizer V integration",
+    pronunciationLyricsOnly: "The Synthesizer V integration is off, so only pasted lyrics are checked here. Turn it on to check a .svp project directly.",
   },
   dataFolder: {
     label: "Data folder",
