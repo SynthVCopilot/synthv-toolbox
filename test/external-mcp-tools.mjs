@@ -16,6 +16,13 @@ const fixture = join(testDirectory, "fixtures", "external-mcp-server.mjs");
 const LONG_NAME = "weird tool/name.with:odd chars and a very long suffix that keeps going far beyond any provider limit";
 const TOOL_NAME = /^[a-zA-Z0-9_-]{1,64}$/;
 const FIXTURE_TOOLS = 11;
+
+// Orphans are found through WMI, whose first query on a fresh CI runner can outlast the reaping timeout. Warming it up here
+// keeps these tests about the reaping logic rather than WMI start-up time.
+if (process.platform === "win32") {
+  const { spawnSync } = await import("node:child_process");
+  spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Process | Out-Null"], { stdio: "ignore", timeout: 120_000, windowsHide: true });
+}
 // Pi validates tool arguments with this before execute; its install location depends on npm hoisting.
 const piValidation = ["packages/agent-runtime/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai", "packages/agent-runtime/node_modules/@earendil-works/pi-ai", "node_modules/@earendil-works/pi-ai"]
   .map(path => join(testDirectory, "..", path, "dist", "utils", "validation.js")).find(path => existsSync(path));

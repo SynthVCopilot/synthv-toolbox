@@ -395,7 +395,8 @@ const FILETIME_UNIX_EPOCH_MS = 11_644_473_600_000;
  */
 async function killWindowsOrphans(pid: number, spawnedAt: number): Promise<void> {
   const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-  const table = await capture(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(PROCESS_TABLE, "utf16le").toString("base64")], 15_000);
+  // The first WMI query after the service went idle can take well over ten seconds; giving up early would leave the orphans running.
+  const table = await capture(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(PROCESS_TABLE, "utf16le").toString("base64")], 30_000);
   const rows = table.split(/\r?\n/).map(line => line.trim().split(/\s+/).map(Number)).filter(row => row.length === 3 && row.every(Number.isFinite)).map(([id, parent, created]) => ({ id: id!, parent: parent!, created: created! / 10_000 - FILETIME_UNIX_EPOCH_MS }));
   // The dead child itself may still be listed (created right at spawn); any other holder of its pid is a newer process whose children are not ours.
   const holder = rows.find(row => row.id === pid && Math.abs(row.created - spawnedAt) > 1_000);

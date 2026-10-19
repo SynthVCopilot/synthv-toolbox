@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,12 @@ const { probeStdioMcpServer, stdioMcpServerConfig } = await importElectronSource
 const fixture = fileURLToPath(new URL("./fixtures/stdio-mcp-server.mjs", import.meta.url));
 const isRunning = (pid) => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; } };
 const pidFrom = (detail) => Number(/fixture pid (\d+)/.exec(detail)?.[1]);
+
+// Orphans are found through WMI, whose first query on a fresh CI runner can outlast the reaping timeout. Warming it up here
+// keeps these tests about the reaping logic rather than WMI start-up time.
+if (process.platform === "win32") {
+  spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Process | Out-Null"], { stdio: "ignore", timeout: 120_000, windowsHide: true });
+}
 
 test("a working stdio server reports its identity and every page of tools", async () => {
   const result = await probeStdioMcpServer({ command: process.execPath, args: [fixture, "ok", "a b", "c&d"] }, { clientVersion: "9.9.9" });
@@ -54,6 +61,7 @@ test("a server left running by a launcher that already exited is stopped when th
     config = { command: process.execPath, args: [fileURLToPath(new URL("./fixtures/stdio-mcp-launcher.mjs", import.meta.url)), fixture, "ok"], env };
   }
   let pid = 0;
+  const started = Date.now();
   try {
     // On POSIX the server answers on the inherited pipes. Behind `start /b` it holds them without using them for stdio, so the
     // handshake times out; either way the probe ends with the launcher long gone and the server still holding the pipes.
@@ -64,7 +72,9 @@ test("a server left running by a launcher that already exited is stopped when th
     // The launcher was gone before the handshake ended; its server must not outlive the probe.
     const deadline = Date.now() + 5_000;
     while (isRunning(pid) && Date.now() < deadline) await new Promise((done) => setTimeout(done, 50));
-    assert.equal(isRunning(pid), false, `server ${pid} survived the probe`);
+    // If it survived, say what the reaper would have seen (parent pid and creation time) so a CI failure is diagnosable.
+    const seen = !isRunning(pid) || process.platform !== "win32" ? "" : spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" | ForEach-Object { "parent $($_.ParentProcessId) created $($_.CreationDate)" }`], { encoding: "utf8", windowsHide: true }).stdout.trim();
+    assert.equal(isRunning(pid), false, `server ${pid} survived the probe ${seen}; probe started ${new Date(started).toISOString()}`);
   } finally {
     if (pid && isRunning(pid)) process.kill(pid);
     await rm(directory, { recursive: true, force: true });
