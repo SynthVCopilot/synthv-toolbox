@@ -327,6 +327,15 @@ async function initializeServices(): Promise<void> {
     if (!desktop.aiModeEnabled()) void ai.cancel_all_agent_runs().catch((reason: unknown) => console.error("Unable to stop agent runs", reason));
   }, dataDirectory);
   await desktop.load();
+  // "auto" follows what is installed and running: look again when a window gains focus and, while it resolves to off, every
+  // few seconds, so a Bridge started with the window hidden (or an MCP client waiting on it) needs no visit to Settings.
+  let synthvRefresh: Promise<void> | undefined;
+  const refreshSynthV = () => synthvRefresh ??= desktop.refreshSynthV()
+    .then((changed) => { if (changed) emitToRenderer("integrations.changed", null); })
+    .catch((reason: unknown) => { console.error("SynthV detection failed:", reason); })
+    .finally(() => { synthvRefresh = undefined; });
+  app.on("browser-window-focus", () => { void refreshSynthV(); });
+  setInterval(() => { if (!desktop.synthvEnabled()) void refreshSynthV(); }, 10_000).unref();
   const coverChildren = async (conversationId: string) => (await cover.invoke("media_tasks", {}) as Array<Record<string, any>>).filter(job => job.parentConversationId === conversationId);
   agentTasks = createAgentTaskService({
     dataRoot: join(userData, "ai"), ai: () => ai, effort: () => desktop.agentEffort(),

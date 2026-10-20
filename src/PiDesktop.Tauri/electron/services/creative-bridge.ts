@@ -2,6 +2,12 @@ import { randomUUID } from "node:crypto";
 import type { EmbeddedBridge } from "./synthv-bridge.js";
 
 type Data = Record<string, any>;
+
+/** Reads a bridge tool reply. A failure that is not JSON (a host error, an older gate) still surfaces as its own text. */
+function bridgeReply(reply: { text: string; isError?: boolean }): Data {
+  try { return JSON.parse(reply.text) as Data; }
+  catch (error) { if (reply.isError) return { outcome: "failed", error: { code: "BRIDGE_ERROR", message: reply.text } }; throw error; }
+}
 type Selection = { sessionToken: string; signature: string; target: { trackIndex: number; groupIndex: number }; notes: Data[]; expires: number };
 type Preview = Selection & { contextId: string; slots: Array<{ text: string; phoneme?: string }> };
 export const CREATIVE_BRIDGE_COMMANDS = ["read_lyric_bridge_selection", "preview_lyric_bridge_fit", "confirm_lyric_bridge_fit", "run_score_to_synthv", "run_retake_workbench"];
@@ -14,7 +20,7 @@ export function createCreativeBridge(bridge: EmbeddedBridge) {
     const tool = bridge.tools.find(item => item.name === name);
     if (!tool) throw new Error(`Bridge tool is unavailable: ${name}`);
     const reply = await tool.call(input);
-    const value = JSON.parse(reply.text);
+    const value = bridgeReply(reply);
     if (reply.isError || value.outcome === "failed") throw new Error(`${value.error?.code ?? "BRIDGE_ERROR"}: ${value.error?.message ?? reply.text}`);
     return value;
   };

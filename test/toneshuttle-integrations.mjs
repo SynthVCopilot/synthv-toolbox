@@ -12,13 +12,20 @@ import { isIntegrationPreference, resolveSynthVIntegration } from "../src/PiDesk
 import { unavailableBridge } from "../src/PiDesktop.Tauri/dist/electron/services/synthv-bridge.js";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const noEvidence = { installations: 0, profiles: 0, bridgeConnected: false, bridgeLoaded: true };
+const noEvidence = { installations: 0, profiles: 0, bridgeConnected: false };
 
 test("explicit integration preferences always win over machine evidence", () => {
   assert.equal(resolveSynthVIntegration("on", noEvidence), true);
-  assert.equal(resolveSynthVIntegration("off", { installations: 2, profiles: 1, bridgeConnected: true, bridgeLoaded: true }), false);
+  assert.equal(resolveSynthVIntegration("off", { installations: 2, profiles: 1, bridgeConnected: true }), false);
   assert.equal(isIntegrationPreference("auto"), true);
   assert.equal(isIntegrationPreference("enabled"), false);
+});
+
+test("auto enables SynthV only when this machine shows it is in use", () => {
+  assert.equal(resolveSynthVIntegration("auto", noEvidence), false, "nothing found: the toolbox starts without SynthV");
+  assert.equal(resolveSynthVIntegration("auto", { ...noEvidence, installations: 1 }), true, "an installed Synthesizer V");
+  assert.equal(resolveSynthVIntegration("auto", { ...noEvidence, profiles: 1 }), true, "SV2 account slots kept in the app");
+  assert.equal(resolveSynthVIntegration("auto", { ...noEvidence, bridgeConnected: true }), true, "a Bridge script connected from SynthV, wherever it is installed");
 });
 
 function fakeServices(probe) {
@@ -61,6 +68,92 @@ test("existing settings files without integrations default to auto and keep Synt
     assert.ok(app.components.some(component => component.id === "cvrs"));
     assert.equal(state.synthvEnabled(), true);
   });
+});
+
+test("auto with nothing detected hides SynthV but keeps probing, and turns it on once SynthV shows up", async () => {
+  let installed = false;
+  const probe = synthvProbe({
+    scanInstallations: async () => { probe.calls.push("scan"); return installed ? [{ displayName: "Synthesizer V Studio 2 Pro", bridgeProfile: "sv2" }] : []; },
+    profileState: async () => { probe.calls.push("profiles"); return { supported: true, slots: [], concurrentProvider: { available: false, detail: "none" } }; },
+    bridgeStatus: async () => { probe.calls.push("bridge"); return { connected: false }; },
+  });
+  await withState({ onboardingCompleted: true }, probe, async (state) => {
+    const app = await state.bootstrap();
+    assert.equal(app.integrations.synthv.preference, "auto");
+    assert.equal(app.integrations.synthv.enabled, false);
+    assert.equal(app.integrations.synthv.detected, false);
+    assert.ok(!app.components.some(component => component.id === "cvrs"));
+    assert.equal(state.synthvEnabled(), false);
+    assert.ok(probe.calls.includes("scan"), "auto keeps looking for SynthV while it resolves to off");
+    installed = true;
+    const next = await state.bootstrap();
+    assert.equal(next.integrations.synthv.enabled, true, "the next refresh picks up a new installation");
+    assert.equal(next.integrations.synthv.detected, true);
+    assert.equal(next.installations.length, 1);
+    assert.equal(state.synthvEnabled(), true);
+  });
+});
+
+test("auto re-detects without a renderer refresh, keeps a Bridge it has seen, and counts the scripts folder set up for it", async () => {
+  let installed = false, connected = false;
+  const probe = synthvProbe({
+    scanInstallations: async () => { probe.calls.push("scan"); return installed ? [{ displayName: "Synthesizer V Studio 2 Pro", bridgeProfile: "sv2" }] : []; },
+    profileState: async () => ({ supported: true, slots: [], concurrentProvider: { available: false, detail: "none" } }),
+    bridgeStatus: async () => ({ connected }),
+  });
+  await withState({ onboardingCompleted: true }, probe, async (state) => {
+    assert.equal(state.synthvEnabled(), false);
+    assert.equal(await state.refreshSynthV(), false, "nothing new: no change to report");
+    connected = true;
+    assert.equal(await state.refreshSynthV(), true, "the main process notices a Bridge without the renderer calling bootstrap");
+    assert.equal(state.synthvEnabled(), true);
+    connected = false;
+    assert.equal(await state.refreshSynthV(), false, "a missed heartbeat or a stopped Bridge does not hide SynthV mid-session");
+    assert.equal(state.synthvEnabled(), true);
+  });
+  const scripts = await mkdtemp(join(tmpdir(), "toneshuttle-flat-scripts-"));
+  try {
+    // A Flat user set up the Bridge through the manual form; the scanner knows no Flat path.
+    await withState({ onboardingCompleted: true, scriptsPath: scripts }, synthvProbe({ scanInstallations: async () => [], profileState: async () => ({ supported: true, slots: [] }), bridgeStatus: async () => ({ connected: false }) }), async (state) => {
+      const app = await state.bootstrap();
+      assert.equal(app.integrations.synthv.enabled, true, "the scripts folder the app installed the Bridge into counts as an installation");
+      assert.equal(app.integrations.synthv.detected, true);
+      await rm(scripts, { recursive: true, force: true });
+      assert.equal(await state.refreshSynthV(), true, "a folder that no longer exists is not evidence");
+      assert.equal(state.synthvEnabled(), false);
+    });
+  } finally { await rm(scripts, { recursive: true, force: true }); }
+  const preferenceOn = synthvProbe();
+  await withState({ integrations: { synthv: "on" } }, preferenceOn, async (state) => {
+    preferenceOn.calls.length = 0;
+    assert.equal(await state.refreshSynthV(), false);
+    assert.deepEqual(preferenceOn.calls, [], "an explicit preference needs no probe");
+  });
+  const main = await readFile(join(root, "src/PiDesktop.Tauri/electron/main.ts"), "utf8");
+  assert.match(main, /app\.on\("browser-window-focus", \(\) => \{ void refreshSynthV\(\); \}\)/, "focus re-detects");
+  assert.match(main, /setInterval\(\(\) => \{ if \(!desktop\.synthvEnabled\(\)\) void refreshSynthV\(\); \}, 10_000\)\.unref\(\)/, "a timer re-detects while auto is off");
+  assert.match(main, /emitToRenderer\("integrations\.changed", null\)/);
+  const renderer = await readFile(join(root, "src/PiDesktop.Tauri/src/main.ts"), "utf8");
+  assert.match(renderer, /listenDesktop<null>\("integrations\.changed"/, "the renderer re-bootstraps when detection changes");
+  assert.match(renderer, /await listenForIntegrationChanges\(\);/);
+});
+
+test("Cover and creative bridge calls report a gate refusal or a non-JSON failure instead of a SyntaxError", async () => {
+  const { gatedBridge } = await import("../src/PiDesktop.Tauri/dist/electron/services/synthv-bridge.js");
+  const { createCoverHost } = await import("../src/PiDesktop.Tauri/dist/electron/services/cover-host.js");
+  const raw = { tools: ["sv_status", "sv_query", "sv_command", "sv_ui", "sv_describe"].map((name) => ({ name, title: name, description: "", annotations: {}, inputSchema: {}, call: async () => ({ text: "{}", isError: false }) })), instructions: "", classify: () => ({ category: "read", risk: "normal" }), status: async () => ({ connected: true, status: { sessionToken: "s", projectFile: "/songs/a.svp" } }), requestStop: async () => undefined, close: async () => undefined };
+  const cover = createCoverHost(gatedBridge(raw, () => false), { listProcesses: async () => [], sendShortcut: async () => ({}) });
+  const failure = await Promise.resolve().then(() => cover.verify({ sessionToken: "s", projectFile: "/songs/a.svp", trackIndex: 1, groupIndex: 1, groupName: "g", timeline: [], notes: [] })).then(() => undefined, (error) => error);
+  assert.ok(failure instanceof Error && !(failure instanceof SyntaxError), `expected a readable refusal, got ${failure}`);
+  assert.match(failure.message, /SYNTHV_INTEGRATION_OFF/);
+  // A host failure that is not JSON keeps its own text; a success that is not JSON is still a protocol error.
+  const { createCreativeBridge } = await import("../src/PiDesktop.Tauri/dist/electron/services/creative-bridge.js");
+  for (const [reply, expected] of [[{ text: "host crashed", isError: true }, /BRIDGE_ERROR: host crashed/], [{ text: "not json", isError: false }, SyntaxError]]) {
+    const host = { ...raw, tools: raw.tools.map((tool) => ({ ...tool, call: async () => reply })) };
+    const creative = createCreativeBridge(host);
+    const outcome = await Promise.resolve().then(() => creative.invoke("read_lyric_bridge_selection", {})).then(() => undefined, (error) => error);
+    assert.ok(expected instanceof RegExp ? expected.test(String(outcome?.message)) : outcome instanceof expected, `${reply.text}: ${outcome}`);
+  }
 });
 
 test("turning SynthV off skips every SynthV probe and hides its components", async () => {
@@ -115,7 +208,11 @@ test("the agent's SynthV tools check the integration on every call, so turning i
   const bridge = gatedBridge(raw, () => enabled);
   assert.deepEqual(await bridge.tools[0].call({ notes: 1 }), { text: "written", isError: false });
   enabled = false;
-  assert.deepEqual(await bridge.tools[0].call({ notes: 2 }), { text: SYNTHV_OFF_MESSAGE, isError: true });
+  const refused = await bridge.tools[0].call({ notes: 2 });
+  assert.equal(refused.isError, true);
+  // The bridge's own failure envelope, so Cover, the creative workflows and approvals read it as a failed call.
+  assert.deepEqual(JSON.parse(refused.text), { outcome: "failed", phase: "accepted", wrote: false, undoRequired: false, retry: "correct_request", error: { code: "SYNTHV_INTEGRATION_OFF", message: SYNTHV_OFF_MESSAGE } });
+  assert.match(SYNTHV_OFF_MESSAGE, /set to Off, or Auto has not detected/, "the refusal does not claim the user chose Off");
   assert.deepEqual(calls, [{ notes: 1 }], "nothing reaches SynthV once the integration is off");
   assert.equal((await bridge.status()).connected, true, "status and install stay available");
   const main = await readFile(join(root, "src/PiDesktop.Tauri/electron/main.ts"), "utf8");

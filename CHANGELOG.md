@@ -10,7 +10,7 @@
 - 修复 Windows 上开启「开机启动」后总是提示系统未应用设置、并显示为关闭的问题。
 - 修复设置页在较窄窗口中被插件特权说明撑宽、右侧内容被裁切的问题。
 - 安装包和更新文件改名为 `Toneshuttle-<版本>-setup.exe`、`Toneshuttle-<版本>.dmg` 和 `Toneshuttle-<版本>-arm64-mac.zip`。
-- Synthesizer V 支持改为可选集成，包括 Bridge、SV2 账号槽位和 .svp 工具，可在「设置 > 集成」中关闭。
+- Synthesizer V 支持改为可选集成，包括 Bridge、SV2 账号槽位和 .svp 工具，可在「设置 > 集成」中关闭。默认的「自动」在检测到 Synthesizer V 安装（含在 Bridge 页设置过的脚本目录）、SV2 账号槽位或已连接的 Bridge 时启用，否则关闭；窗口获得焦点时、以及未启用期间每隔几秒都会重新检测，安装或启动 SynthV 后无需重启。
 - 本地 MCP 端点需要 Bearer 令牌；「连接」页显示令牌，并可为 Claude Code、Codex 和 Cursor / VS Code 生成客户端配置。
 - 修正与外部 MCP 客户端的协议兼容性问题。
 - 修复激活 SV2 账号槽位时可能丢失数据的问题。

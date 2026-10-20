@@ -38,7 +38,9 @@ export function loadEmbeddedBridge(bridgeDirectory: string, clientLabel: string)
     .then((module: { createEmbeddedBridge(options: { clientLabel: string }): EmbeddedBridge }) => module.createEmbeddedBridge({ clientLabel }));
 }
 
-export const SYNTHV_OFF_MESSAGE = "The Synthesizer V integration is turned off in Settings > Integrations.";
+export const SYNTHV_OFF_MESSAGE = "The Synthesizer V integration is turned off: Settings > Integrations is set to Off, or Auto has not detected Synthesizer V on this computer.";
+/** The refusal in the bridge's own failure envelope, so every caller that parses bridge replies reads it as a failed call. */
+const SYNTHV_OFF_REPLY = JSON.stringify({ outcome: "failed", phase: "accepted", wrote: false, undoRequired: false, retry: "correct_request", error: { code: "SYNTHV_INTEGRATION_OFF", message: SYNTHV_OFF_MESSAGE } });
 
 /**
  * Checks `enabled` when each tool call runs rather than when a session was built, so turning SynthV off in Settings also stops
@@ -48,7 +50,7 @@ export function gatedBridge(bridge: EmbeddedBridge, enabled: () => boolean): Emb
   return {
     tools: bridge.tools.map((tool) => ({
       name: tool.name, title: tool.title, description: tool.description, annotations: tool.annotations, inputSchema: tool.inputSchema,
-      call: async (input: unknown) => enabled() ? tool.call(input) : { text: SYNTHV_OFF_MESSAGE, isError: true },
+      call: async (input: unknown) => enabled() ? tool.call(input) : { text: SYNTHV_OFF_REPLY, isError: true },
     })),
     instructions: bridge.instructions,
     classify: (name, input) => bridge.classify(name, input),

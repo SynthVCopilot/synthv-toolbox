@@ -3425,7 +3425,7 @@ function renderIntegrationSettings(): string {
   const status = [synthvOn() ? t("integrations.enabled") : t("integrations.disabled"), state?.detected ? t("integrations.detected") : t("integrations.notDetected"), ...(state && !state.bridgeLoaded ? [t("integrations.bridgeMissing")] : [])].join(" · ");
   const choices = (["auto", "on", "off"] as const).map((value) => `<button class="${preference === value ? "active" : ""}" data-set-integration="synthv:${value}" aria-pressed="${preference === value}" ${busy ? "disabled" : ""}>${t(`integrations.${value}`)}</button>`).join("");
   const errors = (state?.errors ?? []).map((error) => `<small class="error-text">${escapeHtml(error)}</small>`).join("");
-  return `<section class="panel integration-settings"><div class="section-heading"><div><h2>${t("integrations.title")}</h2><p>${t("integrations.description")}</p></div></div><div class="integration-row"><span class="mode-icon slate">${icon("bridge", 22)}</span><div class="integration-copy"><strong>${t("integrations.synthvName")}</strong><small>${t("integrations.synthvDescription")}</small><small class="integration-status">${escapeHtml(status)}</small>${errors}</div><div class="segmented" role="group" aria-label="${t("integrations.synthvName")}">${choices}</div></div>${preference === "auto" ? `<p class="integration-hint">${t("integrations.autoHint")}</p>` : ""}</section>`;
+  return `<section class="panel integration-settings"><div class="section-heading"><div><h2>${t("integrations.title")}</h2><p>${t("integrations.description")}</p></div></div><div class="integration-row"><span class="mode-icon slate">${icon("bridge", 22)}</span><div class="integration-copy"><strong>${t("integrations.synthvName")}</strong><small>${t("integrations.synthvDescription")}</small><small class="integration-status">${escapeHtml(status)}</small>${errors}</div><div class="segmented" role="group" aria-label="${t("integrations.synthvName")}">${choices}</div></div>${preference === "auto" ? `<p class="integration-hint">${t("integrations.autoHint")}${state && !state.detected ? ` ${t("integrations.autoNotDetected")}` : ""}</p>` : ""}</section>`;
 }
 
 async function refreshAutostartStatus(): Promise<void> {
@@ -5274,6 +5274,16 @@ async function listenForAgentRunProgress(): Promise<void> {
   });
 }
 
+async function listenForIntegrationChanges(): Promise<void> {
+  if (!hasDesktopBridge()) return;
+  // "auto" found or lost Synthesizer V (window focus, or the main process's timer); pages and tools follow. A running task
+  // refreshes when it finishes, so skip rather than race it.
+  await listenDesktop<null>("integrations.changed", () => {
+    if (busy) return;
+    void refresh().then(render).catch(() => undefined);
+  });
+}
+
 async function listenForAgentApprovals(): Promise<void> {
   if (!hasDesktopBridge()) return;
   await listenDesktop<AgentApprovalsSnapshot>("agent.approvals.changed", (snapshot) => {
@@ -5299,6 +5309,7 @@ void (async () => {
     await listenForAudioPreparationDrops();
     await listenForAgentRunProgress();
     await listenForAgentApprovals();
+    await listenForIntegrationChanges();
     startInstanceRefresh();
     render();
     refreshAiCatalogLive();
