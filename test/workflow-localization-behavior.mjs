@@ -1,35 +1,65 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire, stripTypeScriptTypes } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import vm from 'node:vm';
 import { JSDOM } from '../src/PiDesktop.Tauri/node_modules/jsdom/lib/api.js';
 const require = createRequire(new URL('../src/PiDesktop.Tauri/package.json', import.meta.url));
 const { parse } = require('@babel/parser');
-const { createI18n } = require('vue-i18n');
 const read = (name) => readFileSync(new URL('../src/PiDesktop.Tauri/src/' + name, import.meta.url), 'utf8');
-const i18n = createI18n({ legacy: false, locale: 'en', fallbackLocale: 'zh-CN', messages: {} });
-const addMessages = (language, messages) => i18n.global.mergeLocaleMessage(language, messages);
-for (const name of ['i18nCommon.ts', 'i18nWorkflows.ts', 'i18nCopilot.ts']) vm.runInNewContext(read(name).replace(/^import .*;\r?\n/gm, ''), { addMessages });
+const source = read('main.ts');
+// Load the renderer's real i18n module and the dictionaries main.ts imports, in
+// its order (later dictionaries override earlier ones), so every label the
+// workflow forms and wireForms() look up resolves exactly as it does in the app.
+const moduleUrl = (text) => `data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(text)).toString('base64')}`;
+const vueI18nUrl = pathToFileURL(require.resolve('vue-i18n')).href;
+const i18nUrl = moduleUrl(read('i18n.ts').replace('from "vue-i18n"', `from ${JSON.stringify(vueI18nUrl)}`));
+const brandUrl = moduleUrl(read('brand.ts'));
+await import(vueI18nUrl); // Vue's runtime-dom probes the global document on first load; let it see none
+globalThis.document = { documentElement: { lang: '' } }; // i18n.ts sets <html lang> when it loads
+const { i18n } = await import(i18nUrl);
+delete globalThis.document;
+const dictionaries = [...source.matchAll(/^import "\.\/(i18n\w+)";/gm)].map((match) => match[1]);
+assert.ok(dictionaries.includes('i18nWorkflows') && dictionaries.includes('i18nIntegrations'), 'Workflow and SynthV-off wording are loaded');
+for (const name of dictionaries) {
+  await import(moduleUrl(read(`${name}.ts`).replace('from "./i18n"', `from ${JSON.stringify(i18nUrl)}`).replace('from "./brand"', `from ${JSON.stringify(brandUrl)}`)));
+}
+i18n.global.locale.value = 'en';
 const t = (key, params = {}) => {
   assert.ok(i18n.global.te(key), `Missing ${i18n.global.locale.value} message: ${key}`);
   return i18n.global.t(key, params);
 };
-const source = read('main.ts');
 const apiSource = read('api.ts');
-assert.match(source, /position\.toLogical\(window\.devicePixelRatio\)/, 'Native drops target the field under the pointer');
+const preloadSource = readFileSync(new URL('../src/PiDesktop.Tauri/electron/preload.ts', import.meta.url), 'utf8');
+// Electron's preload reports DOM drop coordinates, which are already CSS pixels,
+// so the renderer hit-tests them directly (no physical-to-logical conversion).
+assert.match(preloadSource, /webUtils\.getPathForFile\(file\)/, 'Native drops resolve real file paths in the preload');
+assert.match(preloadSource, /position: \{ x: event\.clientX, y: event\.clientY \}/, 'Native drops report the pointer in CSS pixels');
+assert.match(source, /document\.elementFromPoint\(position\.x, position\.y\)/, 'Native drops target the field under the pointer');
 assert.match(source, /data-clear-pipeline-instrumental/, 'Optional instrumental input can be cleared');
 assert.match(apiSource, /instrumentalPath: string \| null/);
 assert.match(apiSource, /outputDirectory: string \| null/);
-const functions = new Set(['escapeHtml', 'formatAudioNumber', 'isTerminalAudioJob', 'asObject', 'resultMetric', 'renderDiagnosticResult', 'renderBatchResult', 'renderScalarResult', 'renderAbAudioResult', 'sourceDirectory', 'setAudioToProjectVocalPath', 'setAudioToProjectInstrumentalPath', 'pathPickerButton', 'pickPathIntoInput', 'pickAudioToProjectInput', 'pickAudioToProjectOutputDirectory', 'dropAudioToProjectInput', 'syncAudioToProjectForm', 'renderWorkflowPanel', 'renderAudioPlanDialog', 'renderCopilot', 'renderMessage', 'wireForms']);
+const functions = new Set(['synthvOn', 'coverInferenceLabel', 'coverStageLabel', 'escapeHtml', 'formatAudioNumber', 'isTerminalAudioJob', 'asObject', 'resultMetric', 'renderDiagnosticResult', 'renderBatchResult', 'renderScalarResult', 'renderAbAudioResult', 'sourceDirectory', 'setAudioToProjectVocalPath', 'setAudioToProjectInstrumentalPath', 'pathPickerButton', 'pickPathIntoInput', 'pickAudioToProjectInput', 'pickAudioToProjectOutputDirectory', 'dropAudioToProjectInput', 'syncAudioToProjectForm', 'renderWorkflowPanel', 'renderAudioPlanDialog', 'renderCopilot', 'renderMessage', 'wireForms',
+  // The Copilot slots and composer pieces an idle chat renders.
+  'renderAgentGoalSlot', 'latestAgentPlanMessage', 'renderLiveRunSlot', 'renderApprovalResolutionsSlot', 'currentConversationResolutions', 'renderApprovalsSlot', 'renderApprovalsSlotDiffKey', 'renderComposerAction', 'renderAgentEffortGroup', 'agentEffortLabel', 'agentEffortBudgetLabel']);
+const constants = new Set(['AGENT_EFFORT_ORDER']);
 const ast = parse(source, { sourceType: 'module', plugins: ['typescript'] });
-const implementations = ast.program.body.filter((node) => node.type === 'FunctionDeclaration' && functions.has(node.id.name)).map((node) => source.slice(node.start, node.end)).join('\n');
+const implementations = ast.program.body.filter((node) => (node.type === 'FunctionDeclaration' && functions.has(node.id.name))
+  || (node.type === 'VariableDeclaration' && node.kind === 'const' && node.declarations.some((declaration) => constants.has(declaration.id.name)))).map((node) => source.slice(node.start, node.end)).join('\n');
 assert.doesNotMatch(implementations, /\p{Script=Han}/u, 'Static workflow wording must come from the dictionaries');
 assert.doesNotMatch(implementations, /t\(['"]['"]\)/, 'No empty lookups');
 const ids = ['audio-preparation', 'cover', 'tuning-learning', 'media-import', 'source-separation', 'audio-insight', 'score-to-synthv', 'project-tools', 'audio-to-project', 'project-doctor', 'batch-recipes', 'selective-sync', 'retake-compare', 'ab-audition', 'pronunciation-doctor', 'render-review', 'future-tool'];
+// The SynthV integration is always stated: synthvOn() treats a missing
+// `integrations` field as "on", which would silently hide the SynthV-off forms.
+const appState = ({ mode = 'ai', bridgeConnected = true, synthv = true } = {}) => ({
+  mode, bridgeConnected, components: [], downloads: [],
+  integrations: { synthv: { preference: synthv ? 'on' : 'off', enabled: synthv, detected: true, bridgeLoaded: true, errors: [] } },
+});
 const state = {
-  t, locale: () => i18n.global.locale.value, icon: () => '', busy: false, page: 'convert',
+  t, locale: () => i18n.global.locale.value, icon: () => '', busy: false, page: 'convert', error: '', notice: '',
   conversation: undefined, conversations: [], activeAiProvider: () => undefined, aiProviderDisplayName: (provider) => provider.displayName,
-  app: { mode: 'ai', bridgeConnected: true, components: [], downloads: [] }, features: [], toolGroups: [], workflowResult: undefined,
+  app: appState(), features: [], toolGroups: [], workflowResult: undefined, agentRunInFlight: false,
+  coverDraft: { source: '', voice: '', process: '', lyrics: '', track: '1', group: 'Toolbox Cover', rights: false },
   audioRuntime: { available: true, version: '8', detail: 'Runtime detail', source: 'system' },
   audioStartInFlight: false, audioJob: undefined, audioPlanRequestInFlight: false, audioLoudnessAnalysisInFlight: false,
   audioProbe: undefined, audioLoudness: undefined, audioPrepareForm: { inputPath: '', sampleFormat: 's24' },
@@ -39,6 +69,10 @@ const state = {
   profiles: { slots: [] }, syncSourceSlotId: '', syncTargetSlotId: '', syncCategories: [], syncSelectedCategories: [], syncManifest: undefined, syncOverwrite: false,
   workflowRecipes: [], audioCaptureCapability: undefined, audioCaptureTargets: [], abProcessId: undefined,
   abStartSeconds: 0, abEndSeconds: 5, abPreRollSeconds: 0, abPostRollSeconds: 0, abBaselinePath: '', abCandidatePath: '', pendingAudioPlan: undefined,
+  lastSlotHtml: new Map(), approvalsSnapshot: { pending: [], recent: [] }, liveRun: undefined, liveRunId: undefined, agentRunCancelling: false,
+  // Cards that exist only during a run, a pending approval or a stored plan are covered by
+  // agent-goal-ui.mjs; reaching one here means the harness state is no longer idle.
+  ...Object.fromEntries(['renderAgentGoalCard', 'renderLiveRunPanel', 'renderApprovalCard', 'renderApprovalResolution'].map((name) => [name, () => { throw new Error(`${name} is outside this idle Copilot harness`); }])),
 };
 vm.createContext(state);
 vm.runInContext(stripTypeScriptTypes(implementations, { mode: 'strip' }), state);
@@ -58,9 +92,11 @@ function rendered(id) {
     'audio-insight': 'audio-path',
     'tuning-learning': 'tuning-audio',
     'project-doctor': 'doctor-project',
-    'pronunciation-doctor': 'pronunciation-project',
+    // With SynthV off the pronunciation check reads pasted lyrics only.
+    ...(state.synthvOn() ? { 'pronunciation-doctor': 'pronunciation-project' } : {}),
     'render-review': 'render-audio',
   };
+  if (id === 'pronunciation-doctor' && !state.synthvOn()) assert.equal(document.querySelector('#pronunciation-project'), null, 'SynthV-off pronunciation form has no project input');
   const pickerInputId = pickerInputIds[id];
   if (pickerInputId) {
     const input = document.querySelector(`#${pickerInputId}`);
@@ -72,18 +108,30 @@ function rendered(id) {
 let renders = 0;
 for (const language of ['en', 'zh-CN']) {
   i18n.global.locale.value = language;
-  for (const mode of ['ai', 'toolbox']) for (const connected of [false, true]) {
-    state.app = { mode, bridgeConnected: connected, components: [], downloads: [] };
+  for (const synthv of [true, false]) for (const mode of ['ai', 'toolbox']) for (const connected of [false, true]) {
+    state.app = appState({ mode, bridgeConnected: connected, synthv });
     for (const id of ids) { rendered(id); renders++; }
   }
 }
 i18n.global.locale.value = 'en';
-state.app = { mode: 'ai', bridgeConnected: true, components: [], downloads: [] };
+state.app = appState();
 state.profiles.slots = [{ id: 'a', displayName: 'Slot A', isActive: true }, { id: 'b', displayName: 'Slot B' }];
 state.syncCategories = ['userDictionaries', 'scripts', 'presets', 'safeSettings'].map((id) => ({ id, label: '后端标签', description: '后端描述' }));
 state.syncManifest = { overwrite: true, entries: [{ action: 'copy', relativePath: 'presets/default', sourceSize: 20 }] };
-state.workflowRecipes = ['project-doctor', 'pronunciation-check', 'render-review', 'project-probe', 'project-no-params'].map((id) => ({ id, title: '后端标题', description: '后端描述', supportsBatch: true }));
-assert.deepEqual([...rendered('batch-recipes').querySelectorAll('option')].map((option) => option.value), state.workflowRecipes.map((recipe) => recipe.id));
+// Mirrors the host catalog in electron/services/creative-service.ts: only render-review reads audio.
+const recipeInputKinds = { 'project-doctor': 'project', 'pronunciation-check': 'project', 'project-probe': 'project', 'project-no-params': 'project', 'render-review': 'audio' };
+state.workflowRecipes = Object.entries(recipeInputKinds).map(([id, inputKind]) => ({ id, title: '后端标题', description: '后端描述', kind: id, inputKind, supportsBatch: true }));
+const batchForm = () => {
+  const document = rendered('batch-recipes');
+  return { recipes: [...document.querySelectorAll('#batch-recipe option')].map((option) => option.value), placeholder: document.querySelector('#batch-inputs').placeholder };
+};
+assert.deepEqual(batchForm().recipes, Object.keys(recipeInputKinds), 'With SynthV on, Batch offers every batch recipe');
+assert.match(batchForm().placeholder, /\.svp/, 'With SynthV on, Batch suggests project inputs');
+state.app = appState({ synthv: false });
+assert.deepEqual(batchForm().recipes, ['render-review'], 'With SynthV off, Batch offers only audio recipes');
+assert.match(batchForm().placeholder, /\.wav/, 'With SynthV off, Batch suggests audio inputs');
+assert.doesNotMatch(batchForm().placeholder, /\.svp/, 'With SynthV off, Batch never suggests SynthV projects');
+state.app = appState();
 assert.deepEqual([...rendered('selective-sync').querySelectorAll('[name=sync-category]')].map((input) => input.value), state.syncCategories.map((category) => category.id));
 state.synthvProcesses = [{ processId: 123, name: 'SynthV' }, { processId: 456, name: 'SynthV' }];
 state.tuningProfiles = [{ voiceName: 'Mai 2', sourceSamples: 4, outcomeSamples: 3, parameters: { loudness: 1, tension: 1, breathiness: 1, vibratoStrength: 1 } }];
@@ -112,7 +160,7 @@ assert.equal(state.sourceDirectory('/song.wav'), '/');
 assert.equal(state.sourceDirectory('C:\\song.wav'), 'C:\\');
 
 // Exercise actual form handlers with a DOM, including the state changes caused
-// by native picker and Tauri drag-drop callbacks.
+// by native picker and Electron file-drop callbacks.
 const interactionDom = new JSDOM('<main></main>');
 const pickerCalls = [];
 state.document = interactionDom.window.document;
@@ -125,6 +173,8 @@ state.api = {
 };
 state.run = async (task) => { await task(); };
 state.renderWorkflowResult = () => '';
+// Settings-page Vue selects; their hosts are absent from this form, where the real helper returns early.
+state.mountFluentSelect = () => {};
 state.render = () => {
   state.document.body.innerHTML = state.renderWorkflowPanel('audio-to-project');
   state.wireForms();
@@ -163,9 +213,21 @@ input('#pipeline-inst', '');
 dispatch(state.document.querySelector('#audio-to-project-form'), 'submit');
 await new Promise((resolve) => setImmediate(resolve));
 assert.equal(state.audioToProjectRequest[1], null, 'Submitting an empty optional instrumental sends null');
-state.document.elementFromPoint = () => state.document.querySelector('#pipeline-inst');
-state.dropAudioToProjectInput(['C:\\audio\\dropped-inst.wav'], { toLogical: () => ({ x: 12, y: 34 }) });
+// The preload reports DOM clientX/clientY, so the renderer hit-tests exactly those CSS pixels.
+const hitTests = [];
+let elementUnderPointer = '#pipeline-inst';
+state.document.elementFromPoint = (x, y) => { hitTests.push([x, y]); return state.document.querySelector(elementUnderPointer); };
+state.dropAudioToProjectInput(['C:\\audio\\dropped-inst.wav'], { x: 12, y: 34 });
+assert.deepEqual(hitTests, [[12, 34]], 'Drop callback hit-tests the reported pointer position');
 assert.equal(state.document.querySelector('#pipeline-inst').value, 'C:\\audio\\dropped-inst.wav', 'Drop callback uses the element under its position');
+elementUnderPointer = 'main';
+state.dropAudioToProjectInput(['C:\\audio\\dropped-vocal.wav'], { x: 1, y: 2 });
+assert.equal(state.document.querySelector('#pipeline-vocal').value, 'C:\\audio\\dropped-vocal.wav', 'A drop outside both fields fills the vocal input');
+assert.equal(state.document.querySelector('#pipeline-inst').value, 'C:\\audio\\dropped-inst.wav', 'A drop outside both fields keeps the instrumental input');
+state.dropAudioToProjectInput(['C:\\audio\\a.wav', 'C:\\audio\\b.wav'], { x: 12, y: 34 });
+assert.equal(state.error, t('workflowCopy.onlyOneAudioFileCanBeDropped'), 'Multi-file drops are refused');
+assert.equal(state.document.querySelector('#pipeline-vocal').value, 'C:\\audio\\dropped-vocal.wav', 'A refused drop leaves the form unchanged');
+state.error = '';
 state.pendingAudioPlan = { kind: 'prepare', plan: { inputPath: 'C:/项目/<source>.wav', outputPath: 'output.wav', expiresAt: '2026-09-06T12:00:00Z', parameters: [], warnings: [] } };
 const dialog = new JSDOM(state.renderAudioPlanDialog()).window.document;
 assert.equal(dialog.querySelector('#audio-plan-title').textContent, 'Confirm: Generate PCM WAV');
