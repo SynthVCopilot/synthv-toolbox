@@ -14,7 +14,8 @@ import { registerSynthVCommands } from "./synthv-commands.js";
 import type { SynthVService } from "./synthv-service.js";
 
 export type EventSink = (event: string, payload: JsonValue) => void;
-export type CommandHandler = (params: Record<string, unknown>) => Promise<unknown>;
+/** `signal` reaches only handlers that start work worth stopping (child processes); the rest ignore it. */
+export type CommandHandler = (params: Record<string, unknown>, signal?: AbortSignal) => Promise<unknown>;
 export interface ElectronServices { ai: AiService; creative: CreativeService; desktop: DesktopStateService; synthv: SynthVService; componentAudio: ComponentAudioOptions; approvals: AgentApprovalBroker; externalMcp?: Pick<ExternalMcpPool, "check">; }
 
 const CREATIVE_COMMANDS = [
@@ -26,7 +27,7 @@ export class ElectronCommandRegistry {
   constructor(private readonly host: ElectronRuntimeHost, private readonly services?: ElectronServices, private readonly emit: EventSink = () => {}) { this.registerCore(); if (services) this.registerServices(services); }
   register(command: string, handler: CommandHandler): void { if (this.handlers.has(command)) throw new Error(`Electron command is already registered: ${command}`); this.handlers.set(command, handler); }
   commands(): string[] { return [...this.handlers.keys()].sort(); }
-  async invoke(command: string, params: Record<string, unknown> = {}): Promise<unknown> { if (typeof command !== "string" || !command.trim()) throw new Error("command must be a non-empty string."); if (!isObject(params)) throw new Error("Command parameters must be an object."); const handler = this.handlers.get(command); if (!handler) throw new Error(`Electron command is not implemented: ${command}`); const result = await handler(params); this.emit("electron-command-completed", { command }); return result; }
+  async invoke(command: string, params: Record<string, unknown> = {}, signal?: AbortSignal): Promise<unknown> { if (typeof command !== "string" || !command.trim()) throw new Error("command must be a non-empty string."); if (!isObject(params)) throw new Error("Command parameters must be an object."); const handler = this.handlers.get(command); if (!handler) throw new Error(`Electron command is not implemented: ${command}`); const result = await handler(params, signal); this.emit("electron-command-completed", { command }); return result; }
 
   private registerCore(): void {
     this.register("list_installed_plugins", async () => this.installedPlugins());
@@ -70,9 +71,9 @@ export class ElectronCommandRegistry {
     registerComponentAudioCommands(this, s.componentAudio);
     // The renderer and the agent's toolbox tools reach these without HostCapabilities, so .svp work (checkpoint restore from
     // History, a project slipped into an audio call) follows the integration here as well.
-    for (const command of CREATIVE_COMMANDS) if (!this.handlers.has(command)) this.register(command, params => {
+    for (const command of CREATIVE_COMMANDS) if (!this.handlers.has(command)) this.register(command, (params, signal) => {
       if (s.desktop.synthvEnabled?.() === false && drivesSynthV(command, params)) throw new Error(SYNTHV_OFF_MESSAGE);
-      return s.creative.invoke(command, params);
+      return s.creative.invoke(command, params, signal);
     });
     this.register("agent_approvals", async () => s.approvals.snapshot());
     this.register("decide_agent_approval", async p => { s.approvals.decide(stringParam(p, "id"), boolParam(p, "approve")); return null; });

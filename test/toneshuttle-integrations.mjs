@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { BRAND, FILE_NAMES, LEGACY_FILE_NAMES, STABLE_IDENTIFIERS } from "../src/PiDesktop.Tauri/dist/electron/brand.js";
@@ -185,6 +186,65 @@ test("the bridge component is loaded only while the integration is not Off, and 
   assert.match(main, /startOff \? new SwitchableBridge\(bridgeOff\(\), false\) : new SwitchableBridge\(await loadBridge\(\), bridgeLoadError === undefined\)/);
   assert.match(main, /followIntegration\(\);\r?\n  \}, dataDirectory\);/, "settings changes load or close the component");
   assert.match(main, /else return;\r?\n[^\n]*\r?\n      emitToRenderer\("integrations\.changed", null\);/, "and Settings learns how the load ended");
+});
+
+test("a refresh reports one SynthV edition replaced by another, though the count is the same", async () => {
+  let edition = "Synthesizer V Studio Pro";
+  const probe = synthvProbe({ scanInstallations: async () => [{ displayName: edition, bridgeProfile: "sv1" }] });
+  await withState({ onboardingCompleted: true }, probe, async (state) => {
+    assert.equal(await state.refreshSynthV(), false);
+    edition = "Synthesizer V Studio 2 Pro";
+    assert.equal(await state.refreshSynthV(), true, "Settings lists the new installation and its Bridge targets");
+  });
+});
+
+test("stopping an agent run ends the process its toolbox tool started, and records no history", async () => {
+  const { createToolboxAgentToolsExtension } = await import("../src/PiDesktop.Tauri/dist/electron/services/toolbox-agent-tools.js");
+  const { createComponentExecutor } = await import("../src/PiDesktop.Tauri/dist/electron/services/component-executor.js");
+  const { createCreativeService } = await import("../src/PiDesktop.Tauri/dist/electron/services/creative-service.js");
+  const { ElectronCommandRegistry } = await import("../src/PiDesktop.Tauri/dist/electron/services/command-registry.js");
+  const directory = await mkdtemp(join(tmpdir(), "toneshuttle-stop-"));
+  try {
+    // A stand-in for pi-audio that never finishes; Node runs the .py file as a script.
+    const pidFile = join(directory, "pid");
+    await mkdir(join(directory, "components", "pi-audio"), { recursive: true });
+    await writeFile(join(directory, "components", "pi-audio", "pi_audio.py"), `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`);
+    const audio = join(directory, "take.wav");
+    await writeFile(audio, "RIFF");
+    const creative = createCreativeService(join(directory, "data"), (command, args, signal) => createComponentExecutor(join(directory, "components"), process.execPath, undefined, { dataRoot: join(directory, "data") })(command, args, signal));
+    const inert = new Proxy({}, { get: () => async () => ({}) });
+    const registry = new ElectronCommandRegistry({ settingsSnapshot: () => ({}), runtime: {} }, { ai: inert, creative, desktop: { ...inert, synthvEnabled: () => true }, synthv: inert, approvals: inert, componentAudio: { dataRoot: directory } });
+    const tools = new Map();
+    createToolboxAgentToolsExtension({ invoke: (command, args, signal) => registry.invoke(command, args, signal) }).factory({ on: () => {}, registerTool: (tool) => tools.set(tool.name, tool) });
+    const controller = new AbortController();
+    const running = tools.get("toolbox_audio_features").execute("call", { path: audio }, controller.signal);
+    let pid;
+    for (let waited = 0; !pid && waited < 10_000; waited += 50) { await delay(50); pid = Number(await readFile(pidFile, "utf8").catch(() => "")) || undefined; }
+    assert.ok(pid, "the analysis process started");
+    controller.abort();
+    await assert.rejects(running, { name: "AbortError" });
+    const end = Date.now() + 5_000;
+    while (Date.now() < end) { try { process.kill(pid, 0); await delay(50); } catch { break; } }
+    assert.throws(() => process.kill(pid, 0), "the analysis process was ended with the run");
+    assert.deepEqual(await creative.invoke("list_creative_history", {}), [], "a stopped run leaves no history");
+    creative.dispose();
+  } finally { await rm(directory, { recursive: true, force: true }); }
+  // A process that finished just as the run was stopped still records nothing.
+  {
+    const finishing = new AbortController();
+    const late = createCreativeService(join(tmpdir(), `toneshuttle-late-${process.pid}`), async (_command, _args, signal) => { finishing.abort(); return { kind: "audio-probe", summary: "done", data: {}, signal: signal === finishing.signal }; });
+    try {
+      await assert.rejects(late.invoke("run_audio_probe", { audioPath: fileURLToPath(import.meta.url) }, finishing.signal), { name: "AbortError" });
+      assert.deepEqual(await late.invoke("list_creative_history", {}), []);
+    } finally { late.dispose(); await rm(join(tmpdir(), `toneshuttle-late-${process.pid}`), { recursive: true, force: true }); }
+  }
+  // FFmpeg's loudness measurement gets the signal too.
+  const { registerComponentAudioCommands } = await import("../src/PiDesktop.Tauri/dist/electron/services/component-audio-commands.js");
+  const handlers = new Map(), seen = [];
+  registerComponentAudioCommands({ register: (name, handler) => handlers.set(name, handler) }, { dataRoot: tmpdir(), run: async (_file, _args, signal) => { seen.push(signal); throw Object.assign(new Error("stopped"), { name: "AbortError" }); } });
+  const loudness = new AbortController();
+  await assert.rejects(handlers.get("analyze_loudness")({ path: fileURLToPath(import.meta.url) }, loudness.signal), { name: "AbortError" });
+  assert.equal(seen[0], loudness.signal);
 });
 
 test("a refresh reports a Bridge that connects while the integration is already on", async () => {

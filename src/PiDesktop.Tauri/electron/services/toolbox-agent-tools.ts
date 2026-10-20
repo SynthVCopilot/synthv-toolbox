@@ -6,7 +6,8 @@ import type { PiInlineExtension, PiToolResult } from "@synthv-toolbox/agent-runt
  * agent session without SynthV can still inspect audio and help with lyrics instead of having no domain tools.
  */
 export interface ToolboxAgentToolsOptions {
-  invoke(command: string, args: Record<string, unknown>): Promise<unknown>;
+  /** `signal` is the agent run's: stopping the run ends the process a tool started (FFmpeg, the audio analysis). */
+  invoke(command: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<unknown>;
 }
 
 interface ToolSpec {
@@ -67,7 +68,8 @@ export function createToolboxAgentToolsExtension(options: ToolboxAgentToolsOptio
           execute: async (_callId, raw, signal): Promise<PiToolResult> => {
             signal?.throwIfAborted();
             const input = validate(spec, raw);
-            const result = await options.invoke(spec.command, spec.args(input));
+            const result = await options.invoke(spec.command, spec.args(input), signal);
+            signal?.throwIfAborted();
             const text = JSON.stringify(spec.present ? spec.present(result) : result) ?? "null";
             return { content: [{ type: "text", text: text.length > TOOLBOX_TOOL_OUTPUT_LIMIT ? `${text.slice(0, TOOLBOX_TOOL_OUTPUT_LIMIT)}\n[Output truncated: showing ${TOOLBOX_TOOL_OUTPUT_LIMIT} of ${text.length} characters.]` : text }] };
           },

@@ -8,8 +8,8 @@ import { COVER_COMMANDS } from "./cover-service.js";
 import type { EmbeddedBridge } from "./synthv-bridge.js";
 
 type Data = Record<string, any>;
-type TaskExecutor = (kind: string, args: Data) => Promise<Data>;
-export interface CreativeService { invoke(command: string, args: Data): Promise<unknown>; dispose?(): void; }
+type TaskExecutor = (kind: string, args: Data, signal?: AbortSignal) => Promise<Data>;
+export interface CreativeService { invoke(command: string, args: Data, signal?: AbortSignal): Promise<unknown>; dispose?(): void; }
 
 export function createCreativeService(dataRoot: string, executeTask: TaskExecutor = async command => { throw new Error(`No component executor is configured for ${command}.`); }, bridge?: EmbeddedBridge, cover?: { invoke(command: string, args: Data): Promise<unknown> }, options: { backupsEnabled?: () => boolean; backupIntervalMs?: number } = {}): CreativeService {
   const root = resolve(dataRoot), lyrics = createLyricService(root), connected = bridge ? createCreativeBridge(bridge) : undefined;
@@ -74,14 +74,14 @@ export function createCreativeService(dataRoot: string, executeTask: TaskExecuto
     void Promise.all([...tracked.keys()].map(path => track(path).catch(() => undefined))).finally(() => { backingUp = false; });
   }, options.backupIntervalMs ?? 60_000);
   timer.unref();
-  const execute = async (command: string, args: Data): Promise<Data> => {
+  const execute = async (command: string, args: Data, signal?: AbortSignal): Promise<Data> => {
     if (typeof args.projectPath === "string" && args.projectPath) await track(args.projectPath);
     let result: Data;
     if (CREATIVE_BRIDGE_COMMANDS.includes(command)) {
       if (!connected) throw new Error("SynthV Bridge is unavailable.");
       result = await connected.invoke(command, args);
     } else {
-      result = await executeTask(command, args);
+      result = await executeTask(command, args, signal);
       if (command === "run_audio_to_project" && args.importToSynthv === true) {
         if (!connected || typeof result.outputPath !== "string") throw new Error("Audio output is unavailable for SynthV import.");
         const imported = await connected.invoke("run_score_to_synthv", { ...args, scorePath: result.outputPath });
@@ -89,9 +89,11 @@ export function createCreativeService(dataRoot: string, executeTask: TaskExecuto
       }
     }
     if (!result || result.succeeded === false || typeof result.summary !== "string" || !result.data || typeof result.data !== "object") throw new Error(String(result?.summary ?? "The component did not return a valid workflow result."));
+    // A stopped run's work is not history, even when the process finished before it could be ended.
+    signal?.throwIfAborted();
     await record(command, args, result); return result;
   };
-  return { dispose() { clearInterval(timer); }, async invoke(command, args) {
+  return { dispose() { clearInterval(timer); }, async invoke(command, args, signal) {
     if (cover && COVER_COMMANDS.includes(command)) return cover.invoke(command, args);
     if ((LYRIC_COMMANDS as readonly string[]).includes(command)) {
       const result = await lyrics.invoke(command, args);
@@ -139,7 +141,7 @@ export function createCreativeService(dataRoot: string, executeTask: TaskExecuto
     }
     if (["media_tasks", "audio_tasks", "list_tuning_profiles"].includes(command)) return [];
     if (["preview_media_source", "queue_media_import", "queue_media_separation", "queue_cover", "cancel_media_task", "retry_media_task", "learn_tuning_profile", "record_tuning_outcome", "apply_tuning_profile", "run_solo_tuning", "generate_lyric_candidates", "review_workflow"].includes(command)) throw new Error("This workflow is not available in this build. Use the local audio, score, lyric and project tools.");
-    return execute(command, args);
+    return execute(command, args, signal);
   } };
 }
 function sha(bytes: Buffer) { return createHash("sha256").update(bytes).digest("hex"); }

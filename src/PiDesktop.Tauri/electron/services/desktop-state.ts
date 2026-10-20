@@ -125,7 +125,9 @@ export class DesktopStateService {
     this.bridgeSeen ||= value.bridgeConnected;
     const installationCount = value.installations.length || (await this.savedScriptsFolderExists() ? 1 : 0);
     this.synthvEvidence = { installations: installationCount, profiles: Array.isArray(value.profiles.slots) ? value.profiles.slots.length : 0, bridgeConnected: this.bridgeSeen };
-    this.lastProbeSignature = JSON.stringify([this.synthvEnabled(), value.installations.length, this.synthvEvidence.profiles, value.bridgeConnected]);
+    // Everything bootstrap() shows from the probe (installations, profiles, Bridge, errors), not just counts: one edition
+    // replaced by another keeps the count but changes the paths and Bridge targets Settings lists.
+    this.lastProbeSignature = JSON.stringify([this.synthvEnabled(), value]);
     return value;
   }
   private async savedScriptsFolderExists(): Promise<boolean> {

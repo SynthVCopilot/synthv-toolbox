@@ -114,7 +114,8 @@ function desktopIconPath(): string {
 function autostartController() {
   return {
     async set(enabled: boolean): Promise<boolean> {
-      app.setLoginItemSettings({ openAtLogin: enabled, openAsHidden: enabled, args: enabled ? [AUTOSTART_ARGUMENT] : [] });
+      // `enabled` also clears a Task Manager "Disabled" mark (Windows), which the migration keeps from the old entry.
+      app.setLoginItemSettings({ openAtLogin: enabled, openAsHidden: enabled, args: enabled ? [AUTOSTART_ARGUMENT] : [], enabled });
       const actual = launchAtLogin();
       if (actual !== enabled) throw new Error("The operating system did not apply the launch-at-login setting.");
       return actual;
@@ -129,9 +130,13 @@ function autostartController() {
   };
 }
 
-/** On Windows the entry only counts as ours when its arguments match too, so they must be passed when reading it back. */
+/**
+ * On Windows the entry only counts as ours when its arguments match too, so they must be passed when reading it back. An
+ * entry disabled in Task Manager is still registered (openAtLogin) but will not run; executableWillLaunchAtLogin says so.
+ */
 function launchAtLogin(): boolean {
-  return app.getLoginItemSettings({ args: [AUTOSTART_ARGUMENT] }).openAtLogin;
+  const settings = app.getLoginItemSettings({ args: [AUTOSTART_ARGUMENT] });
+  return settings.openAtLogin && (process.platform !== "win32" || settings.executableWillLaunchAtLogin);
 }
 
 /** Windows only: the rename of the executable leaves the old login entry behind (see autostart-migration.ts). */
@@ -289,9 +294,9 @@ async function initializeServices(): Promise<void> {
     importer: async python => createMediaImporter({ dataRoot: creativeRoot, python, ffmpegPath: (await resolveFfmpegBinaries({ dataRoot: join(userData, "components") })).ffmpeg }),
     audio: async python => createCoverAudio({ dataRoot: creativeRoot, componentsRoot, python, ffmpegPath: (await resolveFfmpegBinaries({ dataRoot: join(userData, "components") })).ffmpeg }),
   });
-  const creative = createCreativeService(creativeRoot, async (command, args) => {
+  const creative = createCreativeService(creativeRoot, async (command, args, signal) => {
     const runtime = await creativeRuntime.status();
-    return createComponentExecutor(componentsRoot, runtime.ready ? runtime.pythonPath : undefined, undefined, { dataRoot: creativeRoot })(command, args);
+    return createComponentExecutor(componentsRoot, runtime.ready ? runtime.pythonPath : undefined, undefined, { dataRoot: creativeRoot })(command, args, signal);
   }, gatedSynthvBridge, cover, { backupsEnabled: () => desktop.synthvEnabled() });
   const delivery = createSynthVDeliveryRegistry();
   // One process per enabled external server, shared by all sessions; nothing spawns until a session needs it.
@@ -314,7 +319,7 @@ async function initializeServices(): Promise<void> {
           guards.completion(() => monitor.readNotes.size !== target.notes.length ? `Read the entire Cover group: ${monitor.readNotes.size}/${target.notes.length} notes inspected.` : monitor.writes < 1 ? "Apply and verify real tuning changes before completing the Cover." : null);
           return [createSynthVToolsExtension({ bridge: coverHost.forTuning(target, monitor), approvals, sessionId, guards, runState, registry: delivery, workMode: () => "solo" })];
         }
-        const toolbox = createToolboxAgentToolsExtension({ invoke: (command, args) => { if (!commandRegistry) throw new Error("Electron services are not ready."); return commandRegistry.invoke(command, args); } });
+        const toolbox = createToolboxAgentToolsExtension({ invoke: (command, args, signal) => { if (!commandRegistry) throw new Error("Electron services are not ready."); return commandRegistry.invoke(command, args, signal); } });
         const external = desktop.aiModeEnabled() && desktop.enabledMcpServers().length > 0 ? [createExternalMcpToolsExtension({ pool: externalMcp, servers: () => desktop.aiModeEnabled() ? mcpServerConfigs(desktop.enabledMcpServers()) : [], workMode: () => desktop.agentWorkMode() })] : [];
         if (!desktop.synthvEnabled()) return [toolbox, ...external];
         return [toolbox, ...external, createSynthVToolsExtension({ bridge: gatedSynthvBridge, approvals, sessionId, guards, runState, registry: delivery, workMode: () => desktop.agentWorkMode() }), createCoverAgentToolsExtension({ sessionId, guards, runState, invoke: (command, args) => desktop.synthvEnabled() ? cover.invoke(command, args) : Promise.reject(new Error(SYNTHV_OFF_MESSAGE)) })];
