@@ -35,7 +35,16 @@ assert.match(main, /return feature && app && featureVisible\(feature, app\) \? \
 assert.match(main, /feature\.homePriority !== undefined && featureVisible\(feature, current\)/, "home quick-start must apply the same visibility rule as tool tabs");
 
 // SynthV-only tools carry the integration tag; every group must keep a generic tool so turning SynthV off never empties it.
-const synthvOnly = new Set(["cover", "score-to-synthv", "project-tools", "project-doctor", "batch-recipes", "tuning-learning", "ab-audition", "retake-compare", "selective-sync"]);
+// Batch stays visible: its audio recipe (render review) needs no SynthV, and its project recipes are filtered out instead.
+// Each backend recipe needs a label in both locales; the batch form looks them up by recipe id.
+{
+  const creative = readFileSync(new URL("../src/PiDesktop.Tauri/electron/services/creative-service.ts", import.meta.url), "utf8");
+  const workflows = readFileSync(new URL("../src/PiDesktop.Tauri/src/i18nWorkflows.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const ids = [...creative.slice(creative.indexOf("const recipes = ["), creative.indexOf("].map(([id, title, inputKind])")).matchAll(/\["([a-z-]+)", "/g)].map((match) => match[1]);
+  assert.ok(ids.includes("render-review") && ids.length >= 5, `recipe ids not found: ${ids}`);
+  for (const id of ids) assert.equal(workflows.split(`    "${id}": {\n      "title"`).length - 1, 2, `recipe ${id} needs a title in both locales`);
+}
+const synthvOnly = new Set(["cover", "score-to-synthv", "project-tools", "project-doctor", "tuning-learning", "ab-audition", "retake-compare", "selective-sync"]);
 for (const line of catalog.split(/\r?\n/).filter((value) => /^  \{ id: "/.test(value))) {
   const id = line.match(/id: "([^"]+)"/)[1];
   assert.equal(/integration: "synthv"/.test(line), synthvOnly.has(id), `${id} integration tag`);

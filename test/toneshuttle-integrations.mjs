@@ -279,6 +279,12 @@ test("SynthV-backed creative operations and Cover are refused through MCP and pl
   assert.deepEqual(await capabilities.invoke("host.internal", "creative", "run_audio_to_project", { importToSynthv: false }), { ok: true, params: { importToSynthv: false } }, "MIDI export alone needs no SynthV");
   assert.deepEqual(await capabilities.invoke("host.internal", "creative", "run_pronunciation_diagnostics", { lyrics: "你好" }), { ok: true, params: { lyrics: "你好" } }, "plain lyrics stay checkable, as the agent's toolbox_lyrics_check does");
   assert.ok(!calls.some((operation) => offlineProjectWork.some(([refused]) => refused === operation)), "offline .svp work, hidden in the UI with the integration, is refused for MCP and plugins too");
+  const audioBatch = { recipeId: "render-review", inputPaths: ["C:\\Renders\\take.wav"] };
+  assert.deepEqual(await capabilities.invoke("host.internal", "creative", "run_batch_workflow", audioBatch), { ok: true, params: audioBatch }, "an audio-only batch needs no SynthV");
+  await assert.rejects(capabilities.invoke("host.internal", "creative", "run_batch_workflow", { recipeId: "project-doctor", inputPaths: ["C:\\Songs\\a.svp"] }), /turned off/, "project recipes stay with the integration");
+  // creative-service snapshots and keeps backing up any projectPath, so a project slipped into an audio operation is refused too.
+  await assert.rejects(capabilities.invoke("host.internal", "creative", "run_batch_workflow", { ...audioBatch, options: { projectPath: "C:\\Songs\\a.svp" } }), /turned off/, "batch options cannot carry a project");
+  await assert.rejects(capabilities.invoke("host.internal", "creative", "run_render_review", { audioPath: "C:\\Renders\\take.wav", projectPath: "C:\\Songs\\a.svp" }), /turned off/, "nor can an audio review");
   assert.deepEqual(await capabilities.invoke("host.internal", "creative", "retry_media_task", { id: "s1" }), { ok: true, params: { id: "s1" } }, "retrying a non-Cover job is not a Cover");
   synthv = true; ai = false;
   await assert.rejects(capabilities.invoke("host.internal", "creative", "queue_cover", { request: {} }), (error) => error.clientSafe === true && /AI mode/.test(error.message));

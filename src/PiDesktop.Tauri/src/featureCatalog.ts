@@ -43,7 +43,7 @@ const featureDefinitions: FeatureCatalogItem[] = [
   { id: "project-doctor", title: "工程诊断", description: "离线扫描工程版本、音符、歌词、引用与参数曲线，生成只读且可定位的问题报告。", icon: "doctor", accent: "emerald", base: ["结构完整性检查", "音符与引用诊断", "确定性风险分级"], ai: ["问题影响解释", "修复优先级建议", "保守变更方案"], requirements: ["本地 .svp"], integration: "synthv" },
   { id: "pronunciation-doctor", title: "发音诊断", description: "检查工程或粘贴歌词中的空音节、多音节拥挤、混合文字与极短音符风险。", icon: "pronunciation", accent: "emerald", base: ["歌词结构检查", "短音符发音风险", "确定性问题定位"], ai: ["发音问题解释", "音素修正建议", "跨语言复核"], requirements: ["本地 .svp 或歌词"] },
   { id: "render-review", title: "渲染复检", description: "渲染后检查削波、静音和响度突变，并按预期时长、BPM 与音高事件集中确认交付风险。", icon: "shield", accent: "orange", base: ["削波与静音检测", "响度连续性检查", "交付清单"], ai: ["可疑片段归因", "风险等级说明", "复检结论摘要"], requirements: ["FFmpeg", "pi-audio"], componentIds: ["ffmpeg", "pi-audio"] },
-  { id: "batch-recipes", title: "批处理", description: "将工程体检、发音检查、渲染复检、结构探测与无参导出应用到一组文件。", icon: "recipe", accent: "orange", base: ["内置安全配方", "最多 100 项串行执行", "单项失败隔离"], ai: ["失败原因归类", "批次结果总结", "参数优化建议"], requirements: ["对应本地组件"], integration: "synthv" },
+  { id: "batch-recipes", title: "批处理", description: "将工程体检、发音检查、渲染复检、结构探测与无参导出应用到一组文件。", icon: "recipe", accent: "orange", base: ["内置安全配方", "最多 100 项串行执行", "单项失败隔离"], ai: ["失败原因归类", "批次结果总结", "参数优化建议"], requirements: ["对应本地组件"] },
   { id: "selective-sync", title: "账号资源同步", description: "在账号槽位间选择性同步词典、脚本、预设和安全设置，登录态与声库数据库始终排除。", icon: "sync", accent: "violet", base: ["白名单类别", "SHA-256 差异预览", "冲突与过期清单保护"], ai: ["冲突影响解释", "同步范围建议", "同步后复核"], requirements: ["Windows", "至少两个槽位"], windowsOnly: true, integration: "synthv" },
 ];
 

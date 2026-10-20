@@ -1183,7 +1183,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "list_workflow_recipes") return [
     { id: "project-doctor", title: "工程医生", description: "只读检查工程风险。", kind: "project-doctor", inputKind: "svp", supportsBatch: true, requiresBridge: false, requiresAi: false, defaultParameters: {} },
     { id: "pronunciation-check", title: "发音诊断", description: "检查歌词和音素风险。", kind: "pronunciation-check", inputKind: "svpOrText", supportsBatch: true, requiresBridge: false, requiresAi: false, defaultParameters: {} },
-    { id: "render-quality-check", title: "渲染复检", description: "检查渲染交付风险。", kind: "render-quality-check", inputKind: "audio", supportsBatch: true, requiresBridge: false, requiresAi: false, defaultParameters: {} },
+    { id: "render-review", title: "渲染复检", description: "检查渲染交付风险。", kind: "render-review", inputKind: "audio", supportsBatch: true, requiresBridge: false, requiresAi: false, defaultParameters: {} },
     { id: "lyric-template", title: "作词", description: "歌词草稿、歌曲结构与可选韵脚辅助。", kind: "lyric-template", inputKind: "lyrics", supportsBatch: false, requiresBridge: false, requiresAi: false, defaultParameters: { language: "zh-CN", rhymeMode: "family" } },
   ] as T;
   if (command === "list_creative_history" || command === "list_project_checkpoints") return [] as T;

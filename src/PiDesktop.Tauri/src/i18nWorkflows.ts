@@ -391,7 +391,7 @@ addMessages("zh-CN", {
       "title": "发音诊断",
       "description": "扫描歌词中的占位词、多音节拥挤、混合文字与不一致发音风险。"
     },
-    "render-quality-check": {
+    "render-review": {
       "title": "渲染质量复检",
       "description": "复用本地音频分析结果检查削波、静音、动态和异常频谱趋势。"
     },
@@ -815,7 +815,7 @@ addMessages("en", {
       "title": "Pronunciation diagnostics",
       "description": "Check placeholder lyrics, crowded syllables, mixed scripts, and inconsistent pronunciation."
     },
-    "render-quality-check": {
+    "render-review": {
       "title": "Render quality review",
       "description": "Use local audio analysis to check clipping, silence, dynamics, and unusual spectral trends."
     },

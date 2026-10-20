@@ -456,7 +456,7 @@ function toolInfo(raw: unknown): McpToolInfo | undefined {
   };
 }
 
-function abortError(signal: AbortSignal): Error {
+export function abortError(signal: AbortSignal): Error {
   return signal.reason instanceof Error ? signal.reason : Object.assign(new Error("The MCP request was cancelled."), { name: "AbortError" });
 }
 

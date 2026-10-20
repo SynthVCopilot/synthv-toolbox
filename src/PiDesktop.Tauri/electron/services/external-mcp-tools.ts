@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { PiInlineExtension, PiToolResult } from "@synthv-toolbox/agent-runtime";
 import { BRAND } from "../brand.js";
-import { McpStdioClient, type McpCallToolResult, type McpContent, type McpToolInfo } from "./mcp-stdio-client.js";
+import { abortError, McpStdioClient, type McpCallToolResult, type McpContent, type McpToolInfo } from "./mcp-stdio-client.js";
 
 /**
  * Exposes the user's external stdio MCP servers (Connections page) to the built-in agent. One long-lived process per
@@ -101,7 +101,8 @@ export class ExternalMcpPool {
     const entry = this.entries.get(serverId);
     if (!entry || entry.removed) throw new Error(`External MCP server "${serverId}" is no longer enabled. Ask the user to enable it on the Connections page.`);
     signal?.throwIfAborted();
-    const client = await this.connected(entry);
+    // Reaping a dead server can take seconds on Windows; Stop must not wait for it.
+    const client = await untilAborted(this.connected(entry), signal);
     return client.callTool(toolName, args, signal, this.options.callTimeoutMs);
   }
 
@@ -127,6 +128,9 @@ export class ExternalMcpPool {
         entry.tools = undefined;
         entry.error = message(error);
         entry.failedAt = Date.now();
+        // Removed mid-load (AI mode turned off): the session being built lists the server as unavailable. If it comes back
+        // with the same settings, the prompt would match that session again; a new revision makes the next turn rebuild.
+        if (entry.removed) this.toolsRevision++;
       } finally { entry.loading = undefined; }
     })();
   }
@@ -137,11 +141,15 @@ export class ExternalMcpPool {
     if (entry.removed) return Promise.reject(new Error(`External MCP server "${entry.config.name}" is no longer enabled.`));
     return entry.connecting ??= (async () => {
       try {
-        // The dead client may still be reaping a server its launcher left behind; dispose() waits for that.
+        // The dead client may still be reaping a server its launcher left behind; the replacement waits so the two never overlap.
+        // Registered per id, so an entry that replaces this one (the server was edited meanwhile) waits for it as well.
         const stale = entry.client;
-        if (stale) { entry.client = undefined; void this.retire(stale); }
+        if (stale) { entry.client = undefined; await this.awaitRetirement(entry.config.id, this.retire(stale)); }
         // Turning AI mode off and on again, or editing a server, retires the old process first; it may take seconds to reap.
         await this.retiring.get(entry.config.id);
+        // Both waits can take seconds, long enough for the server to be removed or the pool disposed; a process started
+        // now would belong to nobody and outlive the app.
+        if (entry.removed) throw new Error(`External MCP server "${entry.config.name}" is no longer enabled.`);
         const { command, args, env, cwd, name } = entry.config;
         const client: McpStdioClient = new McpStdioClient({
           command, args, ...(env ? { env } : {}), ...(cwd ? { cwd } : {}), label: name,
@@ -392,6 +400,17 @@ function hash(value: string): string { return createHash("sha256").update(value)
 function strings(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; }
 function slug(value: string): string { return value.normalize("NFKD").replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").toLowerCase().slice(0, 20).replace(/_+$/, ""); }
 function toolKey(serverId: string, toolName: string): string { return `${serverId}\u0000${toolName}`; }
+/** Settles with the promise, or rejects as soon as the signal aborts; the promise itself keeps running for later callers. */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return promise;
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(abortError(signal));
+    if (signal.aborted) return abort();
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+
 function fingerprint(config: McpServerConfig): string { return JSON.stringify([config.command, config.args, Object.entries(config.env ?? {}).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0), config.cwd ?? null]); }
 function clip(text: string, limit: number): string { return text.length > limit ? `${text.slice(0, limit - 3)}...` : text; }
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }

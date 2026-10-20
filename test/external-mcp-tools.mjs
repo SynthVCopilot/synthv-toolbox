@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -398,6 +398,34 @@ test("a reconfigured server starts again only after its old process is gone", as
   } finally { await pool.dispose(); }
 });
 
+test("a cancelled call stops waiting for a server that is still starting", async () => {
+  const pool = new ExternalMcpPool({ retryAfterMs: 0, connectTimeoutMs: 10_000 });
+  try {
+    await pool.reconcile([server("a", "Fixture", "--hang")]);
+    const controller = new AbortController();
+    const started = Date.now();
+    const pending = pool.call("a", "read_status", {}, controller.signal);
+    setTimeout(() => controller.abort(), 200);
+    await assert.rejects(pending, { name: "AbortError" });
+    assert.ok(Date.now() - started < 3_000, `the call waited ${Date.now() - started} ms after Stop`);
+  } finally { await pool.dispose(); }
+});
+
+test("a server removed while its tools are loading makes sessions rebuild", async () => {
+  const pool = new ExternalMcpPool({ retryAfterMs: 0, connectTimeoutMs: 10_000 });
+  try {
+    await pool.reconcile([server("a", "Fixture", "--hang")]);
+    const revision = pool.revision;
+    const listing = pool.tools();
+    await delay(200);
+    // AI mode turned off while the session was being built: it lists the server as unavailable.
+    await pool.reconcile([]);
+    const { servers } = await listing;
+    assert.match(servers[0].error ?? "", /no longer enabled|closed/i);
+    assert.notEqual(pool.revision, revision, "turning AI mode back on must not reuse that session");
+  } finally { await pool.dispose(); }
+});
+
 test("a missing command fails with a clear error", async () => {
   const client = new McpStdioClient({ command: "toneshuttle-definitely-missing-mcp-server", label: "Missing" });
   await assert.rejects(client.connect(), /Missing.*(not found|ENOENT)/s);
@@ -434,10 +462,50 @@ test("a server that outlives its cmd.exe launcher is reaped, and the pool reconn
     await delay(300);
     const second = await status(session, "mcp__shim__read_status");
     assert.notEqual(second.pid, first.pid, "the next call reconnects");
-    assert.ok(await waitDead(first.pid, 20_000), `orphaned server ${first.pid} survived its launcher`);
+    assert.equal(alive(first.pid), false, `orphaned server ${first.pid} was still running when its replacement started`);
     await pool.dispose();
     assert.ok(await waitDead(second.pid, 3_000), `server ${second.pid} survived dispose`);
     assert.ok(await waitDead(second.ppid, 3_000), `launcher ${second.ppid} survived dispose`);
+  } finally { await pool.dispose(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a server removed while its dead process is reaped is not started again", { skip: process.platform !== "win32" }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "toneshuttle mcp orphan "));
+  const launches = join(directory, "launches.txt");
+  const pool = new ExternalMcpPool({ retryAfterMs: 0 });
+  try {
+    // The shim logs every launch, so a replacement started after dispose shows up even though the pool no longer tracks it.
+    await writeFile(join(directory, "fixture-shim.cmd"), `@echo off\r\necho launch>>"${launches}"\r\n"${process.execPath}" "${fixture}" %*\r\n`, "utf8");
+    const config = { id: "shim", name: "Shim", command: "fixture-shim", args: ["--name", "shim", "--ignore-eof"], enabled: true, env: { PATH: `${directory}${delimiter}${process.env.PATH ?? process.env.Path ?? ""}` } };
+    const state = await status(await open(pool, [config]), "mcp__shim__read_status");
+    process.kill(state.ppid);
+    await delay(300);
+    // The call finds the client dead and waits while the orphaned server is reaped; the app quits meanwhile.
+    const refused = assert.rejects(pool.call("shim", "read_status", {}), /no longer enabled/);
+    await pool.dispose();
+    await refused;
+    await delay(500);
+    assert.equal((await readFile(launches, "utf8")).trim().split(/\r?\n/).length, 1, "no replacement was launched after dispose");
+    assert.ok(await waitDead(state.pid, 3_000), `orphaned server ${state.pid} survived dispose`);
+  } finally { await pool.dispose(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a server edited while its dead process is reaped starts again only after the reap", { skip: process.platform !== "win32" }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "toneshuttle mcp orphan "));
+  const pool = new ExternalMcpPool({ retryAfterMs: 0 });
+  try {
+    await writeFile(join(directory, "fixture-shim.cmd"), `@echo off\r\n"${process.execPath}" "${fixture}" %*\r\n`, "utf8");
+    const config = { id: "shim", name: "Shim", command: "fixture-shim", args: ["--name", "shim", "--ignore-eof"], enabled: true, env: { PATH: `${directory}${delimiter}${process.env.PATH ?? process.env.Path ?? ""}` } };
+    const first = await status(await open(pool, [config]), "mcp__shim__read_status");
+    process.kill(first.ppid);
+    await delay(300);
+    // A call finds the client dead and starts reaping the orphan; meanwhile the user edits the server.
+    const refused = assert.rejects(pool.call("shim", "read_status", {}), /no longer enabled/);
+    void pool.reconcile([{ ...config, args: [...config.args, "--changed"] }]);
+    const second = JSON.parse(output(await pool.call("shim", "read_status", {})));
+    assert.notEqual(second.pid, first.pid);
+    assert.equal(alive(first.pid), false, `orphaned server ${first.pid} was still running when the edited server started`);
+    await refused;
   } finally { await pool.dispose(); await rm(directory, { recursive: true, force: true }); }
 });
 
