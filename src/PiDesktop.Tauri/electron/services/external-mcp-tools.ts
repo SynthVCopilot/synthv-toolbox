@@ -28,6 +28,9 @@ export interface ExternalMcpPoolOptions {
   retryAfterMs?: number;
 }
 
+/** The settings page's Test result, shaped like the probe's. */
+export interface McpServerCheck { succeeded: boolean; summary: string; detail: string; tools: string[]; serverInfo: { name?: string; version?: string } | null }
+
 interface PoolEntry {
   config: McpServerConfig;
   fingerprint: string;
@@ -107,6 +110,26 @@ export class ExternalMcpPool {
     // Reaping a dead server can take seconds on Windows; Stop must not wait for it.
     const client = await untilAborted(this.connected(entry), signal);
     return client.callTool(toolName, args, signal, this.options.callTimeoutMs);
+  }
+
+  /**
+   * Tests a server through the process the agent already runs for it, so the settings page's Test never starts a second
+   * copy that could collide on a port, a lock or files. Undefined when the pool does not run this exact configuration (AI
+   * mode off, server disabled, or edited since); the caller then probes a fresh process as before.
+   */
+  async check(config: McpServerConfig): Promise<McpServerCheck | undefined> {
+    const entry = this.entries.get(config.id);
+    if (!entry || entry.removed || entry.fingerprint !== fingerprint(config)) return undefined;
+    // A fresh attempt and a fresh list: Test reports the server as it is now, not a cached list or a failure from earlier.
+    entry.tools = undefined;
+    delete entry.failedAt;
+    await this.load(entry);
+    // load() replaced entry.tools; the assignment above narrowed it, so read it again with its declared type.
+    const listed = entry.tools as McpToolInfo[] | undefined;
+    const info = entry.client?.serverInfo, tools = (listed ?? []).map(tool => tool.name);
+    const name = info?.name ? `${info.name}${info.version ? ` ${info.version}` : ""}` : entry.config.name;
+    if (entry.error !== undefined || !listed) return { succeeded: false, summary: `The agent's connection to ${name} failed.`, detail: entry.error ?? "No tools were listed.", tools: [], serverInfo: info ?? null };
+    return { succeeded: true, summary: `Connected to ${name} through the agent's running connection; ${tools.length} tools available.`, detail: tools.join(", ") || "No tools.", tools, serverInfo: info ?? null };
   }
 
   async dispose(): Promise<void> {

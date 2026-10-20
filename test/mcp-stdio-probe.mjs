@@ -119,6 +119,12 @@ test("an oversized finished line fails the probe, and an answer without the JSON
   assert.match(loose.summary, /did not complete the MCP handshake/, "an envelope-less initialize answer is ignored");
 });
 
+test("tool definitions over the byte limit fail the test even when their character count is under it", async () => {
+  const result = await probeStdioMcpServer({ command: process.execPath, args: [fixture, "widetools"] }, { timeoutMs: 20_000 });
+  assert.equal(result.succeeded, false);
+  assert.match(result.summary, /8 MiB of tool definitions/);
+});
+
 test("a server offering more tools than the client keeps fails the test", async () => {
   const result = await probeStdioMcpServer({ command: process.execPath, args: [fixture, "manytools"] });
   assert.equal(result.succeeded, false);
@@ -156,6 +162,11 @@ test("test_mcp_server probes the saved server by id, and rotate_http_api_token d
   assert.deepEqual(tested.serverInfo, { name: "fixture-stdio", version: "1.2.3" });
   assert.deepEqual(await registry.invoke("test_mcp_server", { id: "missing" }), { succeeded: false, summary: "MCP server was not found.", detail: "missing", tools: [], serverInfo: null });
   assert.equal((await registry.invoke("test_mcp_server", { id: "broken" })).summary, "MCP server command is required.");
+  // A server the agent already runs is tested through that process; anything else is probed as before.
+  const checked = [];
+  const pooled = new ElectronCommandRegistry(host, { ai: {}, creative: {}, desktop, synthv: {}, approvals: {}, componentAudio: { dataRoot: process.cwd() }, externalMcp: { async check(config) { checked.push(config.id); return config.id === "fixture" ? { succeeded: true, summary: "pooled", detail: "", tools: ["echo"], serverInfo: null } : undefined; } } });
+  assert.equal((await pooled.invoke("test_mcp_server", { id: "fixture" })).summary, "pooled");
+  assert.deepEqual(checked, ["fixture"]);
   assert.deepEqual(await registry.invoke("rotate_http_api_token"), { token: "rotated" });
   assert.equal(rotations, 1);
 });

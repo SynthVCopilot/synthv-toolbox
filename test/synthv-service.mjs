@@ -474,6 +474,22 @@ test("selective sync needs two slots, keeps its preview's source, and reads the 
   } finally { await rm(fixture.root, { recursive: true, force: true }); }
 });
 
+test("the active slot's data folder is the official one, where SV2 keeps its live data", async () => {
+  const fixture = await slotFixture("synthv-data-folder-"); const { service, canonical } = fixture;
+  try {
+    await writeTree(canonical, { "license/session": "a" });
+    const a = (await service.importCurrentProfile("A")).slots[0].id; const b = await created(service, "B");
+    const slots = (await service.profileState()).slots;
+    assert.equal(slots.find((slot) => slot.id === a).dataPath, canonical);
+    assert.equal(slots.find((slot) => slot.id === b).dataPath, fixture.slot(b));
+    const revealed = [];
+    service.reveal = async (path) => { revealed.push(path); };
+    await service.openProfileFolder(a);
+    await service.openProfileFolder(b);
+    assert.deepEqual(revealed, [canonical, fixture.slot(b)], "Open data folder shows what SV2 uses, not the copy the next switch overwrites");
+  } finally { await rm(fixture.root, { recursive: true, force: true }); }
+});
+
 test("a failed swap of the official folder puts it back and keeps the previous slot active", async () => {
   const fixture = await slotFixture("synthv-swap-fails-"); const { service, canonical } = fixture;
   try {

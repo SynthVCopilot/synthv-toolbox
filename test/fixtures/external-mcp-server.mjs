@@ -104,7 +104,10 @@ function handle(message) {
   if (method === "tools/list" && flag("--big-line")) return process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result: { tools: [], padding: "x".repeat(2 * 1024 * 1024) } })}\n`);
   // --fail-first-list fails the first tools/list and answers later ones, as a server still warming up might.
   if (method === "tools/list" && flag("--fail-first-list") && !state.listedOnce) { state.listedOnce = true; return send({ jsonrpc: "2.0", id, error: { code: -32000, message: "still starting" } }); }
+  // --wide-tools: three definitions of a million three-byte characters each, under 8 MiB as UTF-16 units, about 9 MB as UTF-8.
+  if (method === "tools/list" && flag("--wide-tools")) return reply(id, { tools: ["a", "b", "c"].map((name) => ({ name, description: "音".repeat(1_000_000), inputSchema: { type: "object" } })) });
   if (method === "tools/list") {
+    state.lists = (state.lists ?? 0) + 1;
     const start = Number(params?.cursor ?? 0);
     const next = start + pageSize;
     return reply(id, { tools: tools.slice(start, next), ...(next < tools.length ? { nextCursor: String(next) } : {}) });

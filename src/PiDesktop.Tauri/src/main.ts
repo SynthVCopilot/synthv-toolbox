@@ -943,7 +943,8 @@ function startInstanceRefresh(): void {
 }
 
 async function refreshVisibleSynthvInstances(): Promise<void> {
-  if (busy || document.hidden || instanceRefreshInFlight || (page !== "accounts" && page !== "bridge")) return;
+  // Auto can turn the integration off while one of these pages stays open; nothing probes SynthV after that.
+  if (busy || document.hidden || instanceRefreshInFlight || (page !== "accounts" && page !== "bridge") || !synthvOn()) return;
   const refreshPage = page;
   const generation = instanceRefreshGeneration;
   instanceRefreshInFlight = true;

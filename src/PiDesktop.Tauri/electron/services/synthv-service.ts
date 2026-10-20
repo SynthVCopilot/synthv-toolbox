@@ -99,7 +99,7 @@ export class SynthVService {
   }
 
   async profileState(): Promise<Record<string, unknown>> {
-    const store = await this.readStore();
+    const store = await this.readStore(), canonical = await exists(this.canonicalPath());
     const slots = await Promise.all(store.slots.map(async slot => {
       const isActive = slot.id === store.activeSlotId;
       const sessionSize = await inspectSessionSize(this.sessionPath(slot.id, isActive));
@@ -108,7 +108,7 @@ export class SynthVService {
       const protection = { status: sessionCached ? "ready" : "signInRequired", snapshotAvailable: false, detail: "" };
       const isolatedRoot = join(this.vaultPath(), "instances", slot.id.replaceAll("-", "").slice(0, 16));
       const isolatedDataPath = join(isolatedRoot, "user", "current", "AppData", "Roaming", "Dreamtonics", "Synthesizer V Studio 2");
-      return { ...slot, color: "#6D5CE7", isActive, dataPath: this.slotPath(slot.id), sessionCached, sessionSize, installedVoiceIds: [], accountProbe, concurrentAccountProbe: accountProbe, sessionProtection: protection, concurrentSessionProtection: protection, concurrent: { ready: await exists(isolatedDataPath), dataPath: isolatedDataPath, runningPids: [], detail: "", content: { appSettings: "global", voiceLibraries: "global", effectiveAppSettings: false, effectiveVoiceLibraries: false } } };
+      return { ...slot, color: "#6D5CE7", isActive, dataPath: isActive && canonical ? this.canonicalPath() : this.slotPath(slot.id), sessionCached, sessionSize, installedVoiceIds: [], accountProbe, concurrentAccountProbe: accountProbe, sessionProtection: protection, concurrentSessionProtection: protection, concurrent: { ready: await exists(isolatedDataPath), dataPath: isolatedDataPath, runningPids: [], detail: "", content: { appSettings: "global", voiceLibraries: "global", effectiveAppSettings: false, effectiveVoiceLibraries: false } } };
     }));
     const sandbox = await this.sandboxie();
     return { supported: platform() === "win32" || platform() === "darwin", canonicalPath: this.canonicalPath(), vaultPath: this.vaultPath(), activeSlotId: store.activeSlotId, canonicalRootExists: await exists(this.canonicalPath()), canImportCurrent: await exists(this.canonicalPath()), recoveryRequired: false, recoveryDetail: "", slots, blockers: [], concurrentProvider: sandbox ? { available: true, name: "Sandboxie", edition: "", version: "", installPath: dirname(sandbox.start), detail: "Sandboxie launch tools were found; a configured isolated box is required." } : { available: false, name: "Sandboxie", edition: "", version: "", installPath: "", detail: "Sandboxie Start.exe and SbieIni.exe were not found." }, concurrentDefaults: { appSettings: false, voiceLibraries: false } };
@@ -176,7 +176,14 @@ export class SynthVService {
     const verification = await this.run(sandbox.ini, ["queryex", box, "FileRootPath"]); if (verification.code !== 0 || !normalizePath(verification.stdout).includes(normalizePath(root))) throw new Error("Sandboxie FileRootPath verification failed.");
     await mkdir(join(slot, "sandbox"), { recursive: true }); await writeFile(join(slot, "sandbox", "configured"), JSON.stringify({ box, root, overlay }), "utf8"); return this.profileState();
   }
-  async openProfileFolder(slotId: string): Promise<OperationResult> { await this.assertSlot(slotId); await this.reveal(this.slotPath(slotId)); return ok("Profile folder opened."); }
+  async openProfileFolder(slotId: string): Promise<OperationResult> {
+    await this.assertSlot(slotId);
+    // The active slot's data lives in the official folder; its slot folder is only the copy saved when it was switched in,
+    // and the next switch saves the official folder over it.
+    const active = (await this.readStore()).activeSlotId === slotId && await exists(this.canonicalPath());
+    await this.reveal(active ? this.canonicalPath() : this.slotPath(slotId));
+    return ok("Profile folder opened.");
+  }
 
   async syncProfile(slotId: string, categories: string[]): Promise<Record<string, unknown>> { return this.exclusive(async () => { await this.assertSlot(slotId); if (!Array.isArray(categories) || !categories.every(value => ["settings", "database", "voice"].includes(value))) throw new Error("Unsupported sync category."); for (const category of categories) { const source = join(this.canonicalPath(), category); if (await exists(source)) await cp(source, join(this.slotPath(slotId), category), { recursive: true, force: true }); } return { slotId, categories, succeeded: true }; }); }
   async previewSelectiveSync(sourceSlotId: string, targetSlotId: string, categories: string[], overwrite: boolean): Promise<Record<string, unknown>> { await this.assertSlot(sourceSlotId); await this.assertSlot(targetSlotId); if (sourceSlotId === targetSlotId) throw new Error("Choose two different account slots to sync."); if (!Array.isArray(categories) || !categories.every(value => ["settings", "database", "voice"].includes(value)) || typeof overwrite !== "boolean") throw new Error("Invalid selective sync request."); const token = randomUUID(); this.syncPreviews.set(token, { sourceSlotId, targetSlotId, categories }); return { token, sourceSlotId, targetSlotId, categories, overwrite, entries: [] }; }

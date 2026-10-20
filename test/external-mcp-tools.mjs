@@ -400,6 +400,32 @@ test("tool definitions kept from one server are bounded across pages", async () 
   } finally { await client.close(); }
 });
 
+test("tool definitions are bounded in UTF-8 bytes, not UTF-16 units", async () => {
+  const client = new McpStdioClient({ command: process.execPath, args: [fixture, "--wide-tools"], label: "Wide" });
+  try {
+    await client.connect();
+    await assert.rejects(client.listTools({ timeoutMs: 20_000 }), /8 MiB of tool definitions/);
+  } finally { await client.close(); }
+});
+
+test("Test runs an enabled server through the agent's process instead of starting a second copy", async () => {
+  const pool = new ExternalMcpPool({ retryAfterMs: 0 });
+  try {
+    const config = server("a", "Fixture");
+    const session = await open(pool, [config]);
+    const before = await status(session);
+    const checked = await pool.check(config);
+    assert.equal(checked.succeeded, true, checked.summary);
+    assert.ok(checked.tools.includes("read_status"));
+    assert.match(checked.summary, /through the agent's running connection/);
+    const after = await status(session);
+    assert.equal(after.pid, before.pid);
+    assert.ok(after.lists > before.lists, "the pooled process answered the fresh tools/list");
+    assert.equal(await pool.check({ ...config, args: [...config.args, "--changed"] }), undefined, "an edited server is probed on its own");
+    assert.equal(await new ExternalMcpPool().check(config), undefined, "nothing pooled: the caller probes as before");
+  } finally { await pool.dispose(); }
+});
+
 test("a reconfigured server starts again only after its old process is gone", async () => {
   const pool = new ExternalMcpPool({ retryAfterMs: 0 });
   try {

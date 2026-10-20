@@ -357,7 +357,7 @@ async function initializeServices(): Promise<void> {
     agentChat: async (input, conversationId) => { requireAiMode(desktop); const conversation = conversationId ? await ai.open_conversation(conversationId) : await ai.new_conversation(); return ai.send_message(conversation.id, input, { effort: desktop.agentEffort() }); },
   }, { name: BRAND.slug, title: BRAND.productName, version: app.getVersion() });
   await runtimeHost.attachHttpServer(httpServer);
-  commandRegistry = new ElectronCommandRegistry(runtimeHost, { ai, creative, desktop, synthv, componentAudio: {
+  commandRegistry = new ElectronCommandRegistry(runtimeHost, { ai, creative, desktop, synthv, externalMcp, componentAudio: {
     dataRoot: join(userData, "components"),
     creativeRuntime,
     openExternal: url => shell.openExternal(url),

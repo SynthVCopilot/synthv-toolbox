@@ -126,7 +126,7 @@ export class McpStdioClient {
         if (!tool || seen.has(tool.name)) continue;
         seen.add(tool.name);
         tools.push(tool);
-        bytes += JSON.stringify(raw).length;
+        bytes += Buffer.byteLength(JSON.stringify(raw));
         // Many pages that each fit the message limit could still add up to gigabytes in the main process.
         if (tools.length > MAX_TOOLS || bytes > MAX_TOOL_DEFINITION_BYTES) throw this.error(`offers more than ${MAX_TOOLS} tools or ${MAX_TOOL_DEFINITION_BYTES / 1024 / 1024} MiB of tool definitions`);
       }

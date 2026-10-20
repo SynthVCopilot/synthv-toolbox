@@ -180,6 +180,7 @@ test("History and the renderer's command path leave .svp backups alone while Syn
   assert.match(renderer, /if \(busy\) \{ integrationRefreshPending = true; return; \}/, "a change during a task is kept");
   for (const probe of ["listSynthvProcesses()", "synthvShortcutProfile()", "bridgeSessionStatus()"]) assert.ok(renderer.includes(`synthv ? api.${probe}`), `refresh() skips ${probe} with the integration off`);
   assert.match(renderer, /\$\{synthvOn\(\) \? renderLyricBridgeFit\(\) : ""\}/, "the Lyrics page keeps its editor but drops the Bridge panel");
+  assert.match(renderer, /\(page !== "accounts" && page !== "bridge"\) \|\| !synthvOn\(\)\) return;/, "the Accounts/Bridge poll stops when Auto turns the integration off on those pages");
   assert.match(renderer, /busy = false;\r?\n    if \(integrationRefreshPending\) refreshForIntegrations\(\);/, "and replayed when it ends");
   const main = await readFile(join(root, "src/PiDesktop.Tauri/electron/main.ts"), "utf8");
   assert.match(main, /servers: \(\) => desktop\.aiModeEnabled\(\) \? mcpServerConfigs\(desktop\.enabledMcpServers\(\)\) : \[\]/, "a session initialized after AI mode was turned off starts no external server");
