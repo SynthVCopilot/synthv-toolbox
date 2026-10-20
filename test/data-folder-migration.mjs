@@ -75,6 +75,19 @@ test("a legacy folder is renamed as a whole and stored paths inside it are rewri
   assert.deepEqual(resolveUserDataDirectory(options(appData)), { path: target }, "the next start finds the moved folder and does nothing");
 });
 
+test("a migration lock that cannot be removed is left for the next start instead of stopping this one", (t) => {
+  const { appData, legacy, target } = sandbox(t);
+  seedLegacy(legacy);
+  const removeDirectory = () => { throw Object.assign(new Error("EPERM: operation not permitted, rmdir"), { code: "EPERM" }); };
+  const decision = resolveUserDataDirectory(options(appData, { removeDirectory }));
+  assert.equal(decision.path, target, "the move that already happened is used");
+  assert.equal(decision.migratedFrom, legacy);
+  // The next start finds the lock left by a process that is gone and breaks it.
+  const next = resolveUserDataDirectory(options(appData, { isProcessAlive: () => false }));
+  assert.equal(next.path, target);
+  assert.equal(next.busy, undefined);
+});
+
 test("a fresh machine and a development run never move anything", (t) => {
   const { appData, legacy, target } = sandbox(t);
   assert.deepEqual(resolveUserDataDirectory(options(appData)), { path: target });

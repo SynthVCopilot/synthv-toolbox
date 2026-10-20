@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -136,6 +136,54 @@ test("auto re-detects without a renderer refresh, keeps a Bridge it has seen, an
   const renderer = await readFile(join(root, "src/PiDesktop.Tauri/src/main.ts"), "utf8");
   assert.match(renderer, /listenDesktop<null>\("integrations\.changed"/, "the renderer re-bootstraps when detection changes");
   assert.match(renderer, /await listenForIntegrationChanges\(\);/);
+});
+
+test("settings change only once they are saved, so a failed save leaves SynthV and the mode as shown", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "toneshuttle-unsaved-"));
+  try {
+    let changed = 0;
+    const { runtime, ai } = fakeServices(synthvProbe());
+    const state = new DesktopStateService(directory, "9.9.9", runtime, ai, synthvProbe(), undefined, undefined, undefined, () => { changed++; });
+    await state.load();
+    await state.setIntegration("synthv", "on");
+    assert.equal(changed, 1);
+    // A settings file that cannot be replaced, like a full disk or a locked file.
+    const settings = join(directory, "desktop-settings.json");
+    await rm(settings, { force: true });
+    await mkdir(join(settings, "blocked"), { recursive: true });
+    await assert.rejects(state.setIntegration("synthv", "off"));
+    assert.equal(state.synthvPreference(), "on", "the integration stays as the renderer shows it");
+    assert.equal(state.synthvEnabled(), true);
+    assert.equal(changed, 1, "nothing reacts to settings that were not saved");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("the bridge component is loaded only while the integration is not Off, and swapped as it changes", async () => {
+  const { SwitchableBridge, gatedBridge } = await import("../src/PiDesktop.Tauri/dist/electron/services/synthv-bridge.js");
+  const { savedIntegrationPreference } = await import("../src/PiDesktop.Tauri/dist/electron/services/desktop-state.js");
+  const directory = await mkdtemp(join(tmpdir(), "toneshuttle-saved-pref-"));
+  try {
+    assert.equal(await savedIntegrationPreference(directory, "synthv"), "auto", "no settings yet");
+    await writeFile(join(directory, "desktop-settings.json"), JSON.stringify({ integrations: { synthv: "off" } }), "utf8");
+    assert.equal(await savedIntegrationPreference(directory, "synthv"), "off");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+  let closed = 0;
+  const component = { tools: [{ name: "sv_status", title: "", description: "", annotations: {}, inputSchema: {}, call: async () => ({ text: "{}", isError: false }) }], instructions: "real", classify: () => ({ category: "read", risk: "normal" }), status: async () => ({ connected: true, ipcDirectory: "x" }), requestStop: async () => {}, close: async () => { closed++; } };
+  const placeholder = unavailableBridge("off", {});
+  const bridge = new SwitchableBridge(placeholder, false);
+  const gated = gatedBridge(bridge, () => true);
+  assert.deepEqual(gated.tools, [], "nothing loaded while Off");
+  bridge.replace(component, true);
+  assert.equal(bridge.loaded, true);
+  assert.deepEqual(gated.tools.map((tool) => tool.name), ["sv_status"], "gated users see the component loaded later");
+  assert.equal(gated.instructions, "real");
+  await bridge.replace(placeholder, false).close();
+  assert.equal(closed, 1, "turning Off closes the component, which stops its status watching");
+  assert.deepEqual(gated.tools, []);
+  const main = await readFile(join(root, "src/PiDesktop.Tauri/electron/main.ts"), "utf8");
+  assert.match(main, /const startOff = await savedIntegrationPreference\(userData, "synthv"\) === "off";/);
+  assert.match(main, /startOff \? new SwitchableBridge\(bridgeOff\(\), false\) : new SwitchableBridge\(await loadBridge\(\), bridgeLoadError === undefined\)/);
+  assert.match(main, /followIntegration\(\);\r?\n  \}, dataDirectory\);/, "settings changes load or close the component");
 });
 
 test("a refresh reports a Bridge that connects while the integration is already on", async () => {

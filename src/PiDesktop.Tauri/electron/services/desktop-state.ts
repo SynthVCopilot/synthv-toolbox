@@ -30,13 +30,23 @@ interface DesktopSettings {
 
 const defaults = (): DesktopSettings => ({ onboardingCompleted: false, mode: "toolbox", agentWorkMode: "edit", agentEffort: DEFAULT_AGENT_EFFORT, agentTranscriptsEnabled: false, updateChannel: "stable", concurrentDisclaimerAccepted: false, sv2ConcurrentEnabled: false, sv2AccountIndicatorEnabled: false, smartSvpLaunchEnabled: false, smartSvpAlwaysAsk: false, mcpServers: [], integrations: { synthv: "auto" } });
 
+/** The saved preference, read before the services start: main.ts does not load the SynthV bridge when it is "off". */
+export async function savedIntegrationPreference(root: string, id: IntegrationId): Promise<IntegrationPreference> {
+  try {
+    const parsed = JSON.parse(await readFile(join(root, "desktop-settings.json"), "utf8"));
+    const value = parsed?.integrations !== null && typeof parsed?.integrations === "object" ? parsed.integrations[id] : undefined;
+    return isIntegrationPreference(value) ? value : "auto";
+  } catch { return "auto"; }
+}
+
 export class DesktopStateService {
   private settings = defaults();
   private synthvEvidence: SynthVEvidence = { installations: 0, profiles: 0, bridgeConnected: false };
   private bridgeSeen = false;
+  private saving: Promise<unknown> = Promise.resolve();
   /** What the renderer shows from the last probe; a refresh that changes it is pushed so pages follow without a reload. */
   private lastProbeSignature = "";
-  constructor(private readonly root: string, private readonly appVersion: string, private readonly runtime: ElectronRuntimeHost, private readonly ai: AiService, private readonly synthv: SynthVProbe, private readonly applyUpdateChannel?: (channel: "stable" | "nightly") => void, private readonly creativeRuntime?: { status(): Promise<{ready: boolean; detail: string}> }, private readonly bridgeLoadError?: string, private readonly onSettingsChanged?: () => void, private readonly dataDirectory?: DataDirectoryDecision) {}
+  constructor(private readonly root: string, private readonly appVersion: string, private readonly runtime: ElectronRuntimeHost, private readonly ai: AiService, private readonly synthv: SynthVProbe, private readonly applyUpdateChannel?: (channel: "stable" | "nightly") => void, private readonly creativeRuntime?: { status(): Promise<{ready: boolean; detail: string}> }, private bridgeLoadError?: string, private readonly onSettingsChanged?: () => void, private readonly dataDirectory?: DataDirectoryDecision) {}
 
   async load(): Promise<void> {
     try {
@@ -56,6 +66,9 @@ export class DesktopStateService {
   /** External stdio MCP servers the user enabled for the built-in agent (Connections page). */
   enabledMcpServers(): Data[] { return this.settings.mcpServers.filter(server => server.enabled === true); }
   /** Synchronous so agent session composition can read it; reflects the most recent SynthV probe. */
+  synthvPreference(): IntegrationPreference { return this.settings.integrations.synthv; }
+  /** main.ts loads the bridge component later when the integration is turned on; its outcome replaces the startup one. */
+  bridgeLoaded(error: string | undefined): void { this.bridgeLoadError = error; }
   synthvEnabled(): boolean { return resolveSynthVIntegration(this.settings.integrations.synthv, this.synthvEvidence); }
 
   /**
@@ -80,7 +93,24 @@ export class DesktopStateService {
     return { ...this.settings, integrations: { synthv: integration }, platform: process.platform, appVersion: this.appVersion, configPath: this.path(), dataDirectory: { path: this.root, migratedFrom: this.dataDirectory?.migratedFrom ?? null, deferred: this.dataDirectory?.deferred ?? null, legacyRemaining: this.dataDirectory?.legacyRemaining ?? null, setAside: this.dataDirectory?.setAside ?? null, fixupErrors: this.dataDirectory?.fixupErrors ?? [] }, settingsLoadError: null, model, bridgeBundled: bridgeLoaded, bridgeConnected: synthv.bridgeConnected, installations: synthv.installations, components: componentCatalog(synthv.profiles, creativeRuntime, ffmpeg, enabled), downloads: [], pluginInternalFunctionsEnabled: runtime.pluginInternalFunctionsEnabled, pluginAdvancedFunctionsEnabled: runtime.pluginAdvancedFunctionsEnabled, autostartEnabled: autostart.enabled, autostartError: autostart.error, svpAssociation: { supported: enabled && process.platform === "win32", registered: false, isDefault: false, detail: "Electron launch routing is available after the application is installed." }, sv2Profiles: synthv.profiles, agentBudgets };
   }
 
-  async update(values: Partial<DesktopSettings>): Promise<Data> { this.settings = { ...this.settings, ...values }; if (values.updateChannel) this.applyUpdateChannel?.(values.updateChannel); await this.persist(); this.onSettingsChanged?.(); return this.bootstrap(); }
+  /**
+   * Saved first: a settings file that cannot be written (full disk, a locked file) leaves the app on the settings the renderer
+   * still shows, instead of switching SynthV, the mode or MCP servers behind it. Saves run one at a time, so each starts from
+   * the settings the previous one stored.
+   */
+  async update(values: Partial<DesktopSettings>): Promise<Data> {
+    const apply = async () => {
+      const next = { ...this.settings, ...values };
+      await this.persist(next);
+      this.settings = next;
+      if (values.updateChannel) this.applyUpdateChannel?.(values.updateChannel);
+      this.onSettingsChanged?.();
+    };
+    const saved = this.saving.then(apply, apply);
+    this.saving = saved.catch(() => undefined);
+    await saved;
+    return this.bootstrap();
+  }
   async setIntegration(id: IntegrationId, preference: IntegrationPreference): Promise<Data> { return this.update({ integrations: { ...this.settings.integrations, [id]: preference } }); }
   async saveMcpServer(server: Data): Promise<Data> { const id = requiredText(server.id, "server.id"); const next = this.settings.mcpServers.filter(item => item.id !== id); next.push({ ...server, id }); return this.update({ mcpServers: next }); }
   async deleteMcpServer(id: string): Promise<Data> { return this.update({ mcpServers: this.settings.mcpServers.filter(item => item.id !== id) }); }
@@ -104,7 +134,7 @@ export class DesktopStateService {
     try { return (await stat(path)).isDirectory(); } catch { return false; }
   }
   private path(): string { return join(this.root, "desktop-settings.json"); }
-  private async persist(): Promise<void> { await mkdir(dirname(this.path()), { recursive: true }); const temporary = `${this.path()}.tmp`; await writeFile(temporary, JSON.stringify(this.settings), { encoding: "utf8", mode: 0o600 }); await rename(temporary, this.path()); }
+  private async persist(settings: DesktopSettings): Promise<void> { await mkdir(dirname(this.path()), { recursive: true }); const temporary = `${this.path()}.tmp`; await writeFile(temporary, JSON.stringify(settings), { encoding: "utf8", mode: 0o600 }); await rename(temporary, this.path()); }
 }
 
 function requiredText(value: unknown, label: string): string { if (typeof value !== "string" || !value.trim()) throw new Error(`${label} must be a non-empty string.`); return value; }

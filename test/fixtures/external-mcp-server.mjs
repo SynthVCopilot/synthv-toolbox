@@ -62,6 +62,8 @@ async function callTool(id, name, args) {
   if (name === "add_tool") {
     tools.push({ name: args.name, description: "Added at runtime.", inputSchema: { type: "object", properties: {} }, annotations: readOnly });
     reply(id, text(`added ${args.name}`));
+    // --silent-add changes the list without saying so, as some servers do.
+    if (flag("--silent-add")) return;
     return send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
   }
   send({ jsonrpc: "2.0", id, error: { code: -32602, message: `Unknown tool: ${name}` } });

@@ -48,6 +48,8 @@ export interface DataDirectoryOptions {
   sleep?: (milliseconds: number) => void;
   isProcessAlive?: (pid: number) => boolean;
   now?: () => Date;
+  /** Removes the migration lock; tests make it fail like a file that antivirus or an indexer holds. */
+  removeDirectory?: (path: string) => void;
 }
 
 export interface DataDirectoryDecision {
@@ -136,9 +138,13 @@ function withMigrationLock(options: DataDirectoryOptions, target: string, work: 
     writeFileSync(join(lock, "owner"), String(process.pid));
     return work();
   } finally {
-    rmSync(lock, { recursive: true, force: true });
+    // The work is done (or failed on its own); a lock that cannot be removed right now (antivirus, an indexer) is left for
+    // the next start to find stale, never a reason to stop this one.
+    try { (options.removeDirectory ?? removeWithRetries)(lock); } catch (error) { console.warn(`Could not remove the data-folder migration lock at ${lock}:`, error); }
   }
 }
+
+function removeWithRetries(path: string): void { rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
 
 function staleLock(lock: string, options: DataDirectoryOptions): boolean {
   let age: number;

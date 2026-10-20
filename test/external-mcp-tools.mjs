@@ -426,6 +426,23 @@ test("Test runs an enabled server through the agent's process instead of startin
   } finally { await pool.dispose(); }
 });
 
+test("a Test that finds a changed tool list makes existing sessions rebuild", async () => {
+  const pool = new ExternalMcpPool({ retryAfterMs: 0 });
+  try {
+    const config = server("a", "Fixture", "--silent-add");
+    const session = await open(pool, [config], "solo");
+    await session.run("mcp__fixture__add_tool", { name: "quiet_tool" });
+    await delay(100);
+    const revision = pool.revision;
+    const checked = await pool.check(config);
+    assert.ok(checked.tools.includes("quiet_tool"));
+    assert.ok(pool.revision > revision, "sessions that registered the old list rebuild on their next turn");
+    const unchanged = pool.revision;
+    await pool.check(config);
+    assert.equal(pool.revision, unchanged, "a Test that finds the same list changes nothing");
+  } finally { await pool.dispose(); }
+});
+
 test("a reconfigured server starts again only after its old process is gone", async () => {
   const pool = new ExternalMcpPool({ retryAfterMs: 0 });
   try {

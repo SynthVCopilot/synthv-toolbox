@@ -21,14 +21,14 @@ import { createCoverAudio } from "./services/cover-audio.js";
 import { resolveFfmpegBinaries } from "./services/component-audio-commands.js";
 import { createCreativeService } from "./services/creative-service.js";
 import { createComponentExecutor } from "./services/component-executor.js";
-import { DesktopStateService } from "./services/desktop-state.js";
+import { DesktopStateService, savedIntegrationPreference } from "./services/desktop-state.js";
 import { HostCapabilities } from "./services/host-capabilities.js";
 import { ClientError, HttpMcpServer } from "./services/http-mcp-server.js";
 import { agentSystemPrompt } from "./services/agent-identity.js";
 import { hostResultToToolResult, toolboxMcpTools } from "./services/mcp-tools.js";
 import { AUTOSTART_ARGUMENT, legacyExecutableCandidates, loginItemLookupPath, migrateAutostart } from "./services/autostart-migration.js";
 import { resolveUserDataDirectory, type DataDirectoryDecision } from "./services/user-data-migration.js";
-import { gatedBridge, loadEmbeddedBridge, SYNTHV_OFF_MESSAGE, unavailableBridge, type EmbeddedBridge } from "./services/synthv-bridge.js";
+import { gatedBridge, loadEmbeddedBridge, SwitchableBridge, SYNTHV_OFF_MESSAGE, unavailableBridge } from "./services/synthv-bridge.js";
 import { createSynthVDeliveryRegistry, createSynthVToolsExtension } from "./services/synthv-agent-tools.js";
 import { createToolboxAgentToolsExtension } from "./services/toolbox-agent-tools.js";
 import { createExternalMcpToolsExtension, ExternalMcpPool, mcpServerConfigs } from "./services/external-mcp-tools.js";
@@ -254,11 +254,16 @@ async function initializeServices(): Promise<void> {
   const bridgeDirectory = app.isPackaged ? join(process.resourcesPath, "components", "synthv-agent-bridge") : resolve(currentDirectory, "../../components/synthv-agent-bridge");
   // The bridge only serves the optional SynthV integration; a broken component must not stop the whole app.
   let bridgeLoadError: string | undefined;
-  const bridge: EmbeddedBridge = await loadEmbeddedBridge(bridgeDirectory, BRAND.slug).catch((reason: unknown) => {
+  const loadBridge = () => loadEmbeddedBridge(bridgeDirectory, BRAND.slug).catch((reason: unknown) => {
     bridgeLoadError = `The Synthesizer V bridge component could not be loaded: ${reason instanceof Error ? reason.message : String(reason)}`;
     console.error(bridgeLoadError);
     return unavailableBridge(bridgeLoadError);
   });
+  // Off means no probing: with the integration saved as Off the component (which watches SynthV's status files) is not loaded
+  // at all, and followIntegration() loads or closes it as the setting changes. Auto needs it: a connected Bridge is evidence.
+  const bridgeOff = () => unavailableBridge(SYNTHV_OFF_MESSAGE);
+  const startOff = await savedIntegrationPreference(userData, "synthv") === "off";
+  const bridge = startOff ? new SwitchableBridge(bridgeOff(), false) : new SwitchableBridge(await loadBridge(), bridgeLoadError === undefined);
   const bridgeIpcDirectory = (await bridge.status()).ipcDirectory;
   const accountBrowsers = new Map<string, WebAccountBrowser>();
   const webAccounts = new DreamtonicsWebAccounts((slotId) => {
@@ -325,7 +330,21 @@ async function initializeServices(): Promise<void> {
     void externalMcp.reconcile(desktop.aiModeEnabled() ? mcpServerConfigs(desktop.enabledMcpServers()) : []);
     // Toolbox-only mode promises no model requests, so runs already going (including toolbox_agent tasks) stop now.
     if (!desktop.aiModeEnabled()) void ai.cancel_all_agent_runs().catch((reason: unknown) => console.error("Unable to stop agent runs", reason));
+    followIntegration();
   }, dataDirectory);
+  // Loads the bridge component when the integration stops being Off and closes it when it becomes Off, one change at a time.
+  let bridgeChange: Promise<void> = Promise.resolve();
+  function followIntegration(): void {
+    bridgeChange = bridgeChange.then(async () => {
+      const wanted = desktop.synthvPreference() !== "off";
+      if (wanted && !bridge.loaded) {
+        bridgeLoadError = undefined;
+        const loaded = await loadBridge();
+        bridge.replace(loaded, bridgeLoadError === undefined);
+        desktop.bridgeLoaded(bridgeLoadError);
+      } else if (!wanted && bridge.loaded) await bridge.replace(bridgeOff(), false).close();
+    }).catch((reason: unknown) => { console.error("Unable to switch the SynthV bridge", reason); });
+  }
   await desktop.load();
   // "auto" follows what is installed and running: look again when a window gains focus (which also catches a Bridge started
   // while the integration was on) and, while it resolves to off, every few seconds, so a Bridge started with the window

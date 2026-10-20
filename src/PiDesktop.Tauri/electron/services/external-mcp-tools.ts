@@ -136,11 +136,14 @@ export class ExternalMcpPool {
     const entry = this.entries.get(config.id);
     if (!entry || entry.removed || entry.fingerprint !== fingerprint(config)) return undefined;
     // A fresh attempt and a fresh list: Test reports the server as it is now, not a cached list or a failure from earlier.
+    const before = entry.tools && entry.error === undefined ? JSON.stringify(entry.tools) : undefined;
     entry.tools = undefined;
     delete entry.failedAt;
     await this.load(entry);
     // load() replaced entry.tools; the assignment above narrowed it, so read it again with its declared type.
     const listed = entry.tools as McpToolInfo[] | undefined;
+    // A server may change its tools without tools/list_changed; sessions built from the old list must rebuild.
+    if (listed && before !== undefined && JSON.stringify(listed) !== before) this.toolsRevision++;
     const info = entry.client?.serverInfo, tools = (listed ?? []).map(tool => tool.name);
     const name = info?.name ? `${info.name}${info.version ? ` ${info.version}` : ""}` : entry.config.name;
     if (entry.error !== undefined || !listed) return { succeeded: false, summary: `The agent's connection to ${name} failed.`, detail: entry.error ?? "No tools were listed.", tools: [], serverInfo: info ?? null };
