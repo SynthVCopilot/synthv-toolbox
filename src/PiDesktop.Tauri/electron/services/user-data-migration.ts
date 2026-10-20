@@ -87,6 +87,14 @@ export function resolveUserDataDirectory(options: DataDirectoryOptions): DataDir
 /** Runs under the lock, so everything is evaluated again: another start may have finished the move while this one waited. */
 function migrate(options: DataDirectoryOptions, target: string): DataDirectoryDecision {
   const legacy = findLegacy(options);
+  let setAside: string | undefined;
+  // When the move does not happen, a folder set aside for it goes back under its own name; only if that fails too does the
+  // decision report where it is, since a later successful move would no longer know about it.
+  const putBack = (): { setAside?: string } => {
+    if (!setAside) return {};
+    try { if (!existsSync(target)) { renameSync(setAside, target); return {}; } } catch { /* reported below */ }
+    return { setAside };
+  };
   try {
     if (holdsAppData(target)) {
       const fixupErrors = resumeFixups(target, options);
@@ -95,22 +103,22 @@ function migrate(options: DataDirectoryOptions, target: string): DataDirectoryDe
     if (!legacy) return { path: target };
     const running = liveInstance(legacy, options);
     if (running) return { path: legacy, deferred: { reason: "running", detail: running } };
-    const setAside = clearTarget(target, options);
+    setAside = clearTarget(target, options);
     const aside = setAside ? { setAside } : {};
     // The marker moves with the folder, so a stop between the rename and the fix-ups still leaves them resumable.
     writeMarker(legacy, { from: legacy, to: target, at: now(options).toISOString(), appVersion: options.appVersion, fixups: "pending", attempts: 0 }, options);
     const failure = renameWithRetry(legacy, target, options);
     if (failure) {
       rmSync(join(legacy, MIGRATION_MARKER), { force: true });
-      return { path: legacy, deferred: failure, ...aside };
+      return { path: legacy, deferred: failure, ...putBack() };
     }
     const fixupErrors = resumeFixups(target, options);
     return { path: target, migratedFrom: legacy, ...aside, ...(fixupErrors.length ? { fixupErrors } : {}) };
   } catch (error) {
     // Never block startup. If the folder already moved, say so rather than promising a retry that cannot happen.
-    if (legacy && !existsSync(legacy) && holdsAppData(target)) return { path: target, migratedFrom: legacy, fixupErrors: [message(error)] };
+    if (legacy && !existsSync(legacy) && holdsAppData(target)) return { path: target, migratedFrom: legacy, fixupErrors: [message(error)], ...(setAside ? { setAside } : {}) };
     const path = holdsAppData(target) || !legacy ? target : legacy;
-    return { path, deferred: { reason: "error", detail: message(error) } };
+    return { path, deferred: { reason: "error", detail: message(error) }, ...putBack() };
   }
 }
 

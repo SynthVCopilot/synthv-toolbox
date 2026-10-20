@@ -245,6 +245,9 @@ test("stopping an agent run ends the process its toolbox tool started, and recor
   const loudness = new AbortController();
   await assert.rejects(handlers.get("analyze_loudness")({ path: fileURLToPath(import.meta.url) }, loudness.signal), { name: "AbortError" });
   assert.equal(seen[0], loudness.signal);
+  const probe = new AbortController();
+  await assert.rejects(handlers.get("probe_media")({ path: fileURLToPath(import.meta.url) }, probe.signal), { name: "AbortError" });
+  assert.equal(seen[1], probe.signal, "FFprobe stops with the run too");
 });
 
 test("a refresh reports a Bridge that connects while the integration is already on", async () => {

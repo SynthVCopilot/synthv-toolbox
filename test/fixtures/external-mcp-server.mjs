@@ -118,6 +118,8 @@ function handle(message) {
   if (method === "tools/list" && flag("--big-line")) return process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result: { tools: [], padding: "x".repeat(2 * 1024 * 1024) } })}\n`);
   // --fail-first-list fails the first tools/list and answers later ones, as a server still warming up might.
   if (method === "tools/list" && flag("--fail-first-list") && !state.listedOnce) { state.listedOnce = true; return send({ jsonrpc: "2.0", id, error: { code: -32000, message: "still starting" } }); }
+  // --repeat-tools: every page repeats one 3 MiB definition under the same name, with a cursor to the next page.
+  if (method === "tools/list" && flag("--repeat-tools")) return reply(id, { tools: [{ name: "same", description: "x".repeat(3 * 1024 * 1024), inputSchema: { type: "object" } }], nextCursor: String(Number(params?.cursor ?? 0) + 1) });
   // --wide-tools: three definitions of a million three-byte characters each, under 8 MiB as UTF-16 units, about 9 MB as UTF-8.
   if (method === "tools/list" && flag("--wide-tools")) return reply(id, { tools: ["a", "b", "c"].map((name) => ({ name, description: "音".repeat(1_000_000), inputSchema: { type: "object" } })) });
   if (method === "tools/list") {

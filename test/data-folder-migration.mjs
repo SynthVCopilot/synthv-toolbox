@@ -112,6 +112,19 @@ test("a migration lock that cannot be created defers the move instead of moving 
   assert.equal(resolveUserDataDirectory(options(appData)).migratedFrom, legacy, "a later start takes the lock and moves the folder");
 });
 
+test("a folder set aside for a move that fails before the rename goes back under its own name", (t) => {
+  const { appData, legacy, target } = sandbox(t);
+  seedLegacy(legacy);
+  write(join(target, "notes.txt"), "kept");
+  // The marker cannot be written into the old folder (a directory sits where the file goes), so setup fails after the set-aside.
+  mkdirSync(join(legacy, MIGRATION_MARKER));
+  const decision = resolveUserDataDirectory(options(appData));
+  assert.equal(decision.path, legacy);
+  assert.equal(decision.deferred?.reason, "error");
+  assert.equal(decision.setAside, undefined, "nothing is left aside to report");
+  assert.equal(readFileSync(join(target, "notes.txt"), "utf8"), "kept", "the folder is back under its own name");
+});
+
 test("a fresh machine and a development run never move anything", (t) => {
   const { appData, legacy, target } = sandbox(t);
   assert.deepEqual(resolveUserDataDirectory(options(appData)), { path: target });

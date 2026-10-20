@@ -408,6 +408,14 @@ test("tool definitions are bounded in UTF-8 bytes, not UTF-16 units", async () =
   } finally { await client.close(); }
 });
 
+test("repeated or invalid tool definitions count toward the cap as they arrive", async () => {
+  const client = new McpStdioClient({ command: process.execPath, args: [fixture, "--repeat-tools"], label: "Repeat" });
+  try {
+    await client.connect();
+    await assert.rejects(client.listTools({ timeoutMs: 20_000 }), /8 MiB of tool definitions/, "three 3 MiB copies of one tool pass the cap although only one is kept");
+  } finally { await client.close(); }
+});
+
 test("Test runs an enabled server through the agent's process instead of starting a second copy", async () => {
   const pool = new ExternalMcpPool({ retryAfterMs: 0 });
   try {
