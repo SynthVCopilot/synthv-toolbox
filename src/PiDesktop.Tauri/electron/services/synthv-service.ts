@@ -33,7 +33,7 @@ export type AutostartController = {
 
 export class SynthVService {
   private pendingRoute: Record<string, unknown> | null = null;
-  private readonly syncPreviews = new Map<string, { targetSlotId: string; categories: string[] }>();
+  private readonly syncPreviews = new Map<string, { sourceSlotId: string; targetSlotId: string; categories: string[] }>();
   // One chain for everything that rewrites the store, a slot or the official folder: two overlapping switches would each save the official folder over the slot they both read as active.
   private slotLock: Promise<unknown> = Promise.resolve();
   constructor(private readonly root: string, private readonly bridgeDirectory: string, private readonly bridge: Pick<EmbeddedBridge, "status" | "requestStop">, private readonly bridgeIpcDirectory: string, private readonly runner: Runner = runCommand, private readonly autostart?: AutostartController, private readonly platformDataRoot?: string, private readonly env: NodeJS.ProcessEnv = process.env, private readonly webAccounts?: DreamtonicsWebAccounts) {}
@@ -179,14 +179,19 @@ export class SynthVService {
   async openProfileFolder(slotId: string): Promise<OperationResult> { await this.assertSlot(slotId); await this.reveal(this.slotPath(slotId)); return ok("Profile folder opened."); }
 
   async syncProfile(slotId: string, categories: string[]): Promise<Record<string, unknown>> { return this.exclusive(async () => { await this.assertSlot(slotId); if (!Array.isArray(categories) || !categories.every(value => ["settings", "database", "voice"].includes(value))) throw new Error("Unsupported sync category."); for (const category of categories) { const source = join(this.canonicalPath(), category); if (await exists(source)) await cp(source, join(this.slotPath(slotId), category), { recursive: true, force: true }); } return { slotId, categories, succeeded: true }; }); }
-  async previewSelectiveSync(sourceSlotId: string, targetSlotId: string, categories: string[], overwrite: boolean): Promise<Record<string, unknown>> { await this.assertSlot(sourceSlotId); await this.assertSlot(targetSlotId); if (!Array.isArray(categories) || !categories.every(value => ["settings", "database", "voice"].includes(value)) || typeof overwrite !== "boolean") throw new Error("Invalid selective sync request."); const token = randomUUID(); this.syncPreviews.set(token, { targetSlotId, categories }); return { token, sourceSlotId, targetSlotId, categories, overwrite, entries: [] }; }
+  async previewSelectiveSync(sourceSlotId: string, targetSlotId: string, categories: string[], overwrite: boolean): Promise<Record<string, unknown>> { await this.assertSlot(sourceSlotId); await this.assertSlot(targetSlotId); if (sourceSlotId === targetSlotId) throw new Error("Choose two different account slots to sync."); if (!Array.isArray(categories) || !categories.every(value => ["settings", "database", "voice"].includes(value)) || typeof overwrite !== "boolean") throw new Error("Invalid selective sync request."); const token = randomUUID(); this.syncPreviews.set(token, { sourceSlotId, targetSlotId, categories }); return { token, sourceSlotId, targetSlotId, categories, overwrite, entries: [] }; }
   async executeSelectiveSync(sourceSlotId: string, targetSlotId: string, categories: string[], token: string): Promise<Record<string, unknown>> {
     return this.exclusive(async () => {
-      const preview = this.syncPreviews.get(token); if (!preview || preview.targetSlotId !== targetSlotId || JSON.stringify(preview.categories) !== JSON.stringify(categories)) throw new Error("Selective sync preview is no longer valid."); await this.assertSlot(sourceSlotId);
-      // The next switch saves the official folder over the active slot's folder, so syncing into the active slot has to write the official folder, which SV2 must not hold.
-      const live = (await this.readStore()).activeSlotId === targetSlotId && await exists(this.canonicalPath()); if (live) { const running = await this.runningSv2(); if (running.length) throw sv2RunningError(running, "syncing into the active account slot"); }
-      const targetRoot = live ? this.canonicalPath() : this.slotPath(targetSlotId);
-      for (const category of categories) { const source = join(this.slotPath(sourceSlotId), category); if (await exists(source)) await cp(source, join(targetRoot, category), { recursive: true, force: true }); } this.syncPreviews.delete(token); return { sourceSlotId, targetSlotId, categories, succeeded: true };
+      const preview = this.syncPreviews.get(token); if (!preview || preview.sourceSlotId !== sourceSlotId || preview.targetSlotId !== targetSlotId || JSON.stringify(preview.categories) !== JSON.stringify(categories)) throw new Error("Selective sync preview is no longer valid."); await this.assertSlot(sourceSlotId);
+      if (sourceSlotId === targetSlotId) throw new Error("Choose two different account slots to sync.");
+      // The active slot's data lives in the official folder; its slot folder is the copy saved when it was switched in, and the
+      // next switch saves the official folder over it. So the active slot is read from, and written to, the official folder,
+      // which SV2 must not hold while it is copied.
+      const activeSlotId = (await this.readStore()).activeSlotId, canonical = await exists(this.canonicalPath());
+      const liveSource = canonical && activeSlotId === sourceSlotId, liveTarget = canonical && activeSlotId === targetSlotId;
+      if (liveSource || liveTarget) { const running = await this.runningSv2(); if (running.length) throw sv2RunningError(running, liveTarget ? "syncing into the active account slot" : "syncing from the active account slot"); }
+      const sourceRoot = liveSource ? this.canonicalPath() : this.slotPath(sourceSlotId), targetRoot = liveTarget ? this.canonicalPath() : this.slotPath(targetSlotId);
+      for (const category of categories) { const source = join(sourceRoot, category); if (await exists(source)) await cp(source, join(targetRoot, category), { recursive: true, force: true }); } this.syncPreviews.delete(token); return { sourceSlotId, targetSlotId, categories, succeeded: true };
     });
   }
   async previewSvpRoute(projectPath: string): Promise<Record<string, unknown>> { requireText(projectPath, "projectPath"); const store = await this.readStore(); const route = { projectPath, selectedSlotId: store.activeSlotId, mode: "active", executablePath: (await this.scanInstallations()).find(item => item.bridgeProfile === "sv2")?.executablePath ?? null }; this.pendingRoute = route; return route; }

@@ -111,6 +111,9 @@ test("an oversized finished line fails the probe, and an answer without the JSON
   assert.equal(big.succeeded, false);
   // Pipes split a 2 MiB line into chunks, so whichever check sees it first (tail or finished line) must end the probe.
   assert.match(big.summary, /larger than 1 MiB/);
+  const wide = await probeStdioMcpServer({ command: process.execPath, args: [fixture, "wideline"] }, { maxMessageLength: 1024 * 1024 });
+  assert.equal(wide.succeeded, false, "the limit counts UTF-8 bytes, not UTF-16 units");
+  assert.match(wide.summary, /larger than 1 MiB/);
   const loose = await probeStdioMcpServer({ command: process.execPath, args: [fixture, "loose"] }, { timeoutMs: 1_500 });
   assert.equal(loose.succeeded, false);
   assert.match(loose.summary, /did not complete the MCP handshake/, "an envelope-less initialize answer is ignored");

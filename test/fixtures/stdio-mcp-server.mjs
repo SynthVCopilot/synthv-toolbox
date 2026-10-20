@@ -16,6 +16,8 @@ if (mode === "exit") {
 if (mode === "hang" || mode === "flood") process.stderr.write(`fixture pid ${process.pid}\n`);
 if (mode === "flood") { const chunk = "x".repeat(64 * 1024); const pump = () => process.stdout.write(chunk, pump); pump(); }
 if (mode === "bigline") process.stdout.write(`${"x".repeat(2 * 1024 * 1024)}\n`);
+// 400,000 three-byte characters: under 1 MiB as UTF-16 units, about 1.14 MiB on the wire; then it answers like "ok".
+if (mode === "wideline") process.stdout.write(`${"音".repeat(400_000)}\n`);
 if (mode === "loose") process.stderr.write(`fixture pid ${process.pid}\n`);
 // Behind a launcher that exits early: report this process and keep running after stdin closes, so only a kill ends it.
 if (process.env.FIXTURE_PID_FILE) writeFileSync(process.env.FIXTURE_PID_FILE, String(process.pid));

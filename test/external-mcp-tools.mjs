@@ -363,6 +363,11 @@ test("only JSON-RPC 2.0 responses settle requests, and an oversized finished lin
     await big.connect();
     await assert.rejects(big.listTools({ timeoutMs: 10_000 }), /larger than 1 MiB/, "a finished line over the limit is refused before parsing");
   } finally { await big.close(); }
+  const wide = new McpStdioClient({ command: process.execPath, args: [fixture, "--wide-line"], label: "Wide", maxMessageLength: 1024 * 1024 });
+  try {
+    await wide.connect();
+    await assert.rejects(wide.listTools({ timeoutMs: 10_000 }), /larger than 1 MiB/, "the limit counts UTF-8 bytes, not UTF-16 units");
+  } finally { await wide.close(); }
 });
 
 test("a server that recovers through its running process rebuilds sessions created while it was failing", async () => {

@@ -48,6 +48,30 @@ const STDERR_LINES = 20;
 const MAX_LINE_LENGTH = 500;
 /** A server that streams a single line beyond this is broken or hostile; it would otherwise grow main-process memory without bound. */
 export const MAX_MESSAGE_LENGTH = 64 * 1024 * 1024;
+
+/**
+ * Splits a server's stdout into lines and bounds each one in UTF-8 bytes as received. String .length counts UTF-16 units,
+ * so a line of three-byte characters would pass a character limit at three times its size. The unfinished line is kept as
+ * parts, so a long message arriving in many chunks is not joined again on every chunk.
+ */
+export class StdoutLines {
+  private parts: string[] = [];
+  private bytes = 0;
+  constructor(private readonly limit: number) {}
+
+  /** The lines this chunk finished, or how a line (finished or still open) passed the limit; nothing is kept after that. */
+  push(chunk: string): string[] | { overflow: "line" | "unterminated" } {
+    const segments = chunk.split("\n"), lines: string[] = [];
+    for (let index = 0; index < segments.length; index++) {
+      const segment = segments[index]!, finished = index < segments.length - 1;
+      this.bytes += Buffer.byteLength(segment);
+      if (this.bytes > this.limit) { this.parts = []; this.bytes = 0; return { overflow: finished ? "line" : "unterminated" }; }
+      this.parts.push(segment);
+      if (finished) { lines.push(this.parts.join("")); this.parts = []; this.bytes = 0; }
+    }
+    return lines;
+  }
+}
 /** tools/list pages a session reads before giving up on a server that keeps returning cursors. */
 export const MAX_TOOL_PAGES = 100;
 /** Tools, and bytes of tool definitions, kept from one server across all pages; each page is bounded on its own as well. */
@@ -67,13 +91,13 @@ export class McpStdioClient {
   private offersTools = true;
   private reason?: string;
   private nextId = 0;
-  private stdout = "";
+  private readonly stdout: StdoutLines;
   private stderrPartial = "";
   private readonly pending = new Map<number, Pending>();
   private readonly tail: string[] = [];
   serverInfo?: { name?: string; version?: string };
 
-  constructor(private readonly options: McpStdioClientOptions) {}
+  constructor(private readonly options: McpStdioClientOptions) { this.stdout = new StdoutLines(options.maxMessageLength ?? MAX_MESSAGE_LENGTH); }
 
   get pid(): number | undefined { return this.child?.pid; }
   get closed(): boolean { return this.state === "closed" || (this.child !== undefined && !running(this.child)); }
@@ -235,11 +259,9 @@ export class McpStdioClient {
   }
 
   private onStdout(chunk: string): void {
-    const lines = (this.stdout + chunk).split("\n");
-    this.stdout = lines.pop() ?? "";
-    // Finished lines and the unfinished tail both count, before anything is parsed or kept in the main process.
-    const limit = this.options.maxMessageLength ?? MAX_MESSAGE_LENGTH;
-    if (this.stdout.length > limit || lines.some(line => line.length > limit)) { this.stdout = ""; this.fail(`sent a message larger than ${Math.round(limit / 1024 / 1024)} MiB`); void this.close(0); return; }
+    // Finished lines and the unfinished tail both count, in bytes, before anything is parsed or kept in the main process.
+    const lines = this.stdout.push(chunk);
+    if (!Array.isArray(lines)) { const limit = this.options.maxMessageLength ?? MAX_MESSAGE_LENGTH; this.fail(`sent a message larger than ${Math.round(limit / 1024 / 1024)} MiB`); void this.close(0); return; }
     for (const line of lines) this.onLine(line.trim());
   }
 

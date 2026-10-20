@@ -444,10 +444,33 @@ test("selective sync into the active slot writes the official folder, which the 
     assert.deepEqual(await readTree(canonical), { "license/session": "a", "settings/presets.xml": "b-presets" });
     await service.activateProfile(b);
     assert.deepEqual(await readTree(fixture.slot(a)), { "license/session": "a", "settings/presets.xml": "b-presets" }, "the switch did not discard the synced files");
-    const inactive = await service.previewSelectiveSync(b, a, ["settings"], false);
-    await writeTree(fixture.slot(b), { "settings/presets.xml": "b-changed" }); fixture.running = true;
-    await service.executeSelectiveSync(b, a, ["settings"], inactive.token);
-    assert.deepEqual(await readTree(fixture.slot(a)), { "license/session": "a", "settings/presets.xml": "b-changed" }, "an inactive target is still synced in its slot folder, even while SV2 runs");
+    // B is active now, so it would be read from the official folder; between two inactive slots nothing touches that folder.
+    const c = await created(service, "C");
+    await writeTree(fixture.slot(c), { "settings/presets.xml": "c-presets" });
+    const inactive = await service.previewSelectiveSync(c, a, ["settings"], false);
+    fixture.running = true;
+    await service.executeSelectiveSync(c, a, ["settings"], inactive.token);
+    assert.deepEqual(await readTree(fixture.slot(a)), { "license/session": "a", "settings/presets.xml": "c-presets" }, "an inactive target is still synced in its slot folder, even while SV2 runs");
+  } finally { await rm(fixture.root, { recursive: true, force: true }); }
+});
+
+test("selective sync needs two slots, keeps its preview's source, and reads the active slot from the official folder", async () => {
+  const fixture = await slotFixture("synthv-sync-source-"); const { service, canonical } = fixture;
+  try {
+    await writeTree(canonical, { "license/session": "a", "settings/settings.xml": "a-saved" });
+    const a = (await service.importCurrentProfile("A")).slots[0].id; const b = await created(service, "B"); const c = await created(service, "C");
+    await assert.rejects(service.previewSelectiveSync(a, a, ["settings"], false), /two different account slots/, "the active slot synced onto itself would overwrite live data with its saved copy");
+    await writeTree(fixture.slot(c), { "settings/settings.xml": "c" });
+    const forB = await service.previewSelectiveSync(b, c, ["settings"], false);
+    await assert.rejects(service.executeSelectiveSync(a, c, ["settings"], forB.token), /no longer valid/, "a preview made for another source cannot be executed");
+    // A is active: SV2 has changed its settings in the official folder since A's slot folder was saved.
+    await writeTree(canonical, { "settings/settings.xml": "a-live" });
+    const fromA = await service.previewSelectiveSync(a, c, ["settings"], false);
+    fixture.running = true;
+    await assert.rejects(service.executeSelectiveSync(a, c, ["settings"], fromA.token), /Close it before syncing from the active account slot\./);
+    fixture.running = false;
+    await service.executeSelectiveSync(a, c, ["settings"], fromA.token);
+    assert.equal((await readTree(fixture.slot(c)))["settings/settings.xml"], "a-live", "the copy comes from what SV2 uses now, not the slot's saved copy");
   } finally { await rm(fixture.root, { recursive: true, force: true }); }
 });
 

@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { BRAND } from "../brand.js";
-import { isJsonRpcResponse, MAX_MESSAGE_LENGTH, MAX_TOOL_DEFINITION_BYTES, MAX_TOOL_PAGES, MAX_TOOLS, reapProcessTree, serverEnvironment, spawnPlan, STDIO_MCP_PROTOCOL_VERSIONS } from "./mcp-stdio-client.js";
+import { isJsonRpcResponse, MAX_MESSAGE_LENGTH, StdoutLines, MAX_TOOL_DEFINITION_BYTES, MAX_TOOL_PAGES, MAX_TOOLS, reapProcessTree, serverEnvironment, spawnPlan, STDIO_MCP_PROTOCOL_VERSIONS } from "./mcp-stdio-client.js";
 
 export interface StdioMcpServerConfig {
   command: string;
@@ -58,7 +58,7 @@ export async function probeStdioMcpServer(config: StdioMcpServerConfig, options:
   const closed = new Promise<void>((done) => child.once("close", () => done()));
   return new Promise<StdioMcpProbeResult>((resolveProbe) => {
     let stderr = "";
-    let stdout = "";
+    const stdout = new StdoutLines(maxMessageLength);
     let nextId = 0;
     let settled = false;
     const pending = new Map<number, { resolve(result: Record<string, unknown>): void; reject(error: Error): void }>();
@@ -100,15 +100,10 @@ export async function probeStdioMcpServer(config: StdioMcpServerConfig, options:
     child.stderr.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(-stderrLimit); });
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-      for (let index = stdout.indexOf("\n"); index >= 0; index = stdout.indexOf("\n")) {
-        const line = stdout.slice(0, index).trim();
-        stdout = stdout.slice(index + 1);
-        if (line.length > maxMessageLength) { stdout = ""; finish(failure(`${command} sent a message larger than ${Math.round(maxMessageLength / 1024 / 1024)} MiB.`, stderrTail())); return; }
-        if (line) receive(line);
-      }
-      // A server that never ends a line would otherwise grow this buffer until the timeout, in the app's main process.
-      if (stdout.length > maxMessageLength) { stdout = ""; finish(failure(`${command} sent a message larger than ${Math.round(maxMessageLength / 1024 / 1024)} MiB without a line break.`, stderrTail())); }
+      // Bounded in bytes like the client's; a server that never ends a line would otherwise grow the buffer until the timeout.
+      const lines = stdout.push(chunk);
+      if (!Array.isArray(lines)) { finish(failure(`${command} sent a message larger than ${Math.round(maxMessageLength / 1024 / 1024)} MiB${lines.overflow === "unterminated" ? " without a line break" : ""}.`, stderrTail())); return; }
+      for (const line of lines) { const trimmed = line.trim(); if (trimmed) receive(trimmed); }
     });
     void (async (): Promise<StdioMcpProbeResult> => {
       const initialized = await request("initialize", { protocolVersion: probeProtocolVersion, capabilities: {}, clientInfo: { name: BRAND.slug, version: options.clientVersion ?? "0.0.0" } });
