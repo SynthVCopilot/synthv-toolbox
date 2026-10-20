@@ -375,10 +375,11 @@ function projectUrl(value: unknown): string { const base = BRAND.repositoryUrl; 
 function modelCatalog() { const values: Record<AiProviderId, string[]> = { anthropic: [["cla", "ude-sonnet-4-6"].join(""), ["cla", "ude-opus-4-6"].join("")], "openai-codex": [["g", "pt-5.6-terra"].join(""), ["g", "pt-6-astra"].join("")], workbuddy: ["glm-5.2"], traecode: [] }; return { models: async (provider: AiProviderId) => values[provider], opencode: async () => ({ generatedAt: Date.now(), providers: Object.entries(values).map(([id, models]) => ({ id, name: id, modelCount: models.length, package: "@model-auth/providers", models })) }) }; }
 async function authorizeProvider(provider: AiProviderId, signal: AbortSignal) { const options = { openExternal: (url: string) => shell.openExternal(url), signal }; const credential = provider === "anthropic" ? await authorizeAnthropic(options) : provider === "openai-codex" ? await authorizeOpenAI(options) : provider === "workbuddy" ? await authorizeWorkBuddy(options) : await authorizeTrae(options); const value = credential as { accountId?: string; label?: string; expires?: number }; return { id: value.accountId, label: value.label ?? provider, secret: JSON.stringify(credential), expiresAt: value.expires }; }
 
-if (!app.requestSingleInstanceLock()) {
+// A start that found another one mid-migration leaves like a second instance; the first shows its window once the move is done.
+if (dataDirectory?.busy || !app.requestSingleInstanceLock()) {
   // While the move is deferred this start shares the old folder, so the instance holding the lock is most likely the
   // previous version. It only brings its own window forward and cannot say why, so say it here. Tests run unpackaged.
-  if (dataDirectory?.deferred && app.isPackaged) dialog.showErrorBox(`${BRAND.productNameZh} ${BRAND.productName}`, [
+  if (dataDirectory?.deferred && !dataDirectory.busy && app.isPackaged) dialog.showErrorBox(`${BRAND.productNameZh} ${BRAND.productName}`, [
     `旧版本（${LEGACY_PRODUCT_NAME}）仍在运行，数据目录暂时无法迁移。请从托盘图标退出旧版本，然后重新启动${BRAND.productNameZh}。`,
     `The previous version (${LEGACY_PRODUCT_NAME}) is still running, so the data folder cannot be moved yet. Quit it from its tray icon, then start ${BRAND.productName} again.`,
   ].join("\n\n"));

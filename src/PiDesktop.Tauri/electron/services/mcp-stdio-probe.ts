@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { BRAND } from "../brand.js";
-import { MAX_MESSAGE_LENGTH, MAX_TOOL_PAGES, reapProcessTree, serverEnvironment, spawnPlan, STDIO_MCP_PROTOCOL_VERSIONS } from "./mcp-stdio-client.js";
+import { isJsonRpcResponse, MAX_MESSAGE_LENGTH, MAX_TOOL_PAGES, reapProcessTree, serverEnvironment, spawnPlan, STDIO_MCP_PROTOCOL_VERSIONS } from "./mcp-stdio-client.js";
 
 export interface StdioMcpServerConfig {
   command: string;
@@ -86,6 +86,7 @@ export async function probeStdioMcpServer(config: StdioMcpServerConfig, options:
         if (message.id !== undefined) write(message.method === "ping" ? { id: message.id, result: {} } : { id: message.id, error: { code: -32601, message: "Method not found." } });
         return;
       }
+      if (!isJsonRpcResponse(message)) return;
       const waiting = typeof message.id === "number" ? pending.get(message.id) : undefined;
       if (!waiting) return;
       pending.delete(message.id as number);
@@ -103,6 +104,7 @@ export async function probeStdioMcpServer(config: StdioMcpServerConfig, options:
       for (let index = stdout.indexOf("\n"); index >= 0; index = stdout.indexOf("\n")) {
         const line = stdout.slice(0, index).trim();
         stdout = stdout.slice(index + 1);
+        if (line.length > maxMessageLength) { stdout = ""; finish(failure(`${command} sent a message larger than ${Math.round(maxMessageLength / 1024 / 1024)} MiB.`, stderrTail())); return; }
         if (line) receive(line);
       }
       // A server that never ends a line would otherwise grow this buffer until the timeout, in the app's main process.

@@ -58,6 +58,8 @@ export interface DataDirectoryDecision {
   setAside?: string;
   /** Files whose stored paths could not be rewritten after the move. */
   fixupErrors?: string[];
+  /** Another start of the app is still moving the folder; this one must exit rather than open it half migrated. */
+  busy?: boolean;
 }
 
 interface MigrationMarker { from: string; to: string; at: string; appVersion: string; fixups: "pending" | "done"; attempts?: number; errors?: string[] }
@@ -121,7 +123,7 @@ function withMigrationLock(options: DataDirectoryOptions, target: string, work: 
       if (staleLock(lock, options)) { rmSync(lock, { recursive: true, force: true }); continue; }
       if (waited >= LOCK_WAIT_MS) {
         const legacy = findLegacy(options);
-        return { path: holdsAppData(target) || !legacy ? target : legacy, deferred: { reason: "in-use", detail: "Another start of the app is moving the data folder." } };
+        return { path: holdsAppData(target) || !legacy ? target : legacy, deferred: { reason: "in-use", detail: "Another start of the app is moving the data folder." }, busy: true };
       }
       sleep(100);
     }

@@ -106,6 +106,16 @@ test("a server that pages tools/list past the client's limit fails the test inst
   assert.match(result.detail, /^100 tools listed before giving up\.$/);
 });
 
+test("an oversized finished line fails the probe, and an answer without the JSON-RPC envelope is not accepted", async () => {
+  const big = await probeStdioMcpServer({ command: process.execPath, args: [fixture, "bigline"] }, { maxMessageLength: 1024 * 1024 });
+  assert.equal(big.succeeded, false);
+  // Pipes split a 2 MiB line into chunks, so whichever check sees it first (tail or finished line) must end the probe.
+  assert.match(big.summary, /larger than 1 MiB/);
+  const loose = await probeStdioMcpServer({ command: process.execPath, args: [fixture, "loose"] }, { timeoutMs: 1_500 });
+  assert.equal(loose.succeeded, false);
+  assert.match(loose.summary, /did not complete the MCP handshake/, "an envelope-less initialize answer is ignored");
+});
+
 test("JSON-RPC errors and launch failures are reported as failed probes", async () => {
   const rejected = await probeStdioMcpServer({ command: process.execPath, args: [fixture, "error"] });
   assert.equal(rejected.succeeded, false);

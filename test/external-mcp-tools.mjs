@@ -345,6 +345,38 @@ test("a server without a tools capability has no tools and is not reported as un
   } finally { await pool.dispose(); }
 });
 
+test("only JSON-RPC 2.0 responses settle requests, and an oversized finished line ends the connection", async () => {
+  const { isJsonRpcResponse } = await import("../src/PiDesktop.Tauri/dist/electron/services/mcp-stdio-client.js");
+  assert.equal(isJsonRpcResponse({ jsonrpc: "2.0", id: 1, result: {} }), true);
+  assert.equal(isJsonRpcResponse({ jsonrpc: "2.0", id: 1, error: { code: 1, message: "x" } }), true);
+  assert.equal(isJsonRpcResponse({ id: 1, result: {} }), false, "no version");
+  assert.equal(isJsonRpcResponse({ jsonrpc: "1.0", id: 1, result: {} }), false);
+  assert.equal(isJsonRpcResponse({ jsonrpc: "2.0", id: 1, result: {}, error: {} }), false, "both");
+  assert.equal(isJsonRpcResponse({ jsonrpc: "2.0", id: 1 }), false, "neither");
+  const loose = new McpStdioClient({ command: process.execPath, args: [fixture, "--loose-list"], label: "Loose" });
+  try {
+    await loose.connect();
+    await assert.rejects(loose.listTools({ timeoutMs: 500 }), /did not answer tools\/list within 0\.5 s/, "the envelope-less answer is ignored, not taken as the result");
+  } finally { await loose.close(); }
+  const big = new McpStdioClient({ command: process.execPath, args: [fixture, "--big-line"], label: "Big", maxMessageLength: 1024 * 1024 });
+  try {
+    await big.connect();
+    await assert.rejects(big.listTools({ timeoutMs: 10_000 }), /larger than 1 MiB/, "a finished line over the limit is refused before parsing");
+  } finally { await big.close(); }
+});
+
+test("a server that recovers through its running process rebuilds sessions created while it was failing", async () => {
+  const pool = new ExternalMcpPool({ retryAfterMs: 0 });
+  try {
+    const failing = await open(pool, [{ ...server("w", "Warmup"), args: [fixture, "--name", "warmup", "--fail-first-list"] }]);
+    assert.ok(![...failing.tools.keys()].some((name) => name.startsWith("mcp__warmup__")));
+    const revision = pool.revision;
+    const recovered = await open(pool, [{ ...server("w", "Warmup"), args: [fixture, "--name", "warmup", "--fail-first-list"] }]);
+    assert.ok(recovered.tools.has("mcp__warmup__read_status"));
+    assert.equal(pool.revision, revision + 1, "conversations opened during the failure rebuild on their next turn");
+  } finally { await pool.dispose(); }
+});
+
 test("a missing command fails with a clear error", async () => {
   const client = new McpStdioClient({ command: "toneshuttle-definitely-missing-mcp-server", label: "Missing" });
   await assert.rejects(client.connect(), /Missing.*(not found|ENOENT)/s);

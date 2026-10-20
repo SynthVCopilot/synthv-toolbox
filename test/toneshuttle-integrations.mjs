@@ -188,6 +188,7 @@ test("file names agree across brand.ts, the builder config and the installer hoo
   const order = ["resolveUserDataDirectory({", "app.setPath(\"userData\"", "requestSingleInstanceLock"].map((marker) => main.indexOf(marker));
   assert.ok(order.every((index, position) => index > 0 && (position === 0 || index > order[position - 1])), "the folder must be moved, then pinned, before the single-instance lock creates it");
   assert.match(main, /hasSwitch\("user-data-dir"\) \? undefined/, "an explicit --user-data-dir wins and is never migrated");
+  assert.match(main, /if \(dataDirectory\?\.busy \|\| !app\.requestSingleInstanceLock\(\)\)/u, "a start that finds another one mid-migration leaves like a second instance");
 });
 
 test("the installer moves the install folder without touching the registry or the uninstaller", async () => {

@@ -176,7 +176,7 @@ test("concurrent starts are serialized, and a lock left by a dead process is bro
   writeFileSync(join(lock, "owner"), "4242");
   const waits = [];
   const blocked = resolveUserDataDirectory(options(appData, { isProcessAlive: () => true, sleep: (milliseconds) => waits.push(milliseconds) }));
-  assert.deepEqual(blocked, { path: legacy, deferred: { reason: "in-use", detail: "Another start of the app is moving the data folder." } });
+  assert.deepEqual(blocked, { path: legacy, deferred: { reason: "in-use", detail: "Another start of the app is moving the data folder." }, busy: true }, "this start exits instead of opening a folder another start is moving");
   assert.equal(waits.length, 50, "it waits about five seconds for the other start to finish");
   assert.ok(existsSync(join(legacy, "desktop-settings.json")), "nothing moves without the lock");
   const resumed = resolveUserDataDirectory(options(appData, { isProcessAlive: () => false }));

@@ -85,6 +85,12 @@ function handle(message) {
   if (method === "ping") return reply(id, {});
   // A resources-only server: it never offered tools, so asking for them is an error.
   if (method === "tools/list" && flag("--no-tools")) return send({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } });
+  // --loose-list answers tools/list without the JSON-RPC envelope, like a log object that happens to carry the id.
+  if (method === "tools/list" && flag("--loose-list")) return send({ id, result: { tools: [] } });
+  // --big-line answers tools/list with one line longer than the client's limit in the tests (2 MiB).
+  if (method === "tools/list" && flag("--big-line")) return process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result: { tools: [], padding: "x".repeat(2 * 1024 * 1024) } })}\n`);
+  // --fail-first-list fails the first tools/list and answers later ones, as a server still warming up might.
+  if (method === "tools/list" && flag("--fail-first-list") && !state.listedOnce) { state.listedOnce = true; return send({ jsonrpc: "2.0", id, error: { code: -32000, message: "still starting" } }); }
   if (method === "tools/list") {
     const start = Number(params?.cursor ?? 0);
     const next = start + pageSize;

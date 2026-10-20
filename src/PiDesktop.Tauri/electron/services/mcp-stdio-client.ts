@@ -24,7 +24,7 @@ export interface McpCallToolResult { content: McpContent[]; structuredContent?: 
 export interface McpStdioClientOptions {
   command: string;
   args?: readonly string[];
-  /** Merged over process.env; on Windows keys replace inherited ones case-insensitively (Path vs PATH). */
+  /** Merged over the basic inherited variables (serverEnvironment); on Windows keys replace inherited ones case-insensitively (Path vs PATH). */
   env?: Readonly<Record<string, string>>;
   cwd?: string;
   /** Names the server in errors; defaults to the command. */
@@ -32,6 +32,8 @@ export interface McpStdioClientOptions {
   /** clientInfo.version sent in initialize. */
   clientVersion?: string;
   connectTimeoutMs?: number;
+  /** Longest single message accepted from the server; defaults to MAX_MESSAGE_LENGTH. */
+  maxMessageLength?: number;
   onNotification?(method: string, params: unknown): void;
 }
 
@@ -222,13 +224,11 @@ export class McpStdioClient {
   }
 
   private onStdout(chunk: string): void {
-    if (!chunk.includes("\n")) {
-      this.stdout += chunk;
-      if (this.stdout.length > MAX_MESSAGE_LENGTH) { this.stdout = ""; this.fail("sent a message larger than 64 MiB"); void this.close(0); }
-      return;
-    }
     const lines = (this.stdout + chunk).split("\n");
     this.stdout = lines.pop() ?? "";
+    // Finished lines and the unfinished tail both count, before anything is parsed or kept in the main process.
+    const limit = this.options.maxMessageLength ?? MAX_MESSAGE_LENGTH;
+    if (this.stdout.length > limit || lines.some(line => line.length > limit)) { this.stdout = ""; this.fail(`sent a message larger than ${Math.round(limit / 1024 / 1024)} MiB`); void this.close(0); return; }
     for (const line of lines) this.onLine(line.trim());
   }
 
@@ -258,6 +258,8 @@ export class McpStdioClient {
       else this.send({ jsonrpc: "2.0", id, error: { code: -32601, message: `Method not found: ${message.method}` } });
       return;
     }
+    // A log object that happens to carry an id is not an answer; only a proper envelope may settle a request.
+    if (!isJsonRpcResponse(message)) { this.remember("[stdout] ignored a message that is not a JSON-RPC 2.0 response"); return; }
     const key = typeof id === "number" ? id : typeof id === "string" && /^\d+$/.test(id) ? Number(id) : undefined;
     const pending = key === undefined ? undefined : this.pending.get(key);
     if (!pending || key === undefined) return;
@@ -271,6 +273,11 @@ export class McpStdioClient {
     const child = this.child;
     return !child || !running(child) || within(this.exited!, ms);
   }
+}
+
+/** A JSON-RPC 2.0 response carries the version and exactly one of result and error. */
+export function isJsonRpcResponse(message: Record<string, unknown>): boolean {
+  return message.jsonrpc === "2.0" && Object.hasOwn(message, "result") !== Object.hasOwn(message, "error");
 }
 
 export interface SpawnPlan { file: string; args: string[]; verbatim: boolean; }

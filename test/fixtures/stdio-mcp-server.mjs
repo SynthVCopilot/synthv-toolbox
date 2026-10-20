@@ -15,6 +15,8 @@ if (mode === "exit") {
 // Lets the timeout test check that the probe really ended this process.
 if (mode === "hang" || mode === "flood") process.stderr.write(`fixture pid ${process.pid}\n`);
 if (mode === "flood") { const chunk = "x".repeat(64 * 1024); const pump = () => process.stdout.write(chunk, pump); pump(); }
+if (mode === "bigline") process.stdout.write(`${"x".repeat(2 * 1024 * 1024)}\n`);
+if (mode === "loose") process.stderr.write(`fixture pid ${process.pid}\n`);
 // Behind a launcher that exits early: report this process and keep running after stdin closes, so only a kill ends it.
 if (process.env.FIXTURE_PID_FILE) writeFileSync(process.env.FIXTURE_PID_FILE, String(process.pid));
 if (process.env.FIXTURE_LINGER === "1") setInterval(() => { }, 1_000);
@@ -27,6 +29,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   if (message.method === "initialize") {
     if (mode === "error") return send({ id: message.id, error: { code: -32602, message: "Unsupported client." } });
     if (mode === "oldversion") return send({ id: message.id, result: { protocolVersion: "2023-01-01", capabilities: { tools: {} }, serverInfo: { name: "fixture-stdio", version: "0.1.0" } } });
+    if (mode === "loose") return process.stdout.write(`${JSON.stringify({ id: message.id, result: { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "loose", version: "1" } } })}\n`);
     initialize = message;
     process.stdout.write("this line is not JSON-RPC and must be ignored\n");
     send({ method: "notifications/message", params: { level: "info", data: "starting" } });

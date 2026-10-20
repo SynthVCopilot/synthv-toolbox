@@ -117,6 +117,8 @@ export class ExternalMcpPool {
       try {
         const client = await this.connected(entry);
         entry.tools = await client.listTools({ timeoutMs: this.options.connectTimeoutMs });
+        // Sessions created while it was failing have none of its tools; a new revision makes their next turn rebuild.
+        if (entry.error !== undefined) this.toolsRevision++;
         delete entry.error;
         delete entry.failedAt;
       } catch (error) {
