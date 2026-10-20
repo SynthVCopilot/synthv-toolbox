@@ -108,8 +108,8 @@ test("auto re-detects without a renderer refresh, keeps a Bridge it has seen, an
     assert.equal(await state.refreshSynthV(), true, "the main process notices a Bridge without the renderer calling bootstrap");
     assert.equal(state.synthvEnabled(), true);
     connected = false;
-    assert.equal(await state.refreshSynthV(), false, "a missed heartbeat or a stopped Bridge does not hide SynthV mid-session");
-    assert.equal(state.synthvEnabled(), true);
+    assert.equal(await state.refreshSynthV(), true, "the renderer hears that the Bridge went down...");
+    assert.equal(state.synthvEnabled(), true, "...but a missed heartbeat or a stopped Bridge does not hide SynthV mid-session");
   });
   const scripts = await mkdtemp(join(tmpdir(), "toneshuttle-flat-scripts-"));
   try {
@@ -126,8 +126,8 @@ test("auto re-detects without a renderer refresh, keeps a Bridge it has seen, an
   const preferenceOn = synthvProbe();
   await withState({ integrations: { synthv: "on" } }, preferenceOn, async (state) => {
     preferenceOn.calls.length = 0;
-    assert.equal(await state.refreshSynthV(), false);
-    assert.deepEqual(preferenceOn.calls, [], "an explicit preference needs no probe");
+    assert.equal(await state.refreshSynthV(), false, "On still probes, for the Bridge state, but reports only changes");
+    assert.ok(preferenceOn.calls.includes("bridge"));
   });
   const main = await readFile(join(root, "src/PiDesktop.Tauri/electron/main.ts"), "utf8");
   assert.match(main, /app\.on\("browser-window-focus", \(\) => \{ void refreshSynthV\(\); \}\)/, "focus re-detects");
@@ -136,6 +136,48 @@ test("auto re-detects without a renderer refresh, keeps a Bridge it has seen, an
   const renderer = await readFile(join(root, "src/PiDesktop.Tauri/src/main.ts"), "utf8");
   assert.match(renderer, /listenDesktop<null>\("integrations\.changed"/, "the renderer re-bootstraps when detection changes");
   assert.match(renderer, /await listenForIntegrationChanges\(\);/);
+});
+
+test("a refresh reports a Bridge that connects while the integration is already on", async () => {
+  let connected = false;
+  const probe = synthvProbe({ bridgeStatus: async () => ({ connected }) });
+  await withState({ onboardingCompleted: true }, probe, async (state) => {
+    assert.equal(state.synthvEnabled(), true, "the installation already turned auto on");
+    assert.equal(await state.refreshSynthV(), false);
+    connected = true;
+    assert.equal(await state.refreshSynthV(), true, "the renderer must learn that the Bridge is up, though the switch did not move");
+    assert.equal((await state.bootstrap()).bridgeConnected, true);
+    assert.equal(await state.refreshSynthV(), false, "nothing new since");
+  });
+  const off = synthvProbe();
+  await withState({ integrations: { synthv: "off" } }, off, async (state) => {
+    assert.equal(await state.refreshSynthV(), false);
+    assert.deepEqual(off.calls, [], "off never probes");
+  });
+});
+
+test("History and the renderer's command path leave .svp backups alone while SynthV is off", async () => {
+  const { ElectronCommandRegistry } = await import("../src/PiDesktop.Tauri/dist/electron/services/command-registry.js");
+  const calls = [];
+  let enabled = false;
+  const creative = { invoke: async (command, params) => { calls.push(command); return { ok: true }; } };
+  const host = { settingsSnapshot: () => ({}), runtime: {} };
+  const inert = new Proxy({}, { get: () => async () => ({}) });
+  const registry = new ElectronCommandRegistry(host, { ai: inert, creative, desktop: { ...inert, synthvEnabled: () => enabled, update: async () => ({}) }, synthv: inert, approvals: inert, componentAudio: { dataRoot: process.cwd() } });
+  await assert.rejects(registry.invoke("restore_project_checkpoint", { id: "c1", outputName: "a.svp" }), /turned off/);
+  await assert.rejects(registry.invoke("list_project_checkpoints", {}), /turned off/);
+  assert.deepEqual(await registry.invoke("list_creative_history", {}), { ok: true }, "workflow history stays");
+  enabled = true;
+  assert.deepEqual(await registry.invoke("restore_project_checkpoint", { id: "c1", outputName: "a.svp" }), { ok: true });
+  assert.deepEqual(calls, ["list_creative_history", "restore_project_checkpoint"]);
+  const renderer = await readFile(join(root, "src/PiDesktop.Tauri/src/main.ts"), "utf8");
+  assert.match(renderer, /synthv \? api\.projectBackupState\(\) : Promise\.resolve\(undefined\)/, "History does not read backups with the integration off");
+  assert.match(renderer, /synthv \? api\.listProjectCheckpoints\(\) : Promise\.resolve\(\[\]\)/);
+  assert.match(renderer, /\$\{synthvOn\(\) \? `<section class="panel history-checkpoint-grid">/, "nor offers restore buttons");
+  assert.match(renderer, /if \(busy\) \{ integrationRefreshPending = true; return; \}/, "a change during a task is kept");
+  assert.match(renderer, /busy = false;\r?\n    if \(integrationRefreshPending\) refreshForIntegrations\(\);/, "and replayed when it ends");
+  const main = await readFile(join(root, "src/PiDesktop.Tauri/electron/main.ts"), "utf8");
+  assert.match(main, /servers: \(\) => desktop\.aiModeEnabled\(\) \? mcpServerConfigs\(desktop\.enabledMcpServers\(\)\) : \[\]/, "a session initialized after AI mode was turned off starts no external server");
 });
 
 test("Cover and creative bridge calls report a gate refusal or a non-JSON failure instead of a SyntaxError", async () => {

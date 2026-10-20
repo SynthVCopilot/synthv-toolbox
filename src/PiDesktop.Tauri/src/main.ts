@@ -812,6 +812,7 @@ async function run(task: () => Promise<void>): Promise<void> {
     error = formatError(reason);
   } finally {
     busy = false;
+    if (integrationRefreshPending) refreshForIntegrations();
     render();
   }
 }
@@ -1972,7 +1973,9 @@ function scheduleHistoryRefresh(): void {
   const refresh = async () => {
     if (generation !== historyRefreshGeneration || page !== "history") return;
     try {
-      const [backup, workflow, checkpoints] = await Promise.all([api.projectBackupState(), api.listCreativeHistory(), api.listProjectCheckpoints()]);
+      // Project backups and snapshots are .svp work: with the integration off they are neither read nor offered for restore.
+      const synthv = synthvOn();
+      const [backup, workflow, checkpoints] = await Promise.all([synthv ? api.projectBackupState() : Promise.resolve(undefined), api.listCreativeHistory(), synthv ? api.listProjectCheckpoints() : Promise.resolve([])]);
       if (generation !== historyRefreshGeneration || page !== "history") return;
       projectBackupState = backup;
       creativeHistory = workflow;
@@ -2008,8 +2011,8 @@ function renderHistoryPage(): string {
   const tracked = backup?.projects.length ? backup.projects.map((item) => `<article class="checkpoint-item"><span class="feature-icon blue">${icon("history", 17)}</span><div><strong>${escapeHtml(item.sourcePath)}</strong><small>${t("history.recentlyFound", { time: formatHistoryTime(item.lastSeenAtUtc), count: item.backupCount })}</small><code>${item.lastError ? escapeHtml(t("history.failed", { error: item.lastError })) : escapeHtml(t("history.lastBackup", { time: formatHistoryTime(item.lastBackupAtUtc) }))}</code></div></article>`).join("") : `<div class="empty-inline">${t("history.emptyTracked")}</div>`;
   const loadError = historyLoadState === "error" ? `<div class="audio-inline-error" role="alert">${escapeHtml(t("history.readingFailed", { error: historyLoadError }))}</div>` : "";
   return `<section class="panel history-intro"><span class="feature-icon blue">${icon("history", 22)}</span><div><span class="eyebrow">${t("history.eyebrow")}</span><h2>${t("history.title")}</h2><p>${t("history.description")}</p></div><span class="availability ${historyLoadState === "ready" && !backup?.lastError && !itemError ? "ready" : "warning"}">${backupStatus}</span></section>${loadError}
-    <section class="panel history-checkpoint-grid"><div class="section-heading"><div><h2>${t("history.backupStatus")}</h2><p>${t("history.backupDescription", { seconds: backup?.intervalSeconds ?? 60 })}${backup?.lastError ? ` · ${escapeHtml(backup.lastError)}` : ""}</p></div></div><div class="checkpoint-list">${tracked}</div></section>
-    <section class="panel"><div class="section-heading"><div><h2>${t("history.snapshots")}</h2><p>${t("history.snapshotDescription")}</p></div></div><div class="checkpoint-list">${checkpoints}</div></section>
+    ${synthvOn() ? `<section class="panel history-checkpoint-grid"><div class="section-heading"><div><h2>${t("history.backupStatus")}</h2><p>${t("history.backupDescription", { seconds: backup?.intervalSeconds ?? 60 })}${backup?.lastError ? ` · ${escapeHtml(backup.lastError)}` : ""}</p></div></div><div class="checkpoint-list">${tracked}</div></section>
+    <section class="panel"><div class="section-heading"><div><h2>${t("history.snapshots")}</h2><p>${t("history.snapshotDescription")}</p></div></div><div class="checkpoint-list">${checkpoints}</div></section>` : ""}
     <section class="panel workflow-history"><div class="section-heading"><div><h2>${t("history.workflow")}</h2><p>${t("history.workflowDescription")}</p></div></div><div class="timeline-list">${history}</div></section>`;
 }
 
@@ -5274,13 +5277,20 @@ async function listenForAgentRunProgress(): Promise<void> {
   });
 }
 
+let integrationRefreshPending = false;
+
+function refreshForIntegrations(): void {
+  integrationRefreshPending = false;
+  void refresh().then(render).catch(() => undefined);
+}
+
 async function listenForIntegrationChanges(): Promise<void> {
   if (!hasDesktopBridge()) return;
-  // "auto" found or lost Synthesizer V (window focus, or the main process's timer); pages and tools follow. A running task
-  // refreshes when it finishes, so skip rather than race it.
+  // The main process found SynthV, lost it, or saw its Bridge connect; pages and tools follow. The main process reports a
+  // change once, so one that arrives during a task is replayed when the task ends (run()) instead of being dropped.
   await listenDesktop<null>("integrations.changed", () => {
-    if (busy) return;
-    void refresh().then(render).catch(() => undefined);
+    if (busy) { integrationRefreshPending = true; return; }
+    refreshForIntegrations();
   });
 }
 

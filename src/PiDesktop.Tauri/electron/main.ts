@@ -310,7 +310,7 @@ async function initializeServices(): Promise<void> {
           return [createSynthVToolsExtension({ bridge: coverHost.forTuning(target, monitor), approvals, sessionId, guards, runState, registry: delivery, workMode: () => "solo" })];
         }
         const toolbox = createToolboxAgentToolsExtension({ invoke: (command, args) => { if (!commandRegistry) throw new Error("Electron services are not ready."); return commandRegistry.invoke(command, args); } });
-        const external = desktop.aiModeEnabled() && desktop.enabledMcpServers().length > 0 ? [createExternalMcpToolsExtension({ pool: externalMcp, servers: () => mcpServerConfigs(desktop.enabledMcpServers()), workMode: () => desktop.agentWorkMode() })] : [];
+        const external = desktop.aiModeEnabled() && desktop.enabledMcpServers().length > 0 ? [createExternalMcpToolsExtension({ pool: externalMcp, servers: () => desktop.aiModeEnabled() ? mcpServerConfigs(desktop.enabledMcpServers()) : [], workMode: () => desktop.agentWorkMode() })] : [];
         if (!desktop.synthvEnabled()) return [toolbox, ...external];
         return [toolbox, ...external, createSynthVToolsExtension({ bridge: gatedSynthvBridge, approvals, sessionId, guards, runState, registry: delivery, workMode: () => desktop.agentWorkMode() }), createCoverAgentToolsExtension({ sessionId, guards, runState, invoke: (command, args) => desktop.synthvEnabled() ? cover.invoke(command, args) : Promise.reject(new Error(SYNTHV_OFF_MESSAGE)) })];
       },
@@ -327,8 +327,9 @@ async function initializeServices(): Promise<void> {
     if (!desktop.aiModeEnabled()) void ai.cancel_all_agent_runs().catch((reason: unknown) => console.error("Unable to stop agent runs", reason));
   }, dataDirectory);
   await desktop.load();
-  // "auto" follows what is installed and running: look again when a window gains focus and, while it resolves to off, every
-  // few seconds, so a Bridge started with the window hidden (or an MCP client waiting on it) needs no visit to Settings.
+  // "auto" follows what is installed and running: look again when a window gains focus (which also catches a Bridge started
+  // while the integration was on) and, while it resolves to off, every few seconds, so a Bridge started with the window
+  // hidden (or an MCP client waiting on it) needs no visit to Settings.
   let synthvRefresh: Promise<void> | undefined;
   const refreshSynthV = () => synthvRefresh ??= desktop.refreshSynthV()
     .then((changed) => { if (changed) emitToRenderer("integrations.changed", null); })

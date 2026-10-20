@@ -250,6 +250,15 @@ test("the HTTP API bearer token is generated once, stored owner-only, kept by co
   await ownerOnly();
   assert.equal((await ping(status.endpoint, token)).status, 401);
   assert.equal((await ping(status.endpoint, status.token)).status, 200);
+
+  // A full disk or a locked file: the rotation fails, and the token the caller still holds keeps working.
+  const live = status.token;
+  await rm(settingsPath, { force: true });
+  await mkdir(settingsPath);
+  await assert.rejects(runtimeHost.rotateHttpApiToken());
+  assert.equal(runtimeHost.settingsSnapshot().httpApiToken, live);
+  assert.equal((await runtimeHost.httpMcpStatus()).token, live);
+  assert.equal((await ping(status.endpoint, live)).status, 200, "the listener went back to the token the renderer shows");
 });
 
 test("an unreadable settings file is never overwritten with defaults just to store a new token", async (t) => {

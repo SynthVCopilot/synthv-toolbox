@@ -4,9 +4,11 @@ import type { AiService, AiProviderId, AiLoadStrategy } from "./ai-service.js";
 import type { CreativeService } from "./creative-service.js";
 import { registerComponentAudioCommands, type ComponentAudioOptions } from "./component-audio-commands.js";
 import type { DesktopStateService } from "./desktop-state.js";
+import { drivesSynthV } from "./host-capabilities.js";
 import { INTEGRATION_IDS, INTEGRATION_PREFERENCES } from "./integrations.js";
 import { probeStdioMcpServer, stdioMcpServerConfig, type StdioMcpServerConfig } from "./mcp-stdio-probe.js";
 import type { ElectronRuntimeHost } from "./runtime-host.js";
+import { SYNTHV_OFF_MESSAGE } from "./synthv-bridge.js";
 import { registerSynthVCommands } from "./synthv-commands.js";
 import type { SynthVService } from "./synthv-service.js";
 
@@ -65,7 +67,12 @@ export class ElectronCommandRegistry {
     this.registerAi(s.ai, s.desktop, state);
     registerSynthVCommands(this, s.synthv);
     registerComponentAudioCommands(this, s.componentAudio);
-    for (const command of CREATIVE_COMMANDS) if (!this.handlers.has(command)) this.register(command, params => s.creative.invoke(command, params));
+    // The renderer and the agent's toolbox tools reach these without HostCapabilities, so .svp work (checkpoint restore from
+    // History, a project slipped into an audio call) follows the integration here as well.
+    for (const command of CREATIVE_COMMANDS) if (!this.handlers.has(command)) this.register(command, params => {
+      if (s.desktop.synthvEnabled?.() === false && drivesSynthV(command, params)) throw new Error(SYNTHV_OFF_MESSAGE);
+      return s.creative.invoke(command, params);
+    });
     this.register("agent_approvals", async () => s.approvals.snapshot());
     this.register("decide_agent_approval", async p => { s.approvals.decide(stringParam(p, "id"), boolParam(p, "approve")); return null; });
   }

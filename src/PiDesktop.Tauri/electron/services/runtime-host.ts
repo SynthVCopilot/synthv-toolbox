@@ -120,9 +120,16 @@ export class ElectronRuntimeHost {
     const next = { ...this.settings, httpApiToken: createApiToken() };
     // The server switches first. Status reports the token from settings, so publishing it earlier would let the old
     // token keep working after a client has already been shown the new one.
+    const previous = this.settings;
     await this.syncHttpServer(next);
     this.settings = next;
-    await this.persist();
+    try { await this.persist(); }
+    catch (error) {
+      // Unsaved, the new token would be lost on restart and the caller never sees it; keep serving the one clients have.
+      this.settings = previous;
+      await this.syncHttpServer(previous);
+      throw error;
+    }
     return this.httpMcpStatus();
   }
 

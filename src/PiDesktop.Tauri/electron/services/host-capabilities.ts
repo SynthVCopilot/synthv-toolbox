@@ -83,7 +83,7 @@ export class HostCapabilities {
 const SVP_PROJECT_OPERATIONS = ["get_project_backup_state", "create_project_checkpoint", "list_project_checkpoints", "restore_project_checkpoint", "run_project_probe", "run_project_doctor", "add_project_reference", "export_project_without_parameters", "export_project_lyrics"];
 /** Batch recipes that read audio rather than .svp projects, so they stay available without SynthV. */
 const AUDIO_BATCH_RECIPES = ["render-review"];
-function drivesSynthV(operation: string, params: Data): boolean {
+export function drivesSynthV(operation: string, params: Data): boolean {
   return CREATIVE_BRIDGE_COMMANDS.includes(operation) || operation.includes("lyric_bridge") || SVP_PROJECT_OPERATIONS.includes(operation)
     // A project file is SynthV work in any operation: creative-service snapshots every projectPath it sees and keeps backing
     // it up. Plain lyrics (the agent's toolbox_lyrics_check) and audio batches stay available without SynthV.

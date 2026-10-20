@@ -34,6 +34,8 @@ export class DesktopStateService {
   private settings = defaults();
   private synthvEvidence: SynthVEvidence = { installations: 0, profiles: 0, bridgeConnected: false };
   private bridgeSeen = false;
+  /** What the renderer shows from the last probe; a refresh that changes it is pushed so pages follow without a reload. */
+  private lastProbeSignature = "";
   constructor(private readonly root: string, private readonly appVersion: string, private readonly runtime: ElectronRuntimeHost, private readonly ai: AiService, private readonly synthv: SynthVProbe, private readonly applyUpdateChannel?: (channel: "stable" | "nightly") => void, private readonly creativeRuntime?: { status(): Promise<{ready: boolean; detail: string}> }, private readonly bridgeLoadError?: string, private readonly onSettingsChanged?: () => void, private readonly dataDirectory?: DataDirectoryDecision) {}
 
   async load(): Promise<void> {
@@ -57,14 +59,15 @@ export class DesktopStateService {
   synthvEnabled(): boolean { return resolveSynthVIntegration(this.settings.integrations.synthv, this.synthvEvidence); }
 
   /**
-   * Probes again for "auto", so SynthV installed or started after launch is picked up without a settings change or a
-   * renderer refresh. Returns whether the resolved state changed; explicit preferences need no probe.
+   * Probes again, so SynthV installed or started after launch is picked up without a settings change or a renderer refresh.
+   * Returns whether anything the renderer shows changed: the resolved switch, but also a Bridge that connected while the
+   * integration was already on. "off" never probes.
    */
   async refreshSynthV(): Promise<boolean> {
-    if (this.settings.integrations.synthv !== "auto") return false;
-    const before = this.synthvEnabled();
+    if (this.settings.integrations.synthv === "off") return false;
+    const before = this.lastProbeSignature;
     await this.probeSynthV();
-    return this.synthvEnabled() !== before;
+    return this.lastProbeSignature !== before;
   }
 
   async bootstrap(): Promise<Data> {
@@ -92,6 +95,7 @@ export class DesktopStateService {
     this.bridgeSeen ||= value.bridgeConnected;
     const installationCount = value.installations.length || (await this.savedScriptsFolderExists() ? 1 : 0);
     this.synthvEvidence = { installations: installationCount, profiles: Array.isArray(value.profiles.slots) ? value.profiles.slots.length : 0, bridgeConnected: this.bridgeSeen };
+    this.lastProbeSignature = JSON.stringify([this.synthvEnabled(), value.installations.length, this.synthvEvidence.profiles, value.bridgeConnected]);
     return value;
   }
   private async savedScriptsFolderExists(): Promise<boolean> {
