@@ -89,6 +89,15 @@ function handle(message) {
   if (method === "tools/list" && flag("--many-tools")) return reply(id, { tools: Array.from({ length: 1_001 }, (_, index) => ({ name: `tool_${index}`, inputSchema: { type: "object" } })) });
   // --loose-list answers tools/list without the JSON-RPC envelope, like a log object that happens to carry the id.
   if (method === "tools/list" && flag("--loose-list")) return send({ id, result: { tools: [] } });
+  // --change-during-list adds a tool while the first tools/list is in flight: the notification goes out before the answer,
+  // which still carries the old list.
+  if (method === "tools/list" && flag("--change-during-list") && !state.changedDuringList) {
+    state.changedDuringList = true;
+    const stale = tools.slice();
+    tools.push({ name: "arrived_mid_list", description: "Added during tools/list.", inputSchema: { type: "object", properties: {} }, annotations: readOnly });
+    send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+    return reply(id, { tools: stale });
+  }
   // --wide-line answers with 400,000 three-byte characters: under 1 MiB counted as UTF-16 units, about 1.14 MiB as UTF-8.
   if (method === "tools/list" && flag("--wide-line")) return process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result: { tools: [], padding: "音".repeat(400_000) } })}\n`);
   // --big-line answers tools/list with one line longer than the client's limit in the tests (2 MiB).

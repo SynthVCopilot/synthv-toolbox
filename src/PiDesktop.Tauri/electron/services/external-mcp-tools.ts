@@ -38,6 +38,9 @@ interface PoolEntry {
   loading?: Promise<void>;
   connecting?: Promise<McpStdioClient>;
   removed?: boolean;
+  /** tools/list_changed notifications received, and how many had arrived when the cached list was requested. */
+  changes?: number;
+  listedAt?: number;
 }
 
 export const EXTERNAL_TOOL_OUTPUT_LIMIT = 100_000;
@@ -114,12 +117,18 @@ export class ExternalMcpPool {
   }
 
   private load(entry: PoolEntry): Promise<void> {
-    if (entry.removed || (entry.tools && !entry.error && entry.client && !entry.client.closed)) return Promise.resolve();
+    if (entry.removed || (entry.tools && entry.listedAt === (entry.changes ?? 0) && !entry.error && entry.client && !entry.client.closed)) return Promise.resolve();
     if (entry.error && entry.failedAt !== undefined && Date.now() - entry.failedAt < (this.options.retryAfterMs ?? 30_000)) return Promise.resolve();
     return entry.loading ??= (async () => {
       try {
         const client = await this.connected(entry);
-        entry.tools = await client.listTools({ timeoutMs: this.options.connectTimeoutMs });
+        // A tools/list_changed that arrives while the list is in flight makes its answer stale: list again, a few times for a
+        // server that keeps changing. A list still overtaken serves this session but is not trusted as the cache.
+        let changes = 0, tools: McpToolInfo[] = [], attempts = 0;
+        do { changes = entry.changes ?? 0; tools = await client.listTools({ timeoutMs: this.options.connectTimeoutMs }); }
+        while ((entry.changes ?? 0) !== changes && ++attempts < 3);
+        entry.tools = tools;
+        entry.listedAt = changes;
         // Sessions created while it was failing have none of its tools; a new revision makes their next turn rebuild.
         if (entry.error !== undefined) this.toolsRevision++;
         delete entry.error;
@@ -155,7 +164,7 @@ export class ExternalMcpPool {
           command, args, ...(env ? { env } : {}), ...(cwd ? { cwd } : {}), label: name,
           ...(this.options.clientVersion ? { clientVersion: this.options.clientVersion } : {}),
           ...(this.options.connectTimeoutMs ? { connectTimeoutMs: this.options.connectTimeoutMs } : {}),
-          onNotification: method => { if (method === "notifications/tools/list_changed" && entry.client === client) { entry.tools = undefined; this.toolsRevision++; } },
+          onNotification: method => { if (method === "notifications/tools/list_changed" && entry.client === client) { entry.tools = undefined; entry.changes = (entry.changes ?? 0) + 1; this.toolsRevision++; } },
         });
         entry.client = client;
         await client.connect();

@@ -237,6 +237,16 @@ test("tools/list_changed bumps the pool revision, and the next session sees the 
   } finally { await pool.dispose(); }
 });
 
+test("a tools/list_changed that arrives while the tools are being listed is not overwritten by the stale answer", async () => {
+  const pool = new ExternalMcpPool({ retryAfterMs: 0 });
+  try {
+    const session = await open(pool, [server("a", "Fixture", "--change-during-list", "--page-size", "100")]);
+    assert.ok(session.tools.has("mcp__fixture__arrived_mid_list"), "the pool listed again after the notification");
+    const again = await open(pool, [server("a", "Fixture", "--change-during-list", "--page-size", "100")]);
+    assert.ok(again.tools.has("mcp__fixture__arrived_mid_list"), "and caches the fresh list");
+  } finally { await pool.dispose(); }
+});
+
 test("structured results reach the agent next to a text summary, without repeating JSON the text already holds", () => {
   const records = { rows: [{ id: 1, name: "take" }] };
   assert.equal(renderMcpResult({ content: [{ type: "text", text: "1 row found." }], structuredContent: records }), `1 row found.\nStructured result:\n${JSON.stringify(records)}`);

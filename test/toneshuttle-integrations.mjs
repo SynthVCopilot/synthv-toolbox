@@ -167,14 +167,19 @@ test("History and the renderer's command path leave .svp backups alone while Syn
   await assert.rejects(registry.invoke("restore_project_checkpoint", { id: "c1", outputName: "a.svp" }), /turned off/);
   await assert.rejects(registry.invoke("list_project_checkpoints", {}), /turned off/);
   assert.deepEqual(await registry.invoke("list_creative_history", {}), { ok: true }, "workflow history stays");
+  // The renderer's pasted-lyrics form sends projectPath: null; only a real path is project work.
+  assert.deepEqual(await registry.invoke("run_pronunciation_diagnostics", { projectPath: null, lyrics: "你好" }), { ok: true }, "lyrics-only checks pass with the integration off");
+  await assert.rejects(registry.invoke("run_pronunciation_diagnostics", { projectPath: "C:\\Songs\\a.svp", lyrics: null }), /turned off/);
   enabled = true;
   assert.deepEqual(await registry.invoke("restore_project_checkpoint", { id: "c1", outputName: "a.svp" }), { ok: true });
-  assert.deepEqual(calls, ["list_creative_history", "restore_project_checkpoint"]);
+  assert.deepEqual(calls, ["list_creative_history", "run_pronunciation_diagnostics", "restore_project_checkpoint"]);
   const renderer = await readFile(join(root, "src/PiDesktop.Tauri/src/main.ts"), "utf8");
   assert.match(renderer, /synthv \? api\.projectBackupState\(\) : Promise\.resolve\(undefined\)/, "History does not read backups with the integration off");
   assert.match(renderer, /synthv \? api\.listProjectCheckpoints\(\) : Promise\.resolve\(\[\]\)/);
   assert.match(renderer, /\$\{synthvOn\(\) \? `<section class="panel history-checkpoint-grid">/, "nor offers restore buttons");
   assert.match(renderer, /if \(busy\) \{ integrationRefreshPending = true; return; \}/, "a change during a task is kept");
+  for (const probe of ["listSynthvProcesses()", "synthvShortcutProfile()", "bridgeSessionStatus()"]) assert.ok(renderer.includes(`synthv ? api.${probe}`), `refresh() skips ${probe} with the integration off`);
+  assert.match(renderer, /\$\{synthvOn\(\) \? renderLyricBridgeFit\(\) : ""\}/, "the Lyrics page keeps its editor but drops the Bridge panel");
   assert.match(renderer, /busy = false;\r?\n    if \(integrationRefreshPending\) refreshForIntegrations\(\);/, "and replayed when it ends");
   const main = await readFile(join(root, "src/PiDesktop.Tauri/electron/main.ts"), "utf8");
   assert.match(main, /servers: \(\) => desktop\.aiModeEnabled\(\) \? mcpServerConfigs\(desktop\.enabledMcpServers\(\)\) : \[\]/, "a session initialized after AI mode was turned off starts no external server");

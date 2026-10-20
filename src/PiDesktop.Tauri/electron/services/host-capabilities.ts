@@ -87,10 +87,12 @@ export function drivesSynthV(operation: string, params: Data): boolean {
   return CREATIVE_BRIDGE_COMMANDS.includes(operation) || operation.includes("lyric_bridge") || SVP_PROJECT_OPERATIONS.includes(operation)
     // A project file is SynthV work in any operation: creative-service snapshots every projectPath it sees and keeps backing
     // it up. Plain lyrics (the agent's toolbox_lyrics_check) and audio batches stay available without SynthV.
-    || params.projectPath !== undefined || (isObject(params.options) && params.options.projectPath !== undefined)
+    || hasProjectPath(params) || (isObject(params.options) && hasProjectPath(params.options))
     || (operation === "run_batch_workflow" && !AUDIO_BATCH_RECIPES.includes(String(params.recipeId)))
     || (operation === "run_audio_to_project" && params.importToSynthv === true);
 }
+/** The same test creative-service applies before it snapshots a project: a non-empty string, not null for "no project". */
+function hasProjectPath(params: Data): boolean { return typeof params.projectPath === "string" && params.projectPath.trim() !== ""; }
 function clientSafe(message: string): Error { return Object.assign(new Error(message), { clientSafe: true }); }
 function isObject(value: unknown): value is Data { return value !== null && typeof value === "object" && !Array.isArray(value); }
 function text(params: Data, key: string): string { const value = params[key]; if (typeof value !== "string" || !value) throw new Error(`${key} must be a non-empty string.`); return value; }
