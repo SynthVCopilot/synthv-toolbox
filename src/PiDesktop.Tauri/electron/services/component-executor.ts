@@ -5,12 +5,12 @@ import { projectDoctor, pronunciationDiagnostics } from "./component-diagnostics
 
 type Data = Record<string, unknown>;
 type ExecutionOptions = { dataRoot?: string };
-type ComponentExecution = (file: string, args: string[], env?: NodeJS.ProcessEnv) => Promise<Data>;
+type ComponentExecution = (file: string, args: string[], env?: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<Data>;
 
 export function createComponentExecutor(
   componentsRoot: string,
   python = process.env.SYNTHV_TOOLBOX_PYTHON ?? (process.platform === "win32" ? "python.exe" : process.platform === "darwin" ? "python3.11" : "python3"),
-  execute: ComponentExecution = runJson,
+  executeComponent: ComponentExecution = runJson,
   options: ExecutionOptions = {},
 ) {
   const piAudio = resolve(componentsRoot, "pi-audio", "pi_audio.py");
@@ -19,7 +19,9 @@ export function createComponentExecutor(
   const dataRoot = resolve(options.dataRoot ?? process.env.SYNTHV_TOOLBOX_DATA_ROOT ?? resolve(componentsRoot, ".data"));
   const env = { ...process.env, SYNTHV_TOOLBOX_DATA_ROOT: dataRoot };
 
-  return async (command: string, args: Data): Promise<Data> => {
+  return async (command: string, args: Data, signal?: AbortSignal): Promise<Data> => {
+    // Every component run below carries the caller's signal: stopping an agent run ends the Python process it started.
+    const execute = (file: string, list: string[], environment?: NodeJS.ProcessEnv) => executeComponent(file, list, environment, signal);
     if (command === "run_audio_probe") {
       const result = await execute(python, [piAudio, "probe", await input(args.audioPath, "audioPath"), ...(args.advanced === true ? ["--notes"] : [])], env);
       return workflow(command, "audio-probe", result, "duration_sec", "Audio probe completed.");
@@ -93,9 +95,10 @@ export function createComponentExecutor(
   };
 }
 
-async function runJson(file: string, args: string[], env?: NodeJS.ProcessEnv): Promise<Data> {
+async function runJson(file: string, args: string[], env?: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<Data> {
   return new Promise((done, reject) => {
-    const child = spawn(file, args, { shell: false, windowsHide: true, env });
+    // An aborted signal kills the process (spawn's own handling) and rejects with an AbortError through "error".
+    const child = spawn(file, args, { shell: false, windowsHide: true, env, ...(signal ? { signal } : {}) });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", chunk => { stdout += chunk; });

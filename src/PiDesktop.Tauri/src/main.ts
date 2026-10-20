@@ -7,6 +7,9 @@ import "./styles.css";
 import "@platform-kit/fluent/style.css";
 import "./i18nCommon";
 import "./i18nLyrics";
+import "./i18nIntegrations";
+import { BRAND, productName } from "./brand";
+import { maskToken, mcpClientSnippets } from "./mcpClientConfig";
 import { hasDesktopBridge, listenDesktop, listenForDesktopFileDrops } from "../electron/bridge";
 import { registerModelAuthElement, registerModelConnectionPanelElement } from "@model-auth/vue/custom-element";
 import { FluentSelect } from "@platform-kit/fluent/vue";
@@ -85,6 +88,7 @@ import type {
   MediaTaskSnapshot,
   McpServerConfig,
   HttpApiStatus,
+  IntegrationPreference,
   InstalledPlugin,
   OperationResult,
   ProjectCheckpoint,
@@ -141,6 +145,7 @@ let app: BootstrapState | undefined;
 let page: Page = "home";
 let busy = false;
 let notice = "";
+let mcpTokenRevealed = false;
 let error = "";
 let conversations: ConversationSummary[] = [];
 let conversation: ConversationSnapshot | undefined;
@@ -807,18 +812,21 @@ async function run(task: () => Promise<void>): Promise<void> {
     error = formatError(reason);
   } finally {
     busy = false;
+    if (integrationRefreshPending) refreshForIntegrations();
     render();
   }
 }
 
 async function refresh(): Promise<void> {
   app = await api.bootstrap();
+  // With the integration off nothing probes for SynthV: no process listing, shortcut profile or Bridge read.
+  const synthv = synthvOn();
   const [plugins, nextLyricProjects, nextProcesses, nextShortcutProfile, nextBridgeSession, nextMediaTasks, nextTuningProfiles, nextHttpApiStatus] = await Promise.all([
     api.discoverAgentPlugins().catch(() => []),
     api.listLyricProjects(),
-    api.listSynthvProcesses(),
-    api.synthvShortcutProfile(),
-    api.bridgeSessionStatus().catch(() => ({ connected: false, instanceOwnership: "unverified" as const, detail: "" })),
+    synthv ? api.listSynthvProcesses() : Promise.resolve([] as SynthVProcess[]),
+    synthv ? api.synthvShortcutProfile() : Promise.resolve(synthvShortcutProfile),
+    synthv ? api.bridgeSessionStatus().catch(() => ({ connected: false, instanceOwnership: "unverified" as const, detail: "" })) : Promise.resolve({ connected: false, instanceOwnership: "unverified" as const, detail: "" }),
     api.mediaTasks(),
     api.listTuningProfiles(),
     api.getHttpApiStatus(),
@@ -935,7 +943,8 @@ function startInstanceRefresh(): void {
 }
 
 async function refreshVisibleSynthvInstances(): Promise<void> {
-  if (busy || document.hidden || instanceRefreshInFlight || (page !== "accounts" && page !== "bridge")) return;
+  // Auto can turn the integration off while one of these pages stays open; nothing probes SynthV after that.
+  if (busy || document.hidden || instanceRefreshInFlight || (page !== "accounts" && page !== "bridge") || !synthvOn()) return;
   const refreshPage = page;
   const generation = instanceRefreshGeneration;
   instanceRefreshInFlight = true;
@@ -1050,22 +1059,22 @@ function navItem(target: Page, label: string, glyph: IconName): string {
 function renderSidebar(): string {
   if (!app) return "";
   return `<div class="brand" data-page="home" title="${t("onboardingDetails.home")}">
-      <div class="brand-mark small"><img class="brand-logo" src="./assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div>
-      <div><strong>Synthesizer V Toolbox</strong><span>Creative utility suite</span></div>
+      <div class="brand-mark small"><img class="brand-logo" src="${BRAND.logo}" alt="${BRAND.productName}" /></div>
+      <div><strong>${productName(locale())}</strong><span>${t("brand.tagline")}</span></div>
     </div>
     <nav class="nav" aria-label="${t("onboardingDetails.navigation")}">
       <span class="nav-label">${t("nav.workspace")}</span>
       ${navItem("home", t("nav.home"), "home")}
-      ${app.platform === "windows" || app.platform === "macos" || app.platform === "preview" ? navItem("accounts", t("nav.accounts"), "users") : ""}
+      ${synthvOn() && (app.platform === "windows" || app.platform === "macos" || app.platform === "preview") ? navItem("accounts", t("nav.accounts"), "users") : ""}
       ${toolGroups.map((group) => navItem(group.id, group.title, group.icon)).join("")}
       ${navItem("lyrics", t("nav.lyrics"), "lyrics")}
       ${navItem("history", t("nav.history"), "history")}
       ${app.mode === "ai" ? navItem("copilot", t("nav.copilot"), "bot") : ""}
       ${app.mode === "ai" ? navItem("ai", t("nav.ai"), "sparkles") : ""}
-      ${pluginRegistry.pages().length ? `<span class="nav-label">Plugins</span>${pluginRegistry.pages().map((pluginPage) => navItem(pluginPage.pageId, escapeHtml(pluginPage.title), pluginPage.icon ?? "plug")).join("")}` : ""}
+      ${pluginRegistry.pages().length ? `<span class="nav-label">${t("nav.pluginPages")}</span>${pluginRegistry.pages().map((pluginPage) => navItem(pluginPage.pageId, escapeHtml(pluginPage.title), pluginPage.icon ?? "plug")).join("")}` : ""}
       <span class="nav-label">${t("nav.system")}</span>
       ${navItem("components", t("nav.components"), "boxes")}
-      ${navItem("bridge", t("nav.bridge"), "bridge")}
+      ${synthvOn() ? navItem("bridge", t("nav.bridge"), "bridge") : ""}
       ${navItem("connections", t("nav.connections"), "server")}
       ${navItem("plugins", t("nav.plugins"), "plug")}
     </nav>
@@ -1097,7 +1106,7 @@ function renderApp(): void {
   if (!app) return;
   if (app.settingsLoadError) {
     root.innerHTML = `<main class="fatal settings-recovery" role="alert">
-      <div class="brand-mark"><img class="brand-logo" src="./assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div>
+      <div class="brand-mark"><img class="brand-logo" src="${BRAND.logo}" alt="${BRAND.productName}" /></div>
       <span class="eyebrow">${t("system.recovery")}</span>
       <h1>${t("system.recoveryTitle")}</h1>
       <p>${t("system.recoveryDescription")}</p>
@@ -1645,7 +1654,7 @@ function renderOnboarding(): void {
   root.innerHTML = `<main class="onboarding">
     <div class="onboarding-glow one"></div><div class="onboarding-glow two"></div>
     <section class="onboarding-card">
-      <div class="onboarding-brand"><div class="brand-mark"><img class="brand-logo" src="./assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div><span>Synthesizer V Toolbox</span></div>
+      <div class="onboarding-brand"><div class="brand-mark"><img class="brand-logo" src="${BRAND.logo}" alt="${BRAND.productName}" /></div><span>${productName(locale())}</span></div>
       <div class="eyebrow">${t("onboarding.eyebrow")}</div>
       <h1>${t("onboarding.title")}</h1>
       <p class="lead">${t("onboarding.lead")}</p>
@@ -1676,7 +1685,7 @@ function renderPage(): string {
   if (isPluginPageId(page)) return "";
   switch (page) {
     case "home": return renderHome();
-    case "accounts": return renderAccounts();
+    case "accounts": return synthvOn() ? renderAccounts() : renderIntegrationOff();
     case "import": return renderToolCategory("import");
     case "convert": return renderToolCategory("convert");
     case "analysis": return renderToolCategory("analysis");
@@ -1686,12 +1695,16 @@ function renderPage(): string {
     case "copilot": return renderCopilot();
     case "ai": return renderAiPage();
     case "components": return renderComponents();
-    case "bridge": return renderBridge();
+    case "bridge": return synthvOn() ? renderBridge() : renderIntegrationOff();
     case "connections": return renderMcp();
     case "plugins": return renderPlugins();
     case "settings": return renderSettings();
-    case "about": return renderAboutPage({ app: app!, update: toolboxUpdate, download: toolboxUpdateDownload, busy, locale: locale(), translate: t, escapeHtml, icon });
+    case "about": return renderAboutPage({ app: app!, product: { name: productName(locale()), alternate: productName(locale()) === BRAND.productName ? BRAND.productNameZh : BRAND.productName, logo: BRAND.logo }, update: toolboxUpdate, download: toolboxUpdateDownload, busy, locale: locale(), translate: t, escapeHtml, icon });
   }
+}
+
+function renderIntegrationOff(): string {
+  return `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("bridge", 24)}</span><div><h2>${t("integrations.offTitle")}</h2><p>${t("integrations.offDescription")}</p><button class="primary" data-set-integration="synthv:on" ${busy ? "disabled" : ""}>${t("integrations.turnOn")}</button></div></section>`;
 }
 
 function renderPlugins(): string {
@@ -1926,18 +1939,18 @@ function renderHome(): string {
       <div><span class="eyebrow">${app.mode === "ai" ? t("home.aiWorkspace") : t("home.localWorkspace")}</span>
         <h2>${app.mode === "ai" ? t("home.aiTitle") : t("home.localTitle")}</h2>
         <p>${app.mode === "ai" ? t("home.aiDescription") : t("home.localDescription")}</p>
-        <div class="hero-actions"><button class="primary" data-page="${app.mode === "ai" ? "copilot" : "import"}">${icon(app.mode === "ai" ? "bot" : "pipeline", 18)} ${app.mode === "ai" ? t("home.openCopilot") : t("home.openImport")}</button><button class="secondary" data-page="bridge">${t("home.checkBridge")}</button></div>
+        <div class="hero-actions"><button class="primary" data-page="${app.mode === "ai" ? "copilot" : "import"}">${icon(app.mode === "ai" ? "bot" : "pipeline", 18)} ${app.mode === "ai" ? t("home.openCopilot") : t("home.openImport")}</button>${synthvOn() ? `<button class="secondary" data-page="bridge">${t("home.checkBridge")}</button>` : `<button class="secondary" data-page="components">${t("home.checkComponents")}</button>`}</div>
       </div>
-      <div class="hero-orb"><div><img class="brand-logo" src="./assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div><span>${app.mode === "ai" ? "COPILOT READY" : "LOCAL FIRST"}</span></div>
+      <div class="hero-orb"><div><img class="brand-logo" src="${BRAND.logo}" alt="${BRAND.productName}" /></div><span>${app.mode === "ai" ? "COPILOT READY" : "LOCAL FIRST"}</span></div>
     </div>
     <div class="stats-grid">
       <article class="stat-card"><span>${t("home.mode")}</span><strong>${app.mode === "ai" ? t("home.ai") : t("home.toolbox")}</strong><small>${app.mode === "ai" ? aiConnectionSummary() : t("home.runtimeOff")}</small></article>
       <article class="stat-card"><span>${t("home.components")}</span><strong>${ready} / ${app.components.length}</strong><small>${t("home.available")}</small></article>
-      <article class="stat-card"><span>SynthV</span><strong>${app.installations.length ? t("home.discovered") : t("home.notDiscovered")}</strong><small>${app.installations[0]?.displayName ?? t("home.manualScripts")}</small></article>
-      <article class="stat-card"><span>${t("home.toolConnections")}</span><strong>${app.bridgeConnected ? t("home.online") : t("home.offline")}</strong><small>${app.mode === "ai" ? t("home.enabledMcp", { count: app.mcpServers.filter((server) => server.enabled).length }) : t("home.independentBridge")}</small></article>
+      ${synthvOn() ? `<article class="stat-card"><span>SynthV</span><strong>${app.installations.length ? t("home.discovered") : t("home.notDiscovered")}</strong><small>${app.installations[0]?.displayName ?? t("home.manualScripts")}</small></article>` : `<article class="stat-card"><span>${t("home.localService")}</span><strong>${httpApiStatus.running ? t("home.serviceRunning") : t("home.serviceOff")}</strong><small>${httpApiStatus.running ? t("home.serviceClients") : t("home.serviceDisabled")}</small></article>`}
+      ${synthvOn() ? `<article class="stat-card"><span>${t("home.toolConnections")}</span><strong>${app.bridgeConnected ? t("home.online") : t("home.offline")}</strong><small>${app.mode === "ai" ? t("home.enabledMcp", { count: app.mcpServers.filter((server) => server.enabled).length }) : t("home.independentBridge")}</small></article>` : `<article class="stat-card"><span>${t("home.externalMcp")}</span><strong>${app.mcpServers.filter((server) => server.enabled).length}</strong><small>${app.mode === "ai" ? t("home.externalMcpAgent") : t("home.externalMcpAiOnly")}</small></article>`}
     </div>
     <section class="section-block"><div class="section-heading"><div><h2>${t("home.quickStart")}</h2><p>${t("home.quickDescription")}</p></div></div>
-      <div class="quick-grid">${features.filter((feature) => feature.homePriority !== undefined).sort((left, right) => (left.homePriority ?? 0) - (right.homePriority ?? 0)).slice(0, 3).map((feature) => {
+      <div class="quick-grid">${features.filter((feature) => feature.homePriority !== undefined && featureVisible(feature, current)).sort((left, right) => (left.homePriority ?? 0) - (right.homePriority ?? 0)).slice(0, 3).map((feature) => {
         const availability = featureAvailability(feature, current);
         const target = availability.route ? `data-page="${availability.route}"` : `data-feature="${feature.id}"`;
         const detail = availability.tone === "ready" ? `${feature.base[0]} · ${feature.base[1]}` : availability.label;
@@ -1963,7 +1976,9 @@ function scheduleHistoryRefresh(): void {
   const refresh = async () => {
     if (generation !== historyRefreshGeneration || page !== "history") return;
     try {
-      const [backup, workflow, checkpoints] = await Promise.all([api.projectBackupState(), api.listCreativeHistory(), api.listProjectCheckpoints()]);
+      // Project backups and snapshots are .svp work: with the integration off they are neither read nor offered for restore.
+      const synthv = synthvOn();
+      const [backup, workflow, checkpoints] = await Promise.all([synthv ? api.projectBackupState() : Promise.resolve(undefined), api.listCreativeHistory(), synthv ? api.listProjectCheckpoints() : Promise.resolve([])]);
       if (generation !== historyRefreshGeneration || page !== "history") return;
       projectBackupState = backup;
       creativeHistory = workflow;
@@ -1999,8 +2014,8 @@ function renderHistoryPage(): string {
   const tracked = backup?.projects.length ? backup.projects.map((item) => `<article class="checkpoint-item"><span class="feature-icon blue">${icon("history", 17)}</span><div><strong>${escapeHtml(item.sourcePath)}</strong><small>${t("history.recentlyFound", { time: formatHistoryTime(item.lastSeenAtUtc), count: item.backupCount })}</small><code>${item.lastError ? escapeHtml(t("history.failed", { error: item.lastError })) : escapeHtml(t("history.lastBackup", { time: formatHistoryTime(item.lastBackupAtUtc) }))}</code></div></article>`).join("") : `<div class="empty-inline">${t("history.emptyTracked")}</div>`;
   const loadError = historyLoadState === "error" ? `<div class="audio-inline-error" role="alert">${escapeHtml(t("history.readingFailed", { error: historyLoadError }))}</div>` : "";
   return `<section class="panel history-intro"><span class="feature-icon blue">${icon("history", 22)}</span><div><span class="eyebrow">${t("history.eyebrow")}</span><h2>${t("history.title")}</h2><p>${t("history.description")}</p></div><span class="availability ${historyLoadState === "ready" && !backup?.lastError && !itemError ? "ready" : "warning"}">${backupStatus}</span></section>${loadError}
-    <section class="panel history-checkpoint-grid"><div class="section-heading"><div><h2>${t("history.backupStatus")}</h2><p>${t("history.backupDescription", { seconds: backup?.intervalSeconds ?? 60 })}${backup?.lastError ? ` · ${escapeHtml(backup.lastError)}` : ""}</p></div></div><div class="checkpoint-list">${tracked}</div></section>
-    <section class="panel"><div class="section-heading"><div><h2>${t("history.snapshots")}</h2><p>${t("history.snapshotDescription")}</p></div></div><div class="checkpoint-list">${checkpoints}</div></section>
+    ${synthvOn() ? `<section class="panel history-checkpoint-grid"><div class="section-heading"><div><h2>${t("history.backupStatus")}</h2><p>${t("history.backupDescription", { seconds: backup?.intervalSeconds ?? 60 })}${backup?.lastError ? ` · ${escapeHtml(backup.lastError)}` : ""}</p></div></div><div class="checkpoint-list">${tracked}</div></section>
+    <section class="panel"><div class="section-heading"><div><h2>${t("history.snapshots")}</h2><p>${t("history.snapshotDescription")}</p></div></div><div class="checkpoint-list">${checkpoints}</div></section>` : ""}
     <section class="panel workflow-history"><div class="section-heading"><div><h2>${t("history.workflow")}</h2><p>${t("history.workflowDescription")}</p></div></div><div class="timeline-list">${history}</div></section>`;
 }
 
@@ -2032,11 +2047,21 @@ function featureAvailability(feature: Feature, current: BootstrapState): Feature
   };
 }
 
+/** Hosts that predate integrations omit the field; they always behaved as if SynthV were on. */
+function synthvOn(current: BootstrapState | undefined = app): boolean {
+  return current?.integrations?.synthv.enabled ?? true;
+}
+
+/** One rule for tool tabs and home quick-start, so a hidden tool is never offered as a shortcut. */
+function featureVisible(feature: Feature, current: BootstrapState): boolean {
+  if (feature.id === "cover" && current.mode !== "ai") return false;
+  return feature.integration !== "synthv" || synthvOn(current);
+}
+
 function groupFeatures(group: ToolGroup): Feature[] {
   return group.featureIds.flatMap((id) => {
-    if (id === "cover" && app?.mode !== "ai") return [];
     const feature = features.find((item) => item.id === id);
-    return feature ? [feature] : [];
+    return feature && app && featureVisible(feature, app) ? [feature] : [];
   });
 }
 
@@ -2046,9 +2071,9 @@ function renderToolCategory(groupId: ToolGroup["id"]): string {
   const group = toolGroups.find((item) => item.id === groupId);
   if (!group) return "";
   const groupFeatureList = groupFeatures(group);
-  const selected = activeWorkflow && group.featureIds.includes(activeWorkflow)
-    ? groupFeatureList.find((feature) => feature.id === activeWorkflow)
-    : groupFeatureList.find((feature) => featureAvailability(feature, current).tone === "ready") ?? groupFeatureList[0];
+  // A remembered tool may be hidden now (for example after turning SynthV off), so only visible tools can stay selected.
+  const selected = (activeWorkflow ? groupFeatureList.find((feature) => feature.id === activeWorkflow) : undefined)
+    ?? groupFeatureList.find((feature) => featureAvailability(feature, current).tone === "ready") ?? groupFeatureList[0];
   const tabs = groupFeatureList.length > 1 ? groupFeatureList.map((feature) => {
     const availability = featureAvailability(feature, current);
     return `<button class="tool-tab ${selected?.id === feature.id ? "active" : ""} ${availability.tone}" data-feature="${escapeHtml(feature.id)}" ${selected?.id === feature.id ? 'aria-current="page"' : ""}><span>${escapeHtml(feature.title)}</span><small>${escapeHtml(availability.label)}</small></button>`;
@@ -2241,7 +2266,7 @@ function renderLyricStudio(ai: boolean): string {
   const projectToolbar = `<section class="lyric-project-toolbar panel-inset"><div><span class="eyebrow">${t("lyrics.localProject")}</span><strong>${escapeHtml(projectStatus)}</strong><small>${t("lyrics.projectLocalDescription")}</small></div><div class="lyric-project-actions"><button type="button" class="secondary compact" data-new-lyric-project>${t("lyrics.newProject")}</button><select id="lyric-project-select" ${lyricProjects.length ? "" : "disabled"}><option value="">${lyricProjects.length ? t("lyrics.chooseProject") : t("lyrics.noProjects")}</option>${projectOptions}</select><button type="button" class="secondary compact" data-load-lyric-project ${lyricProjects.length ? "" : "disabled"}>${t("lyrics.open")}</button><button type="button" class="secondary compact" data-export-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>${t("lyrics.export")}</button><button type="button" class="primary compact" data-save-lyric-project>${lyricProjectId === undefined ? t("lyrics.saveAsProject") : t("lyrics.save")}</button>${versionOptions ? `<select id="lyric-version-select"><option value="">${t("lyrics.versionHistory")}</option>${versionOptions}</select><button type="button" class="secondary compact" data-restore-lyric-version>${t("lyrics.restoreVersion")}</button>` : ""}</div></section>`;
   const structureRows = lyricSections.map((section, index) => `<article class="lyric-section-row" data-lyric-section-id="${escapeHtml(section.id)}"><span class="section-index">${index + 1}</span><label>${t("lyrics.sectionName")}<input data-lyric-section-field="label" maxlength="60" value="${escapeHtml(section.label)}" /></label><label>${t("lyrics.lineCount")}<input data-lyric-section-field="lineCount" type="number" min="1" max="32" value="${section.lineCount}" /></label><label>${t("lyrics.scheme")}<input data-lyric-section-field="rhymeScheme" maxlength="32" value="${escapeHtml(section.rhymeScheme)}" placeholder="${t("lyrics.schemeHint")}" /></label><input type="hidden" data-lyric-section-field="kind" value="${escapeHtml(section.kind)}" /><div class="lyric-row-actions"><button type="button" class="icon-plain" data-move-lyric-section="up" data-section-id="${escapeHtml(section.id)}" title="${t("lyrics.moveUp")}" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" class="icon-plain" data-move-lyric-section="down" data-section-id="${escapeHtml(section.id)}" title="${t("lyrics.moveDown")}" ${index === lyricSections.length - 1 ? "disabled" : ""}>↓</button><button type="button" class="icon-plain danger" data-remove-lyric-section="${escapeHtml(section.id)}" title="${t("lyrics.delete")}">×</button></div></article>`).join("");
   const copilot = ai ? `<section class="lyric-copilot panel-inset"><h3>${t("lyrics.continueWriting")}</h3><p>${t("lyrics.copilotDescription")}</p><button type="button" class="secondary" data-page="copilot">${t("home.openCopilot")}</button>${renderLyricCandidates()}</section>` : "";
-  return `<div class="lyric-mode-banner"><span class="feature-icon ${ai ? "violet" : "emerald"}">${icon(ai ? "sparkles" : "lyrics", 21)}</span><div><strong>${t("lyrics.focus")}</strong><p>${t("lyrics.autosaveDescription")}</p></div><span class="lyric-save-state">${t("lyrics.localAutosave")}</span></div>${projectToolbar}<div class="lyric-workbench-grid lyric-writing-layout"><main class="lyric-editor panel-inset"><div class="lyric-editor-head"><label class="lyric-title">${t("lyrics.songTitle")}<input id="lyric-song-title" maxlength="120" value="${escapeHtml(lyricSongTitle)}" placeholder="${t("lyrics.untitledLyrics")}" /></label><div class="lyric-editor-actions"><button type="button" class="secondary compact" data-copy-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>${t("lyrics.copyButton")}</button><button type="button" class="secondary compact" data-clear-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>${t("lyrics.clearButton")}</button></div></div><label class="lyric-draft-label">${t("lyrics.draftLabel")}<textarea id="lyric-draft" rows="22" spellcheck="false" placeholder="${t("lyrics.draftHint")}">${escapeHtml(lyricDraft)}</textarea></label><footer class="lyric-editor-footer"><span>${t("lyrics.draftStats", { lines: lineCount, characters: lyricDraft.length.toLocaleString(locale()) })}</span><span>${t("lyrics.autosaveTyping")}</span></footer></main><aside class="lyric-helper-stack">${copilot}${renderLyricBridgeFit()}<details class="lyric-tools panel-inset"><summary><span><span class="eyebrow">${t("lyrics.optionalTools")}</span><strong>${icon("recipe", 16)} ${t("lyrics.structure")}</strong></span><small>${t("lyrics.structureStats", { sections: lyricSections.length, lines: lyricSections.reduce((sum, section) => sum + section.lineCount, 0) })}</small></summary><form id="lyric-structure-form"><div class="lyric-presets"><span>${t("lyrics.quickStart")}</span><button type="button" data-lyric-preset="compact">${t("lyrics.presetCompact")}</button><button type="button" data-lyric-preset="pop">${t("lyrics.presetPop")}</button><button type="button" data-lyric-preset="rap">${t("lyrics.presetRap")}</button><button type="button" data-lyric-preset="blank">${t("lyrics.presetBlank")}</button></div><div class="lyric-section-list">${structureRows}</div><div class="lyric-structure-actions"><button type="button" class="secondary" data-add-lyric-section>${icon("plus", 15)} ${t("lyrics.addSection")}</button><button class="primary">${icon("recipe", 15)} ${t("lyrics.insertStructure")}</button></div></form></details><details class="lyric-tools panel-inset"><summary><span><span class="eyebrow">${t("lyrics.optionalTools")}</span><strong>${icon("pronunciation", 16)} ${t("lyrics.rhymeHelper")}</strong></span><small>${t("lyrics.rhymeOnDemand")}</small></summary><form id="rhyme-lookup-form" class="rhyme-search"><input id="rhyme-query" required maxlength="24" value="${escapeHtml(lyricRhymeQuery)}" placeholder="${t("lyrics.rhymeHint")}" /><select id="rhyme-match-mode"><option value="family" ${lyricRhymeMode === "family" ? "selected" : ""}>${t("lyrics.familyLabel")}</option><option value="exact" ${lyricRhymeMode === "exact" ? "selected" : ""}>${t("lyrics.exactLabel")}</option></select><button class="secondary">${t("lyrics.findRhymes")}</button></form>${renderRhymeLookupResult()}</details></aside></div>`;
+  return `<div class="lyric-mode-banner"><span class="feature-icon ${ai ? "violet" : "emerald"}">${icon(ai ? "sparkles" : "lyrics", 21)}</span><div><strong>${t("lyrics.focus")}</strong><p>${t("lyrics.autosaveDescription")}</p></div><span class="lyric-save-state">${t("lyrics.localAutosave")}</span></div>${projectToolbar}<div class="lyric-workbench-grid lyric-writing-layout"><main class="lyric-editor panel-inset"><div class="lyric-editor-head"><label class="lyric-title">${t("lyrics.songTitle")}<input id="lyric-song-title" maxlength="120" value="${escapeHtml(lyricSongTitle)}" placeholder="${t("lyrics.untitledLyrics")}" /></label><div class="lyric-editor-actions"><button type="button" class="secondary compact" data-copy-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>${t("lyrics.copyButton")}</button><button type="button" class="secondary compact" data-clear-lyric-draft ${lyricDraft.trim() ? "" : "disabled"}>${t("lyrics.clearButton")}</button></div></div><label class="lyric-draft-label">${t("lyrics.draftLabel")}<textarea id="lyric-draft" rows="22" spellcheck="false" placeholder="${t("lyrics.draftHint")}">${escapeHtml(lyricDraft)}</textarea></label><footer class="lyric-editor-footer"><span>${t("lyrics.draftStats", { lines: lineCount, characters: lyricDraft.length.toLocaleString(locale()) })}</span><span>${t("lyrics.autosaveTyping")}</span></footer></main><aside class="lyric-helper-stack">${copilot}${synthvOn() ? renderLyricBridgeFit() : ""}<details class="lyric-tools panel-inset"><summary><span><span class="eyebrow">${t("lyrics.optionalTools")}</span><strong>${icon("recipe", 16)} ${t("lyrics.structure")}</strong></span><small>${t("lyrics.structureStats", { sections: lyricSections.length, lines: lyricSections.reduce((sum, section) => sum + section.lineCount, 0) })}</small></summary><form id="lyric-structure-form"><div class="lyric-presets"><span>${t("lyrics.quickStart")}</span><button type="button" data-lyric-preset="compact">${t("lyrics.presetCompact")}</button><button type="button" data-lyric-preset="pop">${t("lyrics.presetPop")}</button><button type="button" data-lyric-preset="rap">${t("lyrics.presetRap")}</button><button type="button" data-lyric-preset="blank">${t("lyrics.presetBlank")}</button></div><div class="lyric-section-list">${structureRows}</div><div class="lyric-structure-actions"><button type="button" class="secondary" data-add-lyric-section>${icon("plus", 15)} ${t("lyrics.addSection")}</button><button class="primary">${icon("recipe", 15)} ${t("lyrics.insertStructure")}</button></div></form></details><details class="lyric-tools panel-inset"><summary><span><span class="eyebrow">${t("lyrics.optionalTools")}</span><strong>${icon("pronunciation", 16)} ${t("lyrics.rhymeHelper")}</strong></span><small>${t("lyrics.rhymeOnDemand")}</small></summary><form id="rhyme-lookup-form" class="rhyme-search"><input id="rhyme-query" required maxlength="24" value="${escapeHtml(lyricRhymeQuery)}" placeholder="${t("lyrics.rhymeHint")}" /><select id="rhyme-match-mode"><option value="family" ${lyricRhymeMode === "family" ? "selected" : ""}>${t("lyrics.familyLabel")}</option><option value="exact" ${lyricRhymeMode === "exact" ? "selected" : ""}>${t("lyrics.exactLabel")}</option></select><button class="secondary">${t("lyrics.findRhymes")}</button></form>${renderRhymeLookupResult()}</details></aside></div>`;
 }
 
 function renderLyricsPage(): string {
@@ -2474,15 +2499,16 @@ function renderWorkflowPanel(id: string): string {
         <div class="workflow-pair"><label>${t("workflowCopy.outputDirectory")}<div class="path-picker-control"><input id="pipeline-output-directory" value="${escapeHtml(audioToProjectOutputDirectory)}" placeholder="${t("workflowCopy.outputDirectoryDefaultsToSource")}" /><button class="secondary path-picker-button" type="button" data-pick-pipeline-output-directory title="${t("workflowCopy.chooseDirectory")}" aria-label="${t("workflowCopy.chooseDirectory")}">${icon("folder", 16)}</button></div><small>${t("workflowCopy.outputDirectoryDefaultsToSource")}</small></label><label>${t("workflowCopy.outputMidiFilename")}<input id="pipeline-output" required value="${escapeHtml(audioToProjectOutputName)}" /></label></div>
         ${ai ? `<label>${t("workflowCopy.matchingToleranceSeconds")}<input id="pipeline-tolerance" type="number" min="0.02" max="0.25" step="0.01" value="${audioToProjectTolerance}" /></label>` : `<input id="pipeline-tolerance" type="hidden" value="${audioToProjectTolerance}" />`}
         ${ai ? `<label class="checkbox workflow-check"><input id="pipeline-advanced" type="checkbox" ${audioToProjectAdvanced ? "checked" : ""} /> ${t("workflowCopy.enableParameterOptimizationAndLowConfidenceNote")}</label>` : ""}
-        <label class="checkbox workflow-check"><input id="pipeline-import" type="checkbox" ${audioToProjectImportToSynthv ? "checked" : ""} ${app.bridgeConnected ? "" : "disabled"} /> ${t("workflowCopy.importIntoTheCurrentSynthvProjectThrough")}${app.bridgeConnected ? "" : t("workflowCopy.bridgeDisconnected")}</label>
-        <div id="pipeline-import-options" class="workflow-nested" hidden><div class="workflow-pair"><label>${t("workflowCopy.targetTrackNumber")}<input id="pipeline-track" type="number" min="1" max="10000" value="${audioToProjectTrackIndex}" required disabled /></label><label>${t("workflowCopy.synthvNoteGroupName")}<input id="pipeline-group-name" required value="${escapeHtml(audioToProjectGroupName)}" maxlength="200" disabled /></label></div><label class="checkbox workflow-check"><input id="pipeline-rights" type="checkbox" ${audioToProjectRightsConfirmed ? "checked" : ""} disabled /> ${t("workflowCopy.iHavePermissionToUseTheseLocal")}</label></div>
+        ${synthvOn() ? `<label class="checkbox workflow-check"><input id="pipeline-import" type="checkbox" ${audioToProjectImportToSynthv ? "checked" : ""} ${app.bridgeConnected ? "" : "disabled"} /> ${t("workflowCopy.importIntoTheCurrentSynthvProjectThrough")}${app.bridgeConnected ? "" : t("workflowCopy.bridgeDisconnected")}</label>
+        <div id="pipeline-import-options" class="workflow-nested" hidden><div class="workflow-pair"><label>${t("workflowCopy.targetTrackNumber")}<input id="pipeline-track" type="number" min="1" max="10000" value="${audioToProjectTrackIndex}" required disabled /></label><label>${t("workflowCopy.synthvNoteGroupName")}<input id="pipeline-group-name" required value="${escapeHtml(audioToProjectGroupName)}" maxlength="200" disabled /></label></div><label class="checkbox workflow-check"><input id="pipeline-rights" type="checkbox" ${audioToProjectRightsConfirmed ? "checked" : ""} disabled /> ${t("workflowCopy.iHavePermissionToUseTheseLocal")}</label></div>` : ""}
         <button class="primary" id="pipeline-submit">${icon("pipeline", 16)} ${t("workflowCopy.extractAndExportMidi")}</button>
       </form>`;
   } else if (id === "project-doctor") {
     form = `<div class="mode-limit">${t("workflowCopy.completelyOfflineReadOnlyInspectionOfA")}</div><form id="project-doctor-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.svpProjectPath")}<div class="path-picker-control"><input id="doctor-project" required placeholder="${t("workflowCopy.chooseAProjectToInspect")}" />${pathPickerButton("doctor-project", "project")}</div></label><button class="primary">${icon("doctor", 16)} ${t("workflowCopy.startReadOnlyInspection")}</button></form>`;
   } else if (id === "batch-recipes") {
-    const recipes = workflowRecipes.filter((recipe) => recipe.supportsBatch);
-    form = `<div class="mode-limit">${t("workflowCopy.enterOneInputPathPerLineUp")}</div><form id="batch-workflow-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.batchRecipe")}<select id="batch-recipe">${recipes.map((recipe) => `<option value="${escapeHtml(recipe.id)}">${escapeHtml(t(`workflowRecipes.${recipe.id}.title`))} · ${escapeHtml(t(`workflowRecipes.${recipe.id}.description`))}</option>`).join("")}</select></label><label>${t("workflowCopy.inputFilePathsOnePerLine")}<textarea id="batch-inputs" rows="8" required placeholder="C:\Projects\song-a.svp&#10;C:\Projects\song-b.svp"></textarea></label><label>${t("workflowCopy.optionalJsonParameters")}<textarea id="batch-options" rows="3" placeholder='${t("workflowCopy.forExample")} {"suffix":"_delivery"}'>{}</textarea></label><button class="primary">${icon("batch", 16)} ${t("workflowCopy.queueAndRunBatch")}</button></form>`;
+    // Project recipes read .svp files and belong to the SynthV integration; audio recipes (render review) work without it.
+    const recipes = workflowRecipes.filter((recipe) => recipe.supportsBatch && (synthvOn() || recipe.inputKind === "audio"));
+    form = `<div class="mode-limit">${t("workflowCopy.enterOneInputPathPerLineUp")}</div><form id="batch-workflow-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.batchRecipe")}<select id="batch-recipe">${recipes.map((recipe) => `<option value="${escapeHtml(recipe.id)}">${escapeHtml(t(`workflowRecipes.${recipe.id}.title`))} · ${escapeHtml(t(`workflowRecipes.${recipe.id}.description`))}</option>`).join("")}</select></label><label>${t("workflowCopy.inputFilePathsOnePerLine")}<textarea id="batch-inputs" rows="8" required placeholder="${synthvOn() ? "C:\\Projects\\song-a.svp&#10;C:\\Projects\\song-b.svp" : "C:\\Renders\\take-a.wav&#10;C:\\Renders\\take-b.wav"}"></textarea></label><label>${t("workflowCopy.optionalJsonParameters")}<textarea id="batch-options" rows="3" placeholder='${t("workflowCopy.forExample")} {"suffix":"_delivery"}'>{}</textarea></label><button class="primary">${icon("batch", 16)} ${t("workflowCopy.queueAndRunBatch")}</button></form>`;
   } else if (id === "selective-sync") {
     const slotOptions = profiles?.slots.map((slot) => `<option value="${escapeHtml(slot.id)}" ${slot.id === syncSourceSlotId ? "selected" : ""}>${escapeHtml(slot.displayName)}${slot.isActive ? t("workflowCopy.currentDefault") : ""}</option>`).join("") ?? "";
     const targetOptions = profiles?.slots.map((slot) => `<option value="${escapeHtml(slot.id)}" ${slot.id === syncTargetSlotId ? "selected" : ""}>${escapeHtml(slot.displayName)}${slot.isActive ? t("workflowCopy.currentDefault") : ""}</option>`).join("") ?? "";
@@ -2511,7 +2537,9 @@ function renderWorkflowPanel(id: string): string {
       <div class="ab-capture-paths"><div><span>${t("workflowCopy.baselineA")}</span><code>${escapeHtml(abBaselinePath || t("workflowCopy.notCaptured"))}</code></div><div><span>${t("workflowCopy.candidateB")}</span><code>${escapeHtml(abCandidatePath || t("workflowCopy.notCaptured"))}</code></div></div>
       <form id="ab-compare-form" class="workflow-form workflow-wide"><div class="workflow-pair"><label>${t("workflowCopy.aWavPath")}<div class="path-picker-control"><input id="ab-baseline-path" required value="${escapeHtml(abBaselinePath)}" />${pathPickerButton("ab-baseline-path", "audio")}</div></label><label>${t("workflowCopy.bWavPath")}<div class="path-picker-control"><input id="ab-candidate-path" required value="${escapeHtml(abCandidatePath)}" />${pathPickerButton("ab-candidate-path", "audio")}</div></label></div><label>${t("workflowCopy.maximumAutomaticAlignmentOffsetMs")}<input id="ab-max-lag" type="number" min="0" max="1000" step="1" value="250" /></label><button class="primary">${icon("compare", 16)} ${t("workflowCopy.alignAndCompareAB")}</button></form>`;
   } else if (id === "pronunciation-doctor") {
-    form = `<div class="mode-limit">${t("workflowCopy.inspectASavedProjectOrPasteLyrics")}</div><form id="pronunciation-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.svpProjectPathOptional")}<div class="path-picker-control"><input id="pronunciation-project" placeholder="${t("workflowCopy.doNotAlsoPasteLyricsWhenProviding")}" />${pathPickerButton("pronunciation-project", "project")}</div></label><label>${t("workflowCopy.lyricTextOptional")}<textarea id="pronunciation-lyrics" rows="8" placeholder="${t("workflowCopy.pasteLyricsLineByLineLeaveThe")}"></textarea></label><button class="primary">${icon("pronunciation", 16)} ${t("workflowCopy.runPronunciationDiagnostics")}</button></form>`;
+    // Reading a .svp is part of the SynthV integration; pasted lyrics are checked either way.
+    const projectInput = synthvOn() ? `<label>${t("workflowCopy.svpProjectPathOptional")}<div class="path-picker-control"><input id="pronunciation-project" placeholder="${t("workflowCopy.doNotAlsoPasteLyricsWhenProviding")}" />${pathPickerButton("pronunciation-project", "project")}</div></label>` : "";
+    form = `<div class="mode-limit">${synthvOn() ? t("workflowCopy.inspectASavedProjectOrPasteLyrics") : t("integrations.pronunciationLyricsOnly")}</div><form id="pronunciation-form" class="workflow-form workflow-wide">${projectInput}<label>${t("workflowCopy.lyricTextOptional")}<textarea id="pronunciation-lyrics" rows="8" placeholder="${t("workflowCopy.pasteLyricsLineByLineLeaveThe")}"></textarea></label><button class="primary">${icon("pronunciation", 16)} ${t("workflowCopy.runPronunciationDiagnostics")}</button></form>`;
   } else if (id === "render-review") {
     form = `<div class="mode-limit">${t("workflowCopy.usesLocalPiAudioResultsToCheck")}</div><form id="render-review-form" class="workflow-form workflow-wide"><label>${t("workflowCopy.renderedAudioPath")}<div class="path-picker-control"><input id="render-audio" required />${pathPickerButton("render-audio", "audio")}</div></label><div class="workflow-pair"><label>${t("workflowCopy.expectedDurationSecondsOptional")}<input id="render-duration" type="number" min="0.01" step="0.01" /></label><label>${t("workflowCopy.expectedBpmOptional")}<input id="render-bpm" type="number" min="1" max="1000" step="0.01" /></label></div><label class="checkbox workflow-check"><input id="render-notes" type="checkbox" /> ${t("workflowCopy.requireDetectedPitchEvents")}</label>${ai ? `<label class="checkbox workflow-check"><input id="render-advanced" type="checkbox" /> ${t("workflowCopy.enableAdvancedAudioAnalysis")}</label>` : ""}<button class="primary">${icon("shield", 16)} ${t("workflowCopy.startDeliveryReview")}</button></form>`;
   } else {
@@ -2587,6 +2615,13 @@ const AGENT_TOOL_DISPLAY_NAME_KEYS: Record<string, string> = {
   sv_query: "copilot.toolNameSvQuery",
   sv_describe: "copilot.toolNameSvDescribe",
   sv_review: "copilot.toolNameSvReview",
+  toolbox_audio_probe: "copilot.toolNameAudioProbe",
+  toolbox_audio_loudness: "copilot.toolNameAudioLoudness",
+  toolbox_audio_features: "copilot.toolNameAudioFeatures",
+  toolbox_lyrics_rhymes: "copilot.toolNameLyricsRhymes",
+  toolbox_lyrics_check: "copilot.toolNameLyricsCheck",
+  toolbox_history: "copilot.toolNameHistory",
+  toolbox_cover: "copilot.toolNameCover",
 };
 
 function agentToolDisplayName(name: string): string {
@@ -2873,7 +2908,7 @@ function renderCopilot(): string {
     <section class="chat-panel">
       <div class="chat-header"><div class="chat-title"><strong>${escapeHtml(conversation?.title ?? t("copilot.newChat"))}</strong><small>${escapeHtml(t("copilot.enabledToolsOnly"))}</small></div><div class="chat-header-actions" aria-label="${escapeHtml(t("copilot.toolbar"))}"><button type="button" class="chat-model-button" data-open-ai-provider-picker aria-label="${escapeHtml(t("copilot.chooseProviderModel", { provider: providerName, model: providerModel }))}"><span class="chat-model-mark">${icon("sparkles", 14)}</span><span><strong>${escapeHtml(providerName)}</strong><small>${escapeHtml(providerModel)} · ${providerStatus}</small></span>${icon("arrow", 14)}</button><div class="chat-work-mode" role="group" aria-label="${escapeHtml(t("copilot.workMode"))}"><button type="button" class="${app?.agentWorkMode === "edit" ? "active" : ""}" data-agent-work-mode="edit" aria-pressed="${app?.agentWorkMode === "edit"}">Edit</button><button type="button" class="${app?.agentWorkMode === "solo" ? "active" : ""}" data-agent-work-mode="solo" aria-pressed="${app?.agentWorkMode === "solo"}">Solo</button></div>${renderAgentEffortGroup()}</div></div>
       <div id="agent-approvals-slot" class="agent-approvals-slot">${approvalsSlotHtml}</div>
-      <div class="messages"><div id="agent-goal-slot">${goalSlotHtml}</div>${messages.length ? messages.map(renderMessage).join("") : `<div class="empty-chat"><span class="mode-icon purple">${icon("bot", 30)}</span><h2>${escapeHtml(t("copilot.emptyTitle"))}</h2><p>${escapeHtml(t("copilot.emptyDescription"))}</p><div class="prompt-chips"><button data-prompt="${escapeHtml(t("copilot.audioPrompt"))}">${escapeHtml(t("copilot.audioAction"))}</button><button data-prompt="${escapeHtml(t("copilot.projectPrompt"))}">${escapeHtml(t("copilot.projectAction"))}</button><button data-prompt="${escapeHtml(t("copilot.planPrompt"))}">${escapeHtml(t("copilot.planAction"))}</button></div></div>`}<div id="agent-live-run">${liveRunSlotHtml}</div></div>
+      <div class="messages"><div id="agent-goal-slot">${goalSlotHtml}</div>${messages.length ? messages.map(renderMessage).join("") : `<div class="empty-chat"><span class="mode-icon purple">${icon("bot", 30)}</span><h2>${escapeHtml(t("copilot.emptyTitle"))}</h2><p>${escapeHtml(t(synthvOn() ? "copilot.emptyDescription" : "copilot.emptyDescriptionGeneric"))}</p><div class="prompt-chips"><button data-prompt="${escapeHtml(t("copilot.audioPrompt"))}">${escapeHtml(t("copilot.audioAction"))}</button>${synthvOn() ? `<button data-prompt="${escapeHtml(t("copilot.projectPrompt"))}">${escapeHtml(t("copilot.projectAction"))}</button><button data-prompt="${escapeHtml(t("copilot.planPrompt"))}">${escapeHtml(t("copilot.planAction"))}</button>` : `<button data-prompt="${escapeHtml(t("copilot.planPromptGeneric"))}">${escapeHtml(t("copilot.planActionGeneric"))}</button>`}</div></div>`}<div id="agent-live-run">${liveRunSlotHtml}</div></div>
       <form id="chat-form" class="composer"><div class="composer-shell"><textarea id="chat-input" rows="1" placeholder="${t("copilot.placeholder")}"></textarea><span id="agent-composer-action">${composerActionHtml}</span></div><span>${t("copilot.review")}</span></form>
     </section>
   </div>`;
@@ -3126,6 +3161,27 @@ function renderBridge(): string {
     </section>${processControls}</div>`;
 }
 
+/** Client configs carry the real token when copied but show it masked unless the user reveals it. */
+function renderMcpClientSetup(): string {
+  const status = httpApiStatus;
+  // Either endpoint needs the token; only the MCP endpoint has client configurations to generate.
+  if ((!status.endpoint && !status.agentEndpoint) || !status.token) return `<section class="panel mcp-client-setup"><div class="section-heading"><div><h2>${t("mcpClient.title")}</h2><p>${t("mcpClient.needsMcp")}</p></div></div></section>`;
+  const token = status.token;
+  const shown = (text: string) => mcpTokenRevealed ? text : text.replaceAll(token, maskToken(token));
+  const snippets = !status.endpoint ? "" : mcpClientSnippets(status.endpoint, token).map((snippet) => `<article class="mcp-snippet"><header><strong>${escapeHtml(snippet.label)}</strong><small>${escapeHtml(t("mcpClient.target", { target: snippet.target === "terminal" ? t("mcpClient.terminal") : snippet.target }))}</small><button class="secondary" data-copy-mcp="${snippet.id}">${t("mcpClient.copy")}</button></header><pre><code>${escapeHtml(shown(snippet.text))}</code></pre></article>`).join("");
+  const tools = status.tools ?? [];
+  return `<section class="panel mcp-client-setup"><div class="section-heading"><div><h2>${t("mcpClient.title")}</h2><p>${t("mcpClient.description")}</p></div></div><div class="mcp-token-row"><strong>${t("mcpClient.token")}</strong><code data-mcp-token>${escapeHtml(shown(token))}</code><button class="secondary" data-toggle-mcp-token>${mcpTokenRevealed ? t("mcpClient.hide") : t("mcpClient.show")}</button><button class="secondary" data-copy-mcp="token">${t("mcpClient.copy")}</button><button class="secondary danger" data-rotate-mcp-token ${busy ? "disabled" : ""}>${t("mcpClient.rotate")}</button></div>${status.endpoint ? `<p class="mcp-client-meta">${t("mcpClient.authRequired")} ${t("mcpClient.server")}: <code>${escapeHtml(status.serverName ?? BRAND.slug)}</code>${status.protocolVersions?.length ? ` · ${t("mcpClient.protocols")}: ${escapeHtml(status.protocolVersions.join(", "))}` : ""}</p><div class="mcp-snippets">${snippets}</div>` : `<p class="mcp-client-meta" data-agent-only>${escapeHtml(t("mcpClient.agentOnly", { endpoint: status.agentEndpoint ?? "" }))}</p>`}${status.endpoint ? `<div class="mcp-tools"><strong>${t("mcpClient.tools")}</strong>${tools.length ? `<ul>${tools.map((tool) => `<li><code>${escapeHtml(tool)}</code>${tool === "toolbox_agent" && app?.mode !== "ai" ? `<small>${t("mcpClient.agentNeedsAi")}</small>` : ""}</li>`).join("")}</ul>` : `<p>${t("mcpClient.noTools")}</p>`}</div>` : ""}</section>`;
+}
+
+function copyMcpText(id: string): void {
+  const token = httpApiStatus.token;
+  if (!token) return;
+  const snippet = httpApiStatus.endpoint ? mcpClientSnippets(httpApiStatus.endpoint, token).find((item) => item.id === id) : undefined;
+  if (!snippet && id !== "token") return;
+  const label = snippet?.label ?? t("mcpClient.token");
+  void navigator.clipboard.writeText(snippet?.text ?? token).then(() => { notice = t("mcpClient.copied", { label }); }).catch((reason) => { notice = t("mcpClient.copyFailed", { error: formatError(reason) }); }).finally(render);
+}
+
 function renderMcp(): string {
   if (!app) return "";
   const externalMcp = app.mode === "ai"
@@ -3133,7 +3189,7 @@ function renderMcp(): string {
       <div class="mcp-layout"><section class="panel"><div class="section-heading"><div><h2>${t("connections.external")}</h2><p>${t("connections.configurations", { count: app.mcpServers.length })}</p></div></div><div class="mcp-list">${app.mcpServers.length ? app.mcpServers.map((server) => `<article><span class="server-icon">${icon("server", 20)}</span><div><strong>${escapeHtml(server.name)}</strong><code>${escapeHtml([server.command, ...server.args].join(" "))}</code></div><span class="availability">${server.enabled ? t("connections.enabled") : t("connections.disabledServer")}</span><button class="icon-plain" data-test-mcp="${escapeHtml(server.id)}" title="${t("system.testConnection")}">${icon("sync", 17)}</button><button class="icon-plain danger" data-delete-mcp="${escapeHtml(server.id)}" title="${t("system.deleteConnection")}">${icon("trash", 17)}</button></article>`).join("") : `<div class="empty-inline">${t("connections.noServers")}</div>`}</div></section>
       <section class="panel"><div class="section-heading"><div><h2>${t("connections.addStdio")}</h2><p>${t("connections.stdioDescription")}</p></div></div><form id="mcp-form" class="form-stack"><label>${t("connections.name")}<input id="mcp-name" required placeholder="Filesystem tools" /></label><label>${t("connections.command")}<input id="mcp-command" required placeholder="npx, node, or an absolute path" /></label><label>${t("connections.arguments")}<textarea id="mcp-args" rows="4" placeholder="-y\n@modelcontextprotocol/server-filesystem\n/path/to/workspace"></textarea></label><label class="checkbox"><input id="mcp-enabled" type="checkbox" checked /> ${t("connections.enableOnSave")}</label><button class="primary">${t("connections.addServer")}</button></form></section></div>`
     : `<section class="panel quiet-panel"><span class="mode-icon slate">${icon("server", 24)}</span><div><h2>${t("connections.aiOnly")}</h2><p>${t("connections.aiOnlyDescription")}</p></div></section>`;
-  return `<div class="connections-layout"><section class="panel http-api-settings"><div class="section-heading"><div><h2>${t("connections.localService")}</h2><p>${t("connections.localServiceDescription")}</p></div><span class="availability ${httpApiStatus.running ? "ready" : httpApiStatus.enabled || httpApiStatus.agentEnabled ? "warning" : ""}">${httpApiStatus.running ? t("connections.running") : httpApiStatus.enabled || httpApiStatus.agentEnabled ? t("connections.failed") : t("connections.off")}</span></div><form id="http-api-form" class="http-api-form"><section class="http-api-access-group" aria-labelledby="http-api-endpoint-heading"><div class="http-api-group-heading"><h3 id="http-api-endpoint-heading">${t("connections.endpointAccess")}</h3><p>${t("connections.endpointAccessDescription")}</p></div><div class="http-api-endpoint-grid"><label class="toolbox-switch large"><input id="http-api-enabled" name="enabled" type="checkbox" ${httpApiStatus.enabled ? "checked" : ""} aria-label="${t("connections.mcpTools")}" aria-describedby="http-api-help" /><span></span>${t("connections.mcpTools")}</label><label class="toolbox-switch large"><input id="http-agent-enabled" name="agentEnabled" type="checkbox" ${httpApiStatus.agentEnabled ? "checked" : ""} aria-label="${t("connections.agentChat")}" aria-describedby="http-api-help" /><span></span>${t("connections.agentChat")}</label></div></section><section class="http-api-access-group" aria-labelledby="http-api-privilege-heading"><div class="http-api-group-heading"><h3 id="http-api-privilege-heading">${t("connections.privilegedAccess")}</h3><p>${t("connections.privilegesRequireMcp")}</p></div><div class="http-api-privilege-grid"><label class="toolbox-switch large http-api-privilege"><input id="http-internal-functions-enabled" name="internalFunctionsEnabled" type="checkbox" ${httpApiStatus.internalFunctionsEnabled ? "checked" : ""} aria-label="${t("connections.internalFunctions")}" aria-describedby="http-api-help" /><span></span><span><strong>${t("connections.internalFunctions")}</strong><small>${t("connections.internalFunctionsDescription")}</small></span></label><label class="toolbox-switch large http-api-privilege danger"><input id="http-advanced-functions-enabled" name="advancedFunctionsEnabled" type="checkbox" ${httpApiStatus.advancedFunctionsEnabled ? "checked" : ""} aria-label="${t("connections.advancedFunctions")}" aria-describedby="http-api-help" /><span></span><span><strong>${t("connections.advancedFunctions")}</strong><small>${t("connections.advancedFunctionsDescription")}</small></span></label></div></section><div class="http-api-actions"><label class="http-api-port">${t("connections.port")}<input id="http-api-port" name="port" type="number" min="1" max="65535" step="1" value="${httpApiStatus.port || 17831}" inputmode="numeric" required aria-describedby="http-api-help" /></label><button class="primary" type="submit" ${busy ? "disabled" : ""}>${t("connections.apply")}</button></div></form><div id="http-api-help" class="http-api-status"><span><strong>${t("connections.listening")}</strong>${httpApiStatus.running ? t("connections.active") : httpApiStatus.enabled || httpApiStatus.agentEnabled ? t("connections.inactive") : t("connections.disabled")}</span>${httpApiStatus.endpoint ? `<span><strong>MCP</strong><code>${escapeHtml(httpApiStatus.endpoint)}</code></span>` : ""}${httpApiStatus.agentEndpoint ? `<span><strong>Agent</strong><code>${escapeHtml(httpApiStatus.agentEndpoint)}</code></span>` : ""}${httpApiStatus.lastError ? `<span class="error-text"><strong>${t("connections.error")}</strong>${escapeHtml(httpApiStatus.lastError)}</span>` : ""}</div></section>${externalMcp}</div>`;
+  return `<div class="connections-layout"><section class="panel http-api-settings"><div class="section-heading"><div><h2>${t("connections.localService")}</h2><p>${t("connections.localServiceDescription")}</p></div><span class="availability ${httpApiStatus.running ? "ready" : httpApiStatus.enabled || httpApiStatus.agentEnabled ? "warning" : ""}">${httpApiStatus.running ? t("connections.running") : httpApiStatus.enabled || httpApiStatus.agentEnabled ? t("connections.failed") : t("connections.off")}</span></div><form id="http-api-form" class="http-api-form"><section class="http-api-access-group" aria-labelledby="http-api-endpoint-heading"><div class="http-api-group-heading"><h3 id="http-api-endpoint-heading">${t("connections.endpointAccess")}</h3><p>${t("connections.endpointAccessDescription")}</p></div><div class="http-api-endpoint-grid"><label class="toolbox-switch large"><input id="http-api-enabled" name="enabled" type="checkbox" ${httpApiStatus.enabled ? "checked" : ""} aria-label="${t("connections.mcpTools")}" aria-describedby="http-api-help" /><span></span>${t("connections.mcpTools")}</label><label class="toolbox-switch large"><input id="http-agent-enabled" name="agentEnabled" type="checkbox" ${httpApiStatus.agentEnabled ? "checked" : ""} aria-label="${t("connections.agentChat")}" aria-describedby="http-api-help" /><span></span>${t("connections.agentChat")}</label></div></section><section class="http-api-access-group" aria-labelledby="http-api-privilege-heading"><div class="http-api-group-heading"><h3 id="http-api-privilege-heading">${t("connections.privilegedAccess")}</h3><p>${t("connections.privilegesRequireMcp")}</p></div><div class="http-api-privilege-grid"><label class="toolbox-switch large http-api-privilege"><input id="http-internal-functions-enabled" name="internalFunctionsEnabled" type="checkbox" ${httpApiStatus.internalFunctionsEnabled ? "checked" : ""} aria-label="${t("connections.internalFunctions")}" aria-describedby="http-api-help" /><span></span><span><strong>${t("connections.internalFunctions")}</strong><small>${t("connections.internalFunctionsDescription")}</small></span></label><label class="toolbox-switch large http-api-privilege danger"><input id="http-advanced-functions-enabled" name="advancedFunctionsEnabled" type="checkbox" ${httpApiStatus.advancedFunctionsEnabled ? "checked" : ""} aria-label="${t("connections.advancedFunctions")}" aria-describedby="http-api-help" /><span></span><span><strong>${t("connections.advancedFunctions")}</strong><small>${t("connections.advancedFunctionsDescription")}</small></span></label></div></section><div class="http-api-actions"><label class="http-api-port">${t("connections.port")}<input id="http-api-port" name="port" type="number" min="1024" max="65535" step="1" value="${httpApiStatus.port || 17831}" inputmode="numeric" required aria-describedby="http-api-help" /></label><button class="primary" type="submit" ${busy ? "disabled" : ""}>${t("connections.apply")}</button></div></form><div id="http-api-help" class="http-api-status"><span><strong>${t("connections.listening")}</strong>${httpApiStatus.running ? t("connections.active") : httpApiStatus.enabled || httpApiStatus.agentEnabled ? t("connections.inactive") : t("connections.disabled")}</span>${httpApiStatus.endpoint ? `<span><strong>MCP</strong><code>${escapeHtml(httpApiStatus.endpoint)}</code></span>` : ""}${httpApiStatus.agentEndpoint ? `<span><strong>Agent</strong><code>${escapeHtml(httpApiStatus.agentEndpoint)}</code></span>` : ""}${httpApiStatus.lastError ? `<span class="error-text"><strong>${t("connections.error")}</strong>${escapeHtml(httpApiStatus.lastError)}</span>` : ""}</div></section>${renderMcpClientSetup()}${externalMcp}</div>`;
 }
 
 function aiProviders(): AiProviderSummary[] {
@@ -3334,7 +3390,7 @@ async function executeModelAuthAction(action: ModelAuthAction, detail: unknown[]
 
 function renderSettings(): string {
   if (!app) return "";
-  const showSvpRouting = app.platform === "windows" || app.platform === "preview";
+  const showSvpRouting = synthvOn() && (app.platform === "windows" || app.platform === "preview");
   const association = app.svpAssociation;
   const associationLabel = !association.supported
     ? t("settings.unsupported")
@@ -3346,10 +3402,36 @@ function renderSettings(): string {
   return `<div class="settings-layout"><section class="panel language-settings"><div class="section-heading"><div><h2>${t("settings.language")}</h2></div><div id="language-select-host" class="kit-fluent-select-host"></div></div></section>
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.autostart")}</h2><p>${t("settings.autostartDescription")}</p>${app.autostartError ? `<p class="error-text">${escapeHtml(app.autostartError)}</p>` : ""}</div><label class="toolbox-switch large"><input id="autostart-enabled" type="checkbox" ${app.autostartEnabled === true ? "checked" : ""} ${busy || app.autostartEnabled == null ? "disabled" : ""} aria-label="${t("settings.autostart")}" /><span></span>${app.autostartEnabled == null ? t("settings.unknown") : app.autostartEnabled ? t("settings.enabled") : t("settings.disabled")}</label></div></section>
     <section class="panel"><div class="section-heading"><div><h2>${t("settings.mode")}</h2><p>${t("settings.modeDescription")}</p></div></div><div class="mode-setting"><button class="setting-choice ${app.mode === "toolbox" ? "active" : ""}" data-set-mode="toolbox"><span class="mode-icon slate">${icon("toolbox", 23)}</span><span><strong>${t("settings.toolbox")}</strong><small>${t("settings.toolboxDescription")}</small></span>${app.mode === "toolbox" ? icon("check", 20) : ""}</button><button class="setting-choice ${app.mode === "ai" ? "active" : ""}" data-set-mode="ai"><span class="mode-icon purple">${icon("sparkles", 23)}</span><span><strong>${t("settings.ai")}</strong><small>${t("settings.aiDescription")}</small></span>${app.mode === "ai" ? icon("check", 20) : ""}</button></div></section>
+    ${renderIntegrationSettings()}
     ${showSvpRouting ? `<section class="panel smart-route-settings"><div class="section-heading"><div><h2>${t("settings.smartRoute")}</h2><p>${t("settings.smartRouteDescription")}</p></div><label class="toolbox-switch large"><input id="svp-routing-enabled" type="checkbox" ${app.smartSvpLaunchEnabled ? "checked" : ""} ${association.supported ? "" : "disabled"} aria-label="${t("settings.smartRoute")}" /><span></span>${app.smartSvpLaunchEnabled ? t("settings.enabled") : t("settings.disabled")}</label></div><label class="toolbox-switch large"><input id="svp-routing-always-ask" type="checkbox" ${app.smartSvpAlwaysAsk ? "checked" : ""} ${app.smartSvpLaunchEnabled && association.supported && !busy ? "" : "disabled"} aria-label="${t("settings.alwaysAsk")}" /><span></span>${t("settings.alwaysAsk")}</label><div class="smart-route-state ${association.isDefault ? "ready" : "pending"}"><span class="feature-icon ${association.isDefault ? "emerald" : "blue"}">${icon("file", 20)}</span><div><strong>${escapeHtml(associationLabel)}</strong><p>${escapeHtml(association.detail)}</p></div><button class="secondary compact" data-open-svp-default-apps ${association.supported ? "" : "disabled"}>${t("settings.openDefaults")}</button></div></section>` : ""}
     <section class="panel plugin-privilege-settings"><div class="section-heading"><div><h2>${t("settings.pluginPrivileges")}</h2><p>${t("settings.pluginPrivilegesDescription")}</p></div></div><label class="toolbox-switch"><input id="plugin-internal-functions-enabled" type="checkbox" ${app.pluginInternalFunctionsEnabled ? "checked" : ""} /><span></span><span><strong>${t("settings.pluginInternalFunctions")}</strong><small>${t("settings.pluginInternalFunctionsDescription")}</small></span></label><label class="toolbox-switch"><input id="plugin-advanced-functions-enabled" type="checkbox" ${app.pluginAdvancedFunctionsEnabled ? "checked" : ""} /><span></span><span><strong>${t("settings.pluginAdvancedFunctions")}</strong><small>${t("settings.pluginAdvancedFunctionsDescription")}</small></span></label></section>
     ${app.mode === "ai" ? `<section class="panel agent-transcripts-settings"><div class="section-heading"><div><h2>${t("settings.agentTranscripts")}</h2><p>${t("settings.agentTranscriptsDescription")}</p></div></div><label class="toolbox-switch"><input id="agent-transcripts-enabled" type="checkbox" ${app.agentTranscriptsEnabled ? "checked" : ""} /><span></span><span><strong>${t("settings.agentTranscripts")}</strong><small>${app.agentTranscriptsEnabled ? t("settings.enabled") : t("settings.disabled")}</small></span></label></section>` : ""}
-    <section class="panel"><div class="section-heading"><div><h2>${t("settings.dataPlatform")}</h2><p>${t("settings.dataPlatformDescription")}</p></div></div><dl class="detail-list"><div><dt>${t("settings.platform")}</dt><dd>${escapeHtml(app.platform)}</dd></div><div><dt>${t("settings.config")}</dt><dd><code>${escapeHtml(app.configPath)}</code></dd></div><div><dt>${t("settings.appVersion")}</dt><dd>${escapeHtml(app.appVersion)}</dd></div></dl></section></div>`;
+    <section class="panel"><div class="section-heading"><div><h2>${t("settings.dataPlatform")}</h2><p>${t("settings.dataPlatformDescription")}</p></div></div><dl class="detail-list"><div><dt>${t("settings.platform")}</dt><dd>${escapeHtml(app.platform)}</dd></div>${app.dataDirectory ? `<div><dt>${t("dataFolder.label")}</dt><dd><code>${escapeHtml(app.dataDirectory.path)}</code></dd></div>` : ""}<div><dt>${t("settings.config")}</dt><dd><code>${escapeHtml(app.configPath)}</code></dd></div><div><dt>${t("settings.appVersion")}</dt><dd>${escapeHtml(app.appVersion)}</dd></div></dl>${renderDataFolderNotes()}</section></div>`;
+}
+
+/** Explains a data folder move from the pre-Toneshuttle name, or why it has not happened yet. */
+function renderDataFolderNotes(): string {
+  const folder = app?.dataDirectory;
+  if (!folder) return "";
+  const deferred = folder.deferred ? t(folder.deferred.reason === "running" ? "dataFolder.deferredRunning" : folder.deferred.reason === "in-use" ? "dataFolder.deferredInUse" : "dataFolder.deferredError", { detail: folder.deferred.detail }) : "";
+  const notes = [
+    folder.migratedFrom ? `<p>${escapeHtml(t("dataFolder.migrated", { from: folder.migratedFrom }))}</p>` : "",
+    deferred ? `<p class="error-text" role="status">${escapeHtml(deferred)}</p>` : "",
+    folder.legacyRemaining ? `<p>${escapeHtml(t("dataFolder.legacyRemaining", { path: folder.legacyRemaining }))}</p>` : "",
+    folder.setAside ? `<p>${escapeHtml(t("dataFolder.setAside", { path: folder.setAside }))}</p>` : "",
+    folder.fixupErrors.length ? `<p class="error-text">${escapeHtml(t("dataFolder.fixupErrors", { files: folder.fixupErrors.join("; ") }))}</p>` : "",
+  ].join("");
+  return notes ? `<div class="data-folder-notes">${notes}</div>` : "";
+}
+
+function renderIntegrationSettings(): string {
+  if (!app) return "";
+  const state = app.integrations?.synthv;
+  const preference = state?.preference ?? "on";
+  const status = [synthvOn() ? t("integrations.enabled") : t("integrations.disabled"), state?.detected ? t("integrations.detected") : t("integrations.notDetected"), ...(state && !state.bridgeLoaded ? [t("integrations.bridgeMissing")] : [])].join(" · ");
+  const choices = (["auto", "on", "off"] as const).map((value) => `<button class="${preference === value ? "active" : ""}" data-set-integration="synthv:${value}" aria-pressed="${preference === value}" ${busy ? "disabled" : ""}>${t(`integrations.${value}`)}</button>`).join("");
+  const errors = (state?.errors ?? []).map((error) => `<small class="error-text">${escapeHtml(error)}</small>`).join("");
+  return `<section class="panel integration-settings"><div class="section-heading"><div><h2>${t("integrations.title")}</h2><p>${t("integrations.description")}</p></div></div><div class="integration-row"><span class="mode-icon slate">${icon("bridge", 22)}</span><div class="integration-copy"><strong>${t("integrations.synthvName")}</strong><small>${t("integrations.synthvDescription")}</small><small class="integration-status">${escapeHtml(status)}</small>${errors}</div><div class="segmented" role="group" aria-label="${t("integrations.synthvName")}">${choices}</div></div>${preference === "auto" ? `<p class="integration-hint">${t("integrations.autoHint")}${state && !state.detected ? ` ${t("integrations.autoNotDetected")}` : ""}</p>` : ""}</section>`;
 }
 
 async function refreshAutostartStatus(): Promise<void> {
@@ -3578,7 +3660,7 @@ function wireForms(): void {
   audioToProjectForm?.addEventListener("submit", (event) => {
     event.preventDefault();
     syncAudioToProjectForm();
-    void run(async () => { workflowResult = await api.runAudioToProject(audioToProjectVocalPath, audioToProjectInstrumentalPath || null, audioToProjectOutputName, audioToProjectOutputDirectory || null, audioToProjectTolerance, app?.mode === "ai" && audioToProjectAdvanced, audioToProjectImportToSynthv, audioToProjectRightsConfirmed, audioToProjectTrackIndex, audioToProjectGroupName); notice = workflowResult.summary; });
+    void run(async () => { workflowResult = await api.runAudioToProject(audioToProjectVocalPath, audioToProjectInstrumentalPath || null, audioToProjectOutputName, audioToProjectOutputDirectory || null, audioToProjectTolerance, app?.mode === "ai" && audioToProjectAdvanced, synthvOn() && audioToProjectImportToSynthv, audioToProjectRightsConfirmed, audioToProjectTrackIndex, audioToProjectGroupName); notice = workflowResult.summary; });
   });
   document.querySelector<HTMLFormElement>("#project-doctor-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -3698,7 +3780,7 @@ function wireForms(): void {
   });
   document.querySelector<HTMLFormElement>("#pronunciation-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
-    const projectPath = document.querySelector<HTMLInputElement>("#pronunciation-project")?.value.trim() || undefined;
+    const projectPath = synthvOn() ? document.querySelector<HTMLInputElement>("#pronunciation-project")?.value.trim() || undefined : undefined;
     const lyrics = document.querySelector<HTMLTextAreaElement>("#pronunciation-lyrics")?.value.trim() || undefined;
     void run(async () => { workflowResult = await api.runPronunciationDiagnostics(projectPath, lyrics); notice = workflowResult.summary; });
   });
@@ -4820,13 +4902,22 @@ document.addEventListener("click", (event) => {
   }
   const onboarding = target.dataset.onboarding as AppMode | undefined;
   if (onboarding) { void run(async () => { app = await api.completeOnboarding(onboarding); page = "home"; }); return; }
+  const integrationChoice = target.dataset.setIntegration?.split(":")[1] as IntegrationPreference | undefined;
+  if (integrationChoice) { void run(async () => { app = await api.setIntegration("synthv", integrationChoice); notice = t("integrations.changed", { state: t(`integrations.${integrationChoice}`) }); }); return; }
+  if (target.hasAttribute("data-toggle-mcp-token")) { mcpTokenRevealed = !mcpTokenRevealed; render(); return; }
+  if (target.dataset.copyMcp) { copyMcpText(target.dataset.copyMcp); return; }
+  if (target.hasAttribute("data-rotate-mcp-token")) {
+    if (!window.confirm(t("mcpClient.rotateConfirm"))) return;
+    void run(async () => { httpApiStatus = await api.rotateHttpApiToken(); notice = t("mcpClient.rotated"); });
+    return;
+  }
   const mode = target.dataset.setMode as AppMode | undefined;
   if (mode) { void run(async () => { app = await api.setMode(mode); notice = t("system.modeChanged", { mode: t(mode === "ai" ? "settings.ai" : "settings.toolbox") }); }); return; }
   const agentWorkMode = target.dataset.agentWorkMode as AgentWorkMode | undefined;
   if (agentWorkMode) { void run(async () => { app = await api.setAgentWorkMode(agentWorkMode); notice = t("system.agentModeChanged", { mode: agentWorkMode === "solo" ? "Solo" : "Edit" }); }); return; }
   const agentEffort = target.dataset.agentEffort as AgentEffortLevel | undefined;
   if (agentEffort) { if (agentRunInFlight) return; void run(async () => { app = await api.setAgentEffort(agentEffort); notice = t("system.agentEffortChanged", { level: agentEffortLabel(agentEffort) }); }); return; }
-  const toolboxProjectTarget = target.dataset.openToolboxProject as "project" | "issues" | "guide" | undefined;
+  const toolboxProjectTarget = target.dataset.openToolboxProject as "project" | "issues" | "guide" | "terms" | undefined;
   if (toolboxProjectTarget) {
     void run(async () => { setOpenFeedback(await api.openToolboxProject(toolboxProjectTarget)); });
     return;
@@ -5118,7 +5209,7 @@ document.addEventListener("click", (event) => {
   if (target.dataset.approveAgent) { void decideApproval(target.dataset.approveAgent, true, target); return; }
   if (target.dataset.denyAgent) { void decideApproval(target.dataset.denyAgent, false, target); return; }
   if (target.dataset.prompt) { void sendPrompt(target.dataset.prompt); return; }
-  if (target.dataset.testMcp) { void run(async () => { setFeedback(await api.testMcpServer(target.dataset.testMcp ?? "")); }); return; }
+  if (target.dataset.testMcp) { void run(async () => { const result = await api.testMcpServer(target.dataset.testMcp ?? ""); setFeedback(result.succeeded && result.tools?.length ? { ...result, detail: [result.detail, t("mcpTest.tools", { tools: result.tools.join(", ") })].filter(Boolean).join("\n") } : result); }); return; }
   if (target.dataset.deleteMcp) { void run(async () => { app = await api.deleteMcpServer(target.dataset.deleteMcp ?? ""); notice = t("connections.deleted"); }); }
 });
 
@@ -5189,6 +5280,23 @@ async function listenForAgentRunProgress(): Promise<void> {
   });
 }
 
+let integrationRefreshPending = false;
+
+function refreshForIntegrations(): void {
+  integrationRefreshPending = false;
+  void refresh().then(render).catch(() => undefined);
+}
+
+async function listenForIntegrationChanges(): Promise<void> {
+  if (!hasDesktopBridge()) return;
+  // The main process found SynthV, lost it, or saw its Bridge connect; pages and tools follow. The main process reports a
+  // change once, so one that arrives during a task is replayed when the task ends (run()) instead of being dropped.
+  await listenDesktop<null>("integrations.changed", () => {
+    if (busy) { integrationRefreshPending = true; return; }
+    refreshForIntegrations();
+  });
+}
+
 async function listenForAgentApprovals(): Promise<void> {
   if (!hasDesktopBridge()) return;
   await listenDesktop<AgentApprovalsSnapshot>("agent.approvals.changed", (snapshot) => {
@@ -5214,10 +5322,11 @@ void (async () => {
     await listenForAudioPreparationDrops();
     await listenForAgentRunProgress();
     await listenForAgentApprovals();
+    await listenForIntegrationChanges();
     startInstanceRefresh();
     render();
     refreshAiCatalogLive();
   } catch (reason) {
-    root.innerHTML = `<div class="fatal"><div class="brand-mark"><img class="brand-logo" src="./assets/synthv-toolbox-logo.svg" alt="Synthesizer V Toolbox" /></div><h1>${t("system.startupFailed")}</h1><pre>${escapeHtml(formatError(reason))}</pre><p>${t("system.startupHelp")}</p></div>`;
+    root.innerHTML = `<div class="fatal"><div class="brand-mark"><img class="brand-logo" src="${BRAND.logo}" alt="${BRAND.productName}" /></div><h1>${t("system.startupFailed")}</h1><pre>${escapeHtml(formatError(reason))}</pre><p>${t("system.startupHelp")}</p></div>`;
   }
 })();

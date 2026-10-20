@@ -3,18 +3,34 @@ import { spawn } from "node:child_process";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { JsonValue } from "@synthv-toolbox/runtime-protocol";
 import type { AiService, AiProviderId } from "./ai-service.js";
+import { CREATIVE_BRIDGE_COMMANDS } from "./creative-bridge.js";
 import type { CreativeService } from "./creative-service.js";
 import type { SynthVService } from "./synthv-service.js";
+import { SYNTHV_OFF_MESSAGE } from "./synthv-bridge.js";
 
 type Data = Record<string, unknown>;
 
 export class HostCapabilities {
-  constructor(private readonly synthv: SynthVService, private readonly creative: CreativeService, private readonly ai: AiService) {}
+  constructor(private readonly synthv: SynthVService, private readonly creative: CreativeService, private readonly ai: AiService, private readonly synthvEnabled: () => boolean = () => true, private readonly aiModeEnabled: () => boolean = () => true) {}
 
   async invoke(permission: "host.internal" | "host.advanced", capability: string, operation: string, params: JsonValue): Promise<JsonValue> {
     if (!isObject(params)) throw new Error("Host capability parameters must be an object.");
+    // The UI hides these paths when SynthV is off or the app is in toolbox mode; MCP clients and plugins must not reopen them.
+    const cover = capability === "creative" && await this.startsCover(operation, params);
+    if (!this.synthvEnabled() && (capability === "synthv" || cover || (capability === "creative" && drivesSynthV(operation, params)))) throw clientSafe(SYNTHV_OFF_MESSAGE);
+    if (cover && !this.aiModeEnabled()) throw clientSafe("Cover runs the internal agent, which is only available in AI mode.");
     if (permission === "host.internal") return this.internal(capability, operation, params);
     return this.advanced(capability, operation, params);
+  }
+
+  /** Cover drives the agent and writes into SynthV; a retry counts only when the job being retried is a Cover job. */
+  private async startsCover(operation: string, params: Data): Promise<boolean> {
+    if (operation === "queue_cover") return true;
+    if (operation !== "retry_media_task") return false;
+    const jobs = await this.creative.invoke("media_tasks", {});
+    // cover-service accepts either name for the job, so the gate must too.
+    const id = params.id ?? params.taskId;
+    return Array.isArray(jobs) && jobs.some(job => isObject(job) && job.id === id && job.kind === "cover");
   }
 
   private async internal(capability: string, operation: string, params: Data): Promise<JsonValue> {
@@ -63,6 +79,21 @@ export class HostCapabilities {
   }
 }
 
+/** Offline .svp work belongs to the integration too: the renderer hides these tools with it, so non-UI callers lose them as well. */
+const SVP_PROJECT_OPERATIONS = ["get_project_backup_state", "create_project_checkpoint", "list_project_checkpoints", "restore_project_checkpoint", "run_project_probe", "run_project_doctor", "add_project_reference", "export_project_without_parameters", "export_project_lyrics"];
+/** Batch recipes that read audio rather than .svp projects, so they stay available without SynthV. */
+const AUDIO_BATCH_RECIPES = ["render-review"];
+export function drivesSynthV(operation: string, params: Data): boolean {
+  return CREATIVE_BRIDGE_COMMANDS.includes(operation) || operation.includes("lyric_bridge") || SVP_PROJECT_OPERATIONS.includes(operation)
+    // A project file is SynthV work in any operation: creative-service snapshots every projectPath it sees and keeps backing
+    // it up. Plain lyrics (the agent's toolbox_lyrics_check) and audio batches stay available without SynthV.
+    || hasProjectPath(params) || (isObject(params.options) && hasProjectPath(params.options))
+    || (operation === "run_batch_workflow" && !AUDIO_BATCH_RECIPES.includes(String(params.recipeId)))
+    || (operation === "run_audio_to_project" && params.importToSynthv === true);
+}
+/** The same test creative-service applies before it snapshots a project: a non-empty string, not null for "no project". */
+function hasProjectPath(params: Data): boolean { return typeof params.projectPath === "string" && params.projectPath.trim() !== ""; }
+function clientSafe(message: string): Error { return Object.assign(new Error(message), { clientSafe: true }); }
 function isObject(value: unknown): value is Data { return value !== null && typeof value === "object" && !Array.isArray(value); }
 function text(params: Data, key: string): string { const value = params[key]; if (typeof value !== "string" || !value) throw new Error(`${key} must be a non-empty string.`); return value; }
 function boolean(params: Data, key: string): boolean { if (typeof params[key] !== "boolean") throw new Error(`${key} must be a boolean.`); return params[key] as boolean; }

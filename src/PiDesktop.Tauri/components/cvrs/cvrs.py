@@ -454,9 +454,10 @@ def cmd_export_lrc(args) -> dict:
     ensure_distinct_output(args.svp, word_path)
     if normal_path.resolve() == word_path.resolve():
         raise ValueError("普通 LRC 与逐字 LRC 不能使用同一个输出文件名")
-    with normal_path.open("x", encoding="utf-8") as output:
+    # newline="\n" keeps Windows text mode from writing CRLF, so exports are identical on every platform.
+    with normal_path.open("x", encoding="utf-8", newline="\n") as output:
         output.write(render_lrc(phrases))
-    with word_path.open("x", encoding="utf-8") as output:
+    with word_path.open("x", encoding="utf-8", newline="\n") as output:
         output.write(render_lrc(phrases, enhanced=True))
     return {
         "tool": "cvrs/export-lrc",

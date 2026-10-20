@@ -31,6 +31,10 @@ Notes:
 - The disk image carries no license agreement dialog. The terms of use stay in `src/PiDesktop.Tauri/electron/assets/TERMS-OF-USE.txt`.
 - The signed app has the RunAsNode fuse turned off, so shipped code must not start the app binary as Node; a contract test guards this.
 - Squirrel.Mac only installs an update whose signing identity matches the installed app. The signing center signs with Team ID `76DMUAK6J5`. If the macOS build installed today was signed by another team, those users must reinstall manually once; say so in the release notes of the first center-signed release.
+- Release files are named `Toneshuttle-<version>-setup.exe`, `Toneshuttle-<version>.dmg` and `Toneshuttle-<version>-arm64-mac.zip`, and the app bundle is `Toneshuttle.app`. The app and bundle id `com.synthvcopilot.toolbox`, the pinned NSIS GUID, this repository and the signing center project `synthv-toolbox-arm64` keep the identifiers chosen under the Synthesizer V Toolbox name, because installed apps and the center's provisioning depend on them.
+- The package name stays `synthv-toolbox`. It fixes `app.name`, which names the Windows launch-at-login entry, the macOS keychain item that protects the SV2 account web sessions, and the updater cache folder. File and folder names are set explicitly instead (`FILE_NAMES` in `electron/brand.ts`).
+- The Windows executable is `Toneshuttle.exe` (`win.executableName`). Electron-builder still derives the default per-user install folder from the package name, so `electron/assets/installer.nsh` moves both fresh installs and upgrades from `%LOCALAPPDATA%\Programs\synthv-toolbox` to `...\Toneshuttle`. It only changes `$INSTDIR` in `customInit`: the old build's uninstaller, which runs during the upgrade, then removes the old folder, and the installer recreates the desktop and Start menu shortcuts for the new executable. Taskbar pins to the old executable cannot be carried over. Uninstaller hooks would only take effect from the following upgrade, so none are used.
+- On first start the app renames the data folder from `synthv-toolbox` to `Toneshuttle` before anything reads it (`electron/services/user-data-migration.ts`), then moves its launch-at-login entry to the new executable (`electron/services/autostart-migration.ts`). Ship the product, executable and folder renames in one release so users go through one shortcut change.
 
 ## 中文
 
@@ -63,3 +67,7 @@ Notes:
 - 磁盘映像不再弹出许可协议，使用条款保留在 `src/PiDesktop.Tauri/electron/assets/TERMS-OF-USE.txt`。
 - 已签名应用的 RunAsNode 熔丝为关闭状态，发布代码不能再把应用可执行文件当作 Node 启动，契约测试会检查这一点。
 - Squirrel.Mac 只安装签名身份与已安装应用一致的更新。签名中心使用 Team ID `76DMUAK6J5`；如果当前已安装的 macOS 版本由其他团队签名，这些用户需要手动重装一次，并应在首个由签名中心签名的版本的发布说明中注明。
+- 发布文件名为 `Toneshuttle-<版本>-setup.exe`、`Toneshuttle-<版本>.dmg` 和 `Toneshuttle-<版本>-arm64-mac.zip`，应用包为 `Toneshuttle.app`。应用与 bundle id `com.synthvcopilot.toolbox`、固定的 NSIS GUID、本仓库以及签名中心项目 `synthv-toolbox-arm64` 沿用 Synthesizer V Toolbox 时期的标识，因为已安装的应用和签名中心的配置依赖它们。
+- 包名保持 `synthv-toolbox`。它决定 `app.name`，而 `app.name` 又决定 Windows 开机自启动项的名称、macOS 上保护 SV2 账号网页会话的钥匙串条目，以及更新缓存目录。文件名和目录名改为显式指定（`electron/brand.ts` 中的 `FILE_NAMES`）。
+- Windows 可执行文件为 `Toneshuttle.exe`（`win.executableName`）。electron-builder 仍按包名推导默认的按用户安装目录，因此 `electron/assets/installer.nsh` 会把全新安装和升级都从 `%LOCALAPPDATA%\Programs\synthv-toolbox` 移到 `...\Toneshuttle`。它只在 `customInit` 中修改 `$INSTDIR`：升级时运行的旧版卸载器随后会删除旧目录，安装器会为新的可执行文件重建桌面和开始菜单快捷方式。固定到任务栏的旧图标无法迁移。卸载器钩子要到下一次升级才会生效，所以没有使用。
+- 新版本首次启动时，应用会在任何代码读取数据目录之前把它从 `synthv-toolbox` 改名为 `Toneshuttle`（`electron/services/user-data-migration.ts`），然后把开机自启动项迁移到新的可执行文件（`electron/services/autostart-migration.ts`）。产品名、可执行文件名和目录名应在同一个版本中发布，让用户只经历一次快捷方式变化。

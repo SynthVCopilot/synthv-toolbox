@@ -863,6 +863,8 @@ button.full { width: 100%; }
 .about-product-details dd { margin-top: 5px; font-size: 11px; font-weight: 650; }
 .about-links { display: flex; grid-column: 1 / -1; flex-wrap: wrap; gap: 7px; }
 .about-links button { min-height: 32px; padding: 6px 9px; font-size: 10px; }
+.about-product-copy h2 small { margin-left: 4px; color: var(--muted); font-size: 13px; font-weight: 500; letter-spacing: 0; }
+.about-notice { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 10px; line-height: 1.55; }
 .about-updates { min-width: 0; padding-left: 28px; border-left: 1px solid var(--line); }
 .about-update-controls { display: grid; grid-template-columns: minmax(170px,1fr) auto; align-items: end; gap: 13px; }
 .about-update-controls .field { margin: 0; }
@@ -1037,7 +1039,7 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .checkbox { display: flex !important; align-items: center; gap: 8px; }
 .checkbox input { width: 16px; height: 16px; margin: 0; accent-color: var(--primary); }
 
-.settings-layout { grid-template-columns: 1fr; max-width: 820px; }
+.settings-layout { grid-template-columns: minmax(0, 1fr); max-width: 820px; }
 .ai-page { display: grid; gap: 16px; max-width: 1180px; }
 .ai-connections-panel, .ai-usage-panel { min-width: 0; }
 .ai-usage-table-wrap { overflow-x: auto; margin-top: 14px; }
@@ -1194,6 +1196,28 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .http-api-status strong { color: inherit; font-weight: 600; }
 .http-api-status code { overflow-wrap: anywhere; color: var(--primary); }
 .http-api-status .error-text { color: var(--danger); }
+.mcp-client-setup .section-heading { margin-bottom: 10px; }
+.mcp-token-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-subtle); font-size: 12px; }
+.mcp-token-row code { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; color: var(--primary); }
+.mcp-token-row button { min-height: 30px; padding: 5px 10px; font-size: 11px; }
+.mcp-client-meta { margin: 8px 0 12px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.mcp-snippets { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.mcp-snippet { min-width: 0; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-subtle); }
+.mcp-snippet header { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.mcp-snippet header small { flex: 1; min-width: 0; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+.mcp-snippet header button { min-height: 28px; padding: 4px 9px; font-size: 11px; }
+.mcp-snippet pre { margin: 0; padding: 10px; overflow-x: auto; font-size: 11px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mcp-tools { margin-top: 12px; font-size: 12px; }
+.mcp-tools ul { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; padding: 0; list-style: none; }
+.mcp-tools p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+.mcp-tools li small { margin-left: 5px; color: var(--muted); font-size: 10px; }
+.integration-row { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 12px; }
+.integration-copy { display: grid; gap: 3px; min-width: 0; }
+.integration-copy small { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.integration-copy .integration-status { color: inherit; font-weight: 600; }
+.integration-copy .error-text { color: var(--danger); }
+.integration-hint { margin: 10px 0 0; color: var(--muted); font-size: 11px; }
+@media (max-width: 900px) { .mcp-snippets { grid-template-columns: 1fr; } .integration-row { grid-template-columns: auto minmax(0,1fr); } .integration-row .segmented { grid-column: 1 / -1; justify-self: start; } }
 @media (max-width: 720px) { .http-api-endpoint-grid, .http-api-privilege-grid { grid-template-columns: 1fr; } .http-api-actions { align-items: stretch; flex-direction: column; } .http-api-port input, .http-api-actions > button { width: 100%; } }
 .smart-route-state { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 12px; padding: 13px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-subtle); }
 .smart-route-state.ready { border-color: color-mix(in srgb,var(--success) 24%,var(--line)); }
@@ -1210,6 +1234,9 @@ button.secondary.component-remove-action:hover:not(:disabled) { background: colo
 .quiet-panel { margin: 0; border-color: var(--line); background: var(--surface-subtle); }
 .quiet-panel h2 { margin: 0; }
 .detail-list { margin: 0; }
+.data-folder-notes { display: grid; gap: 6px; margin-top: 10px; }
+.data-folder-notes p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.data-folder-notes .error-text { color: var(--danger); }
 .detail-list div { display: grid; grid-template-columns: 110px 1fr; padding: 10px 0; border-top: 1px solid var(--line); }
 .detail-list div:first-child { border-top: 0; }
 .detail-list dt { color: var(--muted); font-size: 12px; }
@@ -1668,7 +1695,10 @@ button.path-picker-button { display: inline-flex; flex: 0 0 34px; align-items: c
 .plugin-permission-level.required, .plugin-manager-required-grant { color: var(--warning); }
 .plugin-manager-required-grant { margin: 0; font-size: 12px; line-height: 1.45; }
 .plugin-manager-privileges, .plugin-privilege-settings { display: grid; gap: 12px; }
-.plugin-manager-privileges .toolbox-switch, .plugin-privilege-settings .toolbox-switch { align-items: flex-start; }
+/* The switch's nowrap suits its short on/off label, not these descriptions; unwrapped they widened the whole Settings column. */
+.plugin-manager-privileges .toolbox-switch, .plugin-privilege-settings .toolbox-switch { align-items: flex-start; white-space: normal; }
+/* Once the description can wrap, the empty track would shrink with it and the knob would overhang it. */
+.plugin-manager-privileges .toolbox-switch > span:first-of-type, .plugin-privilege-settings .toolbox-switch > span:first-of-type { flex-shrink: 0; }
 .plugin-manager-privileges .toolbox-switch > span:last-child, .plugin-privilege-settings .toolbox-switch > span:last-child { width: auto; height: auto; border: 0; border-radius: 0; background: transparent; }
 .plugin-manager-privileges .toolbox-switch > span:last-child::after, .plugin-privilege-settings .toolbox-switch > span:last-child::after { content: none; }
 .plugin-manager-privileges .toolbox-switch strong, .plugin-privilege-settings .toolbox-switch strong { display: block; color: var(--text); font-size: 12px; }

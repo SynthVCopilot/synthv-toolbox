@@ -82,7 +82,7 @@ state.app = { mode: 'ai', bridgeConnected: true, components: [], downloads: [] }
 state.profiles.slots = [{ id: 'a', displayName: 'Slot A', isActive: true }, { id: 'b', displayName: 'Slot B' }];
 state.syncCategories = ['userDictionaries', 'scripts', 'presets', 'safeSettings'].map((id) => ({ id, label: '后端标签', description: '后端描述' }));
 state.syncManifest = { overwrite: true, entries: [{ action: 'copy', relativePath: 'presets/default', sourceSize: 20 }] };
-state.workflowRecipes = ['project-doctor', 'pronunciation-check', 'render-quality-check', 'project-probe', 'project-no-params'].map((id) => ({ id, title: '后端标题', description: '后端描述', supportsBatch: true }));
+state.workflowRecipes = ['project-doctor', 'pronunciation-check', 'render-review', 'project-probe', 'project-no-params'].map((id) => ({ id, title: '后端标题', description: '后端描述', supportsBatch: true }));
 assert.deepEqual([...rendered('batch-recipes').querySelectorAll('option')].map((option) => option.value), state.workflowRecipes.map((recipe) => recipe.id));
 assert.deepEqual([...rendered('selective-sync').querySelectorAll('[name=sync-category]')].map((input) => input.value), state.syncCategories.map((category) => category.id));
 state.synthvProcesses = [{ processId: 123, name: 'SynthV' }, { processId: 456, name: 'SynthV' }];

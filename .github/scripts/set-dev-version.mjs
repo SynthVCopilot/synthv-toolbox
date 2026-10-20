@@ -68,4 +68,4 @@ updateJson(lockFile, (value) => {
 if (process.env.GITHUB_OUTPUT) {
   fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
 }
-process.stdout.write(`SynthV Toolbox development build version: ${version}\n`);
+process.stdout.write(`Toneshuttle development build version: ${version}\n`);

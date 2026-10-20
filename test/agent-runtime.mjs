@@ -1751,3 +1751,85 @@ test("stdio worker answers session.steer immediately while an earlier request is
     await new Promise((resolve) => child.once("exit", resolve));
   }
 });
+
+test("a Stop that tears down an in-flight model request ends the run cancelled, not as an error", async () => {
+  // Whitebox: the abort can surface from the provider as stopReason "error" ("This operation was aborted"), which
+  // used to outrank the cancellation and report the user's Stop as a model failure.
+  const loop = await import(`${pathToFileURL(join(packageRoot, "dist", "task-loop.js")).href}?stop=${Date.now()}`);
+  const { AGENT_EFFORT_PROFILES, estimateAgentRunBudget } = await import(pathToFileURL(join(root, "packages", "runtime-protocol", "dist", "index.js")).href);
+  const budget = estimateAgentRunBudget("mid", []);
+  const cancelledMidRequest = loop.createTaskLoopState(null, budget);
+  const cancelled = await loop.runTaskLoop(cancelledMidRequest, AGENT_EFFORT_PROFILES.mid, "go", async () => {
+    cancelledMidRequest.cancelled = true;
+    cancelledMidRequest.roundError = { message: "This operation was aborted", aborted: false };
+  });
+  assert.equal(cancelled.status, "cancelled");
+  const failed = loop.createTaskLoopState(null, budget);
+  const error = await loop.runTaskLoop(failed, AGENT_EFFORT_PROFILES.mid, "go", async () => { failed.roundError = { message: "HTTP 500", aborted: false }; });
+  assert.equal(error.status, "error", "a real provider failure without a Stop still reports an error");
+});
+
+test("conversation history is normalized into alternating, non-empty turns that end with the assistant", () => {
+  assert.deepEqual(runtime.normalizeSessionHistory([
+    { role: "assistant", text: "orphaned greeting" },
+    { role: "user", text: "first" },
+    { role: "user", text: "  steer  " },
+    { role: "assistant", text: "" },
+    { role: "assistant", text: "answer" },
+    { role: "user", text: "a request whose run produced no reply" },
+  ]), [
+    { role: "user", text: "first\n\nsteer" },
+    { role: "assistant", text: "answer" },
+  ]);
+  assert.deepEqual(runtime.normalizeSessionHistory([]), []);
+});
+
+test("a recreated Pi session is seeded with the conversation's earlier turns", async () => {
+  const appended = [];
+  let restoredFrom;
+  const session = { prompt: async () => {}, setThinkingLevel: () => {}, abort: async () => {}, dispose: () => {}, subscribe: () => () => {} };
+  const factory = runtime.createPiSessionFactory({
+    loadSdk: async () => ({
+      getAgentDir: () => "C:/agent",
+      SettingsManager: { create: () => ({ applyOverrides: () => {} }) },
+      SessionManager: { inMemory: () => ({ appendMessage: (message) => { appended.push(message); return String(appended.length); } }), create: () => { throw new Error("transcripts are off"); } },
+      DefaultResourceLoader: class { async reload() {} },
+      ModelRuntime: { create: async () => ({ setRuntimeApiKey: async () => {}, getModel: () => ({ id: "model-1", api: "anthropic-messages", provider: "anthropic", contextWindow: 200_000 }) }) },
+      // createAgentSession loads whatever the SessionManager holds, so the seed must be in place before it runs.
+      createAgentSession: async (options) => { restoredFrom = [...appended]; assert.equal(options.sessionManager.appendMessage instanceof Function, true); return { session }; },
+    }),
+  });
+  await factory.create({ sessionId: "s1", model: { providerId: "anthropic", modelId: "model-1", apiKey: "temporary" }, history: [{ role: "user", text: "Analyze my take." }, { role: "assistant", text: "It is in A minor." }] });
+  assert.equal(restoredFrom.length, 2);
+  assert.deepEqual({ role: restoredFrom[0].role, content: restoredFrom[0].content }, { role: "user", content: "Analyze my take." });
+  assert.deepEqual({ role: restoredFrom[1].role, content: restoredFrom[1].content, api: restoredFrom[1].api, provider: restoredFrom[1].provider, model: restoredFrom[1].model, stopReason: restoredFrom[1].stopReason }, { role: "assistant", content: [{ type: "text", text: "It is in A minor." }], api: "anthropic-messages", provider: "anthropic", model: "model-1", stopReason: "stop" });
+  assert.equal(restoredFrom[1].usage.totalTokens, 0);
+
+  appended.length = 0;
+  await factory.create({ sessionId: "s2", model: { providerId: "anthropic", modelId: "model-1", apiKey: "temporary" } });
+  assert.deepEqual(appended, [], "a new conversation starts empty");
+});
+
+test("session.initialize passes history only when it creates a session, and rejects malformed history", async () => {
+  const created = [];
+  const worker = new runtime.AgentRuntimeWorker(
+    { create: async (input) => { created.push(input); return { prompt: async () => ({ message: "", outcome: placeholderOutcome() }), cancel: async () => false, dispose: () => {} }; } },
+    { request: async (method) => method === "host.model.resolve" ? {
+      providerId: "openai", modelId: "gpt-4.1", credentials: [{ id: "credential-1", providerId: "openai", modelId: "gpt-4.1", authMethod: "api-key", apiKey: "temporary" }],
+    } : {} },
+  );
+  await worker.handleJsonl(request("hello", "host.hello", { hostId: "host", protocol: { min: "1.0", max: "1.0" }, capabilities: [] }));
+  for (const history of [{ role: "user" }, [{ role: "system", text: "x" }], [{ role: "user", text: 1 }], Array.from({ length: 201 }, () => ({ role: "user", text: "x" }))]) {
+    const reply = JSON.parse((await worker.handleJsonl(request("bad", "session.initialize", { sessionId: "s1", history })))[0]);
+    assert.equal(reply.error?.code, "session.invalid", JSON.stringify(history).slice(0, 60));
+  }
+  const history = [{ role: "user", text: "hi" }, { role: "assistant", text: "hello" }];
+  assert.equal(JSON.parse((await worker.handleJsonl(request("init", "session.initialize", { sessionId: "s1", systemPrompt: "A", history })))[0]).ok, true);
+  assert.deepEqual(created.at(-1).history, history);
+  const reused = JSON.parse((await worker.handleJsonl(request("again", "session.initialize", { sessionId: "s1", systemPrompt: "A", history })))[0]);
+  assert.equal(reused.result.reused, true, "an unchanged session keeps its own messages and is not seeded twice");
+  assert.equal(created.length, 1);
+  assert.equal(JSON.parse((await worker.handleJsonl(request("rebuild", "session.initialize", { sessionId: "s1", systemPrompt: "B", history })))[0]).ok, true);
+  assert.equal(created.length, 2, "a changed prompt (an integration or MCP server toggled) recreates the session");
+  assert.deepEqual(created.at(-1).history, history, "and the new session gets the earlier turns");
+});

@@ -35,7 +35,8 @@ const originalInferenceDevice = process.env.SYNTHV_TOOLBOX_INFERENCE_DEVICE;
 process.env.SYNTHV_TOOLBOX_INFERENCE_DEVICE = "cpu";
 const run = createComponentExecutor(
   fileURLToPath(new URL("../src/PiDesktop.Tauri/components/", import.meta.url)),
-  process.env.SYNTHV_TOOLBOX_PYTHON ?? "python3.11",
+  // Windows has no versioned python3.11 command; CI and developer machines put python on PATH.
+  process.env.SYNTHV_TOOLBOX_PYTHON ?? (process.platform === "win32" ? "python" : "python3.11"),
   undefined,
   { dataRoot },
 );

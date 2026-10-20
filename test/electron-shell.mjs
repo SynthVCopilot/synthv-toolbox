@@ -60,5 +60,6 @@ test("Electron host routes updater, runtime, plugin, and MCP commands through re
   assert.match(electronMain, /webContents\.send\("toolbox:event"/);
   assert.match(updater, /autoUpdater/);
   assert.match(runtimeHost, /class ElectronRuntimeHost/);
-  assert.match(electronMain, /new ElectronCommandRegistry\(runtimeHost, \{ ai, creative, desktop, synthv, componentAudio:/);
+  // The pool rides along so Connections > Test reuses the agent's running server instead of starting a second copy.
+  assert.match(electronMain, /new ElectronCommandRegistry\(runtimeHost, \{ ai, creative, desktop, synthv, externalMcp, componentAudio:/);
 });

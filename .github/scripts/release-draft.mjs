@@ -9,7 +9,7 @@ import { assetNames } from './publish-macos.mjs';
 export function requiredAssets(version) {
   const macos = assetNames(version);
   return [
-    'latest.yml', `Synthesizer-V-Toolbox-${version}-setup.exe`,
+    'latest.yml', `Toneshuttle-${version}-setup.exe`,
     macos.metadata, macos.dmg, macos.zip,
   ];
 }

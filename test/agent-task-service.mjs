@@ -18,6 +18,8 @@ const deferred = () => {
   return { promise, resolve };
 };
 const turn = () => new Promise((resolve) => setImmediate(resolve));
+// File polls pause between reads: on Windows an open reader makes the service's atomic rename fail, and a tight read loop would starve it.
+const filePause = () => new Promise((resolve) => setTimeout(resolve, 5));
 async function waitForStatus(service, taskId, expected) {
   for (let index = 0; index < 1000; index++) {
     const snapshot = await service.invoke({ action: "status", taskId });
@@ -31,7 +33,7 @@ async function waitForFileStatus(path, taskId, expected) {
     const tasks = JSON.parse(await readFile(path, "utf8"));
     const task = tasks.find((item) => item.taskId === taskId);
     if (task?.status === expected) return task;
-    await turn();
+    await filePause();
   }
   throw new Error(`Timed out waiting for persisted task ${taskId} to become ${expected}.`);
 }
@@ -39,13 +41,15 @@ async function waitForFileTasks(path, predicate) {
   for (let index = 0; index < 1000; index++) {
     const tasks = JSON.parse(await readFile(path, "utf8"));
     if (predicate(tasks)) return tasks;
-    await turn();
+    await filePause();
   }
   throw new Error("Timed out waiting for persisted task list state.");
 }
 async function waitForTasks(service, predicate) {
   for (let index = 0; index < 1000; index++) {
-    const tasks = await service.invoke({ action: "list" });
+    const listed = await service.invoke({ action: "list" });
+    assert.deepEqual(Object.keys(listed), ["tasks"], "list returns an object so MCP structuredContent stays an object");
+    const { tasks } = listed;
     if (predicate(tasks)) return tasks;
     await turn();
   }
@@ -69,8 +73,12 @@ try {
   const task = await Promise.race([startPromise, new Promise((_, reject) => { startTimeout = setTimeout(() => reject(new Error("start waited for the agent response")), 1000); })]);
   clearTimeout(startTimeout);
   assert.equal(task.status, "running");
-  await assert.rejects(() => service.invoke({ action: "start", input: "ignored", permission: "advanced" }), /unsupported field/);
-  await assert.rejects(() => service.invoke({ action: "delete" }), /action is invalid/);
+  // Validation failures are client-safe so the MCP server returns them to the model as isError tool results.
+  await assert.rejects(() => service.invoke({ action: "start", input: "ignored", permission: "advanced" }), (error) => error.clientSafe === true && /unsupported field for start: permission\. It accepts action, input\./.test(error.message));
+  await assert.rejects(() => service.invoke({ action: "list", input: "" }), (error) => error.clientSafe === true && /unsupported field for list: input/.test(error.message));
+  await assert.rejects(() => service.invoke({ action: "delete" }), (error) => error.clientSafe === true && /action is invalid/.test(error.message));
+  await assert.rejects(() => service.invoke({ action: "status" }), (error) => error.clientSafe === true && /taskId or conversationId is required/.test(error.message));
+  await assert.rejects(() => service.invoke({ action: "continue", input: "x" }), (error) => error.clientSafe === true && /Continue requires input and conversationId/.test(error.message));
   progress.runId = task.runId;
   await started.promise;
   service.recordProgress(progress);

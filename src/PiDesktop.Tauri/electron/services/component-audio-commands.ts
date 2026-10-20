@@ -12,16 +12,17 @@ type Plan = { planId: string; token: string; expiresAt: string; requestDigest: s
 type Job = { id: string; operation: string; status: string; progressPercent?: number; outputPath?: string; artifactId?: string; loudnessReport?: unknown; error?: string; startedAt: string; completedAt?: string };
 type Artifact = { path: string; operation: string };
 
-export interface CommandRegistry { register(command: string, handler: (args: Args) => Promise<unknown>): void; }
+export interface CommandRegistry { register(command: string, handler: (args: Args, signal?: AbortSignal) => Promise<unknown>): void; }
 export interface CreativeRuntimeStatus { ready: boolean; pythonPath?: string; missing: string[]; detail: string; }
 export interface CreativeRuntime {
   status(): Promise<CreativeRuntimeStatus>;
   ensure(options?: { signal?: AbortSignal; onProgress?: (progress: number, detail: string) => void }): Promise<string>;
 }
-export interface ComponentAudioOptions { ffmpegPath?: string; dataRoot: string; creativeRuntime?: CreativeRuntime; run?: (file: string, args: string[]) => Promise<Result>; reveal?: (path: string) => Promise<void>; saveFile?: (defaultName: string) => Promise<string | undefined>; openExternal?: (url: string) => Promise<void>; }
+export interface ComponentAudioOptions { ffmpegPath?: string; dataRoot: string; creativeRuntime?: CreativeRuntime; run?: (file: string, args: string[], signal?: AbortSignal) => Promise<Result>; reveal?: (path: string) => Promise<void>; saveFile?: (defaultName: string) => Promise<string | undefined>; openExternal?: (url: string) => Promise<void>; }
 
-const runProcess = (file: string, args: string[]) => new Promise<Result>((done, reject) => {
-  const child = spawn(file, args, { windowsHide: true, shell: false }); let stdout = ""; let stderr = "";
+// An aborted signal kills the process (spawn's own handling) and rejects with an AbortError.
+const runProcess = (file: string, args: string[], signal?: AbortSignal) => new Promise<Result>((done, reject) => {
+  const child = spawn(file, args, { windowsHide: true, shell: false, ...(signal ? { signal } : {}) }); let stdout = ""; let stderr = "";
   child.stdout.on("data", chunk => { stdout += chunk; }); child.stderr.on("data", chunk => { stderr += chunk; });
   child.once("error", reject); child.once("close", code => code === 0 ? done({ stdout, stderr }) : reject(new Error(stderr || `${file} exited with ${code}`)));
 });
@@ -79,10 +80,10 @@ export function registerComponentAudioCommands(registry: CommandRegistry, option
   registry.register("get_ffmpeg_configuration", readConfig);
   registry.register("set_ffmpeg_directory", async args => { const directory = args.directory === null ? null : resolve(text(args.directory, "directory")); if (directory) { const suffix = process.platform === "win32" ? ".exe" : ""; await Promise.all([access(join(directory, `ffmpeg${suffix}`)), access(join(directory, `ffprobe${suffix}`))]); } await writeComponentState(configPath, { directory }); return { succeeded: true, summary: "FFmpeg configuration saved.", detail: directory ?? "System PATH" }; });
   registry.register("open_ffmpeg_download_page", async () => { if (!options.openExternal) throw new Error("External URL handling is unavailable."); await options.openExternal("https://ffmpeg.org/download.html"); return { succeeded: true, summary: "Opened the FFmpeg download page.", detail: "" }; });
-  registry.register("probe_media", async args => { const path = resolve(text(args.path, "path")); await access(path); const runtime = await binaries(); const result = await run(runtime.ffprobe, ["-v", "error", "-show_entries", "format=format_name,duration,bit_rate:stream=codec_name,codec_type,sample_rate,channels,channel_layout,bits_per_sample", "-of", "json", path]); const raw = JSON.parse(result.stdout); const stream = raw.streams?.find((item: Args) => item.codec_type === "audio") ?? raw.streams?.[0] ?? {}; const format = raw.format ?? {}; return { path, container: format.format_name, codec: stream.codec_name, durationSeconds: number(format.duration), sampleRate: number(stream.sample_rate), channels: number(stream.channels), channelLayout: stream.channel_layout, bitDepth: number(stream.bits_per_sample), bitRate: number(format.bit_rate) }; });
+  registry.register("probe_media", async (args, signal) => { const path = resolve(text(args.path, "path")); await access(path); const runtime = await binaries(); const result = await run(runtime.ffprobe, ["-v", "error", "-show_entries", "format=format_name,duration,bit_rate:stream=codec_name,codec_type,sample_rate,channels,channel_layout,bits_per_sample", "-of", "json", path], signal); const raw = JSON.parse(result.stdout); const stream = raw.streams?.find((item: Args) => item.codec_type === "audio") ?? raw.streams?.[0] ?? {}; const format = raw.format ?? {}; return { path, container: format.format_name, codec: stream.codec_name, durationSeconds: number(format.duration), sampleRate: number(stream.sample_rate), channels: number(stream.channels), channelLayout: stream.channel_layout, bitDepth: number(stream.bits_per_sample), bitRate: number(format.bit_rate) }; });
   registry.register("plan_audio_prepare", async args => makePlan("prepare", object(args.request, "request") as AudioRequest));
   registry.register("start_audio_prepare", async args => startJob("prepare", object(args.request, "request") as AudioRequest, text(args.token, "token")));
-  registry.register("analyze_loudness", async args => { const path = resolve(text(args.path, "path")); await access(path); const runtime = await binaries(); const result = await run(runtime.ffmpeg, ["-hide_banner", "-nostats", "-i", path, "-af", "loudnorm=print_format=json", "-f", "null", process.platform === "win32" ? "NUL" : "/dev/null"]); return parseLoudness(result.stderr, path); });
+  registry.register("analyze_loudness", async (args, signal) => { const path = resolve(text(args.path, "path")); await access(path); const runtime = await binaries(); const result = await run(runtime.ffmpeg, ["-hide_banner", "-nostats", "-i", path, "-af", "loudnorm=print_format=json", "-f", "null", process.platform === "win32" ? "NUL" : "/dev/null"], signal); return parseLoudness(result.stderr, path); });
   registry.register("plan_loudness_normalize", async args => makePlan("normalize", object(args.request, "request") as NormalizeRequest));
   registry.register("start_loudness_normalize", async args => startJob("normalize", object(args.request, "request") as NormalizeRequest, text(args.token, "token")));
   registry.register("audio_job_snapshot", async args => { const job = jobs.get(text(args.id, "id")); if (!job) throw new Error("Audio job was not found."); return { ...job }; });

@@ -1,6 +1,7 @@
 import packageJson from "../package.json";
 import { AGENT_EFFORT_LEVELS, DEFAULT_AGENT_EFFORT, estimateAgentRunBudget, type PluginManifest } from "@synthv-toolbox/runtime-protocol";
 import { hasDesktopBridge, invokeDesktop, openDesktopDialog } from "../electron/bridge";
+import { BRAND } from "./brand";
 import type {
   AiProviderId,
   AgentApprovalsSnapshot,
@@ -47,6 +48,8 @@ import type {
   MediaSourcePreview,
   MediaTaskSnapshot,
   HttpApiStatus,
+  IntegrationPreference,
+  McpProbeResult,
   OperationResult,
   ProjectCheckpoint,
   ProjectBackupState,
@@ -101,7 +104,14 @@ let previewHttpApiStatus: HttpApiStatus = {
   endpoint: null,
   agentEndpoint: null,
   lastError: null,
+  token: "preview-token-3f9c2a7d1b8e4c6a",
+  authRequired: true,
+  serverName: BRAND.slug,
+  protocolVersions: ["2025-11-25", "2025-06-18", "2025-03-26"],
+  tools: [],
 };
+let previewSynthvPreference: IntegrationPreference = "auto";
+let previewMcpServers: McpServerConfig[] = [{ id: "demo", name: "Demo tools", command: "node", args: ["server.mjs"], enabled: true }];
 let previewBridgeConnected = true;
 let previewBridgeRequestedProcessId: number | null = null;
 const previewBridgeTargets = new Set<string>();
@@ -448,7 +458,16 @@ const previewSv2VoiceCatalog = [
   { id: "00000000-0000-4000-8000-000000000002", name: null, imageDataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E%3Crect width='48' height='48' fill='%230ea5e9'/%3E%3C/svg%3E" },
 ];
 
-const previewState = (): BootstrapState => ({
+/** Mirrors the host: with SynthV off its installations, bridge and components disappear from bootstrap. */
+const previewState = (): BootstrapState => {
+  const state = previewBaseState();
+  const enabled = previewSynthvPreference !== "off";
+  const integrations = { synthv: { preference: previewSynthvPreference, enabled, detected: true, bridgeLoaded: true, errors: [] } };
+  if (enabled) return { ...state, integrations };
+  return { ...state, integrations, installations: [], bridgeConnected: false, components: state.components.filter((component) => component.id !== "cvrs" && component.id !== "sandboxie"), svpAssociation: { ...state.svpAssociation, supported: false } };
+};
+
+const previewBaseState = (): BootstrapState => ({
   onboardingCompleted: previewOnboarding,
   mode: previewMode,
   agentWorkMode: previewAgentWorkMode,
@@ -458,7 +477,8 @@ const previewState = (): BootstrapState => ({
   updateChannel: previewUpdateChannel,
   platform: "preview",
   appVersion: packageJson.version,
-  configPath: "~/.SynthVcopilot/config.json",
+  configPath: "~/Library/Application Support/Toneshuttle/desktop-settings.json",
+  dataDirectory: { path: "~/Library/Application Support/Toneshuttle", migratedFrom: null, deferred: null, legacyRemaining: null, setAside: null, fixupErrors: [] },
   settingsLoadError: undefined,
   model: previewMode === "ai" ? previewAiModel() : undefined,
   scriptsPath: "/Library/Application Support/Dreamtonics/Synthesizer V Studio 2/scripts",
@@ -488,10 +508,10 @@ const previewState = (): BootstrapState => ({
     { id: "cvrs", displayName: "CVRS 工程工具", description: "工程探测、安全副本、无参导出与 LRC。", audience: "AI 与人工", installed: previewInstalledManagedComponentIds.has("cvrs"), downloaded: false, installable: true, removable: previewInstalledManagedComponentIds.has("cvrs"), status: previewInstalledManagedComponentIds.has("cvrs") ? "已就绪" : "可由 Toolbox 内置下载器下载" },
     { id: "media-fetcher", displayName: "媒体导入器", description: "固定版本 yt-dlp，用于显式 Bilibili/YouTube URL 导入。", audience: "AI 与人工", installed: previewInstalledManagedComponentIds.has("media-fetcher"), downloaded: false, installable: true, removable: previewInstalledManagedComponentIds.has("media-fetcher"), status: previewInstalledManagedComponentIds.has("media-fetcher") ? "已就绪" : "可由 Toolbox 内置下载器下载" },
     { id: "vocal-separation", displayName: "人声伴奏分离", description: "使用 Demucs htdemucs 把单个混音分成 vocals 与 inst。", audience: "AI 与人工", installed: previewInstalledManagedComponentIds.has("vocal-separation"), downloaded: false, installable: true, removable: previewInstalledManagedComponentIds.has("vocal-separation"), status: previewInstalledManagedComponentIds.has("vocal-separation") ? "已就绪" : "可安装本地运行环境" },
-    { id: "sandboxie", displayName: "Sandboxie Plus 1.18.2", description: "Synthesizer V Toolbox 并发隔离提供方；下载官方安装包后由用户交互安装。", audience: "Windows 并发隔离", installed: false, downloaded: false, installable: true, removable: false, status: "可由 Toolbox 内置下载器下载官方 x64 安装包" },
+    { id: "sandboxie", displayName: "Sandboxie Plus 1.18.2", description: `${BRAND.productNameZh} 并发隔离提供方；下载官方安装包后由用户交互安装。`, audience: "Windows 并发隔离", installed: false, downloaded: false, installable: true, removable: false, status: "可由 Toolbox 内置下载器下载官方 x64 安装包" },
   ],
   downloads: previewDownloads,
-  mcpServers: previewMode === "ai" ? [{ id: "demo", name: "Demo tools", command: "node", args: ["server.mjs"], enabled: true }] : [],
+  mcpServers: previewMode === "ai" ? previewMcpServers : [],
   concurrentDisclaimerAccepted: previewConcurrentDisclaimerAccepted,
   sv2ConcurrentEnabled: previewSv2ConcurrentEnabled,
   sv2AccountIndicatorEnabled: previewSv2AccountIndicatorEnabled,
@@ -506,7 +526,7 @@ const previewState = (): BootstrapState => ({
     registered: previewSmartSvpLaunchEnabled,
     isDefault: false,
     detail: previewSmartSvpLaunchEnabled
-      ? "已注册为 .svp 可选打开方式；请在 Windows 默认应用中选择 Synthesizer V Toolbox。"
+      ? `已注册为 .svp 可选打开方式；请在 Windows 默认应用中选择${BRAND.productNameZh}。`
       : "智能启动默认关闭，不会改变当前 .svp 打开方式。",
   },
 });
@@ -586,8 +606,9 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     const internalFunctionsEnabled = Boolean(args?.internalFunctionsEnabled);
     const advancedFunctionsEnabled = Boolean(args?.advancedFunctionsEnabled);
     const port = Number(args?.port);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("端口必须是 1 到 65535 之间的整数。");
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error("端口必须是 1024 到 65535 之间的整数。");
     previewHttpApiStatus = {
+      ...previewHttpApiStatus,
       enabled,
       agentEnabled,
       internalFunctionsEnabled,
@@ -595,10 +616,36 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       running: enabled || agentEnabled,
       port,
       endpoint: enabled ? `http://127.0.0.1:${port}/mcp` : null,
-      agentEndpoint: agentEnabled ? `http://127.0.0.1:${port}/agent/chat` : null,
+      agentEndpoint: agentEnabled ? `http://127.0.0.1:${port}/agent` : null,
       lastError: null,
+      tools: enabled ? [...(internalFunctionsEnabled ? ["toolbox_internal"] : []), ...(advancedFunctionsEnabled ? ["toolbox_advanced"] : []), ...(agentEnabled ? ["toolbox_agent"] : [])] : [],
     };
     return { ...previewHttpApiStatus } as T;
+  }
+  if (command === "rotate_http_api_token") {
+    previewHttpApiStatus = { ...previewHttpApiStatus, token: `preview-token-${Math.random().toString(16).slice(2, 18)}` };
+    return { ...previewHttpApiStatus } as T;
+  }
+  if (command === "set_integration") {
+    const preference = args?.preference;
+    if (args?.integration !== "synthv" || (preference !== "auto" && preference !== "on" && preference !== "off")) throw new Error("integration or preference is invalid.");
+    previewSynthvPreference = preference;
+    return previewState() as T;
+  }
+  if (command === "test_mcp_server") {
+    const server = previewMcpServers.find((item) => item.id === args?.id);
+    if (!server) return { succeeded: false, summary: "未找到该 MCP 服务器配置。", detail: String(args?.id ?? ""), tools: [] } as T;
+    return { succeeded: true, summary: `${server.name} 可用，提供 2 个工具。`, detail: `预览模式未启动 ${server.command}。`, tools: ["read_file", "list_directory"], serverInfo: { name: server.name, version: "preview" } } as T;
+  }
+  if (command === "save_mcp_server") {
+    const server = args?.server as McpServerConfig | undefined;
+    if (!server?.id) throw new Error("server.id must be a non-empty string.");
+    previewMcpServers = [...previewMcpServers.filter((item) => item.id !== server.id), server];
+    return previewState() as T;
+  }
+  if (command === "delete_mcp_server") {
+    previewMcpServers = previewMcpServers.filter((item) => item.id !== args?.id);
+    return previewState() as T;
   }
   if (command === "get_agent_runtime_status") {
     return { running: false, protocolVersion: "1.0" } as T;
@@ -618,7 +665,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     return previewState() as T;
   }
   if (command === "open_svp_default_apps_settings") {
-    return { succeeded: true, summary: "已打开 Windows 默认应用设置。", detail: "请为 .svp 选择 Synthesizer V Toolbox。" } as T;
+    return { succeeded: true, summary: "已打开 Windows 默认应用设置。", detail: `请为 .svp 选择${BRAND.productNameZh}。` } as T;
   }
   if (command === "authorize_ai_provider") {
     throw new Error("浏览器预览不执行 OAuth 授权。请在桌面应用中连接提供商，完成真实浏览器授权；此处不会创建模拟账号。");
@@ -895,7 +942,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       currentVersion: previewState().appVersion,
       latestVersion: previewVersion,
       updateAvailable: true,
-      releaseName: previewNightly ? "SynthV Toolbox v0.3.0 Pre-release" : "Synthesizer V Toolbox v0.2.0",
+      releaseName: previewNightly ? `${BRAND.productName} v0.3.0 Pre-release` : `${BRAND.productName} v0.2.0`,
       releaseUrl: `https://github.com/SynthVCopilot/synthv-toolbox/releases/tag/${previewTag}`,
       publishedAtUtc: new Date().toISOString(),
       releaseNotes: "## 更新内容\n\n- 新增更新检查工具\n- 修复若干问题",
@@ -908,7 +955,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "install_toolbox_update") return { succeeded: false, summary: "Preview cannot install updates.", detail: "" } as T;
   if (command === "open_toolbox_releases" || command === "open_toolbox_project") return {
     succeeded: true,
-    summary: "已打开 Synthesizer V Toolbox 发布页。",
+    summary: `已打开${BRAND.productNameZh}发布页。`,
     detail: "预览模式不会启动外部浏览器。",
   } as T;
   if (command === "sv2_profile_state") return previewProfiles as T;
@@ -1126,7 +1173,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "remove_local_component") {
     const componentId = String(args?.id ?? "");
     if (!previewManagedComponentIds.has(componentId)) {
-      return { succeeded: false, summary: "该组件不由 Synthesizer V Toolbox 管理。", detail: "预览模式不会删除系统或外部安装的组件。" } as T;
+      return { succeeded: false, summary: `该组件不由${BRAND.productNameZh}管理。`, detail: "预览模式不会删除系统或外部安装的组件。" } as T;
     }
     if (!previewInstalledManagedComponentIds.delete(componentId)) {
       return { succeeded: true, summary: "组件当前未安装。", detail: "预览状态中没有需要删除的工具箱运行环境或配置。" } as T;
@@ -1136,7 +1183,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "list_workflow_recipes") return [
     { id: "project-doctor", title: "工程医生", description: "只读检查工程风险。", kind: "project-doctor", inputKind: "svp", supportsBatch: true, requiresBridge: false, requiresAi: false, defaultParameters: {} },
     { id: "pronunciation-check", title: "发音诊断", description: "检查歌词和音素风险。", kind: "pronunciation-check", inputKind: "svpOrText", supportsBatch: true, requiresBridge: false, requiresAi: false, defaultParameters: {} },
-    { id: "render-quality-check", title: "渲染复检", description: "检查渲染交付风险。", kind: "render-quality-check", inputKind: "audio", supportsBatch: true, requiresBridge: false, requiresAi: false, defaultParameters: {} },
+    { id: "render-review", title: "渲染复检", description: "检查渲染交付风险。", kind: "render-review", inputKind: "audio", supportsBatch: true, requiresBridge: false, requiresAi: false, defaultParameters: {} },
     { id: "lyric-template", title: "作词", description: "歌词草稿、歌曲结构与可选韵脚辅助。", kind: "lyric-template", inputKind: "lyrics", supportsBatch: false, requiresBridge: false, requiresAi: false, defaultParameters: { language: "zh-CN", rhymeMode: "family" } },
   ] as T;
   if (command === "list_creative_history" || command === "list_project_checkpoints") return [] as T;
@@ -1471,7 +1518,7 @@ export const api = {
   scanSynthV: () => call<SynthVInstallation[]>("scan_synthv"),
   checkToolboxUpdate: () => call<ToolboxUpdateCheck>("check_toolbox_update"),
   openToolboxReleases: (releaseUrl?: string) => call<OperationResult>("open_toolbox_releases", { releaseUrl }),
-  openToolboxProject: (target: "project" | "issues" | "guide") => call<OperationResult>("open_toolbox_project", { target }),
+  openToolboxProject: (target: "project" | "issues" | "guide" | "terms") => call<OperationResult>("open_toolbox_project", { target }),
   getToolboxUpdateDownload: () => call<import("./types").ToolboxUpdateDownload>("get_toolbox_update_download"),
   downloadToolboxUpdate: () => call<import("./types").ToolboxUpdateDownload>("download_toolbox_update"),
   cancelToolboxUpdateDownload: () => call<import("./types").ToolboxUpdateDownload>("cancel_toolbox_update_download"),
@@ -1720,7 +1767,9 @@ export const api = {
   setAgentTranscriptsEnabled: (enabled: boolean) => call<BootstrapState>("set_agent_transcripts", { enabled }),
   saveMcpServer: (server: McpServerConfig) => call<BootstrapState>("save_mcp_server", { server }),
   deleteMcpServer: (id: string) => call<BootstrapState>("delete_mcp_server", { id }),
-  testMcpServer: (id: string) => call<OperationResult>("test_mcp_server", { id }),
+  testMcpServer: (id: string) => call<McpProbeResult>("test_mcp_server", { id }),
+  rotateHttpApiToken: () => call<HttpApiStatus>("rotate_http_api_token"),
+  setIntegration: (integration: "synthv", preference: IntegrationPreference) => call<BootstrapState>("set_integration", { integration, preference }),
   getHttpApiStatus: () => call<HttpApiStatus>("get_http_api_status"),
   configureHttpApi: (enabled: boolean, agentEnabled: boolean, internalFunctionsEnabled: boolean, advancedFunctionsEnabled: boolean, port: number) =>
     call<HttpApiStatus>("configure_http_api", { enabled, agentEnabled, internalFunctionsEnabled, advancedFunctionsEnabled, port }),

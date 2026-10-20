@@ -10,6 +10,9 @@ import {
   DEFAULT_AGENT_EFFORT,
   estimateAgentRunBudget,
   validateAgentRunOutcome,
+  AGENT_SESSION_HISTORY_MAX_MESSAGES,
+  AGENT_SESSION_HISTORY_MAX_TEXT_LENGTH,
+  type AgentSessionHistoryMessage,
   type AgentEffortLevel,
   type AgentRunBudget,
   type AgentRunOutcome,
@@ -118,6 +121,10 @@ export interface AiServiceOptions {
   files?: MetadataFilePort;
   now?: () => Date;
   id?: () => string;
+  /** Base agent prompt; a changed value recreates the Pi session, so it can carry the active integrations. */
+  systemPrompt?: () => string;
+  /** False in toolbox-only mode, which promises no model requests; checked before every run. */
+  agentAllowed?: () => boolean;
 }
 
 const providers: readonly AiProviderId[] = ["anthropic", "openai-codex", "workbuddy", "traecode"];
@@ -468,6 +475,7 @@ export class AiService {
     if (!text) throw new Error("Message is required.");
     if (text.length > AGENT_INPUT_MAX_LENGTH) throw new Error("Message exceeds the 32,000 character limit.");
     if (this.activeRuns.has(conversationId)) throw new Error("A run is already in progress.");
+    if (this.options.agentAllowed && !this.options.agentAllowed()) throw new Error("The internal agent is only available in AI mode. Switch the toolbox to AI mode in Settings first.");
     const effort = options.effort ?? DEFAULT_AGENT_EFFORT;
     const active: ActiveRun = { runId: options.runId ?? this.id(), cancelRequested: false, sendIssued: false, steers: [] };
     this.activeRuns.set(conversationId, active);
@@ -476,7 +484,9 @@ export class AiService {
       const conversation = metadata.conversations.find((item) => item.id === conversationId);
       if (!conversation) throw new Error("Conversation was not found.");
       const seedOutcome = latestOutcome(conversation);
-      await this.options.runtime.request("session.initialize", { sessionId: conversation.id, ...(options.cwd ? { cwd: options.cwd } : {}), ...(seedOutcome ? { outcome: seedOutcome } : {}) });
+      const systemPrompt = this.options.systemPrompt?.();
+      const history = sessionHistory(conversation.messages);
+      await this.options.runtime.request("session.initialize", { sessionId: conversation.id, ...(options.cwd ? { cwd: options.cwd } : {}), ...(systemPrompt ? { systemPrompt } : {}), ...(seedOutcome ? { outcome: seedOutcome } : {}), ...(history.length ? { history } : {}) });
       const { assistant, outcome } = active.cancelRequested
         ? { assistant: "", outcome: cancelledOutcome(effort, this.agentUsageSamples()) }
         : await this.runSend(conversation.id, text, effort, active);
@@ -518,6 +528,13 @@ export class AiService {
       .then(() => ({ role: "user", content: text, createdAt: this.now().toISOString() }));
     active.steers.push(pending);
     return { ...await pending };
+  }
+
+  /** Stops every run in progress (chat, toolbox_agent tasks, Cover phases); used when the app leaves AI mode. */
+  async cancel_all_agent_runs(): Promise<string[]> {
+    const conversations = [...this.activeRuns.keys()];
+    await Promise.allSettled(conversations.map(conversationId => this.cancel_agent_run(conversationId)));
+    return conversations;
   }
 
   async cancel_agent_run(conversationId: string): Promise<void> {
@@ -642,6 +659,28 @@ function parseMetadata(raw: string): AiServiceMetadata {
 function cancelledOutcome(effort: AgentEffortLevel, samples: AgentUsageSample[]): AgentRunOutcome {
   const budget = estimateAgentRunBudget(effort, samples);
   return { status: "cancelled", summary: "", evidence: [], missing: [], plan: null, budget: { ...budget, turns: 0, tokens: 0, uncachedInputTokens: 0, cacheReadTokens: 0 } };
+}
+
+/** Characters of earlier turns replayed into a recreated session; older turns are dropped first. */
+const SESSION_HISTORY_BUDGET = 60_000;
+/** No single turn may take more than this, so one long reply cannot crowd out every turn before it. */
+const SESSION_HISTORY_TURN_LIMIT = 20_000;
+const TRUNCATED = "\n[… shortened]";
+
+/** The most recent turns that fit the budget, oldest first, for a session the runtime has to create again. */
+function sessionHistory(messages: readonly ConversationMessage[]): AgentSessionHistoryMessage[] {
+  const history: AgentSessionHistoryMessage[] = [];
+  let used = 0;
+  for (let index = messages.length - 1; index >= 0 && history.length < AGENT_SESSION_HISTORY_MAX_MESSAGES; index--) {
+    const limit = Math.min(SESSION_HISTORY_TURN_LIMIT, SESSION_HISTORY_BUDGET - used);
+    if (limit <= TRUNCATED.length) break;
+    const content = messages[index].content;
+    if (!content.trim()) continue;
+    const text = content.length > limit ? `${content.slice(0, limit - TRUNCATED.length)}${TRUNCATED}` : content;
+    used += text.length;
+    history.unshift({ role: messages[index].role, text });
+  }
+  return history;
 }
 
 function latestOutcome(conversation: ConversationSnapshot): AgentRunOutcome | undefined {
