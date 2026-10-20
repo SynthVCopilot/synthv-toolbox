@@ -467,6 +467,32 @@ test("a server removed while its tools are loading makes sessions rebuild", asyn
   } finally { await pool.dispose(); }
 });
 
+test("a server that failed while a conversation was built is retried on that conversation's next turn", async () => {
+  const pool = new ExternalMcpPool({ retryAfterMs: 300 });
+  try {
+    const config = server("a", "Fixture", "--fail-first-list");
+    const first = await open(pool, [config]);
+    assert.ok(!first.tools.has("mcp__fixture__read_status"), "the first tools/list failed");
+    const revision = pool.revision;
+    assert.equal(pool.revision, revision, "within the backoff the conversation keeps its session");
+    await delay(400);
+    const announced = pool.revision;
+    assert.ok(announced > revision, "after the backoff the next turn's prompt changes, so its session is rebuilt and lists again");
+    assert.equal(pool.revision, announced, "announced once per failure");
+    const rebuilt = await open(pool, [config]);
+    assert.ok(rebuilt.tools.has("mcp__fixture__read_status"), "the rebuilt session has the recovered server's tools");
+  } finally { await pool.dispose(); }
+});
+
+test("a hostile schema depth degrades that tool to any object instead of exhausting the stack", () => {
+  let deep = { type: "string" };
+  for (let level = 0; level < 20_000; level++) deep = { type: "object", properties: { next: deep } };
+  assert.deepEqual(toolParameters(deep), { type: "object", properties: {}, additionalProperties: true });
+  let ordinary = { type: "string" };
+  for (let level = 0; level < 20; level++) ordinary = { type: "object", properties: { next: ordinary } };
+  assert.equal(toolParameters(ordinary).properties.next.type, "object", "real nesting is kept");
+});
+
 test("a missing command fails with a clear error", async () => {
   const client = new McpStdioClient({ command: "toneshuttle-definitely-missing-mcp-server", label: "Missing" });
   await assert.rejects(client.connect(), /Missing.*(not found|ENOENT)/s);

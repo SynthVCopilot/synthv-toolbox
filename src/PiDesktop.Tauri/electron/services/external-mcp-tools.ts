@@ -41,6 +41,8 @@ interface PoolEntry {
   loading?: Promise<void>;
   connecting?: Promise<McpStdioClient>;
   removed?: boolean;
+  /** The failure (its failedAt) whose retry the revision already announced. */
+  retryAnnounced?: number;
   /** tools/list_changed notifications received, and how many had arrived when the cached list was requested. */
   changes?: number;
   listedAt?: number;
@@ -67,8 +69,21 @@ export class ExternalMcpPool {
   /**
    * Bumped when a server's tool list may differ from what sessions registered: it said so (tools/list_changed), or a server
    * that had failed came back. The agent prompt includes it, so the next turn builds a session with the current tools.
+   *
+   * A conversation keeps its session while the prompt is unchanged and never lists again, so a server that failed while it
+   * was built would stay missing. Once a failure's backoff has passed, the next read (the next turn's prompt) bumps the
+   * revision once: that turn rebuilds the session, which retries the server. Retries follow the user's turns; nothing
+   * restarts a broken server in the background.
    */
-  get revision(): number { return this.toolsRevision; }
+  get revision(): number {
+    const now = Date.now(), backoff = this.options.retryAfterMs ?? 30_000;
+    for (const entry of this.entries.values()) {
+      if (entry.error === undefined || entry.failedAt === undefined || entry.retryAnnounced === entry.failedAt || now - entry.failedAt < backoff) continue;
+      entry.retryAnnounced = entry.failedAt;
+      this.toolsRevision++;
+    }
+    return this.toolsRevision;
+  }
 
   private readonly entries = new Map<string, PoolEntry>();
   private readonly closing = new Set<Promise<void>>();
@@ -290,6 +305,9 @@ export function externalToolNames(servers: readonly { id: string; name: string; 
  */
 export function toolParameters(schema: unknown): Record<string, unknown> {
   if (!isRecord(schema)) return { type: "object", properties: {} };
+  // Every step below, Pi's validator and the provider walk the schema recursively; a hostile nesting depth would exhaust the
+  // stack and take the whole session down. Such a tool accepts any object instead, and the server still validates it.
+  if (nestedDeeperThan(schema, MAX_SCHEMA_DEPTH)) return { type: "object", properties: {}, additionalProperties: true };
   const root = dereference(schema, schema);
   if (root.type === "object" && !("$ref" in root) && !COMBINATORS.some(key => key in root)) return withoutDanglingRefs(root);
   const variants = COMBINATORS.flatMap(key => Array.isArray(root[key]) ? (root[key] as unknown[]).filter(isRecord).map(variant => ({ key, schema: dereference(variant, schema) })) : []);
@@ -315,6 +333,21 @@ export function toolParameters(schema: unknown): Record<string, unknown> {
     type: "object", properties, ...(required.size ? { required: [...required] } : {}), additionalProperties: true,
     ...(typeof root.description === "string" ? { description: root.description } : {}), ...definitions,
   });
+}
+
+/** Deepest nesting a tool schema keeps; real schemas stay far below it. */
+export const MAX_SCHEMA_DEPTH = 64;
+
+/** Measured with an explicit stack, so measuring a hostile schema cannot exhaust the call stack either. */
+function nestedDeeperThan(value: unknown, limit: number): boolean {
+  const pending: Array<[unknown, number]> = [[value, 0]];
+  while (pending.length) {
+    const [node, depth] = pending.pop()!;
+    if (depth > limit) return true;
+    if (Array.isArray(node)) for (const item of node) pending.push([item, depth + 1]);
+    else if (isRecord(node)) for (const item of Object.values(node)) pending.push([item, depth + 1]);
+  }
+  return false;
 }
 
 /** Inlines a $ref chain that points inside the document; siblings of the $ref are kept. */
