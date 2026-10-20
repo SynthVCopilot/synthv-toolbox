@@ -36,6 +36,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     return send({ id: "server-ping", method: "ping" });
   }
   if (message.method === "tools/list") {
+    if (mode === "manytools") return send({ id: message.id, result: { tools: Array.from({ length: 1_001 }, (_, index) => ({ name: `tool_${index}`, inputSchema: { type: "object" } })) } });
     if (mode === "endless") return send({ id: message.id, result: { tools: [{ name: `page-${message.params?.cursor ?? 0}`, inputSchema: { type: "object" } }], nextCursor: String(Number(message.params?.cursor ?? 0) + 1) } });
     if (!message.params?.cursor) return send({ id: message.id, result: { tools: [{ name: "echo", inputSchema: { type: "object" } }], nextCursor: "page-2" } });
     return send({ id: message.id, result: { tools: [{ name: `args:${extra.join("|")}`, inputSchema: { type: "object" } }] } });

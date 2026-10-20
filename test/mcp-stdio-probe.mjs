@@ -116,6 +116,12 @@ test("an oversized finished line fails the probe, and an answer without the JSON
   assert.match(loose.summary, /did not complete the MCP handshake/, "an envelope-less initialize answer is ignored");
 });
 
+test("a server offering more tools than the client keeps fails the test", async () => {
+  const result = await probeStdioMcpServer({ command: process.execPath, args: [fixture, "manytools"] });
+  assert.equal(result.succeeded, false);
+  assert.match(result.summary, /more than 1000 tools or 8 MiB of tool definitions/);
+});
+
 test("JSON-RPC errors and launch failures are reported as failed probes", async () => {
   const rejected = await probeStdioMcpServer({ command: process.execPath, args: [fixture, "error"] });
   assert.equal(rejected.succeeded, false);

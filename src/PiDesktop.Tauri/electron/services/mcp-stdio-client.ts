@@ -50,6 +50,9 @@ const MAX_LINE_LENGTH = 500;
 export const MAX_MESSAGE_LENGTH = 64 * 1024 * 1024;
 /** tools/list pages a session reads before giving up on a server that keeps returning cursors. */
 export const MAX_TOOL_PAGES = 100;
+/** Tools, and bytes of tool definitions, kept from one server across all pages; each page is bounded on its own as well. */
+export const MAX_TOOLS = 1_000;
+export const MAX_TOOL_DEFINITION_BYTES = 8 * 1024 * 1024;
 const CLOSE_GRACE_MS = 1_000;
 
 export class McpStdioClient {
@@ -89,12 +92,20 @@ export class McpStdioClient {
     // Servers that only offer resources or prompts may reject tools/list; the Connections probe treats them as having none too.
     if (!this.offersTools) return [];
     const tools: McpToolInfo[] = [], seen = new Set<string>();
-    let cursor: string | undefined;
+    let cursor: string | undefined, bytes = 0;
     // A server that keeps returning cursors would otherwise hold session creation forever.
     for (let page = 0; page < MAX_TOOL_PAGES; page++) {
       const result = await this.request("tools/list", cursor === undefined ? undefined : { cursor }, { signal: options.signal, timeoutMs: options.timeoutMs ?? this.connectTimeout() });
       if (!isRecord(result) || !Array.isArray(result.tools)) throw this.error("answered tools/list without a tools array");
-      for (const raw of result.tools) { const tool = toolInfo(raw); if (tool && !seen.has(tool.name)) { seen.add(tool.name); tools.push(tool); } }
+      for (const raw of result.tools) {
+        const tool = toolInfo(raw);
+        if (!tool || seen.has(tool.name)) continue;
+        seen.add(tool.name);
+        tools.push(tool);
+        bytes += JSON.stringify(raw).length;
+        // Many pages that each fit the message limit could still add up to gigabytes in the main process.
+        if (tools.length > MAX_TOOLS || bytes > MAX_TOOL_DEFINITION_BYTES) throw this.error(`offers more than ${MAX_TOOLS} tools or ${MAX_TOOL_DEFINITION_BYTES / 1024 / 1024} MiB of tool definitions`);
+      }
       cursor = typeof result.nextCursor === "string" && result.nextCursor ? result.nextCursor : undefined;
       if (cursor === undefined) return tools;
     }

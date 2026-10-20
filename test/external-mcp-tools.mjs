@@ -377,6 +377,27 @@ test("a server that recovers through its running process rebuilds sessions creat
   } finally { await pool.dispose(); }
 });
 
+test("tool definitions kept from one server are bounded across pages", async () => {
+  const client = new McpStdioClient({ command: process.execPath, args: [fixture, "--many-tools"], label: "Many" });
+  try {
+    await client.connect();
+    await assert.rejects(client.listTools(), /offers more than 1000 tools or 8 MiB of tool definitions/);
+  } finally { await client.close(); }
+});
+
+test("a reconfigured server starts again only after its old process is gone", async () => {
+  const pool = new ExternalMcpPool({ retryAfterMs: 0 });
+  try {
+    // --ignore-eof makes the old process outlive stdin, so retiring it takes the client's grace period and a kill.
+    const config = { ...server("a", "Fixture"), args: [fixture, "--name", "fixture", "--ignore-eof"] };
+    const first = await status(await open(pool, [config]));
+    void pool.reconcile([]);
+    const second = await status(await open(pool, [{ ...config, args: [...config.args, "--changed"] }]));
+    assert.notEqual(second.pid, first.pid);
+    assert.equal(alive(first.pid), false, "the replacement never runs beside the process it replaces");
+  } finally { await pool.dispose(); }
+});
+
 test("a missing command fails with a clear error", async () => {
   const client = new McpStdioClient({ command: "toneshuttle-definitely-missing-mcp-server", label: "Missing" });
   await assert.rejects(client.connect(), /Missing.*(not found|ENOENT)/s);

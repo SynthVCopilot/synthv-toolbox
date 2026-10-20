@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { BRAND } from "../brand.js";
-import { isJsonRpcResponse, MAX_MESSAGE_LENGTH, MAX_TOOL_PAGES, reapProcessTree, serverEnvironment, spawnPlan, STDIO_MCP_PROTOCOL_VERSIONS } from "./mcp-stdio-client.js";
+import { isJsonRpcResponse, MAX_MESSAGE_LENGTH, MAX_TOOL_DEFINITION_BYTES, MAX_TOOL_PAGES, MAX_TOOLS, reapProcessTree, serverEnvironment, spawnPlan, STDIO_MCP_PROTOCOL_VERSIONS } from "./mcp-stdio-client.js";
 
 export interface StdioMcpServerConfig {
   command: string;
@@ -121,10 +121,14 @@ export async function probeStdioMcpServer(config: StdioMcpServerConfig, options:
       const capabilities = isRecord(initialized.capabilities) ? initialized.capabilities : {};
       if (capabilities.tools !== undefined) {
         let cursor: string | undefined;
+        let definitionBytes = 0;
         for (let page = 0; page < MAX_TOOL_PAGES; page++) {
           const listed = await request("tools/list", cursor ? { cursor } : {});
           if (!Array.isArray(listed.tools)) throw new Error("tools/list did not return a tools array.");
           tools.push(...listed.tools.map((tool) => isRecord(tool) && typeof tool.name === "string" ? tool.name : "(unnamed)"));
+          definitionBytes += JSON.stringify(listed.tools).length;
+          // The agent's client stops at the same bounds, so a server past them must not pass the test.
+          if (tools.length > MAX_TOOLS || definitionBytes > MAX_TOOL_DEFINITION_BYTES) return { ...failure(`The server offers more than ${MAX_TOOLS} tools or ${MAX_TOOL_DEFINITION_BYTES / 1024 / 1024} MiB of tool definitions.`, `${tools.length} tools listed before giving up.`), serverInfo: info };
           cursor = typeof listed.nextCursor === "string" && listed.nextCursor ? listed.nextCursor : undefined;
           if (!cursor) break;
         }

@@ -28,7 +28,9 @@ export class HostCapabilities {
     if (operation === "queue_cover") return true;
     if (operation !== "retry_media_task") return false;
     const jobs = await this.creative.invoke("media_tasks", {});
-    return Array.isArray(jobs) && jobs.some(job => isObject(job) && job.id === params.id && job.kind === "cover");
+    // cover-service accepts either name for the job, so the gate must too.
+    const id = params.id ?? params.taskId;
+    return Array.isArray(jobs) && jobs.some(job => isObject(job) && job.id === id && job.kind === "cover");
   }
 
   private async internal(capability: string, operation: string, params: Data): Promise<JsonValue> {

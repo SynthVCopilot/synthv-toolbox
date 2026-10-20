@@ -375,7 +375,8 @@ function projectUrl(value: unknown): string { const base = BRAND.repositoryUrl; 
 function modelCatalog() { const values: Record<AiProviderId, string[]> = { anthropic: [["cla", "ude-sonnet-4-6"].join(""), ["cla", "ude-opus-4-6"].join("")], "openai-codex": [["g", "pt-5.6-terra"].join(""), ["g", "pt-6-astra"].join("")], workbuddy: ["glm-5.2"], traecode: [] }; return { models: async (provider: AiProviderId) => values[provider], opencode: async () => ({ generatedAt: Date.now(), providers: Object.entries(values).map(([id, models]) => ({ id, name: id, modelCount: models.length, package: "@model-auth/providers", models })) }) }; }
 async function authorizeProvider(provider: AiProviderId, signal: AbortSignal) { const options = { openExternal: (url: string) => shell.openExternal(url), signal }; const credential = provider === "anthropic" ? await authorizeAnthropic(options) : provider === "openai-codex" ? await authorizeOpenAI(options) : provider === "workbuddy" ? await authorizeWorkBuddy(options) : await authorizeTrae(options); const value = credential as { accountId?: string; label?: string; expires?: number }; return { id: value.accountId, label: value.label ?? provider, secret: JSON.stringify(credential), expiresAt: value.expires }; }
 
-// A start that found another one mid-migration leaves like a second instance; the first shows its window once the move is done.
+// A start still blocked after waiting two minutes for another one's migration leaves; normally it waited for the move and then
+// reaches the lock below, which hands its window to the first instance as for any second launch.
 if (dataDirectory?.busy || !app.requestSingleInstanceLock()) {
   // While the move is deferred this start shares the old folder, so the instance holding the lock is most likely the
   // previous version. It only brings its own window forward and cannot say why, so say it here. Tests run unpackaged.

@@ -283,6 +283,7 @@ test("SynthV-backed creative operations and Cover are refused through MCP and pl
   synthv = true; ai = false;
   await assert.rejects(capabilities.invoke("host.internal", "creative", "queue_cover", { request: {} }), (error) => error.clientSafe === true && /AI mode/.test(error.message));
   await assert.rejects(capabilities.invoke("host.internal", "creative", "retry_media_task", { id: "c1" }), /AI mode/);
+  await assert.rejects(capabilities.invoke("host.internal", "creative", "retry_media_task", { taskId: "c1" }), /AI mode/, "the cover service accepts taskId too, so the gate resolves it");
   assert.deepEqual(await capabilities.invoke("host.internal", "creative", "run_score_to_synthv", {}), { ok: true, params: {} });
   ai = true;
   assert.deepEqual(await capabilities.invoke("host.internal", "creative", "queue_cover", { request: {} }), { ok: true, params: { request: {} } });

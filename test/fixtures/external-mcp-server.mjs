@@ -85,6 +85,8 @@ function handle(message) {
   if (method === "ping") return reply(id, {});
   // A resources-only server: it never offered tools, so asking for them is an error.
   if (method === "tools/list" && flag("--no-tools")) return send({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } });
+  // --many-tools offers one tool more than the client keeps from a server.
+  if (method === "tools/list" && flag("--many-tools")) return reply(id, { tools: Array.from({ length: 1_001 }, (_, index) => ({ name: `tool_${index}`, inputSchema: { type: "object" } })) });
   // --loose-list answers tools/list without the JSON-RPC envelope, like a log object that happens to carry the id.
   if (method === "tools/list" && flag("--loose-list")) return send({ id, result: { tools: [] } });
   // --big-line answers tools/list with one line longer than the client's limit in the tests (2 MiB).

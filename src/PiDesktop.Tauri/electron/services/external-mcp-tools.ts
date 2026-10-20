@@ -66,6 +66,8 @@ export class ExternalMcpPool {
 
   private readonly entries = new Map<string, PoolEntry>();
   private readonly closing = new Set<Promise<void>>();
+  /** Per server id, the shutdown of a removed or reconfigured process; its replacement starts only after it, so the two never overlap on ports, locks or files. */
+  private readonly retiring = new Map<string, Promise<void>>();
   private order: string[] = [];
 
   constructor(private readonly options: ExternalMcpPoolOptions = {}) {}
@@ -76,7 +78,7 @@ export class ExternalMcpPool {
     const dropped: Promise<void>[] = [];
     for (const [id, entry] of this.entries) {
       const next = wanted.get(id);
-      if (!next || fingerprint(next) !== entry.fingerprint) { this.entries.delete(id); dropped.push(this.drop(entry)); }
+      if (!next || fingerprint(next) !== entry.fingerprint) { this.entries.delete(id); dropped.push(this.awaitRetirement(id, this.drop(entry))); }
     }
     for (const config of wanted.values()) {
       const entry = this.entries.get(config.id);
@@ -138,6 +140,8 @@ export class ExternalMcpPool {
         // The dead client may still be reaping a server its launcher left behind; dispose() waits for that.
         const stale = entry.client;
         if (stale) { entry.client = undefined; void this.retire(stale); }
+        // Turning AI mode off and on again, or editing a server, retires the old process first; it may take seconds to reap.
+        await this.retiring.get(entry.config.id);
         const { command, args, env, cwd, name } = entry.config;
         const client: McpStdioClient = new McpStdioClient({
           command, args, ...(env ? { env } : {}), ...(cwd ? { cwd } : {}), label: name,
@@ -160,6 +164,13 @@ export class ExternalMcpPool {
     const client = entry.client;
     entry.client = undefined;
     return client ? this.retire(client) : Promise.resolve();
+  }
+
+  private awaitRetirement(id: string, closing: Promise<void>): Promise<void> {
+    const chain = Promise.all([this.retiring.get(id), closing]).then(() => undefined);
+    this.retiring.set(id, chain);
+    void chain.finally(() => { if (this.retiring.get(id) === chain) this.retiring.delete(id); });
+    return chain;
   }
 
   private retire(client: McpStdioClient): Promise<void> {

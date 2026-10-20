@@ -16,7 +16,11 @@ import { join, relative } from "node:path";
 export const MIGRATION_MARKER = ".toneshuttle-migration.json";
 /** Serializes concurrent starts of the new version, which would otherwise race on the same move. */
 const LOCK_DIRECTORY = ".toneshuttle-migration.lock";
-const LOCK_WAIT_MS = 5000;
+/**
+ * How long a start waits for another start's migration. Moves take well under a second, so this only matters when the
+ * first start is slow; afterwards the waiting start reaches the single-instance lock and hands its window to the first.
+ */
+const LOCK_WAIT_MS = 120_000;
 /** A lock without a readable owner pid (its owner crashed before writing it) is stale after this. */
 const LOCK_STALE_MS = 30000;
 /** Even a live owner pid stops counting after this: a rename and a few JSON rewrites never take that long, but a reused pid could. */
