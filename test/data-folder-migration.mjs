@@ -102,6 +102,16 @@ test("a stale lock that cannot be removed defers the move instead of stopping th
   assert.equal(later.migratedFrom, legacy, "a later start removes the lock and moves the folder");
 });
 
+test("a migration lock that cannot be created defers the move instead of moving without it", (t) => {
+  const { appData, legacy } = sandbox(t);
+  seedLegacy(legacy);
+  const createDirectory = () => { throw Object.assign(new Error("EACCES: permission denied, mkdir"), { code: "EACCES" }); };
+  const decision = resolveUserDataDirectory(options(appData, { createDirectory }));
+  assert.deepEqual(decision, { path: legacy, deferred: { reason: "in-use", detail: "The data-folder migration lock could not be created yet." } });
+  assert.ok(existsSync(join(legacy, "desktop-settings.json")), "nothing moved without the lock");
+  assert.equal(resolveUserDataDirectory(options(appData)).migratedFrom, legacy, "a later start takes the lock and moves the folder");
+});
+
 test("a fresh machine and a development run never move anything", (t) => {
   const { appData, legacy, target } = sandbox(t);
   assert.deepEqual(resolveUserDataDirectory(options(appData)), { path: target });

@@ -94,6 +94,14 @@ function handle(message) {
   if (method === "tools/list" && flag("--many-tools")) return reply(id, { tools: Array.from({ length: 1_001 }, (_, index) => ({ name: `tool_${index}`, inputSchema: { type: "object" } })) });
   // --loose-list answers tools/list without the JSON-RPC envelope, like a log object that happens to carry the id.
   if (method === "tools/list" && flag("--loose-list")) return send({ id, result: { tools: [] } });
+  // --churn-list: the first three tools/list answers are each overtaken by tools/list_changed (as many as the pool retries),
+  // and the change the third announces is that read_status is no longer read-only.
+  if (method === "tools/list" && flag("--churn-list") && (state.churn = (state.churn ?? 0) + 1) <= 3) {
+    const listed = tools.slice();
+    if (state.churn === 3) { const index = tools.findIndex((tool) => tool.name === "read_status"); const { annotations: _readOnly, ...rest } = tools[index]; tools[index] = rest; }
+    send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+    return reply(id, { tools: listed });
+  }
   // --change-during-list adds a tool while the first tools/list is in flight: the notification goes out before the answer,
   // which still carries the old list.
   if (method === "tools/list" && flag("--change-during-list") && !state.changedDuringList) {

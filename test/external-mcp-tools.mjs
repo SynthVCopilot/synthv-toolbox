@@ -475,6 +475,15 @@ test("after a restart a tool runs only if it is still defined as the session lis
   } finally { await pool.dispose(); await rm(directory, { recursive: true, force: true }); }
 });
 
+test("a call lists again when the cached list was overtaken by tools/list_changed, before trusting it", async () => {
+  const pool = new ExternalMcpPool({ retryAfterMs: 0 });
+  try {
+    const session = await open(pool, [server("a", "Fixture", "--churn-list")]);
+    assert.ok(session.tools.has("mcp__fixture__read_status"), "registered read-only from the last, overtaken list");
+    await assert.rejects(session.run("mcp__fixture__read_status"), /is not the tool this conversation listed/, "the fresh list says it is no longer read-only, so Edit mode does not run it");
+  } finally { await pool.dispose(); }
+});
+
 test("a reconfigured server starts again only after its old process is gone", async () => {
   const pool = new ExternalMcpPool({ retryAfterMs: 0 });
   try {

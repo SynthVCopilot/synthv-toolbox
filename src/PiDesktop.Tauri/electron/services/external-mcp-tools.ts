@@ -135,7 +135,8 @@ export class ExternalMcpPool {
     if (expected?.tool) {
       // A replaced process, or one that announced new tools, may define this tool differently: list again, then call only
       // the definition the session registered.
-      if (!entry.tools) { await untilAborted(this.load(entry), signal); client = await untilAborted(this.connected(entry), signal); }
+      // load() keeps the last answer of a server that kept announcing changes, but marks it stale (listedAt behind changes).
+      if (!entry.tools || entry.listedAt !== (entry.changes ?? 0)) { await untilAborted(this.load(entry), signal); client = await untilAborted(this.connected(entry), signal); }
       const current = entry.tools?.find(tool => tool.name === toolName);
       if (!current || toolIdentity(current) !== toolIdentity(expected.tool)) throw new Error(`"${toolName}" from external MCP server "${entry.config.name}" is not the tool this conversation listed: the server restarted or changed its tools${entry.error ? ` (${entry.error})` : ""}. Its current tools are available from the next message.`);
     }

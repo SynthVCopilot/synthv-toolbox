@@ -48,6 +48,8 @@ export interface DataDirectoryOptions {
   sleep?: (milliseconds: number) => void;
   isProcessAlive?: (pid: number) => boolean;
   now?: () => Date;
+  /** Creates the migration lock; tests make it fail like a folder antivirus briefly denies. */
+  createDirectory?: (path: string) => void;
   /** Removes the migration lock; tests make it fail like a file that antivirus or an indexer holds. */
   removeDirectory?: (path: string) => void;
 }
@@ -124,8 +126,14 @@ function withMigrationLock(options: DataDirectoryOptions, target: string, work: 
   const lock = join(options.appData, LOCK_DIRECTORY);
   const sleep = options.sleep ?? sleepSync;
   for (let waited = 0; ; waited += 100) {
-    try { mkdirSync(lock); break; } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") return work();
+    try { (options.createDirectory ?? mkdirSync)(lock); break; } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        // The lock is what keeps two starts from racing the rename; without it this start keeps the old folder and a later
+        // start moves it.
+        console.warn(`Could not create the data-folder migration lock at ${lock}:`, error);
+        const legacy = findLegacy(options);
+        return { path: holdsAppData(target) || !legacy ? target : legacy, deferred: { reason: "in-use", detail: "The data-folder migration lock could not be created yet." } };
+      }
       if (staleLock(lock, options)) {
         // Antivirus or an indexer may still hold part of the dead start's lock; the move waits for a later start.
         try { (options.removeDirectory ?? removeWithRetries)(lock); continue; } catch (error) {
