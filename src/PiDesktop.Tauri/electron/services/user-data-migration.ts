@@ -126,7 +126,14 @@ function withMigrationLock(options: DataDirectoryOptions, target: string, work: 
   for (let waited = 0; ; waited += 100) {
     try { mkdirSync(lock); break; } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") return work();
-      if (staleLock(lock, options)) { rmSync(lock, { recursive: true, force: true }); continue; }
+      if (staleLock(lock, options)) {
+        // Antivirus or an indexer may still hold part of the dead start's lock; the move waits for a later start.
+        try { (options.removeDirectory ?? removeWithRetries)(lock); continue; } catch (error) {
+          console.warn(`Could not remove the stale data-folder migration lock at ${lock}:`, error);
+          const legacy = findLegacy(options);
+          return { path: holdsAppData(target) || !legacy ? target : legacy, deferred: { reason: "in-use", detail: "A lock left by an earlier start could not be removed yet." } };
+        }
+      }
       if (waited >= LOCK_WAIT_MS) {
         const legacy = findLegacy(options);
         return { path: holdsAppData(target) || !legacy ? target : legacy, deferred: { reason: "in-use", detail: "Another start of the app is moving the data folder." }, busy: true };

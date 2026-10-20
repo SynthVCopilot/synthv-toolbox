@@ -17,7 +17,8 @@ export interface McpServerConfig {
   cwd?: string;
 }
 
-export interface ExternalMcpServerTools { id: string; name: string; tools: McpToolInfo[]; error?: string; }
+/** `fingerprint` identifies the launch configuration the tools were listed from; calls from a session carry it back. */
+export interface ExternalMcpServerTools { id: string; name: string; tools: McpToolInfo[]; error?: string; fingerprint?: string; }
 
 export interface ExternalMcpPoolOptions {
   /** clientInfo.version announced to servers (the app version). */
@@ -114,13 +115,16 @@ export class ExternalMcpPool {
   async tools(): Promise<{ servers: ExternalMcpServerTools[] }> {
     const entries = this.order.map(id => this.entries.get(id)).filter((entry): entry is PoolEntry => entry !== undefined);
     await Promise.all(entries.map(entry => this.load(entry)));
-    return { servers: entries.map(entry => ({ id: entry.config.id, name: entry.config.name, tools: entry.tools ?? [], ...(entry.error ? { error: entry.error } : {}) })) };
+    return { servers: entries.map(entry => ({ id: entry.config.id, name: entry.config.name, tools: entry.tools ?? [], ...(entry.error ? { error: entry.error } : {}), fingerprint: entry.fingerprint })) };
   }
 
   /** Respawns the server once when its process died since the last call; a call that was already sent is never replayed. */
-  async call(serverId: string, toolName: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpCallToolResult> {
+  /** `fingerprint`: the configuration the calling session listed this tool from; a server edited since is not called. */
+  async call(serverId: string, toolName: string, args: Record<string, unknown>, signal?: AbortSignal, fingerprint?: string): Promise<McpCallToolResult> {
     const entry = this.entries.get(serverId);
     if (!entry || entry.removed) throw new Error(`External MCP server "${serverId}" is no longer enabled. Ask the user to enable it on the Connections page.`);
+    // The session registered this tool, its schema and its read-only mark from the old process; the new one may differ.
+    if (fingerprint !== undefined && entry.fingerprint !== fingerprint) throw new Error(`External MCP server "${entry.config.name}" was reconfigured after this conversation listed its tools. Its current tools are available from the next message.`);
     signal?.throwIfAborted();
     // Reaping a dead server can take seconds on Windows; Stop must not wait for it.
     const client = await untilAborted(this.connected(entry), signal);
@@ -266,7 +270,7 @@ export function createExternalMcpToolsExtension(options: ExternalMcpToolsOptions
           execute: async (_callId, raw, signal): Promise<PiToolResult> => {
             signal?.throwIfAborted();
             if (!readOnly && options.workMode() !== "solo") throw new Error(`"${tool.name}" from external MCP server "${server.name}" is not marked read-only, so it may change data outside ${BRAND.productName}. Edit mode requires approval for changes, and external MCP tools do not support approval yet. Ask the user to switch to Solo mode, or use request_input to ask how to proceed.`);
-            const result = await options.pool.call(server.id, tool.name, isRecord(raw) ? raw : {}, signal);
+            const result = await options.pool.call(server.id, tool.name, isRecord(raw) ? raw : {}, signal, server.fingerprint);
             const text = renderMcpResult(result);
             if (result.isError === true) throw new Error(text);
             return { content: [{ type: "text", text }] };

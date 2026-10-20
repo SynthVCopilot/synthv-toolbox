@@ -443,6 +443,19 @@ test("a Test that finds a changed tool list makes existing sessions rebuild", as
   } finally { await pool.dispose(); }
 });
 
+test("a conversation's tools are not called on a server reconfigured after it listed them", async () => {
+  const pool = new ExternalMcpPool({ retryAfterMs: 0 });
+  try {
+    const config = server("a", "Fixture");
+    const session = await open(pool, [config]);
+    assert.ok(JSON.parse(output(await session.run("mcp__fixture__read_status"))).pid);
+    await pool.reconcile([{ ...config, args: [...config.args, "--changed"] }]);
+    await assert.rejects(session.run("mcp__fixture__read_status"), /was reconfigured after this conversation listed its tools/, "its schema and read-only mark came from the old configuration");
+    const fresh = await open(pool, [{ ...config, args: [...config.args, "--changed"] }]);
+    assert.ok(JSON.parse(output(await fresh.run("mcp__fixture__read_status"))).argv.includes("--changed"), "the next session uses the new one");
+  } finally { await pool.dispose(); }
+});
+
 test("a reconfigured server starts again only after its old process is gone", async () => {
   const pool = new ExternalMcpPool({ retryAfterMs: 0 });
   try {

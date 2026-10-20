@@ -88,6 +88,20 @@ test("a migration lock that cannot be removed is left for the next start instead
   assert.equal(next.busy, undefined);
 });
 
+test("a stale lock that cannot be removed defers the move instead of stopping this start", (t) => {
+  const { appData, legacy } = sandbox(t);
+  seedLegacy(legacy);
+  const lock = join(appData, ".toneshuttle-migration.lock");
+  mkdirSync(lock);
+  writeFileSync(join(lock, "owner"), "4242");
+  const removeDirectory = () => { throw Object.assign(new Error("EPERM: operation not permitted, rmdir"), { code: "EPERM" }); };
+  const decision = resolveUserDataDirectory(options(appData, { isProcessAlive: () => false, removeDirectory }));
+  assert.deepEqual(decision, { path: legacy, deferred: { reason: "in-use", detail: "A lock left by an earlier start could not be removed yet." } }, "this start opens the old folder, not busy, so it does not quit as a second instance");
+  assert.ok(existsSync(join(legacy, "desktop-settings.json")), "nothing moved");
+  const later = resolveUserDataDirectory(options(appData, { isProcessAlive: () => false }));
+  assert.equal(later.migratedFrom, legacy, "a later start removes the lock and moves the folder");
+});
+
 test("a fresh machine and a development run never move anything", (t) => {
   const { appData, legacy, target } = sandbox(t);
   assert.deepEqual(resolveUserDataDirectory(options(appData)), { path: target });

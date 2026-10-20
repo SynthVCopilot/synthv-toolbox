@@ -343,6 +343,9 @@ async function initializeServices(): Promise<void> {
         bridge.replace(loaded, bridgeLoadError === undefined);
         desktop.bridgeLoaded(bridgeLoadError);
       } else if (!wanted && bridge.loaded) await bridge.replace(bridgeOff(), false).close();
+      else return;
+      // The settings reply went out before this finished; Settings shows the load result (or failure) only after a refresh.
+      emitToRenderer("integrations.changed", null);
     }).catch((reason: unknown) => { console.error("Unable to switch the SynthV bridge", reason); });
   }
   await desktop.load();

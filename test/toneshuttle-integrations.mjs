@@ -184,6 +184,7 @@ test("the bridge component is loaded only while the integration is not Off, and 
   assert.match(main, /const startOff = await savedIntegrationPreference\(userData, "synthv"\) === "off";/);
   assert.match(main, /startOff \? new SwitchableBridge\(bridgeOff\(\), false\) : new SwitchableBridge\(await loadBridge\(\), bridgeLoadError === undefined\)/);
   assert.match(main, /followIntegration\(\);\r?\n  \}, dataDirectory\);/, "settings changes load or close the component");
+  assert.match(main, /else return;\r?\n[^\n]*\r?\n      emitToRenderer\("integrations\.changed", null\);/, "and Settings learns how the load ended");
 });
 
 test("a refresh reports a Bridge that connects while the integration is already on", async () => {
