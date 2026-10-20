@@ -11,7 +11,7 @@ type Data = Record<string, any>;
 type TaskExecutor = (kind: string, args: Data) => Promise<Data>;
 export interface CreativeService { invoke(command: string, args: Data): Promise<unknown>; dispose?(): void; }
 
-export function createCreativeService(dataRoot: string, executeTask: TaskExecutor = async command => { throw new Error(`No component executor is configured for ${command}.`); }, bridge?: EmbeddedBridge, cover?: { invoke(command: string, args: Data): Promise<unknown> }): CreativeService {
+export function createCreativeService(dataRoot: string, executeTask: TaskExecutor = async command => { throw new Error(`No component executor is configured for ${command}.`); }, bridge?: EmbeddedBridge, cover?: { invoke(command: string, args: Data): Promise<unknown> }, options: { backupsEnabled?: () => boolean; backupIntervalMs?: number } = {}): CreativeService {
   const root = resolve(dataRoot), lyrics = createLyricService(root), connected = bridge ? createCreativeBridge(bridge) : undefined;
   let queue: Promise<unknown> = Promise.resolve();
   const serialize = <T>(fn: () => Promise<T>) => { const next = queue.then(fn, fn); queue = next.catch(() => undefined); return next; };
@@ -68,10 +68,11 @@ export function createCreativeService(dataRoot: string, executeTask: TaskExecuto
   };
   let backingUp = false;
   const timer = setInterval(() => {
-    if (backingUp) return;
+    // .svp backups belong to the SynthV integration: while it is off, tracked projects are neither read nor copied.
+    if (backingUp || options.backupsEnabled?.() === false) return;
     backingUp = true;
     void Promise.all([...tracked.keys()].map(path => track(path).catch(() => undefined))).finally(() => { backingUp = false; });
-  }, 60_000);
+  }, options.backupIntervalMs ?? 60_000);
   timer.unref();
   const execute = async (command: string, args: Data): Promise<Data> => {
     if (typeof args.projectPath === "string" && args.projectPath) await track(args.projectPath);

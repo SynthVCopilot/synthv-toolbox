@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile, symlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { createCreativeService } from "../src/PiDesktop.Tauri/dist/electron/services/creative-service.js";
 
 const root = await mkdtemp(join(tmpdir(), "creative-service-"));
@@ -47,3 +48,26 @@ try {
   }
   console.log("Creative result, history, checkpoint integrity, no-overwrite and batch contracts passed.");
 } finally { service.dispose(); await rm(root, { recursive: true, force: true }); }
+
+// Project backups belong to the SynthV integration: while it is off, the background timer leaves tracked projects alone.
+{
+  const backupRoot = await mkdtemp(join(tmpdir(), "creative-backups-"));
+  let enabled = true;
+  const paused = createCreativeService(join(backupRoot, "data"), async () => ({ kind: "project-probe", summary: "ok", data: {} }), undefined, undefined, { backupsEnabled: () => enabled, backupIntervalMs: 50 });
+  try {
+    const song = join(backupRoot, "song.svp");
+    await writeFile(song, JSON.stringify({ version: 1 }));
+    await paused.invoke("run_project_probe", { projectPath: song });
+    const count = async () => (await paused.invoke("list_project_checkpoints", {})).length;
+    const tracked = await count();
+    enabled = false;
+    await delay(150); // a backup already under way finishes first
+    await writeFile(song, JSON.stringify({ version: 2 }));
+    await delay(400);
+    assert.equal(await count(), tracked, "no background backup while SynthV is off");
+    enabled = true;
+    for (let waited = 0; await count() === tracked && waited < 3_000; waited += 50) await delay(50);
+    assert.equal(await count(), tracked + 1, "backups resume when it is back on");
+    console.log("Background project backups pause while SynthV is off.");
+  } finally { paused.dispose(); await rm(backupRoot, { recursive: true, force: true }); }
+}

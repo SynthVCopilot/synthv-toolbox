@@ -2,6 +2,7 @@
 // Flags: --name <label>, --page-size <n>, --crash (exit before initialize), --hang (never answer initialize),
 // --ignore-eof (keep running after stdin closes, so the client must kill the process tree),
 // --fragmented (every message travels with a log notification, coalesced or batched, in chunks that split a line and a UTF-8 character).
+import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -20,8 +21,10 @@ const waiting = new Map();
 let serverRequestId = 0;
 
 const readOnly = { readOnlyHint: true };
+// FIXTURE_NOT_READONLY names a file; a server started after it exists no longer marks read_status read-only.
+const readStatusReadOnly = !(process.env.FIXTURE_NOT_READONLY && existsSync(process.env.FIXTURE_NOT_READONLY));
 const tools = [
-  { name: "read_status", title: "Read status", description: "Report fixture state.", inputSchema: { type: "object", properties: {} }, annotations: readOnly },
+  { name: "read_status", title: "Read status", description: "Report fixture state.", inputSchema: { type: "object", properties: {} }, ...(readStatusReadOnly ? { annotations: readOnly } : {}) },
   { name: "write_note", description: "Store a note.", inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } },
   { name: "choose_shape", description: "Tool with a top-level oneOf schema.", inputSchema: { oneOf: [{ type: "object", properties: { circle: { type: "number" } }, required: ["circle"] }, { type: "object", properties: { square: { type: "number" } }, required: ["square"] }] }, annotations: readOnly },
   { name: LONG_NAME, description: "Tool with a long, odd name.", inputSchema: { type: "object", properties: {} }, annotations: readOnly },

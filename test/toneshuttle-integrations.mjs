@@ -314,7 +314,7 @@ test("the agent's SynthV tools check the integration on every call, so turning i
   assert.equal((await bridge.status()).connected, true, "status and install stay available");
   const main = await readFile(join(root, "src/PiDesktop.Tauri/electron/main.ts"), "utf8");
   assert.match(main, /const gatedSynthvBridge = gatedBridge\(bridge, \(\) => desktop\.synthvEnabled\(\)\)/);
-  for (const use of ["createCoverHost(gatedSynthvBridge", "execute: async (item) => gatedSynthvBridge.tools", "createSynthVToolsExtension({ bridge: gatedSynthvBridge", "}, gatedSynthvBridge, cover);"]) assert.ok(main.includes(use), use);
+  for (const use of ["createCoverHost(gatedSynthvBridge", "execute: async (item) => gatedSynthvBridge.tools", "createSynthVToolsExtension({ bridge: gatedSynthvBridge", "}, gatedSynthvBridge, cover, { backupsEnabled: () => desktop.synthvEnabled() });"]) assert.ok(main.includes(use), use);
   assert.match(main, /invoke: \(command, args\) => desktop\.synthvEnabled\(\) \? cover\.invoke\(command, args\) : Promise\.reject/);
 });
 

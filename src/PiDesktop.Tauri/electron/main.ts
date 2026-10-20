@@ -292,7 +292,7 @@ async function initializeServices(): Promise<void> {
   const creative = createCreativeService(creativeRoot, async (command, args) => {
     const runtime = await creativeRuntime.status();
     return createComponentExecutor(componentsRoot, runtime.ready ? runtime.pythonPath : undefined, undefined, { dataRoot: creativeRoot })(command, args);
-  }, gatedSynthvBridge, cover);
+  }, gatedSynthvBridge, cover, { backupsEnabled: () => desktop.synthvEnabled() });
   const delivery = createSynthVDeliveryRegistry();
   // One process per enabled external server, shared by all sessions; nothing spawns until a session needs it.
   const externalMcp = new ExternalMcpPool({ clientVersion: app.getVersion() });

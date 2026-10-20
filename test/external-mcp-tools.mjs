@@ -456,6 +456,25 @@ test("a conversation's tools are not called on a server reconfigured after it li
   } finally { await pool.dispose(); }
 });
 
+test("after a restart a tool runs only if it is still defined as the session listed it", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "toneshuttle mcp restart "));
+  const notReadOnly = join(directory, "not-read-only");
+  const pool = new ExternalMcpPool({ retryAfterMs: 0 });
+  try {
+    const config = { ...server("a", "Fixture"), env: { FIXTURE_NOT_READONLY: notReadOnly } };
+    const session = await open(pool, [config]);
+    const first = await status(session);
+    // The restarted server drops read_status's read-only mark, which is what let this Edit-mode session run it.
+    await writeFile(notReadOnly, "1");
+    process.kill(first.pid);
+    assert.ok(await waitDead(first.pid));
+    await delay(300);
+    await assert.rejects(session.run("mcp__fixture__read_status"), /is not the tool this conversation listed/);
+    const fresh = await open(pool, [config], "solo");
+    assert.ok((await status(fresh)).pid, "a session built afterwards registers the current definition");
+  } finally { await pool.dispose(); await rm(directory, { recursive: true, force: true }); }
+});
+
 test("a reconfigured server starts again only after its old process is gone", async () => {
   const pool = new ExternalMcpPool({ retryAfterMs: 0 });
   try {

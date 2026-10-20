@@ -119,15 +119,26 @@ export class ExternalMcpPool {
   }
 
   /** Respawns the server once when its process died since the last call; a call that was already sent is never replayed. */
-  /** `fingerprint`: the configuration the calling session listed this tool from; a server edited since is not called. */
-  async call(serverId: string, toolName: string, args: Record<string, unknown>, signal?: AbortSignal, fingerprint?: string): Promise<McpCallToolResult> {
+  /**
+   * `expected` is what the calling session listed: the server's configuration and the tool as registered (its schema and
+   * read-only mark decided whether Edit mode may run it). A server edited since, or a tool now defined differently, is not called.
+   */
+  async call(serverId: string, toolName: string, args: Record<string, unknown>, signal?: AbortSignal, expected?: { fingerprint?: string; tool?: McpToolInfo }): Promise<McpCallToolResult> {
+    const fingerprint = expected?.fingerprint;
     const entry = this.entries.get(serverId);
     if (!entry || entry.removed) throw new Error(`External MCP server "${serverId}" is no longer enabled. Ask the user to enable it on the Connections page.`);
     // The session registered this tool, its schema and its read-only mark from the old process; the new one may differ.
     if (fingerprint !== undefined && entry.fingerprint !== fingerprint) throw new Error(`External MCP server "${entry.config.name}" was reconfigured after this conversation listed its tools. Its current tools are available from the next message.`);
     signal?.throwIfAborted();
     // Reaping a dead server can take seconds on Windows; Stop must not wait for it.
-    const client = await untilAborted(this.connected(entry), signal);
+    let client = await untilAborted(this.connected(entry), signal);
+    if (expected?.tool) {
+      // A replaced process, or one that announced new tools, may define this tool differently: list again, then call only
+      // the definition the session registered.
+      if (!entry.tools) { await untilAborted(this.load(entry), signal); client = await untilAborted(this.connected(entry), signal); }
+      const current = entry.tools?.find(tool => tool.name === toolName);
+      if (!current || toolIdentity(current) !== toolIdentity(expected.tool)) throw new Error(`"${toolName}" from external MCP server "${entry.config.name}" is not the tool this conversation listed: the server restarted or changed its tools${entry.error ? ` (${entry.error})` : ""}. Its current tools are available from the next message.`);
+    }
     return client.callTool(toolName, args, signal, this.options.callTimeoutMs);
   }
 
@@ -270,7 +281,7 @@ export function createExternalMcpToolsExtension(options: ExternalMcpToolsOptions
           execute: async (_callId, raw, signal): Promise<PiToolResult> => {
             signal?.throwIfAborted();
             if (!readOnly && options.workMode() !== "solo") throw new Error(`"${tool.name}" from external MCP server "${server.name}" is not marked read-only, so it may change data outside ${BRAND.productName}. Edit mode requires approval for changes, and external MCP tools do not support approval yet. Ask the user to switch to Solo mode, or use request_input to ask how to proceed.`);
-            const result = await options.pool.call(server.id, tool.name, isRecord(raw) ? raw : {}, signal, server.fingerprint);
+            const result = await options.pool.call(server.id, tool.name, isRecord(raw) ? raw : {}, signal, { fingerprint: server.fingerprint, tool });
             const text = renderMcpResult(result);
             if (result.isError === true) throw new Error(text);
             return { content: [{ type: "text", text }] };
@@ -472,6 +483,9 @@ function hash(value: string): string { return createHash("sha256").update(value)
 function strings(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; }
 function slug(value: string): string { return value.normalize("NFKD").replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").toLowerCase().slice(0, 20).replace(/_+$/, ""); }
 function toolKey(serverId: string, toolName: string): string { return `${serverId}\u0000${toolName}`; }
+/** What a session relies on from a tool it registered: the arguments' schema and whether Edit mode may run it. */
+function toolIdentity(tool: McpToolInfo): string { return JSON.stringify([tool.inputSchema ?? null, tool.annotations?.readOnlyHint === true]); }
+
 /** Settles with the promise, or rejects as soon as the signal aborts; the promise itself keeps running for later callers. */
 function untilAborted<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
   if (!signal) return promise;
