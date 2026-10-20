@@ -96,7 +96,8 @@ function handle(message) {
   if (method === "tools/list" && flag("--loose-list")) return send({ id, result: { tools: [] } });
   // --churn-list: the first three tools/list answers are each overtaken by tools/list_changed (as many as the pool retries),
   // and the change the third announces is that read_status is no longer read-only.
-  if (method === "tools/list" && flag("--churn-list") && (state.churn = (state.churn ?? 0) + 1) <= 3) {
+  // --churn-always overtakes every answer, as a server stuck announcing changes would.
+  if (method === "tools/list" && (flag("--churn-always") || (flag("--churn-list") && (state.churn = (state.churn ?? 0) + 1) <= 3))) {
     const listed = tools.slice();
     if (state.churn === 3) { const index = tools.findIndex((tool) => tool.name === "read_status"); const { annotations: _readOnly, ...rest } = tools[index]; tools[index] = rest; }
     send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });

@@ -484,6 +484,14 @@ test("a call lists again when the cached list was overtaken by tools/list_change
   } finally { await pool.dispose(); }
 });
 
+test("a call is refused while a server keeps announcing tool changes faster than they can be listed", async () => {
+  const pool = new ExternalMcpPool({ retryAfterMs: 0 });
+  try {
+    const session = await open(pool, [server("a", "Fixture", "--churn-always")]);
+    await assert.rejects(session.run("mcp__fixture__read_status"), /keeps changing its tools faster than they can be listed/, "no list vouches for the read-only mark the session registered");
+  } finally { await pool.dispose(); }
+});
+
 test("a reconfigured server starts again only after its old process is gone", async () => {
   const pool = new ExternalMcpPool({ retryAfterMs: 0 });
   try {
