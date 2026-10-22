@@ -33,7 +33,11 @@ jobs:
       version: ${{ steps.run.outputs.version }}
       source_sha: ${{ steps.run.outputs.source_sha }}
       request_id: ${{ steps.ctx.outputs.request_id }}
-      input_digest: ${{ steps.ctx.outputs.input_digest }}
+      source_digest: ${{ steps.ctx.outputs.source_digest }}
+      source_size: ${{ steps.ctx.outputs.source_size }}
+      profile: ${{ steps.ctx.outputs.profile }}
+      profile_revision: ${{ steps.ctx.outputs.profile_revision }}
+      repository_id: ${{ steps.ctx.outputs.repository_id }}
     steps:
       - name: Reject workflow reruns
         if: ${{ github.run_attempt != 1 }}
@@ -88,12 +92,16 @@ jobs:
           node-version: "22.19.0"
       - name: Wait for notarization
         env:
-          SIGNING_API_KEY: ${{ secrets.SIGNING_API_KEY }}
+          GITEDGE_SIGNING_TOKEN: ${{ secrets.GITEDGE_SIGNING_TOKEN }}
           INPUT_BUILD_RUN_ID: ${{ env.BUILD_RUN_ID }}
           INPUT_VERSION: ${{ needs.resolve.outputs.version }}
           INPUT_SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
           INPUT_REQUEST_ID: ${{ needs.resolve.outputs.request_id }}
-          INPUT_INPUT_DIGEST: ${{ needs.resolve.outputs.input_digest }}
+          INPUT_SOURCE_DIGEST: ${{ needs.resolve.outputs.source_digest }}
+          INPUT_SOURCE_SIZE: ${{ needs.resolve.outputs.source_size }}
+          INPUT_PROFILE: ${{ needs.resolve.outputs.profile }}
+          INPUT_PROFILE_REVISION: ${{ needs.resolve.outputs.profile_revision }}
+          INPUT_REPOSITORY_ID: ${{ needs.resolve.outputs.repository_id }}
           INPUT_TIMEOUT_SECONDS: "10800"
         run: node .github/scripts/publish-macos.mjs await
 
@@ -123,12 +131,16 @@ jobs:
       - name: Fetch and verify signed assets
         id: fetch
         env:
-          SIGNING_API_KEY: ${{ secrets.SIGNING_API_KEY }}
+          GITEDGE_SIGNING_TOKEN: ${{ secrets.GITEDGE_SIGNING_TOKEN }}
           INPUT_BUILD_RUN_ID: ${{ env.BUILD_RUN_ID }}
           INPUT_VERSION: ${{ needs.resolve.outputs.version }}
           INPUT_SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
           INPUT_REQUEST_ID: ${{ needs.resolve.outputs.request_id }}
-          INPUT_INPUT_DIGEST: ${{ needs.resolve.outputs.input_digest }}
+          INPUT_SOURCE_DIGEST: ${{ needs.resolve.outputs.source_digest }}
+          INPUT_SOURCE_SIZE: ${{ needs.resolve.outputs.source_size }}
+          INPUT_PROFILE: ${{ needs.resolve.outputs.profile }}
+          INPUT_PROFILE_REVISION: ${{ needs.resolve.outputs.profile_revision }}
+          INPUT_REPOSITORY_ID: ${{ needs.resolve.outputs.repository_id }}
         run: node .github/scripts/publish-macos.mjs fetch
       - name: Create the draft release if the Windows workflow has not
         env:

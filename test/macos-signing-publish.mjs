@@ -2,20 +2,21 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, describe, test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const publish = await import(path.join(root, ".github", "scripts", "publish-macos.mjs"));
+const publish = await import(pathToFileURL(path.join(root, ".github", "scripts", "publish-macos.mjs")).href);
 const { assertStagedSet, assetNames, awaitSigning, fetchSigned, latestMacYml, main, readContext, resolve, validateVerification, verifyMacos } = publish;
 // The updater reads latest-mac.yml with this parser, so the generated file must load through it.
 const yaml = createRequire(path.join(root, "src/PiDesktop.Tauri/node_modules/electron-updater/package.json"))("js-yaml");
 
-const PROJECT = "synthv-toolbox-arm64";
+const GITEDGE_REPOSITORY = "13814fa3-8580-4b5a-803e-a6b1206007ed";
+const PROFILE = "synthv-macos-arm64";
+const PROFILE_REVISION = "b".repeat(40);
 const BUNDLE_ID = "com.synthvcopilot.toolbox";
 const APP = "Synthesizer V Toolbox.app";
 const TEAM_ID = "76DMUAK6J5";
@@ -24,7 +25,7 @@ const REQUEST_ID = "6f1d0c2e-3b4a-4c5d-8e9f-a0b1c2d3e4f5";
 const NOTARIZATION_ID = "11111111-2222-4333-8444-555555555555";
 const INPUT_DIGEST = `sha256:${"b".repeat(64)}`;
 // The final stage consumes the previous stage output, so its report names a different digest than the request.
-const REPORT_INPUT_DIGEST = `sha256:${"a".repeat(64)}`;
+const REPORT_INPUT_DIGEST = INPUT_DIGEST;
 const temps = [];
 after(async () => { await Promise.all(temps.map((dir) => rm(dir, { recursive: true, force: true }))); });
 const temp = (prefix) => { const dir = mkdtempSync(path.join(tmpdir(), prefix)); temps.push(dir); return dir; };
@@ -33,14 +34,14 @@ const noSleep = async () => {};
 
 describe("build run resolution", () => {
   const run = (overrides = {}) => ({
-    id: 77, path: ".github/workflows/desktop.yml@refs/tags/v1.2.3", repository: { id: 5 }, head_repository: { id: 5 },
+    id: 77, path: ".github/workflows/desktop.yml@refs/tags/v1.2.3", repository: { id: 1319908050 }, head_repository: { id: 1319908050 },
     run_attempt: 1, status: "completed", conclusion: "success", event: "push", head_branch: "v1.2.3", head_sha: SHA, ...overrides,
   });
   const resolveWith = (value, env = {}) => resolve({
-    env: { GITHUB_TOKEN: "t", GITHUB_REPOSITORY: "Org/repo", GITHUB_REPOSITORY_ID: "5", INPUT_BUILD_RUN_ID: "77", ...env },
+    env: { GITHUB_TOKEN: "t", GITHUB_REPOSITORY: "SynthVCopilot/synthv-toolbox", GITHUB_REPOSITORY_ID: "1319908050", INPUT_BUILD_RUN_ID: "77", ...env },
     sleep: noSleep,
     fetchImpl: async (url) => {
-      assert.equal(url, "https://api.github.com/repos/Org/repo/actions/runs/77");
+      assert.equal(url, "https://api.github.com/repos/SynthVCopilot/synthv-toolbox/actions/runs/77");
       return new Response(JSON.stringify(value), { status: 200 });
     },
   });
@@ -68,25 +69,27 @@ describe("build run resolution", () => {
   }
 });
 
-describe("signing request hand-off", () => {
+describe("GitEdge signing request hand-off", () => {
   const contextEnv = async (context) => {
     const dir = temp("toolbox-context-");
     await writeFile(path.join(dir, "request.json"), JSON.stringify(context));
     return { INPUT_CONTEXT_DIR: dir, INPUT_BUILD_RUN_ID: "77", INPUT_VERSION: "1.2.3", INPUT_SOURCE_SHA: SHA };
   };
-  const valid = { schema_version: 1, build_run_id: 77, project_id: PROJECT, request_id: REQUEST_ID, input_digest: INPUT_DIGEST, input_size: 10, version: "1.2.3", source_sha: SHA };
+  const valid = {
+    schema_version: 1, build_run_id: 77, repository_id: GITEDGE_REPOSITORY, request_id: REQUEST_ID,
+    profile: PROFILE, profile_revision: PROFILE_REVISION, source_run_id: "77", source_artifact_id: "88",
+    source_digest: INPUT_DIGEST, source_size: 10, version: "1.2.3", source_sha: SHA,
+  };
 
-  test("reads a context that matches the resolved run", async () => {
+  test("reads a context bound to the resolved source run and signing profile", async () => {
     assert.deepEqual(await readContext({ env: await contextEnv(valid) }), valid);
   });
 
   for (const [label, change] of [
-    ["another build run", { build_run_id: 78 }],
-    ["another version", { version: "1.2.4" }],
-    ["another commit", { source_sha: "f".repeat(40) }],
-    ["another project", { project_id: "iris-shell-arm64" }],
-    ["a malformed request id", { request_id: "not-a-uuid" }],
-    ["a malformed digest", { input_digest: "sha256:abc" }],
+    ["another build run", { build_run_id: 78 }], ["another version", { version: "1.2.4" }],
+    ["another commit", { source_sha: "f".repeat(40) }], ["another GitEdge repository", { repository_id: "other" }],
+    ["another profile", { profile: "other" }], ["a malformed profile revision", { profile_revision: "bad" }],
+    ["another source artifact", { source_artifact_id: "not-an-id" }], ["a malformed digest", { source_digest: "sha256:abc" }],
     ["an extra field", { api_key: "secret" }],
   ]) {
     test(`refuses ${label}`, async () => {
@@ -94,115 +97,90 @@ describe("signing request hand-off", () => {
     });
   }
 });
-
-// A signing center status and download surface as described in the center README.
-async function startCenter({ states = [], archive = Buffer.from("signed-archive"), digest = null, headerDigest = null, cutFirstDownload = false, downloadStatus = null, overrides = {}, statusReport = { input_digest: REPORT_INPUT_DIGEST } } = {}) {
+async function startCenter({ states = [], archive = Buffer.from("signed-archive"), digest = null, headerDigest = null, cutFirstDownload = false, downloadStatus = null, overrides = {} } = {}) {
   const log = { ranges: [], statusCalls: 0, downloads: 0 };
   const queue = [...states];
   const archiveDigest = digest ?? `sha256:${sha256Hex(archive)}`;
-  const server = createServer((req, res) => {
-    if (req.headers.authorization !== "Bearer test-key") { res.writeHead(401); res.end(); return; }
-    if (req.method === "GET" && req.url === `/v1/requests/${REQUEST_ID}`) {
+  const fetch = async (url, options = {}) => {
+    const target = new URL(url);
+    assert.equal(target.origin, "https://gitedge.voidcarve.com");
+    assert.equal(target.searchParams.get("repositoryId"), GITEDGE_REPOSITORY);
+    if (options.headers.authorization !== "Bearer test-token") return new Response("{}", { status: 401 });
+    if (target.pathname === `/api/actions/signing/requests/${REQUEST_ID}` && options.method !== "GET") return new Response("{}", { status: 405 });
+    if (target.pathname === `/api/actions/signing/requests/${REQUEST_ID}`) {
       log.statusCalls += 1;
       const state = queue.length > 1 ? queue.shift() : queue[0];
-      const body = {
-        request_id: REQUEST_ID, project_id: PROJECT, state, platform: "macos", version: "1.2.3", source_run_id: 77, source_sha: SHA,
-        input_digest: INPUT_DIGEST, retry_after_seconds: 30, error: state === "failed" ? "notarization_rejected" : null,
-        output: state === "succeeded" ? { archive_digest: archiveDigest, archive_size: archive.length, report: statusReport } : null, ...overrides,
-      };
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify(body));
-      return;
+      return Response.json({ data: {
+        id: REQUEST_ID, repositoryId: GITEDGE_REPOSITORY, profile: PROFILE, profileRevision: PROFILE_REVISION,
+        platform: "macos", stage: "dmg_finalize", state, sourceDigest: INPUT_DIGEST, sourceSize: 10,
+        outputDigest: state === "succeeded" ? archiveDigest : null,
+        outputSize: state === "succeeded" ? archive.length : null,
+        ...overrides,
+      } });
     }
-    if (req.method === "GET" && req.url === `/v1/requests/${REQUEST_ID}/download`) {
+    if (target.pathname === `/api/actions/signing/requests/${REQUEST_ID}/download`) {
       log.downloads += 1;
-      if (downloadStatus) { res.writeHead(downloadStatus, { "content-type": "application/json" }); res.end("{}"); return; }
-      const range = req.headers.range;
+      if (downloadStatus) return new Response("{}", { status: downloadStatus });
+      const range = options.headers.range;
       log.ranges.push(range ?? null);
       const start = range ? Number(/^bytes=(\d+)-$/.exec(range)[1]) : 0;
-      const headers = { "content-type": "application/zip", "x-signing-archive-digest": headerDigest ?? archiveDigest, "accept-ranges": "bytes" };
-      if (range) headers["content-range"] = `bytes ${start}-${archive.length - 1}/${archive.length}`;
       const payload = archive.subarray(start);
-      headers["content-length"] = String(payload.length);
-      res.writeHead(range ? 206 : 200, headers);
+      const headers = { "content-type": "application/zip", "x-signing-digest": headerDigest ?? archiveDigest,
+        "accept-ranges": "bytes", "content-length": String(payload.length) };
+      if (range) headers["content-range"] = `bytes ${start}-${archive.length - 1}/${archive.length}`;
       if (cutFirstDownload && log.downloads === 1) {
-        res.write(payload.subarray(0, 5));
-        setTimeout(() => res.destroy(), 20);
-        return;
+        const body = new ReadableStream({ start(controller) { controller.enqueue(payload.subarray(0, 5)); setTimeout(() => controller.error(new Error("interrupted")), 5); } });
+        return new Response(body, { status: range ? 206 : 200, headers });
       }
-      res.end(payload);
-      return;
+      return new Response(payload, { status: range ? 206 : 200, headers });
     }
-    res.writeHead(404); res.end();
-  });
-  await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
-  return { log, archive, archiveDigest, url: `http://127.0.0.1:${server.address().port}`, close: () => new Promise((done) => { server.closeAllConnections(); server.close(done); }) };
+    return new Response("{}", { status: 404 });
+  };
+  return { log, archive, archiveDigest, fetch, close: async () => {} };
 }
 
-const signingEnv = (center, extra = {}) => ({
-  SIGNING_API_KEY: "test-key", INPUT_BUILD_RUN_ID: "77", INPUT_VERSION: "1.2.3", INPUT_SOURCE_SHA: SHA,
-  INPUT_REQUEST_ID: REQUEST_ID, INPUT_INPUT_DIGEST: INPUT_DIGEST, ...extra,
+const signingEnv = (_center, extra = {}) => ({
+  GITEDGE_SIGNING_TOKEN: "test-token", INPUT_BUILD_RUN_ID: "77", INPUT_VERSION: "1.2.3", INPUT_SOURCE_SHA: SHA,
+  INPUT_REQUEST_ID: REQUEST_ID, INPUT_SOURCE_DIGEST: INPUT_DIGEST, INPUT_SOURCE_SIZE: "10",
+  INPUT_PROFILE: PROFILE, INPUT_PROFILE_REVISION: PROFILE_REVISION, INPUT_REPOSITORY_ID: GITEDGE_REPOSITORY, ...extra,
 });
-
-describe("waiting for notarization", () => {
-  test("polls until the request succeeds", async () => {
-    const center = await startCenter({ states: ["accepted_waiting_source", "running", "succeeded"] });
-    try {
-      const seen = [];
-      const waits = [];
-      await awaitSigning({ env: signingEnv(center), signingOrigin: center.url, sleep: async (ms) => { waits.push(ms); }, log: (line) => seen.push(line) });
-      assert.equal(center.log.statusCalls, 3);
-      assert.deepEqual(seen, ["state: accepted_waiting_source", "state: running", "state: succeeded"]);
-      assert.ok(waits.every((ms) => ms >= 15_000 && ms <= 300_000));
-    } finally { await center.close(); }
+describe("waiting for GitEdge signing", () => {
+  test("polls the profile-bound request until it succeeds", async () => {
+    const center = await startCenter({ states: ["queued", "running", "succeeded"] });
+    const seen = [];
+    const waits = [];
+    await awaitSigning({ env: signingEnv(center), fetchImpl: center.fetch, sleep: async ms => waits.push(ms), log: line => seen.push(line) });
+    assert.equal(center.log.statusCalls, 3);
+    assert.deepEqual(seen, ["state: queued", "state: running", "state: succeeded"]);
+    assert.ok(waits.every(ms => ms >= 15_000 && ms <= 300_000));
   });
 
-  test("a failed request stops the release with the center's error code", async () => {
+  test("stops after a failed request", async () => {
     const center = await startCenter({ states: ["running", "failed"] });
-    try {
-      await assert.rejects(awaitSigning({ env: signingEnv(center), signingOrigin: center.url, sleep: noSleep, log: () => {} }), { code: "SIGNING_FAILED", detail: "notarization_rejected" });
-    } finally { await center.close(); }
+    await assert.rejects(awaitSigning({ env: signingEnv(center), fetchImpl: center.fetch, sleep: noSleep, log: () => {} }), { code: "SIGNING_FAILED" });
   });
 
   test("gives up after the timeout", async () => {
     const center = await startCenter({ states: ["running"] });
     let clock = 0;
-    try {
-      await assert.rejects(awaitSigning({ env: signingEnv(center, { INPUT_TIMEOUT_SECONDS: "100" }), signingOrigin: center.url, sleep: async (ms) => { clock += ms; }, now: () => clock, log: () => {} }), { code: "SIGNING_TIMEOUT" });
-    } finally { await center.close(); }
+    await assert.rejects(awaitSigning({ env: signingEnv(center, { INPUT_TIMEOUT_SECONDS: "100" }), fetchImpl: center.fetch,
+      sleep: async ms => { clock += ms; }, now: () => clock, log: () => {} }), { code: "SIGNING_TIMEOUT" });
   });
 
-  test("refuses a status that belongs to another run, version, commit or input", async () => {
-    for (const overrides of [{ source_run_id: 78 }, { version: "1.2.4" }, { source_sha: "f".repeat(40) }, { input_digest: `sha256:${"c".repeat(64)}` }, { project_id: "iris-shell-arm64" }, { request_id: "7f1d0c2e-3b4a-4c5d-8e9f-a0b1c2d3e4f5" }]) {
+  test("refuses a status with a mismatched request, repository, profile, revision or source bytes", async () => {
+    for (const overrides of [{ id: "7f1d0c2e-3b4a-4c5d-8e9f-a0b1c2d3e4f5" }, { repositoryId: "other" },
+      { profile: "other" }, { profileRevision: "c".repeat(40) }, { sourceDigest: `sha256:${"c".repeat(64)}` }, { sourceSize: 11 }]) {
       const center = await startCenter({ states: ["succeeded"], overrides });
-      try {
-        await assert.rejects(awaitSigning({ env: signingEnv(center), signingOrigin: center.url, sleep: noSleep, log: () => {} }), { code: "SIGNING_REQUEST_MISMATCH" });
-      } finally { await center.close(); }
+      await assert.rejects(awaitSigning({ env: signingEnv(center), fetchImpl: center.fetch, sleep: noSleep, log: () => {} }), { code: "SIGNING_REQUEST_MISMATCH" });
     }
   });
 
-  test("refuses a succeeded status without the report input digest", async () => {
-    const center = await startCenter({ states: ["succeeded"], statusReport: {} });
-    try {
-      await assert.rejects(awaitSigning({ env: signingEnv(center), signingOrigin: center.url, sleep: noSleep, log: () => {} }), { code: "SIGNING_OUTPUT_INVALID" });
-    } finally { await center.close(); }
-  });
-
-  test("the signing center address is fixed in code and cannot be redirected by the environment", async () => {
-    const urls = [];
-    const fetchImpl = async (url) => { urls.push(url); return new Response("{}", { status: 401 }); };
-    await assert.rejects(awaitSigning({ env: { ...signingEnv({}), SIGNING_URL: "https://attacker.example" }, fetchImpl, sleep: noSleep, log: () => {} }), { code: "SIGNING_AUTH_FAILED" });
-    assert.deepEqual(urls, [`https://sign.voidcarve.com/v1/requests/${REQUEST_ID}`]);
-  });
-
-  test("a rejected key is final", async () => {
+  test("fails immediately on an authentication response", async () => {
     const center = await startCenter({ states: ["running"] });
-    try {
-      await assert.rejects(awaitSigning({ env: signingEnv(center, { SIGNING_API_KEY: "wrong" }), signingOrigin: center.url, sleep: noSleep, log: () => {} }), { code: "SIGNING_AUTH_FAILED" });
-    } finally { await center.close(); }
+    await assert.rejects(awaitSigning({ env: signingEnv(center), fetchImpl: async () => new Response("{}", { status: 401 }),
+      sleep: noSleep, log: () => {} }), { code: "SIGNING_AUTH_FAILED" });
   });
 });
-
 const report = (overrides = {}, files = {}) => ({
   schema_version: 1, request_id: REQUEST_ID, generation: 4, stage: "dmg_finalize", input_digest: REPORT_INPUT_DIGEST, recipe_sha: "d".repeat(40),
   policy_digest: `sha256:${"e".repeat(64)}`, team_id: TEAM_ID, bundle_id: BUNDLE_ID, version: "1.2.3", architecture: "arm64",
@@ -210,7 +188,7 @@ const report = (overrides = {}, files = {}) => ({
   notary_archive_sha256: "f".repeat(64), gatekeeper_verified: true, staple_verified: true,
   files: [{ path: "product.dmg", size: 16, sha256: sha256Hex("signed-dmg-bytes"), ...files }], ...overrides,
 });
-const expectedReport = { requestId: REQUEST_ID, version: "1.2.3", inputDigest: REPORT_INPUT_DIGEST, productSize: 16, productSha256: sha256Hex("signed-dmg-bytes") };
+const expectedReport = { requestId: REQUEST_ID, version: "1.2.3", productSize: 16, productSha256: sha256Hex("signed-dmg-bytes") };
 
 describe("verification report", () => {
   test("accepts the final disk image report for this request", () => {
@@ -220,8 +198,7 @@ describe("verification report", () => {
   for (const [label, overrides, files] of [
     ["another team", { team_id: "ABCDE12345" }],
     ["another bundle id", { bundle_id: "io.example.other" }],
-    ["another input digest", { input_digest: `sha256:${"0".repeat(64)}` }],
-    ["the request digest instead of the stage input digest", { input_digest: INPUT_DIGEST }],
+    ["a malformed previous-stage digest", { input_digest: "sha256:abc" }],
     ["another request", { request_id: "7f1d0c2e-3b4a-4c5d-8e9f-a0b1c2d3e4f5" }],
     ["another version", { version: "1.2.4" }],
     ["another architecture", { architecture: "x64" }],
@@ -239,6 +216,11 @@ describe("verification report", () => {
       assert.throws(() => validateVerification(report(overrides, files), expectedReport), { code: "VERIFICATION_REPORT_INVALID" });
     });
   }
+
+  test("accepts a valid previous-stage digest distinct from the source artifact digest", () => {
+    const previousStageDigest = `sha256:${"0".repeat(64)}`;
+    assert.equal(validateVerification(report({ input_digest: previousStageDigest }), expectedReport).input_digest, previousStageDigest);
+  });
 });
 
 // Fake macOS tooling: every command the verification may run is answered from this table.
@@ -339,7 +321,8 @@ describe("fetching the signed image", () => {
   const fetchWith = async (center, { exec = macTools().exec, env = {} } = {}) => {
     const runnerTemp = temp("toolbox-fetch-");
     const dir = await fetchSigned({
-      env: { ...signingEnv(center), GITHUB_RUN_ID: "88", RUNNER_TEMP: runnerTemp, ...env }, signingOrigin: center.url, exec, sleep: noSleep, now: () => Date.UTC(2026, 9, 11, 10, 0, 0),
+      env: { ...signingEnv(center), GITHUB_RUN_ID: "88", RUNNER_TEMP: runnerTemp, ...env }, fetchImpl: center.fetch,
+      exec, sleep: noSleep, now: () => Date.UTC(2026, 9, 11, 10, 0, 0),
     });
     return { dir, runnerTemp };
   };
@@ -465,11 +448,11 @@ describe("command line", () => {
     const output = path.join(temp("toolbox-output-"), "out.txt");
     const errors = [];
     const code = await main(["resolve"], {
-      env: { GITHUB_TOKEN: "t", GITHUB_REPOSITORY: "Org/repo", GITHUB_REPOSITORY_ID: "5", INPUT_BUILD_RUN_ID: "77", GITHUB_OUTPUT: output },
+      env: { GITHUB_TOKEN: "t", GITHUB_REPOSITORY: "SynthVCopilot/synthv-toolbox", GITHUB_REPOSITORY_ID: "1319908050", INPUT_BUILD_RUN_ID: "77", GITHUB_OUTPUT: output },
       stderr: { write: (text) => errors.push(text) },
       sleep: noSleep,
       fetchImpl: async () => new Response(JSON.stringify({
-        id: 77, path: ".github/workflows/desktop.yml@refs/tags/v1.2.3", repository: { id: 5 }, head_repository: { id: 5 }, run_attempt: 1,
+        id: 77, path: ".github/workflows/desktop.yml@refs/tags/v1.2.3", repository: { id: 1319908050 }, head_repository: { id: 1319908050 }, run_attempt: 1,
         status: "completed", conclusion: "success", event: "push", head_branch: "v1.2.3", head_sha: SHA,
       }), { status: 200 }),
     });

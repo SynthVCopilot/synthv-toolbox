@@ -49,7 +49,7 @@ describe("Desktop Release workflow", () => {
     assert.equal(source.name, "macos-source");
     assert.match(source.name, REQUIRED_JOB);
     assert.equal(source.strategy, undefined);
-    assert.deepEqual(source.permissions, { contents: "read", "id-token": "write" });
+    assert.deepEqual(source.permissions, { actions: "read", contents: "read", "id-token": "write" });
     assert.deepEqual(source.needs, "macos-build");
   });
 
@@ -81,19 +81,20 @@ describe("Desktop Release workflow", () => {
     assert.equal(pack.env.CSC_IDENTITY_AUTO_DISCOVERY, "false");
     assert.equal(upload.with.name, "signing-source");
     assert.equal(upload.with.path, "${{ steps.bundle.outputs.work_dir }}/source.zip");
+    assert.equal(upload.id, "upload");
+    assert.equal(build.outputs.source_artifact_id, "${{ steps.upload.outputs.artifact-id }}");
     assert.equal(steps.at(-1).index, upload.index);
     assert.equal(build.steps.find((step) => /actions\/checkout/.test(step.uses ?? "")).with["persist-credentials"], false);
   });
 
-  test("macos-source submits the downloaded bundle and ends after handing the request over", () => {
+  test("macos-source submits the uploaded artifact ID and hands over request context", () => {
     const steps = stepsOf(source);
-    const download = steps.find((step) => /download-artifact/.test(step.uses ?? ""));
     const submit = steps.find((step) => /submit-macos\.mjs submit/.test(runs(step)));
     const upload = steps.find((step) => /upload-artifact/.test(step.uses ?? ""));
-    assert.ok(download.index < submit.index && submit.index < upload.index);
-    assert.equal(download.with.name, "signing-source");
-    assert.equal(download.with.path, BUNDLE_DIR);
-    assert.equal(submit.env.INPUT_WORK_DIR, BUNDLE_DIR);
+    assert.ok(submit.index < upload.index);
+    assert.equal(submit.env.INPUT_ARTIFACT_ID, "${{ needs.macos-build.outputs.source_artifact_id }}");
+    assert.equal(submit.env.GITEDGE_SIGNING_PROFILE, "${{ vars.GITEDGE_SIGNING_PROFILE }}");
+    assert.equal(submit.env.GITHUB_TOKEN, "${{ github.token }}");
     assert.equal(upload.with.name, "signing-request");
     assert.equal(steps.at(-1).index, upload.index, "the job stops once the request is handed over");
   });
@@ -101,10 +102,11 @@ describe("Desktop Release workflow", () => {
   test("only the submit step receives the signing key and no center address comes from repository variables", () => {
     for (const step of stepsOf(source)) {
       const secrets = JSON.stringify(step.env ?? {});
-      if (/submit-macos\.mjs submit/.test(runs(step))) assert.match(secrets, /secrets\.SIGNING_API_KEY/);
+      if (/submit-macos\.mjs submit/.test(runs(step))) assert.match(secrets, /secrets\.GITEDGE_SIGNING_TOKEN/);
       else assert.doesNotMatch(secrets, /secrets\./);
     }
-    for (const text of [releaseText, publishText, windowsText]) assert.doesNotMatch(text, /SIGNING_URL|vars\./);
+    assert.doesNotMatch(releaseText + publishText + windowsText, /SIGNING_API_KEY|SIGNING_URL|sign\.voidcarve\.com/);
+    assert.match(releaseText, /vars\.GITEDGE_SIGNING_PROFILE/);
   });
 
   test("the request carries the tag version and the exact commit", () => {
@@ -244,7 +246,7 @@ describe("Desktop macOS Publish workflow", () => {
   test("only the wait and fetch steps receive the signing key", () => {
     const withKey = [];
     for (const [name, job] of Object.entries(publish.jobs)) {
-      for (const step of job.steps) if (JSON.stringify(step.env ?? {}).includes("secrets.SIGNING_API_KEY")) withKey.push(`${name}:${/publish-macos\.mjs (\w+)/.exec(runs(step))[1]}`);
+      for (const step of job.steps) if (JSON.stringify(step.env ?? {}).includes("secrets.GITEDGE_SIGNING_TOKEN")) withKey.push(`${name}:${/publish-macos\.mjs (\w+)/.exec(runs(step))[1]}`);
     }
     assert.deepEqual(withKey.sort(), ["await-signing:await", "publish:fetch"]);
     assert.equal((publishText.match(/secrets\./g) ?? []).length, 2);

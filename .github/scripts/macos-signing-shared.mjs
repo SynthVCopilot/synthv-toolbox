@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 
-export const PROJECT_ID = 'synthv-toolbox-arm64';
 export const BUNDLE_ID = 'com.synthvcopilot.toolbox';
 export const APP = 'Synthesizer V Toolbox.app';
 export const ARCH = 'arm64';
@@ -41,17 +40,6 @@ export function stableVersion(tag) {
   return match[1];
 }
 
-export const SIGNING_ORIGIN = 'https://sign.voidcarve.com';
-
-/** Joins the requests path onto the signing center origin; the origin is fixed in code, not configurable per repository. */
-export function signEndpoint(origin = SIGNING_ORIGIN) {
-  const secure = /^https:\/\/[A-Za-z0-9.-]+(?::\d+)?$/.test(origin);
-  // The loopback form lets contract tests run against a local mock server.
-  const loopback = /^http:\/\/127\.0\.0\.1:\d+$/.test(origin);
-  if (!secure && !loopback) throw new ToolError('SIGNING_URL_INVALID');
-  return `${origin}/v1/requests`;
-}
-
 export async function writeOutputs(env, values) {
   const entries = Object.entries(values).map(([key, value]) => [key, String(value)]);
   if (!env.GITHUB_OUTPUT || entries.some(([, value]) => /[\r\n]/.test(value))) throw new ToolError('OUTPUT_UNAVAILABLE');
@@ -75,19 +63,4 @@ export async function readJsonBody(response, code) {
     chunks.push(chunk);
   }
   try { return JSON.parse(Buffer.concat(chunks, size).toString('utf8')); } catch { throw new ToolError(code); }
-}
-
-const CONTEXT_KEYS = ['schema_version', 'build_run_id', 'project_id', 'request_id', 'input_digest', 'input_size', 'version', 'source_sha'];
-
-/** Strict shape of the public hand-off file between the build and publish workflows. */
-export function validateContext(value) {
-  const plain = value !== null && typeof value === 'object' && !Array.isArray(value);
-  if (!plain || Object.keys(value).length !== CONTEXT_KEYS.length || !CONTEXT_KEYS.every((key) => Object.hasOwn(value, key))
-    || value.schema_version !== 1 || !Number.isSafeInteger(value.build_run_id) || value.build_run_id < 1
-    || value.project_id !== PROJECT_ID || typeof value.request_id !== 'string' || !UUID.test(value.request_id)
-    || typeof value.input_digest !== 'string' || !ARCHIVE_DIGEST.test(value.input_digest)
-    || !Number.isSafeInteger(value.input_size) || value.input_size < 1
-    || typeof value.version !== 'string' || !/^\d+\.\d+\.\d+$/.test(value.version)
-    || typeof value.source_sha !== 'string' || !SHA.test(value.source_sha)) throw new ToolError('CONTEXT_INVALID');
-  return Object.fromEntries(CONTEXT_KEYS.map((key) => [key, value[key]]));
 }

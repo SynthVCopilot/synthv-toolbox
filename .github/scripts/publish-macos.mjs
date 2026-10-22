@@ -4,11 +4,16 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
-  APP, ARCH, ARCHIVE_DIGEST, BUNDLE_ID, PROJECT_ID, SHA, TEAM_ID, ToolError, UUID,
-  defaultSleep, hashFile, isTransientStatus, readJsonBody, requireRunId, signEndpoint, stableVersion, validateContext, writeOutputs,
+  APP, ARCH, ARCHIVE_DIGEST, BUNDLE_ID, SHA, TEAM_ID, ToolError, UUID,
+  defaultSleep, hashFile, isTransientStatus, readJsonBody, requireRunId, stableVersion, writeOutputs,
 } from './macos-signing-shared.mjs';
 
 const GITHUB_API = 'https://api.github.com';
+const GITEDGE_ORIGIN = 'https://gitedge.voidcarve.com';
+const GITEDGE_REPOSITORY_ID = '13814fa3-8580-4b5a-803e-a6b1206007ed';
+const PROFILE = 'synthv-macos-arm64';
+const SOURCE_REPOSITORY = 'SynthVCopilot/synthv-toolbox';
+const SOURCE_REPOSITORY_ID = '1319908050';
 const BUILD_WORKFLOW = '.github/workflows/desktop.yml';
 const CONTEXT_FILE = 'request.json';
 const MAX_CONTEXT_BYTES = 16 * 1024;
@@ -55,7 +60,8 @@ export async function resolve({ env = process.env, fetchImpl = fetch, sleep = de
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo ?? '')) throw new ToolError('INVALID_REPOSITORY');
   const buildRunId = requireRunId(env.INPUT_BUILD_RUN_ID);
   const run = await githubRun({ fetchImpl, sleep }, token, repo, buildRunId);
-  if (String(run?.id) !== buildRunId
+  if (repo !== SOURCE_REPOSITORY || String(env.GITHUB_REPOSITORY_ID) !== SOURCE_REPOSITORY_ID
+    || String(run?.id) !== buildRunId
     || String(run.path ?? '').split('@')[0] !== BUILD_WORKFLOW
     || String(run.repository?.id) !== String(env.GITHUB_REPOSITORY_ID ?? '')
     || String(run.head_repository?.id) !== String(env.GITHUB_REPOSITORY_ID ?? '')
@@ -74,32 +80,51 @@ export async function readContext({ env = process.env } = {}) {
   const info = await lstat(file).catch(() => null);
   if (!info?.isFile() || info.size > MAX_CONTEXT_BYTES) throw new ToolError('CONTEXT_INVALID');
   let context;
-  try { context = validateContext(JSON.parse(await readFile(file, 'utf8'))); } catch { throw new ToolError('CONTEXT_INVALID'); }
-  if (String(context.build_run_id) !== buildRunId || context.version !== env.INPUT_VERSION || context.source_sha !== env.INPUT_SOURCE_SHA) throw new ToolError('CONTEXT_INVALID');
+  try { context = JSON.parse(await readFile(file, 'utf8')); } catch { throw new ToolError('CONTEXT_INVALID'); }
+  const keys = ['schema_version', 'build_run_id', 'repository_id', 'request_id', 'profile', 'profile_revision',
+    'source_run_id', 'source_artifact_id', 'source_digest', 'source_size', 'version', 'source_sha'];
+  if (!context || typeof context !== 'object' || Array.isArray(context) || Object.keys(context).length !== keys.length
+    || !keys.every(key => Object.hasOwn(context, key)) || context.schema_version !== 1
+    || String(context.build_run_id) !== buildRunId || String(context.source_run_id) !== buildRunId
+    || context.repository_id !== GITEDGE_REPOSITORY_ID || context.profile !== PROFILE
+    || !/^[a-f0-9]{40}$/.test(context.profile_revision ?? '') || !UUID.test(context.request_id ?? '')
+    || !/^[1-9]\d*$/.test(context.source_artifact_id ?? '') || !ARCHIVE_DIGEST.test(context.source_digest ?? '')
+    || !Number.isSafeInteger(context.source_size) || context.source_size < 1
+    || context.version !== env.INPUT_VERSION || context.source_sha !== env.INPUT_SOURCE_SHA) throw new ToolError('CONTEXT_INVALID');
+  context = Object.fromEntries(keys.map(key => [key, context[key]]));
   return context;
 }
 
-// Signing center access.
+// GitEdge request access.
 
-function signingInputs(env, signingOrigin) {
+function signingInputs(env) {
   const buildRunId = requireRunId(env.INPUT_BUILD_RUN_ID);
   const version = env.INPUT_VERSION;
   const sourceSha = env.INPUT_SOURCE_SHA;
   if (!/^\d+\.\d+\.\d+$/.test(version ?? '') || !SHA.test(sourceSha ?? '')) throw new ToolError('INVALID_INPUT');
-  const apiKey = env.SIGNING_API_KEY;
-  if (!apiKey) throw new ToolError('SIGNING_API_KEY_UNAVAILABLE');
+  const apiToken = env.GITEDGE_SIGNING_TOKEN;
+  if (!apiToken) throw new ToolError('GITEDGE_SIGNING_TOKEN_UNAVAILABLE');
   const requestId = env.INPUT_REQUEST_ID;
-  const digest = env.INPUT_INPUT_DIGEST;
-  if (!UUID.test(requestId ?? '') || !ARCHIVE_DIGEST.test(digest ?? '')) throw new ToolError('INVALID_INPUT');
-  return { buildRunId, version, sourceSha, apiKey, requestId, digest, endpoint: signEndpoint(signingOrigin) };
+  const sourceDigest = env.INPUT_SOURCE_DIGEST;
+  const sourceSize = Number(env.INPUT_SOURCE_SIZE);
+  const profileRevision = env.INPUT_PROFILE_REVISION;
+  const profile = env.INPUT_PROFILE;
+  const repositoryId = env.INPUT_REPOSITORY_ID;
+  if (!UUID.test(requestId ?? '') || repositoryId !== GITEDGE_REPOSITORY_ID || profile !== PROFILE
+    || !/^[a-f0-9]{40}$/.test(profileRevision ?? '') || !ARCHIVE_DIGEST.test(sourceDigest ?? '')
+    || !Number.isSafeInteger(sourceSize) || sourceSize < 1) throw new ToolError('INVALID_INPUT');
+  return { buildRunId, version, sourceSha, apiToken, requestId, sourceDigest, sourceSize, profileRevision,
+    profile, repositoryId, endpoint: `${GITEDGE_ORIGIN}/api/actions/signing/requests` };
 }
 
 async function signingStatus({ fetchImpl }, inputs) {
   let response;
   try {
-    response = await fetchImpl(`${inputs.endpoint}/${inputs.requestId}`, {
+    const url = new URL(`${inputs.endpoint}/${inputs.requestId}`);
+    url.searchParams.set('repositoryId', inputs.repositoryId);
+    response = await fetchImpl(url, {
       method: 'GET', redirect: 'error', signal: AbortSignal.timeout(30_000),
-      headers: { authorization: `Bearer ${inputs.apiKey}`, accept: 'application/json' },
+      headers: { authorization: `Bearer ${inputs.apiToken}`, accept: 'application/json' },
     });
   } catch { throw new ToolError('SIGNING_STATUS_UNAVAILABLE', { transient: true }); }
   if (!response.ok) {
@@ -109,11 +134,13 @@ async function signingStatus({ fetchImpl }, inputs) {
     if (response.status === 404) throw new ToolError('SIGNING_REQUEST_NOT_FOUND');
     throw new ToolError('SIGNING_STATUS_FAILED');
   }
-  let body;
-  try { body = await readJsonBody(response, 'SIGNING_STATUS_UNAVAILABLE'); } catch { throw new ToolError('SIGNING_STATUS_UNAVAILABLE', { transient: true }); }
-  if (body?.request_id !== inputs.requestId || body.project_id !== PROJECT_ID || body.platform !== 'macos'
-    || body.source_run_id !== Number(inputs.buildRunId) || body.version !== inputs.version
-    || body.source_sha !== inputs.sourceSha || body.input_digest !== inputs.digest) throw new ToolError('SIGNING_REQUEST_MISMATCH');
+  let envelope;
+  try { envelope = await readJsonBody(response, 'SIGNING_STATUS_UNAVAILABLE'); } catch { throw new ToolError('SIGNING_STATUS_UNAVAILABLE', { transient: true }); }
+  const body = envelope?.data;
+  if (!body || body.id !== inputs.requestId || body.repositoryId !== inputs.repositoryId
+    || body.profile !== inputs.profile || body.profileRevision !== inputs.profileRevision || body.platform !== 'macos'
+    || body.sourceDigest !== inputs.sourceDigest || body.sourceSize !== inputs.sourceSize)
+    throw new ToolError('SIGNING_REQUEST_MISMATCH');
   return body;
 }
 
@@ -122,15 +149,13 @@ function interpretStatus(body) {
     throw new ToolError(`SIGNING_${body.state.toUpperCase()}`, { detail: typeof body.error === 'string' && SAFE_CODE.test(body.error) ? body.error : '' });
   }
   if (body.state !== 'succeeded') return null;
-  const output = body.output;
-  if (!output || !ARCHIVE_DIGEST.test(output.archive_digest ?? '') || !Number.isSafeInteger(output.archive_size) || output.archive_size < 1) throw new ToolError('SIGNING_OUTPUT_INVALID');
-  const reportInputDigest = output.report?.input_digest;
-  if (!ARCHIVE_DIGEST.test(reportInputDigest ?? '')) throw new ToolError('SIGNING_OUTPUT_INVALID');
-  return { digest: output.archive_digest, size: output.archive_size, reportInputDigest };
+  if (!ARCHIVE_DIGEST.test(body.outputDigest ?? '') || !Number.isSafeInteger(body.outputSize) || body.outputSize < 1)
+    throw new ToolError('SIGNING_OUTPUT_INVALID');
+  return { digest: body.outputDigest, size: body.outputSize };
 }
 
-export async function awaitSigning({ env = process.env, fetchImpl = fetch, sleep = defaultSleep, now = Date.now, log = (line) => process.stdout.write(`${line}\n`), signingOrigin } = {}) {
-  const inputs = signingInputs(env, signingOrigin);
+export async function awaitSigning({ env = process.env, fetchImpl = fetch, sleep = defaultSleep, now = Date.now, log = (line) => process.stdout.write(`${line}\n`) } = {}) {
+  const inputs = signingInputs(env);
   const timeoutMs = Number(env.INPUT_TIMEOUT_SECONDS ?? 10800) * 1000;
   if (!(timeoutMs > 0)) throw new ToolError('INVALID_INPUT');
   const deadline = now() + timeoutMs;
@@ -161,7 +186,8 @@ export function validateVerification(report, { requestId, version, inputDigest, 
   const ok = report !== null && typeof report === 'object' && !Array.isArray(report)
     && Object.keys(report).length === REPORT_KEYS.length && REPORT_KEYS.every((key) => Object.hasOwn(report, key))
     && report.schema_version === 1 && report.request_id === requestId && report.stage === 'dmg_finalize'
-    && report.input_digest === inputDigest && report.team_id === TEAM_ID && report.bundle_id === BUNDLE_ID
+    && ARCHIVE_DIGEST.test(report.input_digest ?? '') && (!inputDigest || report.input_digest === inputDigest)
+    && report.team_id === TEAM_ID && report.bundle_id === BUNDLE_ID
     && report.version === version && report.architecture === ARCH
     && report.codesign_verified === true && report.timestamp_verified === true
     && report.gatekeeper_verified === true && report.staple_verified === true
@@ -178,21 +204,28 @@ export function validateVerification(report, { requestId, version, inputDigest, 
 }
 
 async function downloadArchive({ fetchImpl, sleep }, inputs, expected, dest) {
-  const url = `${inputs.endpoint}/${inputs.requestId}/download`;
+  const downloadUrl = new URL(`${inputs.endpoint}/${inputs.requestId}/download`);
+  downloadUrl.searchParams.set('repositoryId', inputs.repositoryId);
+  const url = downloadUrl.href;
   await writeFile(dest, '', { mode: 0o600 });
   for (let attempt = 1; ; attempt += 1) {
     const have = (await stat(dest)).size;
     let failure = null;
     try {
-      const headers = { authorization: `Bearer ${inputs.apiKey}`, accept: 'application/zip' };
+      const headers = { authorization: `Bearer ${inputs.apiToken}`, accept: 'application/zip' };
       if (have > 0) headers.range = `bytes=${have}-`;
       const response = await fetchImpl(url, { method: 'GET', redirect: 'error', headers, signal: AbortSignal.timeout(600_000) });
       if (response.status === 409 || response.status === 410) { await response.body?.cancel(); throw new ToolError('SIGNED_OUTPUT_UNAVAILABLE'); }
-      if (response.status === 401 || response.status === 403 || response.status === 404) { await response.body?.cancel(); throw new ToolError('SIGNING_AUTH_FAILED'); }
+      if (response.status === 401 || response.status === 403) { await response.body?.cancel(); throw new ToolError('SIGNING_AUTH_FAILED'); }
+      if (response.status === 404) { await response.body?.cancel(); throw new ToolError('SIGNED_OUTPUT_UNAVAILABLE'); }
       if (response.status === 416) { await response.body?.cancel(); await truncate(dest, 0); failure = new ToolError('DOWNLOAD_INTERRUPTED', { transient: true }); }
-      else if (!response.ok || !response.body) { await response.body?.cancel(); failure = new ToolError('DOWNLOAD_INTERRUPTED', { transient: true }); }
+      else if (!response.ok || !response.body) {
+        await response.body?.cancel();
+        if (!isTransientStatus(response.status)) throw new ToolError('SIGNED_OUTPUT_UNAVAILABLE');
+        failure = new ToolError('DOWNLOAD_INTERRUPTED', { transient: true });
+      }
       else {
-        if (response.headers.get('x-signing-archive-digest') !== expected.digest) { await response.body.cancel(); throw new ToolError('SIGNED_OUTPUT_MISMATCH'); }
+        if (response.headers.get('x-signing-digest') !== expected.digest) { await response.body.cancel(); throw new ToolError('SIGNED_OUTPUT_MISMATCH'); }
         let offset = have;
         if (response.status === 200) offset = 0;
         else if (response.status !== 206 || response.headers.get('content-range') !== `bytes ${have}-${expected.size - 1}/${expected.size}`) { await response.body.cancel(); throw new ToolError('SIGNED_OUTPUT_MISMATCH'); }
@@ -325,8 +358,8 @@ async function describe(file, name, version) {
   return { name, version, size: sha512.size, sha512: sha512.hash.digest('base64') };
 }
 
-export async function fetchSigned({ env = process.env, fetchImpl = fetch, sleep = defaultSleep, now = Date.now, exec = defaultExec, signingOrigin } = {}) {
-  const inputs = signingInputs(env, signingOrigin);
+export async function fetchSigned({ env = process.env, fetchImpl = fetch, sleep = defaultSleep, now = Date.now, exec = defaultExec } = {}) {
+  const inputs = signingInputs(env);
   const runId = requireRunId(env.GITHUB_RUN_ID);
   if (!env.RUNNER_TEMP || !path.isAbsolute(env.RUNNER_TEMP)) throw new ToolError('TEMP_UNAVAILABLE');
   const names = assetNames(inputs.version);
@@ -375,14 +408,17 @@ export async function main(args = process.argv.slice(2), deps = {}) {
   try {
     const [command] = args;
     if (args.length !== 1 || !['resolve', 'context', 'await', 'fetch'].includes(command)) throw new ToolError('INVALID_COMMAND');
-    const injected = { env, fetchImpl: deps.fetchImpl, sleep: deps.sleep, now: deps.now, exec: deps.exec, log: deps.log, signingOrigin: deps.signingOrigin };
+  const injected = { env, fetchImpl: deps.fetchImpl, sleep: deps.sleep, now: deps.now, exec: deps.exec, log: deps.log };
     const defined = Object.fromEntries(Object.entries(injected).filter(([, value]) => value !== undefined));
     if (command === 'resolve') {
       const run = await resolve(defined);
       await writeOutputs(env, { tag: run.tag, version: run.version, source_sha: run.source_sha });
     } else if (command === 'context') {
       const context = await readContext({ env });
-      await writeOutputs(env, { request_id: context.request_id, input_digest: context.input_digest });
+      await writeOutputs(env, {
+        request_id: context.request_id, source_digest: context.source_digest, source_size: context.source_size,
+        profile: context.profile, profile_revision: context.profile_revision, repository_id: context.repository_id,
+      });
     } else if (command === 'await') await awaitSigning(defined);
     else {
       const dir = await fetchSigned(defined);

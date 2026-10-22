@@ -3,17 +3,15 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { cpSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, describe, test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scripts = path.join(root, ".github", "scripts");
-const { main, prepare, submitSource, assertTemplateLayout, runIdentity } = await import(path.join(scripts, "submit-macos.mjs"));
+const { main, prepare, submitSource, assertTemplateLayout, runIdentity, writeContext } = await import(pathToFileURL(path.join(scripts, "submit-macos.mjs")).href);
 
-const PROJECT = "synthv-toolbox-arm64";
 const BUNDLE_ID = "com.synthvcopilot.toolbox";
 const APP = "Synthesizer V Toolbox.app";
 const SHA = "0123456789abcdef0123456789abcdef01234567";
@@ -25,276 +23,152 @@ const temp = async (prefix) => { const dir = await mkdtemp(path.join(tmpdir(), p
 const sha256 = (buffer) => `sha256:${createHash("sha256").update(buffer).digest("hex")}`;
 const noSleep = async () => {};
 
-// A signing center that follows the request and push-upload contract of the center README.
-async function startCenter({ partSize = 4, received = [], createState = "awaiting_upload", partFailures = [], createFailures = [] } = {}) {
-  const log = { createCalls: 0, create: null, createHeaders: null, plans: 0, parts: new Map(), partHeaders: [], complete: 0, completeBody: null };
-  log.identities = [];
-  const failures = [...partFailures];
-  const createErrors = [...createFailures];
-  const server = createServer(async (req, res) => {
-    const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
-    const body = Buffer.concat(chunks);
-    const json = (status, value) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(value)); };
-    log.identities.push(req.headers["x-run-identity"]);
-    if (req.headers.authorization !== "Bearer test-key") return json(401, { error: "invalid_api_key" });
-    if (req.method === "POST" && req.url === "/v1/requests") {
-      log.createCalls += 1;
-      const failure = createErrors.shift();
-      if (failure) return json(failure, { error: "github_unavailable" });
-      log.create = JSON.parse(body.toString("utf8"));
-      log.createHeaders = req.headers;
-      return json(202, { request_id: REQUEST_ID, state: createState });
-    }
-    if (req.method === "POST" && req.url === `/v1/requests/${REQUEST_ID}/source`) {
-      assert.equal(body.toString("utf8"), "{}");
-      log.plans += 1;
-      const size = log.create.input_size;
-      return json(200, { part_size: partSize, part_count: Math.ceil(size / partSize), received_parts: [...received, ...log.parts.keys()] });
-    }
-    const part = /^\/v1\/requests\/[^/]+\/source\/parts\/(\d+)$/.exec(req.url);
-    if (req.method === "PUT" && part) {
-      const status = failures.shift();
-      if (status) return json(status, { error: "part_upload_failed" });
-      log.partHeaders.push({ part: Number(part[1]), type: req.headers["content-type"], length: req.headers["content-length"] });
-      log.parts.set(Number(part[1]), body);
-      return json(200, { ok: true });
-    }
-    if (req.method === "POST" && req.url === `/v1/requests/${REQUEST_ID}/source/complete`) {
-      log.complete += 1;
-      log.completeBody = body.toString("utf8");
-      return json(200, { request_id: REQUEST_ID, state: "accepted_waiting_source" });
-    }
-    return json(404, { error: "not_found" });
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return { log, url: `http://127.0.0.1:${server.address().port}`, close: () => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); }) };
-}
-
-async function submitFixture(content = Buffer.from("0123456789")) {
+async function submitFixture() {
   const runnerTemp = await temp("toolbox-submit-");
-  const workDir = path.join(runnerTemp, "toolbox-sign-42-abc");
-  await mkdir(workDir);
-  await writeFile(path.join(workDir, "source.zip"), content);
-  return { runnerTemp, workDir, content };
+  return { runnerTemp };
 }
 
-async function identityFetch(url, options) {
-  if (String(url).startsWith("https://oidc.actions.githubusercontent.com/token")) {
-    return Response.json({ value: "test-run-identity" });
-  }
+const PROFILE = "synthv-macos-arm64";
+const GITEDGE_REPOSITORY = "13814fa3-8580-4b5a-803e-a6b1206007ed";
+const PROFILE_REVISION = "b".repeat(40);
+const ARTIFACT_ID = "73";
+const ARTIFACT_DIGEST = `sha256:${"c".repeat(64)}`;
+const ARTIFACT_SIZE = 1024;
+
+async function gitHubFetch(url, options) {
+  const target = new URL(url);
+  if (target.hostname === "oidc.actions.githubusercontent.com") return Response.json({ value: "test-run-identity" });
+  if (target.hostname === "api.github.com" && target.pathname.endsWith("/actions/runs/42")) return Response.json({
+    id: 42, path: ".github/workflows/desktop.yml@refs/tags/v1.2.3", event: "push", status: "in_progress",
+    run_attempt: 1, head_branch: "v1.2.3", head_sha: SHA,
+  });
+  if (target.hostname === "api.github.com" && target.pathname.endsWith(`/actions/artifacts/${ARTIFACT_ID}`)) return Response.json({
+    id: Number(ARTIFACT_ID), name: "signing-source", expired: false, digest: ARTIFACT_DIGEST,
+    size_in_bytes: ARTIFACT_SIZE, workflow_run: { id: 42, repository_id: 1319908050, head_sha: SHA },
+  });
   return fetch(url, options);
 }
-const submitEnv = (fixture, center, extra = {}) => ({
+
+const submitEnv = (fixture, extra = {}) => ({
   ACTIONS_ID_TOKEN_REQUEST_URL: "https://oidc.actions.githubusercontent.com/token?existing=1",
   ACTIONS_ID_TOKEN_REQUEST_TOKEN: "oidc-request-credential",
-  SIGNING_API_KEY: "test-key",
+  GITEDGE_SIGNING_TOKEN: "test-token",
+  GITEDGE_SIGNING_PROFILE: PROFILE,
+  GITHUB_TOKEN: "github-token",
+  GITHUB_REPOSITORY: "SynthVCopilot/synthv-toolbox",
+  GITHUB_REPOSITORY_ID: "1319908050",
+  GITHUB_REF: "refs/tags/v1.2.3",
+  GITHUB_EVENT_NAME: "push",
   GITHUB_RUN_ID: "42",
   GITHUB_RUN_ATTEMPT: "1",
+  INPUT_ARTIFACT_ID: ARTIFACT_ID,
   INPUT_TAG: "v1.2.3",
   INPUT_SOURCE_SHA: SHA,
-  INPUT_WORK_DIR: fixture.workDir,
   RUNNER_TEMP: fixture.runnerTemp,
   ...extra,
 });
 
+function signingRequest(overrides = {}) {
+  return {
+    id: REQUEST_ID, repositoryId: GITEDGE_REPOSITORY, profile: PROFILE, profileRevision: PROFILE_REVISION,
+    platform: "macos", sourceDigest: ARTIFACT_DIGEST, sourceSize: ARTIFACT_SIZE, state: "queued", ...overrides,
+  };
+}
+
+function mockGitedge(log, { failures = [], request = signingRequest() } = {}) {
+  const pending = [...failures];
+  return async (url, options) => {
+    const target = new URL(url);
+    if (target.hostname !== "gitedge.voidcarve.com") return gitHubFetch(url, options);
+    log.push({ url: String(url), options, body: options.body });
+    assert.equal(target.pathname, "/api/actions/signing/requests");
+    assert.equal(target.searchParams.get("repositoryId"), GITEDGE_REPOSITORY);
+    assert.equal(options.headers.authorization, "Bearer test-token");
+    assert.equal(options.headers["x-run-identity"], "test-run-identity");
+    const failure = pending.shift();
+    if (failure) return new Response("temporary failure", { status: failure });
+    return Response.json({ data: { request } }, { status: 202 });
+  };
+}
+
 describe("GitHub Actions run identity", () => {
-  test("requests a fresh token with the center audience and preserves the runner URL query", async () => {
+  test("requests an OIDC token for GitEdge and preserves the runner URL query", async () => {
     const calls = [];
     const fixture = await submitFixture();
-    const env = submitEnv(fixture, {});
+    const env = submitEnv(fixture);
     const fetchImpl = async (url, options) => {
       calls.push([String(url), options]);
       return Response.json({ value: `token-${calls.length}` });
     };
-    assert.equal(await runIdentity(env, fetchImpl, "https://sign.voidcarve.com"), "token-1");
-    assert.equal(await runIdentity(env, fetchImpl, "https://sign.voidcarve.com"), "token-2");
-    const url = new URL(calls[0][0]);
-    assert.equal(url.searchParams.get("existing"), "1");
-    assert.equal(url.searchParams.get("audience"), "https://sign.voidcarve.com");
+    assert.equal(await runIdentity(env, fetchImpl, "https://gitedge.voidcarve.com"), "token-1");
+    assert.equal(new URL(calls[0][0]).searchParams.get("existing"), "1");
+    assert.equal(new URL(calls[0][0]).searchParams.get("audience"), "https://gitedge.voidcarve.com");
     assert.equal(calls[0][1].headers.authorization, "Bearer oidc-request-credential");
     assert.equal(calls[0][1].redirect, "error");
   });
 
-  test("fails closed when runner identity is unavailable or the provider returns an invalid token", async () => {
+  test("fails closed when run identity is unavailable or invalid", async () => {
     const fixture = await submitFixture();
-    const env = submitEnv(fixture, {});
-    await assert.rejects(runIdentity({ ...env, ACTIONS_ID_TOKEN_REQUEST_TOKEN: "" }, fetch, "https://sign.voidcarve.com"), { code: "RUN_IDENTITY_UNAVAILABLE" });
+    const env = submitEnv(fixture);
+    await assert.rejects(runIdentity({ ...env, ACTIONS_ID_TOKEN_REQUEST_TOKEN: "" }, fetch, "https://gitedge.voidcarve.com"), { code: "RUN_IDENTITY_UNAVAILABLE" });
     for (const value of ["", 42, "x".repeat(4097)]) {
-      await assert.rejects(runIdentity(env, async () => Response.json({ value }), "https://sign.voidcarve.com"), { code: "RUN_IDENTITY_FAILED" });
+      await assert.rejects(runIdentity(env, async () => Response.json({ value }), "https://gitedge.voidcarve.com"), { code: "RUN_IDENTITY_FAILED" });
+    }
+  });
+});
+
+describe("native GitEdge source artifact submission", () => {
+  test("binds the request to the exact GitHub run, uploaded artifact, profile and OIDC identity", async () => {
+    const fixture = await submitFixture();
+    const calls = [];
+    const result = await submitSource({ env: submitEnv(fixture), fetchImpl: mockGitedge(calls), sleep: noSleep });
+    assert.equal(calls.length, 1);
+    const request = JSON.parse(calls[0].body);
+    assert.deepEqual(request, {
+      profile: PROFILE, platform: "macos", sourceRepositoryId: "1319908050", sourceCommitOid: SHA,
+      sourceRunId: "42", sourceArtifactId: ARTIFACT_ID, sourceDigest: ARTIFACT_DIGEST,
+      sourceSize: ARTIFACT_SIZE, version: "1.2.3",
+    });
+    assert.equal(calls[0].options.headers["idempotency-key"], "synthv-42-1");
+    assert.equal(result.request_id, REQUEST_ID);
+    assert.equal(result.source_digest, ARTIFACT_DIGEST);
+    assert.equal(result.source_size, ARTIFACT_SIZE);
+  });
+
+  test("retries transient request failures with identical payload and idempotency key", async () => {
+    const fixture = await submitFixture();
+    const calls = [];
+    const waits = [];
+    await submitSource({ env: submitEnv(fixture), fetchImpl: mockGitedge(calls, { failures: [503] }), sleep: async ms => waits.push(ms) });
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].body, calls[1].body);
+    assert.equal(calls[0].options.headers["idempotency-key"], calls[1].options.headers["idempotency-key"]);
+    assert.deepEqual(waits, [2000]);
+  });
+
+  test("does not retry authorization errors or mismatched run and artifact metadata", async () => {
+    const fixture = await submitFixture();
+    const calls = [];
+    await assert.rejects(submitSource({ env: submitEnv(fixture), fetchImpl: mockGitedge(calls, { failures: [403] }), sleep: noSleep }), { code: "GITEDGE_SIGNING_HTTP_403" });
+    assert.equal(calls.length, 1);
+    for (const extra of [{ GITHUB_REF: "refs/tags/v9.9.9" }, { GITHUB_RUN_ATTEMPT: "2" }, { GITEDGE_SIGNING_PROFILE: "other" }]) {
+      await assert.rejects(submitSource({ env: submitEnv(fixture, extra), fetchImpl: gitHubFetch, sleep: noSleep }));
     }
   });
 
-  test("obtains a fresh identity for every submit, begin, part, retry and complete call", async () => {
-    const center = await startCenter({ partFailures: [503] });
+  test("writes only the native request binding into the public handoff file", async () => {
     const fixture = await submitFixture();
-    let requested = 0;
-    const fetchImpl = async (url, options) => String(url).startsWith("https://oidc.actions.githubusercontent.com/token")
-      ? Response.json({ value: `proof-${++requested}` }) : fetch(url, options);
-    try {
-      await submitSource({ env: submitEnv(fixture, center), signingOrigin: center.url, fetchImpl, sleep: noSleep });
-      assert.equal(requested, 8);
-      assert.deepEqual(center.log.identities, Array.from({ length: 8 }, (_, i) => `proof-${i + 1}`));
-    } finally { await center.close(); }
+    const result = await submitSource({ env: submitEnv(fixture), fetchImpl: mockGitedge([]), sleep: noSleep });
+    const dir = await writeContext(result, { env: submitEnv(fixture) });
+    const context = JSON.parse(await readFile(path.join(dir, "request.json"), "utf8"));
+    assert.deepEqual(context, {
+      schema_version: 1, build_run_id: 42, repository_id: GITEDGE_REPOSITORY, request_id: REQUEST_ID,
+      profile: PROFILE, profile_revision: PROFILE_REVISION, source_run_id: "42", source_artifact_id: ARTIFACT_ID,
+      source_digest: ARTIFACT_DIGEST, source_size: ARTIFACT_SIZE, version: "1.2.3", source_sha: SHA,
+    });
+    assert.doesNotMatch(JSON.stringify(context), /test-token|oidc-request-credential/);
   });
 });
-
-describe("push request to the signing center", () => {
-  test("creates the request, uploads every part and completes", async () => {
-    const center = await startCenter();
-    const fixture = await submitFixture();
-    try {
-      const result = await submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center), sleep: noSleep });
-      assert.deepEqual(center.log.create, {
-        project_id: PROJECT,
-        platform: "macos",
-        execution_visibility: "public",
-        run_id: 42,
-        run_attempt: 1,
-        input_digest: sha256(fixture.content),
-        input_size: 10,
-        version: "1.2.3",
-        source_sha: SHA,
-      });
-      assert.equal(center.log.createHeaders["idempotency-key"], `${PROJECT}-42-1`);
-      assert.deepEqual([...center.log.parts.keys()].sort(), [1, 2, 3]);
-      assert.deepEqual(center.log.partHeaders.map((entry) => [entry.part, entry.type, entry.length]).sort(), [[1, "application/octet-stream", "4"], [2, "application/octet-stream", "4"], [3, "application/octet-stream", "2"]]);
-      assert.equal(Buffer.concat([1, 2, 3].map((n) => center.log.parts.get(n))).toString("utf8"), "0123456789");
-      assert.equal(center.log.complete, 1);
-      assert.equal(center.log.completeBody, "{}");
-      assert.deepEqual(center.log.identities, Array(6).fill("test-run-identity"));
-      assert.equal(result.request_id, REQUEST_ID);
-      assert.equal(result.input_digest, sha256(fixture.content));
-    } finally { await center.close(); }
-  });
-
-  test("a repeated request that is already accepted uploads nothing", async () => {
-    const center = await startCenter({ createState: "accepted_waiting_source" });
-    const fixture = await submitFixture();
-    try {
-      const result = await submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center), sleep: noSleep });
-      assert.equal(result.request_id, REQUEST_ID);
-      assert.equal(center.log.parts.size, 0);
-      assert.equal(center.log.complete, 0);
-    } finally { await center.close(); }
-  });
-
-  test("resumes an interrupted upload without re-sending received parts", async () => {
-    const center = await startCenter({ received: [1, 2] });
-    const fixture = await submitFixture();
-    try {
-      await submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center), sleep: noSleep });
-      assert.deepEqual([...center.log.parts.keys()], [3]);
-      assert.equal(center.log.complete, 1);
-    } finally { await center.close(); }
-  });
-
-  test("retries a part that fails inside the bucket with 503", async () => {
-    const center = await startCenter({ partFailures: [503, 503] });
-    const fixture = await submitFixture();
-    const sleeps = [];
-    try {
-      await submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center), sleep: async (ms) => { sleeps.push(ms); } });
-      assert.deepEqual([...center.log.parts.keys()].sort(), [1, 2, 3]);
-      assert.ok(sleeps.length >= 2);
-    } finally { await center.close(); }
-  });
-
-  test("retries the create call with the same idempotency key after a transient center error", async () => {
-    const center = await startCenter({ createFailures: [503] });
-    const fixture = await submitFixture();
-    const sleeps = [];
-    try {
-      const result = await submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center), sleep: async (ms) => { sleeps.push(ms); } });
-      assert.equal(center.log.createCalls, 2);
-      assert.equal(center.log.createHeaders["idempotency-key"], `${PROJECT}-42-1`);
-      assert.equal(result.request_id, REQUEST_ID);
-      assert.equal(sleeps.length, 1);
-    } finally { await center.close(); }
-  });
-
-  test("does not retry a create call the center rejects", async () => {
-    const center = await startCenter({ createFailures: [403] });
-    const fixture = await submitFixture();
-    try {
-      await assert.rejects(submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center), sleep: noSleep }), { code: "SIGNING_REQUEST_FAILED" });
-      assert.equal(center.log.createCalls, 1);
-    } finally { await center.close(); }
-  });
-
-  test("the signing center address is fixed in code and cannot be redirected by the environment", async () => {
-    const fixture = await submitFixture();
-    const urls = [];
-    const fetchImpl = async (url, options) => {
-      if (String(url).startsWith("https://oidc.actions.githubusercontent.com/token")) return identityFetch(url, options);
-      urls.push(url); return new Response("{}", { status: 401 });
-    };
-    await assert.rejects(submitSource({ env: { ...submitEnv(fixture, { url: "" }), SIGNING_URL: "https://attacker.example" }, fetchImpl, sleep: noSleep }), { code: "SIGNING_REQUEST_FAILED" });
-    assert.deepEqual(urls, ["https://sign.voidcarve.com/v1/requests"]);
-  });
-
-  test("does not retry a part rejected with 400", async () => {
-    const center = await startCenter({ partFailures: [400] });
-    const fixture = await submitFixture();
-    try {
-      await assert.rejects(submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center), sleep: noSleep }), { code: "SOURCE_UPLOAD_FAILED" });
-      assert.equal(center.log.complete, 0);
-    } finally { await center.close(); }
-  });
-
-  test("refuses prerelease tags, reruns, a missing key and a plain http center", async () => {
-    const center = await startCenter();
-    const fixture = await submitFixture();
-    try {
-      await assert.rejects(submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center, { INPUT_TAG: "v1.2.3-rc.1" }), sleep: noSleep }), { code: "TAG_NOT_STABLE" });
-      await assert.rejects(submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center, { INPUT_TAG: "refs/heads/main" }), sleep: noSleep }), { code: "TAG_NOT_STABLE" });
-      await assert.rejects(submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center, { GITHUB_RUN_ATTEMPT: "2" }), sleep: noSleep }), { code: "INVALID_RUN_ATTEMPT" });
-      await assert.rejects(submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center, { SIGNING_API_KEY: "" }), sleep: noSleep }), { code: "SIGNING_API_KEY_UNAVAILABLE" });
-      await assert.rejects(submitSource({ fetchImpl: identityFetch, signingOrigin: "http://sign.example.com", env: submitEnv(fixture, center), sleep: noSleep }), { code: "SIGNING_URL_INVALID" });
-      await assert.rejects(submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center, { INPUT_WORK_DIR: path.join(fixture.runnerTemp, "elsewhere") }), sleep: noSleep }), { code: "INVALID_TEMP_DIR" });
-      assert.equal(center.log.create, null);
-    } finally { await center.close(); }
-  });
-
-  test("an unauthorised key fails the request", async () => {
-    const center = await startCenter();
-    const fixture = await submitFixture();
-    try {
-      await assert.rejects(submitSource({ fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center, { SIGNING_API_KEY: "wrong" }), sleep: noSleep }), { code: "SIGNING_REQUEST_FAILED" });
-    } finally { await center.close(); }
-  });
-
-  test("the command writes only public request data for the publish workflow", async () => {
-    const center = await startCenter();
-    const fixture = await submitFixture();
-    const output = path.join(fixture.runnerTemp, "output.txt");
-    try {
-      const errors = [];
-      const code = await main(["submit"], { fetchImpl: identityFetch, signingOrigin: center.url, env: submitEnv(fixture, center, { GITHUB_OUTPUT: output }), stderr: { write: (text) => errors.push(text) }, sleep: noSleep });
-      assert.equal(code, 0, errors.join(""));
-      const context = JSON.parse(await readFile(path.join(fixture.runnerTemp, "signing-request", "request.json"), "utf8"));
-      assert.deepEqual(context, {
-        schema_version: 1,
-        build_run_id: 42,
-        project_id: PROJECT,
-        request_id: REQUEST_ID,
-        input_digest: sha256(fixture.content),
-        input_size: 10,
-        version: "1.2.3",
-        source_sha: SHA,
-      });
-      assert.doesNotMatch(JSON.stringify(context), /test-key/);
-      assert.match(await readFile(output, "utf8"), new RegExp(`request_id=${REQUEST_ID}`));
-    } finally { await center.close(); }
-  });
-
-  test("rejects unknown commands", async () => {
-    const errors = [];
-    assert.equal(await main(["wipe"], { env: {}, stderr: { write: (text) => errors.push(text) } }), 1);
-    assert.equal(errors.join(""), "INVALID_COMMAND\n");
-  });
-});
-
 // The center accepts only the app, an Applications link to /Applications and the dmg decoration files.
 describe("template disk image layout", { skip: !posix }, () => {
   const layout = async (build) => {

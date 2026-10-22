@@ -1,18 +1,29 @@
 import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, writeFile } from 'node:fs/promises';
-import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
-  APP, ARCH, BUNDLE_ID, PROJECT_ID, SHA, ToolError, UUID,
-  defaultSleep, hashFile, isTransientStatus, readJsonBody, requireFirstAttempt, requireRunId, signEndpoint, stableVersion, writeOutputs,
+  APP, ARCH, BUNDLE_ID, SHA, ToolError, UUID,
+  defaultSleep, hashFile, isTransientStatus, readJsonBody, requireFirstAttempt, requireRunId, stableVersion, writeOutputs,
 } from './macos-signing-shared.mjs';
 
 const BUNDLE_NAME = 'source.zip';
-const MAX_PART_BYTES = 64 * 1024 * 1024;
-const PART_ATTEMPTS = 5;
+const GITHUB_API = 'https://api.github.com';
+const GITEDGE_ORIGIN = 'https://gitedge.voidcarve.com';
+const GITEDGE_REPOSITORY_ID = '13814fa3-8580-4b5a-803e-a6b1206007ed';
+const SOURCE_REPOSITORY = 'SynthVCopilot/synthv-toolbox';
+const SOURCE_REPOSITORY_ID = '1319908050';
+const SOURCE_WORKFLOW = '.github/workflows/desktop.yml';
+const SOURCE_ARTIFACT = 'signing-source';
+const PROFILE = 'synthv-macos-arm64';
+const ARTIFACT_DIGEST = /^sha256:[a-f0-9]{64}$/;
 const MAC_DIR = /^mac(-arm64)?$/;
 const ALLOWED_VOLUME_ENTRIES = new Set(['Applications', '.background', '.background.tiff', '.DS_Store', '.VolumeIcon.icns']);
+
+function requiredEnv(name, value) {
+  if (!value) throw new ToolError(`${name}_UNAVAILABLE`);
+  return value;
+}
 
 function defaultExec(file, args, { capture = false } = {}) {
   const result = spawnSync(file, args, {
@@ -155,12 +166,6 @@ export async function prepare({ env = process.env, exec = defaultExec } = {}) {
   return { workDir, version };
 }
 
-async function checkedWorkDir(value, runId, env) {
-  const workDir = path.resolve(value ?? '');
-  if (path.dirname(workDir) !== runnerTemp(env) || !path.basename(workDir).startsWith(`toolbox-sign-${runId}-`)) throw new ToolError('INVALID_TEMP_DIR');
-  return workDir;
-}
-
 export async function runIdentity(env, fetchImpl, audience) {
   const credential = env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
   if (!env.ACTIONS_ID_TOKEN_REQUEST_URL || !credential) throw new ToolError('RUN_IDENTITY_UNAVAILABLE');
@@ -186,114 +191,106 @@ export async function runIdentity(env, fetchImpl, audience) {
   return body.value;
 }
 
-async function centerJson(fetchImpl, url, apiKey, body, extraHeaders = {}, timeoutMs = 30_000) {
+function sourceArtifactUrl(suffix) { return `${GITHUB_API}/repos/${SOURCE_REPOSITORY}${suffix}`; }
+
+async function githubJson(fetchImpl, url, token) {
+  const response = await fetchImpl(url, {
+    redirect: 'error', signal: AbortSignal.timeout(30_000),
+    headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' },
+  });
+  if (!response.ok) { await response.body?.cancel(); throw new ToolError('GITHUB_API_FAILED'); }
+  return readJsonBody(response, 'GITHUB_API_FAILED');
+}
+
+async function sourceArtifactMetadata(env, fetchImpl) {
+  const runId = requireRunId(env.GITHUB_RUN_ID);
+  const run = await githubJson(fetchImpl, sourceArtifactUrl(`/actions/runs/${runId}`), env.GITHUB_TOKEN);
+  if (String(run.id) !== runId || run.path?.split('@')[0] !== SOURCE_WORKFLOW || run.event !== 'push'
+    || run.status !== 'in_progress' || run.run_attempt !== 1 || !/^v\d+\.\d+\.\d+$/.test(run.head_branch ?? '')
+    || run.head_branch !== env.INPUT_TAG
+    || run.head_sha !== env.INPUT_SOURCE_SHA || env.GITHUB_REF !== `refs/tags/${run.head_branch}`
+    || env.GITHUB_REPOSITORY !== SOURCE_REPOSITORY || env.GITHUB_REPOSITORY_ID !== SOURCE_REPOSITORY_ID)
+    throw new ToolError('SOURCE_RUN_NOT_ALLOWED');
+  const artifactId = env.INPUT_ARTIFACT_ID;
+  if (!/^[1-9]\d*$/.test(artifactId ?? '') || !Number.isSafeInteger(Number(artifactId))) throw new ToolError('INVALID_SOURCE_ARTIFACT');
+  const artifact = await githubJson(fetchImpl, sourceArtifactUrl(`/actions/artifacts/${artifactId}`), env.GITHUB_TOKEN);
+  if (artifact.id !== Number(artifactId) || artifact.name !== SOURCE_ARTIFACT || artifact.expired !== false
+    || String(artifact.workflow_run?.id) !== runId || artifact.workflow_run?.repository_id !== Number(SOURCE_REPOSITORY_ID)
+    || artifact.workflow_run?.head_sha !== env.INPUT_SOURCE_SHA || !ARTIFACT_DIGEST.test(artifact.digest ?? '')
+    || !Number.isSafeInteger(artifact.size_in_bytes) || artifact.size_in_bytes < 1)
+    throw new ToolError('SOURCE_ARTIFACT_METADATA_INVALID');
+  return { id: artifactId, runId, digest: artifact.digest, size: artifact.size_in_bytes, tag: run.head_branch };
+}
+
+async function gitedgeJson(fetchImpl, url, token, { method = 'GET', body, idempotencyKey, identity } = {}) {
   let response;
   try {
     response = await fetchImpl(url, {
-      method: 'POST',
-      redirect: 'error',
-      headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json', accept: 'application/json', ...extraHeaders },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs),
+      method, redirect: 'error', signal: AbortSignal.timeout(120_000),
+      headers: { authorization: `Bearer ${token}`, accept: 'application/json', ...(body ? { 'content-type': 'application/json' } : {}),
+        ...(idempotencyKey ? { 'idempotency-key': idempotencyKey } : {}), ...(identity ? { 'x-run-identity': identity } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}),
     });
-  } catch { throw new ToolError('SIGNING_REQUEST_FAILED', { transient: true }); }
+  } catch { throw new ToolError('GITEDGE_SIGNING_UNAVAILABLE', { transient: true }); }
   if (!response.ok) {
     await response.body?.cancel();
-    throw new ToolError('SIGNING_REQUEST_FAILED', { transient: isTransientStatus(response.status) });
+    throw new ToolError(`GITEDGE_SIGNING_HTTP_${response.status}`, { transient: isTransientStatus(response.status) });
   }
-  return readJsonBody(response, 'SIGNING_REQUEST_FAILED');
+  const value = await readJsonBody(response, 'GITEDGE_RESPONSE_INVALID');
+  if (!value.data || typeof value.data !== 'object') throw new ToolError('GITEDGE_RESPONSE_INVALID');
+  return value.data;
 }
 
-// The create, plan and complete calls are idempotent on the center, so a lost response can be asked for again.
-async function centerRetry(sleep, call) {
-  for (let attempt = 1; ; attempt += 1) {
-    try { return await call(); } catch (error) {
-      if (!(error instanceof ToolError) || !error.transient || attempt >= PART_ATTEMPTS) throw error;
-      await sleep(2000 * 2 ** (attempt - 1));
-    }
-  }
+function gitedgeRequestUrl(requestId = '') {
+  const url = new URL(`/api/actions/signing/requests${requestId ? `/${requestId}` : ''}`, GITEDGE_ORIGIN);
+  url.searchParams.set('repositoryId', GITEDGE_REPOSITORY_ID);
+  return url;
 }
 
-function validateUploadPlan(plan, bundle) {
-  const received = plan?.received_parts;
-  if (!Number.isInteger(plan?.part_size) || plan.part_size < 1 || plan.part_size > MAX_PART_BYTES
-    || !Number.isInteger(plan.part_count) || plan.part_count !== Math.ceil(bundle.size / plan.part_size)
-    || !Array.isArray(received) || !received.every((n) => Number.isInteger(n) && n >= 1 && n <= plan.part_count)) throw new ToolError('SIGNING_REQUEST_FAILED');
-  return plan;
+function validateRequest(request, expected) {
+  if (!request || !UUID.test(request.id ?? '') || request.repositoryId !== GITEDGE_REPOSITORY_ID
+    || request.profile !== PROFILE || request.platform !== 'macos' || request.sourceDigest !== expected.digest
+    || request.sourceSize !== expected.size || !/^[a-f0-9]{40}$/.test(request.profileRevision ?? '')
+    || !['accepted', 'queued', 'running', 'awaiting_source', 'succeeded', 'failed', 'cancelled'].includes(request.state))
+    throw new ToolError('SIGNING_REQUEST_MISMATCH');
+  return request;
 }
 
-async function putPart(fetchImpl, url, apiKey, identity, file, start, length) {
-  const response = await fetchImpl(url, {
-    method: 'PUT',
-    redirect: 'error',
-    headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/octet-stream', 'content-length': String(length), 'x-run-identity': identity },
-    body: createReadStream(file, { start, end: start + length - 1 }),
-    duplex: 'half',
-    signal: AbortSignal.timeout(300_000),
-  });
-  await response.body?.cancel();
-  return response.status;
-}
-
-async function uploadParts(fetchImpl, sleep, base, apiKey, identityHeaders, file, bundle) {
-  const fetchPlan = async () => validateUploadPlan(await centerRetry(sleep, async () => centerJson(fetchImpl, `${base}/source`, apiKey, {}, await identityHeaders())), bundle);
-  let plan = await fetchPlan();
-  for (let part = 1; part <= plan.part_count; part += 1) {
-    if (plan.received_parts.includes(part)) continue;
-    const start = (part - 1) * plan.part_size;
-    const length = Math.min(plan.part_size, bundle.size - start);
-    for (let attempt = 1; ; attempt += 1) {
-      let status = 0;
-      const headers = await centerRetry(sleep, identityHeaders);
-      try { status = await putPart(fetchImpl, `${base}/source/parts/${part}`, apiKey, headers['x-run-identity'], file, start, length); } catch { status = 0; }
-      if (status === 200) break;
-      if (!(status === 0 || isTransientStatus(status)) || attempt >= PART_ATTEMPTS) throw new ToolError('SOURCE_UPLOAD_FAILED');
-      await sleep(2000 * 2 ** (attempt - 1));
-      plan = await fetchPlan();
-      if (plan.received_parts.includes(part)) break;
-    }
-  }
-}
-
-export async function submitSource({ env = process.env, fetchImpl = fetch, sleep = defaultSleep, signingOrigin } = {}) {
-  const endpoint = signEndpoint(signingOrigin);
+export async function submitSource({ env = process.env, fetchImpl = fetch, sleep = defaultSleep } = {}) {
   const runId = requireRunId(env.GITHUB_RUN_ID);
   requireFirstAttempt(env);
   const version = stableVersion(env.INPUT_TAG);
   const sourceSha = env.INPUT_SOURCE_SHA;
   if (!SHA.test(sourceSha ?? '')) throw new ToolError('INVALID_SIGNING_REQUEST');
-  const workDir = await checkedWorkDir(env.INPUT_WORK_DIR, runId, env);
-  const apiKey = env.SIGNING_API_KEY;
-  if (!apiKey) throw new ToolError('SIGNING_API_KEY_UNAVAILABLE');
-  const file = path.join(workDir, BUNDLE_NAME);
-  const info = await stat(file).catch(() => null);
-  if (!info?.isFile()) throw new ToolError('INVALID_SIGNING_REQUEST');
-  const hashed = await hashFile(file);
-  const bundle = { digest: `sha256:${hashed.hash.digest('hex')}`, size: hashed.size };
-  if (bundle.size < 1) throw new ToolError('INVALID_SIGNING_REQUEST');
+  const apiToken = requiredEnv('GITEDGE_SIGNING_TOKEN', env.GITEDGE_SIGNING_TOKEN);
+  if (env.GITEDGE_SIGNING_PROFILE !== PROFILE) throw new ToolError('SIGNING_PROFILE_INVALID');
+  const githubToken = requiredEnv('GITHUB_TOKEN', env.GITHUB_TOKEN);
+  const artifact = await sourceArtifactMetadata({ ...env, GITHUB_TOKEN: githubToken }, fetchImpl);
+  const identity = await runIdentity(env, fetchImpl, GITEDGE_ORIGIN);
   const body = {
-    project_id: PROJECT_ID,
-    platform: 'macos',
-    execution_visibility: 'public',
-    run_id: Number(runId),
-    run_attempt: 1,
-    input_digest: bundle.digest,
-    input_size: bundle.size,
-    version,
-    source_sha: sourceSha,
+    profile: PROFILE, platform: 'macos', sourceRepositoryId: SOURCE_REPOSITORY_ID,
+    sourceCommitOid: sourceSha, sourceRunId: runId, sourceArtifactId: artifact.id,
+    sourceDigest: artifact.digest, sourceSize: artifact.size, version,
   };
-  const identityHeaders = async () => ({ 'x-run-identity': await runIdentity(env, fetchImpl, new URL(endpoint).origin) });
-  const idempotencyKey = { 'idempotency-key': `${PROJECT_ID}-${runId}-1` };
-  const created = await centerRetry(sleep, async () => centerJson(fetchImpl, endpoint, apiKey, body, { ...idempotencyKey, ...await identityHeaders() }));
-  if (typeof created.request_id !== 'string' || !UUID.test(created.request_id)) throw new ToolError('SIGNING_REQUEST_FAILED');
-  if (created.state !== 'accepted_waiting_source') {
-    if (created.state !== 'awaiting_upload') throw new ToolError('SIGNING_REQUEST_FAILED');
-    const base = `${endpoint}/${created.request_id}`;
-    await uploadParts(fetchImpl, sleep, base, apiKey, identityHeaders, file, bundle);
-    const completed = await centerRetry(sleep, async () => centerJson(fetchImpl, `${base}/source/complete`, apiKey, {}, await identityHeaders(), 300_000));
-    if (completed.state !== 'accepted_waiting_source') throw new ToolError('SIGNING_REQUEST_FAILED');
+  let response;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      response = await gitedgeJson(fetchImpl, gitedgeRequestUrl(), apiToken, {
+        method: 'POST', body, identity, idempotencyKey: `synthv-${runId}-1`,
+      });
+      break;
+    } catch (error) {
+      if (!(error instanceof ToolError) || !error.transient || attempt >= 5) throw error;
+      await sleep(2000 * 2 ** (attempt - 1));
+    }
   }
-  return { request_id: created.request_id, input_digest: bundle.digest, input_size: bundle.size, version, source_sha: sourceSha, build_run_id: Number(runId) };
+  const request = validateRequest(response.request, artifact);
+  return {
+    request_id: request.id, repository_id: request.repositoryId, profile: request.profile,
+    profile_revision: request.profileRevision, source_run_id: artifact.runId, source_sha: sourceSha,
+    source_artifact_id: artifact.id, source_digest: artifact.digest, source_size: artifact.size,
+    version, build_run_id: Number(runId),
+  };
 }
 
 /** Writes the public hand-off file; it holds request identifiers only. */
@@ -303,10 +300,14 @@ export async function writeContext(result, { env = process.env } = {}) {
   const context = {
     schema_version: 1,
     build_run_id: result.build_run_id,
-    project_id: PROJECT_ID,
+    repository_id: result.repository_id,
     request_id: result.request_id,
-    input_digest: result.input_digest,
-    input_size: result.input_size,
+    profile: result.profile,
+    profile_revision: result.profile_revision,
+    source_run_id: result.source_run_id,
+    source_artifact_id: result.source_artifact_id,
+    source_digest: result.source_digest,
+    source_size: result.source_size,
     version: result.version,
     source_sha: result.source_sha,
   };
@@ -314,14 +315,14 @@ export async function writeContext(result, { env = process.env } = {}) {
   return dir;
 }
 
-export async function main(args = process.argv.slice(2), { env = process.env, stderr = process.stderr, fetchImpl = fetch, sleep = defaultSleep, exec = defaultExec, signingOrigin } = {}) {
+export async function main(args = process.argv.slice(2), { env = process.env, stderr = process.stderr, fetchImpl = fetch, sleep = defaultSleep, exec = defaultExec } = {}) {
   try {
     if (args.length !== 1 || !['prepare', 'submit'].includes(args[0])) throw new ToolError('INVALID_COMMAND');
     if (args[0] === 'prepare') {
       const { workDir, version } = await prepare({ env, exec });
       await writeOutputs(env, { work_dir: workDir, version });
     } else {
-      const result = await submitSource({ env, fetchImpl, sleep, signingOrigin });
+      const result = await submitSource({ env, fetchImpl, sleep });
       await writeOutputs(env, { request_id: result.request_id, context_dir: await writeContext(result, { env }) });
     }
     return 0;

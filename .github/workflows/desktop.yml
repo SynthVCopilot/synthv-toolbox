@@ -11,6 +11,8 @@ jobs:
     name: macos-build
     runs-on: macos-14
     timeout-minutes: 60
+    outputs:
+      source_artifact_id: ${{ steps.upload.outputs.artifact-id }}
     permissions:
       contents: read
     steps:
@@ -48,6 +50,7 @@ jobs:
           INPUT_SOURCE_SHA: ${{ github.sha }}
         run: node .github/scripts/submit-macos.mjs prepare
       - name: Hand the source bundle to the submit job
+        id: upload
         uses: actions/upload-artifact@v4
         with:
           name: signing-source
@@ -63,6 +66,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
+      actions: read
       contents: read
       id-token: write
     steps:
@@ -75,18 +79,17 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "22.19.0"
-      - name: Download source bundle
-        uses: actions/download-artifact@v4
-        with:
-          name: signing-source
-          path: ${{ runner.temp }}/toolbox-sign-${{ github.run_id }}-bundle
-      - name: Submit to signing center
+      - name: Submit source artifact to GitEdge
         id: submit
         env:
-          SIGNING_API_KEY: ${{ secrets.SIGNING_API_KEY }}
+          GITEDGE_SIGNING_TOKEN: ${{ secrets.GITEDGE_SIGNING_TOKEN }}
+          GITEDGE_SIGNING_PROFILE: ${{ vars.GITEDGE_SIGNING_PROFILE }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
+          INPUT_ARTIFACT_ID: ${{ needs.macos-build.outputs.source_artifact_id }}
           INPUT_TAG: ${{ github.ref_name }}
           INPUT_SOURCE_SHA: ${{ github.sha }}
-          INPUT_WORK_DIR: ${{ runner.temp }}/toolbox-sign-${{ github.run_id }}-bundle
         run: node .github/scripts/submit-macos.mjs submit
       - name: Hand the request to the publish workflow
         uses: actions/upload-artifact@v4
