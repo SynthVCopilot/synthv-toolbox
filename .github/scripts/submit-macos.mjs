@@ -112,7 +112,7 @@ async function assertDmgMatchesApp(app, mounted, executable) {
 }
 
 async function buildBundle({ env, exec, runId, version, sourceSha, app, dir, executable }) {
-  const dmg = path.join(workspace(env), 'release', `Synthesizer-V-Toolbox-${version}.dmg`);
+  const dmg = path.join(workspace(env), 'release', `Toneshuttle-${version}.dmg`);
   const dmgInfo = await lstat(dmg).catch(() => null);
   if (!dmgInfo?.isFile()) throw new ToolError('DMG_APP_MISMATCH');
   const workDir = await mkdtemp(path.join(runnerTemp(env), `toolbox-sign-${runId}-`));

@@ -192,7 +192,7 @@ const functionNames = new Set([
   "agentBudgetUsageTextFromBudget", "renderAgentBudgetMeter", "renderLiveRunPanel",
   "renderAgentGoalSlot", "renderLiveRunSlot", "renderComposerAction", "approvalConversationTitle", "renderApprovalCard", "renderApprovalsSlot", "renderApprovalsSlotDiffKey",
   "tickApprovalCountdowns", "patchSlot", "applyLiveRunPatch", "patchLiveRun", "toastHtml", "scheduleToastDismiss", "patchToast",
-  "renderCopilot", "agentBudgetUsageText", "renderMessage",
+  "renderCopilot", "synthvOn", "agentBudgetUsageText", "renderMessage",
   "listenForAgentRunProgress", "listenForAgentApprovals", "decideApproval", "cancelAgentRun", "steerAgentRun",
   "sendPrompt", "withAiProviderStateRefresh", "withComposerDraft",
 ]);

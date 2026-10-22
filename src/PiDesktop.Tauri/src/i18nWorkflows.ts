@@ -219,7 +219,7 @@ addMessages("zh-CN", {
     "scoreFilePath": "曲谱文件路径",
     "localMidMidiXmlMusicxmlOrMxl": "本地 .mid、.midi、.xml、.musicxml 或 .mxl 文件",
     "iHavePermissionToImportThisLocal": "我确认有权把这份本地曲谱导入当前工程",
-    "saveTheProjectInSynthvFirstThis": "请先在 SynthV 中保存工程；这里读取磁盘上的 .svp，不包含尚未保存的内存修改。所有输出统一写入 ~/.SynthVcopilot/output/，源工程不会被覆盖。",
+    "saveTheProjectInSynthvFirstThis": "请先在 SynthV 中保存工程；这里读取磁盘上的 .svp，不包含尚未保存的内存修改。所有输出写入应用数据目录下的 creative 文件夹，源工程不会被覆盖。",
     "readOnlyProjectProbe": "只读工程探测",
     "svpProjectPath": ".svp 工程路径",
     "targetSvpFile": "目标 .svp 文件",
@@ -391,7 +391,7 @@ addMessages("zh-CN", {
       "title": "发音诊断",
       "description": "扫描歌词中的占位词、多音节拥挤、混合文字与不一致发音风险。"
     },
-    "render-quality-check": {
+    "render-review": {
       "title": "渲染质量复检",
       "description": "复用本地音频分析结果检查削波、静音、动态和异常频谱趋势。"
     },
@@ -643,7 +643,7 @@ addMessages("en", {
     "scoreFilePath": "Score file path",
     "localMidMidiXmlMusicxmlOrMxl": "Local .mid, .midi, .xml, .musicxml, or .mxl file",
     "iHavePermissionToImportThisLocal": "I have permission to import this local score into the current project",
-    "saveTheProjectInSynthvFirstThis": "Save the project in SynthV first. This reads the .svp on disk and excludes unsaved edits. All output goes to ~/.SynthVcopilot/output/ without overwriting the source project.",
+    "saveTheProjectInSynthvFirstThis": "Save the project in SynthV first. This reads the .svp on disk and excludes unsaved edits. All output goes to the creative folder in the app data directory without overwriting the source project.",
     "readOnlyProjectProbe": "Read-only project probe",
     "svpProjectPath": ".svp project path",
     "targetSvpFile": "Target .svp file",
@@ -815,7 +815,7 @@ addMessages("en", {
       "title": "Pronunciation diagnostics",
       "description": "Check placeholder lyrics, crowded syllables, mixed scripts, and inconsistent pronunciation."
     },
-    "render-quality-check": {
+    "render-review": {
       "title": "Render quality review",
       "description": "Use local audio analysis to check clipping, silence, dynamics, and unusual spectral trends."
     },

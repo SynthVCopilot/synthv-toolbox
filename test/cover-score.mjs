@@ -187,7 +187,12 @@ test("blocks empty lyrics and requires tool reads from the current revision befo
 test("rejects sources outside dataRoot and refuses tools without a repair-phase job binding", async () => {
   const ctx = await setup(3);
   try {
-    await assert.rejects(ctx.service.prepare("job-b", "/etc/hosts", "0".repeat(64)), /outside data root/);
+    // A file that really exists outside the data root, so the containment check (not a missing-file error) rejects it on every OS.
+    const outside = await mkdtemp(join(tmpdir(), "cover-outside-"));
+    try {
+      await writeFile(join(outside, "hosts"), "127.0.0.1 localhost", "utf8");
+      await assert.rejects(ctx.service.prepare("job-b", join(outside, "hosts"), "0".repeat(64)), /outside data root/);
+    } finally { await rm(outside, { recursive: true, force: true }); }
     const registered = new Map();
     let completion;
     createCoverScoreToolsExtension({ service: ctx.service, jobForSession: () => undefined, phaseForSession: () => "repair", guards: { completion(check) { completion = check; } } }).factory({

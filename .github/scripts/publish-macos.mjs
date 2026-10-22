@@ -28,8 +28,8 @@ function defaultExec(file, args) {
 }
 
 export const assetNames = (version) => ({
-  dmg: `Synthesizer-V-Toolbox-${version}.dmg`,
-  zip: `Synthesizer-V-Toolbox-${version}-${ARCH}-mac.zip`,
+  dmg: `Toneshuttle-${version}.dmg`,
+  zip: `Toneshuttle-${version}-${ARCH}-mac.zip`,
   metadata: 'latest-mac.yml',
 });
 

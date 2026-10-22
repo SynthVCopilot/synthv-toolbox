@@ -216,15 +216,15 @@ async function bundleFixture({ packageVersion = "1.2.3", plistVersion = "1.2.3",
   await mkdir(path.join(macos, "MacOS"), { recursive: true });
   await mkdir(path.join(macos, "Resources"), { recursive: true });
   await writeFile(path.join(macos, "Info.plist"), "plist");
-  await writeFile(path.join(macos, "MacOS", "Synthesizer V Toolbox"), "binary");
+  await writeFile(path.join(macos, "MacOS", "Toneshuttle"), "binary");
   await writeFile(path.join(macos, "Resources", "app.asar"), "asar");
-  await writeFile(path.join(workspace, "release", "Synthesizer-V-Toolbox-1.2.3.dmg"), "template-image");
+  await writeFile(path.join(workspace, "release", "Toneshuttle-1.2.3.dmg"), "template-image");
   const calls = [];
   const hash = "a".repeat(64);
   const plist = {
     CFBundleIdentifier: BUNDLE_ID,
     CFBundleShortVersionString: plistVersion,
-    CFBundleExecutable: "Synthesizer V Toolbox",
+    CFBundleExecutable: "Toneshuttle",
     ElectronAsarIntegrity: JSON.stringify({ "Resources/app.asar": { algorithm: "SHA256", hash } }),
   };
   const exec = (file, args, options = {}) => {

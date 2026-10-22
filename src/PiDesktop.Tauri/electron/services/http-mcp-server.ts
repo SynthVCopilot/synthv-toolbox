@@ -1,12 +1,20 @@
+import { timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { BRAND } from "../brand.js";
+import { hostResultToToolResult, toStructuredContent, toToolContent, toolboxAgentMcpTool } from "./mcp-tools.js";
 
-const protocolVersion = "2025-06-18";
-const serverVersion = "0.2.0";
+/** Newest first; initialize echoes the client's version when listed here and otherwise offers the fallback. */
+export const SUPPORTED_MCP_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"] as const;
+export const MCP_SERVER_NAME = BRAND.slug;
+const fallbackProtocolVersion = "2025-06-18";
 const internalTool = "toolbox_internal";
 const advancedTool = "toolbox_advanced";
 const agentTaskTool = "toolbox_agent";
 const requestTimeoutMs = 30_000;
 const headersTimeoutMs = 10_000;
+const closeGraceMs = 2_000;
+const maxBodyBytes = 1_048_576;
+const defaultInstructions = "toolbox_agent runs the app's own agent asynchronously: call action \"start\" with input, then poll action \"status\" with the returned taskId every few seconds until status is no longer running or cancelling; when it is needs_input, answer with action \"continue\" (conversationId, input). toolbox_internal and toolbox_advanced take {capability, operation, params}; their descriptions list the supported operations and params is always an object.";
 
 /** Error whose message is safe to return to the client; the marker lets other modules raise it without importing this one. */
 export class ClientError extends Error { readonly clientSafe = true; }
@@ -20,16 +28,33 @@ export interface McpAuthorization {
   advancedEnabled: boolean;
 }
 
+export interface McpToolAnnotations {
+  title?: string;
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
+}
+
 export interface McpTool {
   name: string;
+  title?: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  annotations?: McpToolAnnotations;
   permission?: "internal" | "advanced";
+}
+
+export interface McpServerIdentity {
+  name: string;
+  title: string;
+  version: string;
+  instructions?: string;
 }
 
 export interface RuntimeMcpHost {
   mcpTools(authorization: McpAuthorization): Promise<McpTool[]>;
-  callMcpTool(name: string, arguments_: Record<string, unknown>, authorization: McpAuthorization): Promise<{ content: unknown; isError?: boolean }>;
+  callMcpTool(name: string, arguments_: Record<string, unknown>, authorization: McpAuthorization): Promise<{ content: unknown; structuredContent?: unknown; isError?: boolean }>;
   agentChat?(input: string, conversationId?: string): Promise<unknown>;
   agentTask?(args: Record<string, unknown>): Promise<unknown>;
 }
@@ -38,19 +63,21 @@ export interface HttpMcpConfig extends McpAuthorization {
   enabled: boolean;
   agentEnabled: boolean;
   port: number;
+  /** Bearer token every /mcp and /agent request must present. */
+  token: string;
 }
 
 export interface HttpMcpStatus extends HttpMcpConfig {
   running: boolean;
+  serverName: string;
   endpoint?: string;
   agentEndpoint?: string;
   lastError?: string;
 }
 
 interface JsonRpcRequest {
-  jsonrpc?: unknown;
-  id?: unknown;
-  method?: unknown;
+  id: string | number;
+  method: string;
   params?: unknown;
 }
 
@@ -61,7 +88,7 @@ export class HttpMcpServer {
   private boundPort?: number;
   private lastError?: string;
 
-  constructor(private readonly host: RuntimeMcpHost) {}
+  constructor(private readonly host: RuntimeMcpHost, private readonly identity: McpServerIdentity = { name: MCP_SERVER_NAME, title: BRAND.productName, version: "0.0.0" }) {}
 
   async start(config: HttpMcpConfig): Promise<HttpMcpStatus> {
     validateConfig(config);
@@ -71,6 +98,12 @@ export class HttpMcpServer {
       return this.status();
     }
     if (this.server && sameConfig(this.config, config)) return this.status();
+    // Only the token changed: requests read this.config as they arrive, so the old token stops working at once while
+    // requests already in flight (an agent run can take minutes) finish instead of holding up the rotation.
+    if (this.server?.listening && this.config && sameConfig({ ...this.config, token: config.token }, config)) {
+      this.config = { ...config };
+      return this.status();
+    }
     await this.stop();
     this.config = { ...config };
     try {
@@ -116,6 +149,7 @@ export class HttpMcpServer {
     return {
       ...config,
       running,
+      serverName: this.identity.name,
       ...(config.enabled && running ? { endpoint: `http://127.0.0.1:${port}/mcp` } : {}),
       ...(config.agentEnabled && running ? { agentEndpoint: `http://127.0.0.1:${port}/agent` } : {}),
       ...(this.lastError ? { lastError: this.lastError } : {}),
@@ -128,51 +162,73 @@ export class HttpMcpServer {
     const boundaryError = requestBoundaryError(request, this.boundPort);
     if (boundaryError) return send(response, 403, { error: boundaryError });
     const path = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
-    if (path === "/mcp") {
-      if (request.method !== "POST") return send(response, 405, { error: "Method not allowed." }, { Allow: "POST" });
-      if (!config.enabled) return send(response, 404, { error: "MCP is disabled." });
-      if (!isJsonRequest(request)) return send(response, 415, { error: "Content-Type must be application/json." });
-      const body = await readJson(request);
-      if (body instanceof Error) return send(response, 400, { error: body.message });
-      try {
-        const result = await this.handleRpc(body);
-        if (result === undefined) return send(response, 202, undefined);
-        return send(response, 200, result);
-      } catch (error) {
-        console.error("MCP response failed:", error);
-        return send(response, 500, rpcError(isRecord(body) ? body.id ?? null : null, -32603, "Internal error."));
-      }
-    }
-    if (path === "/agent") {
-      if (request.method !== "POST") return send(response, 405, { error: "Method not allowed." }, { Allow: "POST" });
-      if (!config.agentEnabled || !this.host.agentChat) return send(response, 404, { error: "Agent endpoint is disabled." });
-      if (!isJsonRequest(request)) return send(response, 415, { error: "Content-Type must be application/json." });
-      const body = await readJson(request);
-      if (body instanceof Error || !isRecord(body) || typeof body.input !== "string") return send(response, 400, { error: "Agent input is required." });
-      try {
-        return send(response, 200, { messages: await this.host.agentChat(body.input, typeof body.conversationId === "string" ? body.conversationId : undefined) });
-      } catch (error) {
-        console.error("Agent request failed:", error);
-        return send(response, 500, { error: "Agent request failed." });
-      }
-    }
-    return send(response, 404, { error: "Not found." });
+    if (path !== "/mcp" && path !== "/agent") return send(response, 404, { error: "Not found." });
+    if (!hasBearerToken(request, config.token)) return send(response, 401, { error: "A valid bearer token is required." }, { "WWW-Authenticate": `Bearer realm="${BRAND.slug}"` });
+    if (request.method !== "POST") return send(response, 405, { error: "Method not allowed." }, { Allow: "POST" });
+    return path === "/mcp" ? this.handleMcp(request, response, config) : this.handleAgent(request, response, config);
   }
 
-  private async handleRpc(request: unknown): Promise<Record<string, unknown> | undefined> {
-    if (!isRecord(request) || request.jsonrpc !== "2.0" || typeof request.method !== "string") {
-      return rpcError(null, -32600, "Invalid JSON-RPC request.");
+  private async handleMcp(request: IncomingMessage, response: ServerResponse, config: HttpMcpConfig): Promise<void> {
+    if (!config.enabled) return send(response, 404, { error: "MCP is disabled." });
+    if (!isJsonRequest(request)) return send(response, 415, { error: "Content-Type must be application/json." });
+    const body = await readBody(request);
+    if (body instanceof BodyError) return send(response, body.status, { error: body.message });
+    const parsed = parseJson(body);
+    if (!parsed) return send(response, 400, rpcError(null, -32700, "Parse error."));
+    const message = parsed.value;
+    const id = isRecord(message) && isRequestId(message.id) ? message.id : null;
+    const version = request.headers["mcp-protocol-version"];
+    if (typeof version === "string" && !(isRecord(message) && message.method === "initialize") && !isSupportedVersion(version)) {
+      return send(response, 400, rpcError(id, -32600, `Unsupported MCP-Protocol-Version ${version}; supported versions are ${SUPPORTED_MCP_PROTOCOL_VERSIONS.join(", ")}.`));
     }
-    if (request.id === undefined) return undefined;
+    try {
+      if (Array.isArray(message)) {
+        // 2025-03-26 servers must accept batches; later revisions dropped them, and accepting one costs nothing.
+        if (!message.length) return send(response, 400, rpcError(null, -32600, "Invalid JSON-RPC request."));
+        const replies: Array<Record<string, unknown>> = [];
+        for (const item of message) if (!needsNoReply(item)) replies.push(isRequestMessage(item) ? await this.handleRpc(item) : rpcError(isRecord(item) && isRequestId(item.id) ? item.id : null, -32600, "Invalid JSON-RPC request."));
+        return replies.length ? send(response, 200, replies) : send(response, 202);
+      }
+      if (needsNoReply(message)) return send(response, 202);
+      if (!isRequestMessage(message)) return send(response, 400, rpcError(id, -32600, "Invalid JSON-RPC request."));
+      return send(response, 200, await this.handleRpc(message));
+    } catch (error) {
+      console.error("MCP response failed:", error);
+      return send(response, 500, rpcError(id, -32603, "Internal error."));
+    }
+  }
+
+  private async handleAgent(request: IncomingMessage, response: ServerResponse, config: HttpMcpConfig): Promise<void> {
+    if (!config.agentEnabled || !this.host.agentChat) return send(response, 404, { error: "Agent endpoint is disabled." });
+    if (!isJsonRequest(request)) return send(response, 415, { error: "Content-Type must be application/json." });
+    const body = await readBody(request);
+    if (body instanceof BodyError) return send(response, body.status, { error: body.message });
+    const value = parseJson(body)?.value;
+    if (!isRecord(value) || typeof value.input !== "string") return send(response, 400, { error: "Agent input is required." });
+    try {
+      return send(response, 200, { messages: await this.host.agentChat(value.input, typeof value.conversationId === "string" ? value.conversationId : undefined) });
+    } catch (error) {
+      if (isClientError(error)) return send(response, 409, { error: error.message });
+      console.error("Agent request failed:", error);
+      return send(response, 500, { error: "Agent request failed." });
+    }
+  }
+
+  private async handleRpc(request: JsonRpcRequest): Promise<Record<string, unknown>> {
     const id = request.id;
     try {
       switch (request.method) {
         case "initialize":
-          return rpcResult(id, { protocolVersion, capabilities: { tools: { listChanged: false } }, serverInfo: { name: "synthv-toolbox", version: serverVersion } });
+          return rpcResult(id, {
+            protocolVersion: negotiatedVersion(request.params),
+            capabilities: { tools: { listChanged: false } },
+            serverInfo: { name: this.identity.name, title: this.identity.title, version: this.identity.version },
+            instructions: this.identity.instructions ?? defaultInstructions,
+          });
         case "ping":
           return rpcResult(id, {});
         case "tools/list":
-          return rpcResult(id, { tools: await this.listTools() });
+          return rpcResult(id, { tools: (await this.listTools()).map(({ permission: _, ...tool }) => tool) });
         case "tools/call":
           return rpcResult(id, await this.callTool(request.params));
         default:
@@ -190,58 +246,49 @@ export class HttpMcpServer {
     return { internalEnabled: config.internalEnabled, advancedEnabled: config.advancedEnabled };
   }
 
+  private async availableTools(authorization: McpAuthorization): Promise<McpTool[]> {
+    const tools = [...await this.host.mcpTools(authorization)];
+    if (this.config?.enabled && this.config.agentEnabled && this.host.agentTask) tools.push(toolboxAgentMcpTool());
+    return tools;
+  }
+
   private async listTools(): Promise<McpTool[]> {
     const authorization = this.authorization();
-    const tools = [...await this.host.mcpTools(authorization)];
-    if (this.config?.enabled && this.config.agentEnabled && this.host.agentTask) tools.push(agentTool());
-    return tools.filter((tool) => isToolPermitted(tool, authorization));
+    return (await this.availableTools(authorization)).filter((tool) => isToolPermitted(tool, authorization));
   }
 
   private async callTool(params: unknown): Promise<Record<string, unknown>> {
     if (!isRecord(params) || typeof params.name !== "string") throw new ClientError("tools/call requires a tool name.");
     const authorization = this.authorization();
-    const tools = [...await this.host.mcpTools(authorization)];
-    if (this.config?.enabled && this.config.agentEnabled && this.host.agentTask) tools.push(agentTool());
-    const tool = tools.find((candidate) => candidate.name === params.name);
+    const tool = (await this.availableTools(authorization)).find((candidate) => candidate.name === params.name);
     if (!tool || !isToolPermitted(tool, authorization)) throw new ClientError("Tool is disabled or unavailable.");
     const arguments_ = isRecord(params.arguments) ? withoutPermission(params.arguments) : {};
+    let output: unknown;
     try {
-      if (tool.name === agentTaskTool) {
-        const structuredContent = await this.host.agentTask!(arguments_);
-        return { content: normalizeStructuredContent(structuredContent), structuredContent, isError: false };
-      }
-      const result = await this.host.callMcpTool(tool.name, arguments_, authorization);
-      return { content: normalizeContent(result.content), isError: result.isError === true };
+      output = tool.name === agentTaskTool ? await this.host.agentTask!(arguments_) : await this.host.callMcpTool(tool.name, arguments_, authorization);
     } catch (error) {
+      // Execution failures go back as tool results so the model can read them and correct its call.
       if (isClientError(error)) return { content: [{ type: "text", text: error.message }], isError: true };
+      if (error instanceof Error) return { content: [{ type: "text", text: `Toolbox operation failed: ${error.message}` }], isError: true };
       throw error;
     }
+    // Serialization stays outside the try above: its failures are server faults and must not echo internals.
+    const result: { content: unknown; structuredContent?: unknown; isError?: boolean } = tool.name === agentTaskTool ? hostResultToToolResult(output) : output as { content: unknown };
+    return { content: toToolContent(result.content), ...(result.structuredContent === undefined ? {} : { structuredContent: toStructuredContent(result.structuredContent) }), isError: result.isError === true };
   }
 }
 
-function agentTool(): McpTool {
-  return {
-    name: agentTaskTool,
-    description: "Start, inspect, continue, cancel, or list Toolbox internal agent tasks.",
-    inputSchema: {
-      type: "object",
-      oneOf: [
-        { properties: { action: { const: "start" }, input: { type: "string", minLength: 1 } }, required: ["action", "input"], additionalProperties: false },
-        { properties: { action: { const: "continue" }, conversationId: { type: "string", minLength: 1 }, input: { type: "string", minLength: 1 }, taskId: { type: "string" } }, required: ["action", "conversationId", "input"], additionalProperties: false },
-        { properties: { action: { const: "status" }, taskId: { type: "string" }, conversationId: { type: "string" } }, required: ["action"], anyOf: [{ required: ["taskId"] }, { required: ["conversationId"] }], additionalProperties: false },
-        { properties: { action: { const: "cancel" }, taskId: { type: "string" }, conversationId: { type: "string" } }, required: ["action"], anyOf: [{ required: ["taskId"] }, { required: ["conversationId"] }], additionalProperties: false },
-        { properties: { action: { const: "list" } }, required: ["action"], additionalProperties: false },
-      ],
-    },
-  };
+class BodyError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
 }
 
 function disabledConfig(): HttpMcpConfig {
-  return { enabled: false, agentEnabled: false, internalEnabled: false, advancedEnabled: false, port: 0 };
+  return { enabled: false, agentEnabled: false, internalEnabled: false, advancedEnabled: false, port: 0, token: "" };
 }
 
 function validateConfig(config: HttpMcpConfig): void {
   if (!Number.isInteger(config.port) || config.port < 0 || config.port > 65_535) throw new Error("MCP port must be between 0 and 65535.");
+  if ((config.enabled || config.agentEnabled) && (typeof config.token !== "string" || !config.token)) throw new Error("MCP bearer token is required.");
 }
 
 function requestBoundaryError(request: IncomingMessage, boundPort: number | undefined): string | undefined {
@@ -254,6 +301,14 @@ function requestBoundaryError(request: IncomingMessage, boundPort: number | unde
     try { parsed = new URL(origin); } catch { return "Origin is invalid."; }
     if (parsed.protocol !== "http:" || parsed.origin !== `http://${host}` || !isLoopbackHostname(parsed.hostname) || effectivePort(parsed) !== boundPort) return "Origin does not match this loopback MCP server.";
   }
+}
+
+function hasBearerToken(request: IncomingMessage, token: string): boolean {
+  const match = /^Bearer[ \t]+([^\s]+)[ \t]*$/i.exec(request.headers.authorization ?? "");
+  if (!match || !token) return false;
+  const supplied = Buffer.from(match[1], "utf8");
+  const expected = Buffer.from(token, "utf8");
+  return supplied.length === expected.length && timingSafeEqual(supplied, expected);
 }
 
 function isJsonRequest(request: IncomingMessage): boolean {
@@ -271,9 +326,15 @@ function isLoopbackAuthority(authority: string, port: number): boolean {
 
 function isLoopbackHostname(hostname: string): boolean { return hostname.toLowerCase() === "127.0.0.1" || hostname.toLowerCase() === "localhost"; }
 function effectivePort(url: URL): number { return url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80; }
+function isSupportedVersion(version: unknown): version is string { return (SUPPORTED_MCP_PROTOCOL_VERSIONS as readonly unknown[]).includes(version); }
+function negotiatedVersion(params: unknown): string { return isRecord(params) && isSupportedVersion(params.protocolVersion) ? params.protocolVersion : fallbackProtocolVersion; }
+function isRequestId(value: unknown): value is string | number { return typeof value === "string" || (typeof value === "number" && Number.isFinite(value)); }
+function isRequestMessage(value: unknown): value is JsonRpcRequest { return isRecord(value) && value.jsonrpc === "2.0" && typeof value.method === "string" && isRequestId(value.id); }
+/** Notifications and responses to server requests need no reply under Streamable HTTP. */
+function needsNoReply(value: unknown): boolean { return isRecord(value) && value.jsonrpc === "2.0" && (typeof value.method === "string" ? value.id === undefined : value.method === undefined && isRequestId(value.id) && ("result" in value || "error" in value)); }
 
 function sameConfig(left: HttpMcpConfig | undefined, right: HttpMcpConfig): boolean {
-  return Boolean(left && left.enabled === right.enabled && left.agentEnabled === right.agentEnabled && left.internalEnabled === right.internalEnabled && left.advancedEnabled === right.advancedEnabled && left.port === right.port);
+  return Boolean(left && left.enabled === right.enabled && left.agentEnabled === right.agentEnabled && left.internalEnabled === right.internalEnabled && left.advancedEnabled === right.advancedEnabled && left.port === right.port && left.token === right.token);
 }
 
 function isToolPermitted(tool: McpTool, authorization: McpAuthorization): boolean {
@@ -286,15 +347,6 @@ function isToolPermitted(tool: McpTool, authorization: McpAuthorization): boolea
 function withoutPermission(arguments_: Record<string, unknown>): Record<string, unknown> {
   const { permission: _, ...safe } = arguments_;
   return safe;
-}
-
-function normalizeContent(content: unknown): Array<{ type: "text"; text: string }> {
-  if (Array.isArray(content)) return content as Array<{ type: "text"; text: string }>;
-  return [{ type: "text", text: typeof content === "string" ? content : JSON.stringify(content) ?? String(content) }];
-}
-
-function normalizeStructuredContent(content: unknown): Array<{ type: "text"; text: string }> {
-  return [{ type: "text", text: typeof content === "string" ? content : JSON.stringify(content) ?? String(content) }];
 }
 
 function rpcResult(id: unknown, result: Record<string, unknown>): Record<string, unknown> {
@@ -313,22 +365,21 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function readJson(request: IncomingMessage): Promise<unknown | Error> {
+function parseJson(text: string): { value: unknown } | undefined {
+  try { return { value: JSON.parse(text) }; } catch { return undefined; }
+}
+
+/** Reads the whole body, counting bytes rather than UTF-16 units; an oversized body is drained and rejected without being buffered. */
+function readBody(request: IncomingMessage): Promise<string | BodyError> {
   return new Promise((resolve) => {
-    let body = "";
-    request.setEncoding("utf8");
-    request.on("data", (chunk: string) => {
-      body += chunk;
-      if (body.length > 1_048_576) request.destroy(new Error("Request body is too large."));
+    const chunks: Buffer[] = [];
+    let size = 0;
+    request.on("data", (chunk: Buffer) => {
+      size += chunk.byteLength;
+      if (size <= maxBodyBytes) chunks.push(chunk);
     });
-    request.on("error", (error) => resolve(error));
-    request.on("end", () => {
-      try {
-        resolve(JSON.parse(body));
-      } catch {
-        resolve(new Error("Request body must be valid JSON."));
-      }
-    });
+    request.on("error", (error) => resolve(new BodyError(error.message, 400)));
+    request.on("end", () => resolve(size > maxBodyBytes ? new BodyError("Request body is too large.", 413) : Buffer.concat(chunks).toString("utf8")));
   });
 }
 
@@ -348,6 +399,11 @@ function listen(server: Server, port: number): Promise<void> {
   });
 }
 
+/** Stops listening, drops idle keep-alive sockets, and gives requests in flight a short grace period before cutting them off. */
 function close(server: Server): Promise<void> {
-  return new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  return new Promise((resolve, reject) => {
+    const cutoff = setTimeout(() => server.closeAllConnections(), closeGraceMs);
+    server.close((error) => { clearTimeout(cutoff); if (error) reject(error); else resolve(); });
+    server.closeIdleConnections();
+  });
 }

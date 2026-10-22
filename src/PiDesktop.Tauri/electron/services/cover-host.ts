@@ -5,6 +5,12 @@ import type { EmbeddedBridge } from "./synthv-bridge.js";
 import type { SynthVService } from "./synthv-service.js";
 
 type Data = Record<string, any>;
+
+/** Reads a bridge tool reply. A failure that is not JSON (a host error, an older gate) still surfaces as its own text. */
+function bridgeReply(reply: { text: string; isError?: boolean }): Data {
+  try { return JSON.parse(reply.text) as Data; }
+  catch (error) { if (reply.isError) return { outcome: "failed", error: { code: "BRIDGE_ERROR", message: reply.text } }; throw error; }
+}
 export interface CoverNote { startSeconds: number; endSeconds: number; pitch: number; lyric: string; }
 export interface CoverTarget {
   sessionToken: string; projectFile: string; trackIndex: number; groupIndex?: number;
@@ -20,7 +26,7 @@ export function createCoverHost(bridge: EmbeddedBridge, synthv: Pick<SynthVServi
   const call = async (name: string, input: Data): Promise<Data> => {
     const tool = bridge.tools.find(item => item.name === name);
     if (!tool) throw new Error(`Bridge tool ${name} is unavailable.`);
-    const result = await tool.call(input), value = JSON.parse(result.text);
+    const result = await tool.call(input), value = bridgeReply(result);
     if (result.isError || value.outcome === "failed" || value.outcome === "unknown") throw new Error(`${value.error?.code ?? "BRIDGE_ERROR"}: ${value.error?.message ?? result.text}`);
     return value;
   };

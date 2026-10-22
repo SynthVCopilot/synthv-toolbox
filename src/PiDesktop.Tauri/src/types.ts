@@ -167,6 +167,27 @@ export interface HttpApiStatus {
   endpoint: string | null;
   agentEndpoint: string | null;
   lastError: string | null;
+  /** Present once the host enforces bearer authentication; shown so users can configure clients. */
+  token?: string;
+  authRequired?: boolean;
+  serverName?: string;
+  protocolVersions?: string[];
+  tools?: string[];
+}
+
+export type IntegrationPreference = "auto" | "on" | "off";
+
+export interface IntegrationState {
+  preference: IntegrationPreference;
+  enabled: boolean;
+  detected: boolean;
+  bridgeLoaded: boolean;
+  errors: string[];
+}
+
+export interface McpProbeResult extends OperationResult {
+  tools?: string[];
+  serverInfo?: { name: string; version?: string };
 }
 
 export interface SynthVInstallation {
@@ -446,6 +467,15 @@ export interface InstalledPlugin {
   advancedFunctionsEnabled: boolean;
 }
 
+export interface DataDirectoryState {
+  path: string;
+  migratedFrom: string | null;
+  deferred: { reason: "running" | "in-use" | "error"; detail: string } | null;
+  legacyRemaining: string | null;
+  setAside: string | null;
+  fixupErrors: string[];
+}
+
 export interface BootstrapState {
   onboardingCompleted: boolean;
   mode: AppMode;
@@ -457,6 +487,8 @@ export interface BootstrapState {
   platform: string;
   appVersion: string;
   configPath: string;
+  /** Where the data folder is and whether this launch moved it from the pre-Toneshuttle name. */
+  dataDirectory?: DataDirectoryState;
   settingsLoadError?: string | null;
   model?: ModelSummary;
   scriptsPath?: string;
@@ -476,6 +508,8 @@ export interface BootstrapState {
   autostartEnabled?: boolean | null;
   autostartError?: string | null;
   svpAssociation: SvpAssociationState;
+  /** Older hosts omit this; treat a missing value as SynthV enabled, which was the only behavior then. */
+  integrations?: { synthv: IntegrationState };
 }
 
 export interface ConversationSummary {

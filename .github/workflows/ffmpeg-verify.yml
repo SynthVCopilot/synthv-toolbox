@@ -48,7 +48,7 @@ jobs:
         run: npm exec --prefix src/PiDesktop.Tauri -- electron-builder --config electron-builder.yml ${{ matrix.target }} --publish never
       - uses: actions/upload-artifact@v4
         with:
-          name: synthv-toolbox-${{ matrix.name }}
+          name: toneshuttle-${{ matrix.name }}
           path: ${{ matrix.artifact }}
           if-no-files-found: error
 
@@ -121,6 +121,6 @@ jobs:
         run: |
           $assets = @(gh release view "v$env:NIGHTLY_VERSION" --json assets --jq '.assets[].name')
           if ($LASTEXITCODE -ne 0) { throw "Nightly release was not created." }
-          $packageAsset = "Synthesizer-V-Toolbox-$env:NIGHTLY_VERSION$env:ASSET_SUFFIX"
+          $packageAsset = "Toneshuttle-$env:NIGHTLY_VERSION$env:ASSET_SUFFIX"
           if ($assets -notcontains $packageAsset) { throw "Nightly package was not published: $packageAsset" }
           if ($assets -notcontains $env:UPDATE_METADATA) { throw "Nightly update metadata was not published: $env:UPDATE_METADATA" }
