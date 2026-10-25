@@ -58,9 +58,7 @@ jobs:
         working-directory: src/PiDesktop.Tauri
         run: |
           npm run build:electron
-          node ../../test/electron-updater.mjs
-          node ../../test/electron-ai-service.mjs
-          node ../../test/electron-http-mcp-server.mjs
+          npm run test:contract
       - uses: actions/upload-artifact@v4
         with:
           name: prepared-desktop

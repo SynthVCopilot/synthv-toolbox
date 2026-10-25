@@ -1,4 +1,4 @@
-/** Product identity for the renderer; mirrors electron/brand.ts (checked by test/brand-identity.mjs). */
+/** Product identity for the renderer; mirrors electron/brand.ts (checked by test/contract/services/toneshuttle-integrations.test.mjs). */
 export const BRAND = {
   productName: "Toneshuttle",
   productNameZh: "声梭",

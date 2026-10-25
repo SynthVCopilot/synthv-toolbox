@@ -125,13 +125,8 @@ AI 凭据使用本地 AES-256-GCM 加密：`ai/metadata.json` 保存密文，`ai
 ```sh
 npm ci
 npm run build:electron
-npm run test:contracts
-npm run test:creative-workflow
-npm run test:cover
-npm run test:usability
-npm run test:bridge-lyrics
-npm run test:midi
-npm run test:electron-app
+npm run test:contract
+npm run test:flow
 ```
 
 真实验收还需要可运行的 SynthV 和声库：用独立素材完成导入、选区填词、保存、渲染，再读取实际 SVP/WAV/LRC。测试替身只能证明协议和保护行为，不能代替真实宿主或音频产物。

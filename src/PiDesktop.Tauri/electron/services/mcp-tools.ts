@@ -7,7 +7,7 @@ export type ToolboxMcpToolName = "toolbox_internal" | "toolbox_advanced";
 
 /**
  * Operations HostCapabilities dispatches per MCP permission tier, mapped to the params each one reads.
- * test/electron-http-mcp-server.mjs checks this against host-capabilities.ts and the creative services.
+ * test/contract/services/electron-http-mcp-server.test.mjs checks this against host-capabilities.ts and the creative services.
  */
 export const TOOLBOX_OPERATIONS: Readonly<Record<ToolboxMcpToolName, Readonly<Record<string, Readonly<Record<string, string>>>>>> = {
   toolbox_internal: {

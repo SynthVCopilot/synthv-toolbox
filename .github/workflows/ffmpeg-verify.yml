@@ -40,10 +40,10 @@ jobs:
         run: npm run build:electron
       - name: Run desktop contract tests
         working-directory: src/PiDesktop.Tauri
-        run: npm run test:contracts
-      - name: Load compiled Electron main modules
+        run: npm run test:contract
+      - name: Run desktop flow tests
         working-directory: src/PiDesktop.Tauri
-        run: npm run test:electron-main
+        run: npm run test:flow
       - name: Package development artifacts
         run: npm exec --prefix src/PiDesktop.Tauri -- electron-builder --config electron-builder.yml ${{ matrix.target }} --publish never
       - uses: actions/upload-artifact@v4
