@@ -218,7 +218,7 @@ test("save shortcut sends the platform save key and reports operating system fai
     const service = new SynthVService(root, root, noBridge, root, runner);
     const [target] = await service.listProcesses();
     await service.sendShortcut(target.processId, target.processIdentity, "save");
-    assert.ok(calls.at(-1)[1].some(value => process.platform === "win32" ? value === "^s" : value.includes('keystroke "s" using command down')));
+    assert.ok(calls.at(-1)[1].some(value => process.platform === "win32" ? value === "17,83" || value.endsWith(" '17,83' 0") : value.includes('keystroke "s" using command down')));
     denied = true;
     await assert.rejects(service.sendShortcut(target.processId, target.processIdentity, "save"), /Accessibility denied/);
   } finally { await rm(root, { recursive: true, force: true }); }

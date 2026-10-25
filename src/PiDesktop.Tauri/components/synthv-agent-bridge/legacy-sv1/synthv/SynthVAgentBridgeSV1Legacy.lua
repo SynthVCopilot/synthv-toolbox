@@ -92,6 +92,29 @@ end
 local function serialNote(n, i) return { noteIndex=i, onset=n:getOnset(), duration=n:getDuration(), pitch=n:getPitch(), lyrics=n:getLyrics(), phonemes=n:getPhonemes() } end
 local function serialPart(r, i) local g=group(r); local notes={}; for n=1,g:getNumNotes() do notes[#notes+1]=serialNote(g:getNote(n),n-1) end; return { partIndex=i, name=g:getName(), main=r:isMain(), timeOffset=r:getTimeOffset(), pitchOffset=r:getPitchOffset(), notes=notes } end
 local function serialTrack(t, i) local parts={}; for p=1,t:getNumGroups() do parts[#parts+1]=serialPart(t:getGroupReference(p),p-1) end; return { trackIndex=i, name=t:getName(), parts=parts } end
+local PARAMETER_NAMES={"pitchDelta","vibratoEnv","loudness","tension","breathiness","voicing","gender","toneShift"}
+local function parameterSnapshot(payload)
+  local t=track(project(),payload.trackIndex); local r=part(t,payload.partIndex); local g=group(r); local unavailable={}
+  local voiceOk,voice=pcall(function() return r:getVoice() end); if not voiceOk then voice=nil; unavailable[#unavailable+1]="voice" end
+  local notes={}
+  for i=1,g:getNumNotes() do
+    local n=g:getNote(i); local value=serialNote(n,i-1); local ok,attributes=pcall(function() return n:getAttributes() end)
+    if ok then value.attributes=attributes else unavailable[#unavailable+1]="note["..tostring(i-1).."].attributes" end
+    notes[#notes+1]=value
+  end
+  local automation={}
+  for _,name in ipairs(PARAMETER_NAMES) do
+    local ok,curve=pcall(function() return g:getParameter(name) end)
+    if ok and curve then
+      local curveOk,raw,curveType,interpolation=pcall(function() return curve:getAllPoints(),curve:getType(),curve:getInterpolationMethod() end)
+      if curveOk and type(raw)=="table" then
+        local points={}; for i=1,#raw do points[#points+1]={ position=raw[i][1],value=raw[i][2] } end
+        automation[name]={ type=curveType,interpolation=interpolation,points=points }
+      else unavailable[#unavailable+1]="automation."..name end
+    else unavailable[#unavailable+1]="automation."..name end
+  end
+  return { trackIndex=payload.trackIndex,partIndex=payload.partIndex,partName=g:getName(),main=r:isMain(),timeOffset=r:getTimeOffset(),pitchOffset=r:getPitchOffset(),voice=voice,notes=notes,automation=automation,unavailable=unavailable }
+end
 local function writeAllowed(payload) if payload.writeIntent ~= true then fail("WRITE_INTENT_REQUIRED","Write operations require writeIntent=true") end; if pendingEdits() then fail("HOST_EDIT_IN_PROGRESS","Finish or cancel the active SynthV edit before writing") end end
 local function undo(p, payload) writeAllowed(payload); p:newUndoRecord() end
 local handlers={}
@@ -108,6 +131,7 @@ handlers["track.update"] = function(payload) local p=project(); undo(p,payload);
 handlers["track.delete"] = function(payload) local p=project(); local index=integer(payload.trackIndex,"trackIndex",0,p:getNumTracks()-1); if p:getNumTracks()<=1 then fail("LAST_TRACK_FORBIDDEN","SynthV projects must retain one track") end; undo(p,payload); p:removeTrack(index+1); return { deleted=true, trackIndex=index } end
 handlers["part.list"] = function(payload) local t=track(project(),payload.trackIndex); local result={}; for i=1,t:getNumGroups() do result[#result+1]=serialPart(t:getGroupReference(i),i-1) end; return result end
 handlers["part.get"] = function(payload) return serialPart(part(track(project(),payload.trackIndex),payload.partIndex),payload.partIndex) end
+handlers["parameter.snapshot"] = parameterSnapshot
 handlers["part.create"] = function(payload)
   local p=project(); local t=track(p,payload.trackIndex); undo(p,payload)
   local g=SV:create("NoteGroup"); g:setName(type(payload.name)=="string" and payload.name or "Part")
