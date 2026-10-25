@@ -34,8 +34,6 @@ import { createSynthVDeliveryRegistry, createSynthVToolsExtension } from "./serv
 import { createToolboxAgentToolsExtension } from "./services/toolbox-agent-tools.js";
 import { createExternalMcpToolsExtension, ExternalMcpPool, mcpServerConfigs } from "./services/external-mcp-tools.js";
 import { SynthVService } from "./services/synthv-service.js";
-import { DreamtonicsWebAccounts, type WebAccountBrowser } from "./services/dreamtonics-web.js";
-import { createDreamtonicsBrowser } from "./services/dreamtonics-browser.js";
 import { createPiSessionFactory } from "@synthv-toolbox/agent-runtime";
 import type { JsonValue } from "@synthv-toolbox/runtime-protocol";
 import { authorizeAnthropic } from "@model-auth/providers/anthropic";
@@ -271,13 +269,7 @@ async function initializeServices(): Promise<void> {
   const startOff = await savedIntegrationPreference(userData, "synthv") === "off";
   const bridge = startOff ? new SwitchableBridge(bridgeOff(), false) : new SwitchableBridge(await loadBridge(), bridgeLoadError === undefined);
   const bridgeIpcDirectory = (await bridge.status()).ipcDirectory;
-  const accountBrowsers = new Map<string, WebAccountBrowser>();
-  const webAccounts = new DreamtonicsWebAccounts((slotId) => {
-    let browser = accountBrowsers.get(slotId);
-    if (!browser) { browser = createDreamtonicsBrowser(slotId); accountBrowsers.set(slotId, browser); }
-    return browser;
-  });
-  const synthv = new SynthVService(join(userData, "synthv"), bridgeDirectory, bridge, bridgeIpcDirectory, undefined, autostartController(), undefined, process.env, webAccounts);
+  const synthv = new SynthVService(join(userData, "synthv"), bridgeDirectory, bridge, bridgeIpcDirectory, undefined, autostartController(), undefined, process.env);
   const componentsRoot = app.isPackaged ? join(process.resourcesPath, "components") : resolve(currentDirectory, "../../components");
   let capabilities: HostCapabilities;
   let desktop: DesktopStateService;

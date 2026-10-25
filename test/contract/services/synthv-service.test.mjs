@@ -43,7 +43,7 @@ test("profiles persist locally without session content APIs", async () => {
     const state = await service.createProfile("Primary");
     const slotId = state.slots[0].id;
     assert.deepEqual(await service.sessionSize(slotId), { status: "unknown", sizeBytes: null });
-    for (const name of ["readSession", "writeSession", "inspectOfflineLicense", "setOfflineLicense"]) assert.equal(service[name], undefined);
+    for (const name of ["readSession", "writeSession"]) assert.equal(service[name], undefined);
     assert.equal((await service.profileState()).slots[0].id, slotId);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
