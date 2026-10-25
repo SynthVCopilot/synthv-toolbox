@@ -5,15 +5,16 @@ import { stripTypeScriptTypes } from "node:module";
 const source = fs.readFileSync(new URL("../../../src/PiDesktop.Tauri/src/accountStatus.ts", import.meta.url), "utf8");
 const status = await import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(source, { mode: "transform" })).toString("base64")}`);
 
-const verified = { launchEnabled: true, localBlocked: false, authorizationStatus: "verified" };
-assert.deepEqual(status.evaluateAccountEnvironment({ ...verified, sessionStatus: "ready", remoteUse: "unknown" }), { available: true, busy: false, unavailable: false });
-assert.deepEqual(status.evaluateAccountEnvironment({ ...verified, sessionStatus: "inUse", remoteUse: "unknown" }), { available: true, busy: true, unavailable: false });
-assert.equal(status.evaluateAccountEnvironment({ ...verified, sessionStatus: "ready", remoteUse: "detected" }).available, false);
-assert.equal(status.evaluateAccountEnvironment({ ...verified, sessionStatus: "expired", remoteUse: "unknown" }).available, false);
-assert.equal(status.evaluateAccountEnvironment({ ...verified, authorizationStatus: "unknown", sessionStatus: "ready", remoteUse: "unknown" }).available, false);
+const base = { launchEnabled: true, localBlocked: false };
+assert.deepEqual(status.evaluateAccountEnvironment({ ...base, sessionStatus: "ready" }), { available: true, busy: false, unavailable: false });
+assert.deepEqual(status.evaluateAccountEnvironment({ ...base, sessionStatus: "inUse" }), { available: true, busy: true, unavailable: false });
+assert.deepEqual(status.evaluateAccountEnvironment({ ...base, sessionStatus: "ready", localBlocked: true }), { available: false, busy: true, unavailable: true });
+assert.deepEqual(status.evaluateAccountEnvironment({ ...base, sessionStatus: "ready", launchEnabled: false }), { available: false, busy: false, unavailable: true });
+assert.equal(status.evaluateAccountEnvironment({ ...base, sessionStatus: "missing" }).available, false);
+assert.equal(status.evaluateAccountEnvironment({ ...base, sessionStatus: "expired" }).available, false);
 assert.deepEqual(status.summarizeAccountEnvironments([
-  { ...verified, sessionStatus: "expired", remoteUse: "unknown" },
-  { ...verified, sessionStatus: "ready", remoteUse: "unknown" },
+  { ...base, sessionStatus: "expired" },
+  { ...base, sessionStatus: "ready" },
 ]), { available: true, busy: false, allUnavailable: false });
 
 console.log("Account availability states passed.");

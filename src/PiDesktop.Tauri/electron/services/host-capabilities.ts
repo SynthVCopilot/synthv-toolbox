@@ -72,8 +72,6 @@ export class HostCapabilities {
     }
     if (capability === "synthv") {
       if (operation === "activate-profile") return await this.synthv.activateProfile(text(params, "slotId")) as JsonValue;
-      if (operation === "web-account-query") return await this.synthv.webAccountQuery(text(params, "slotId")) as unknown as JsonValue;
-
     }
     throw new Error(`Unsupported advanced host operation: ${capability}.${operation}`);
   }

@@ -280,16 +280,6 @@ function refreshPreviewAiProvider(provider: AiProviderSummary): void {
 function previewAccountProbe(overrides: Partial<Sv2AccountProbe> = {}): Sv2AccountProbe {
   return {
     sessionStatus: "missing",
-    remoteUse: "unknown",
-    authorizationStatus: "unknown",
-    authorizedVoiceCount: 0,
-    authorizedVoices: [],
-    authorizedVoiceProducts: [],
-    offlineLicense: {
-      cacheStatus: "inactive",
-      eligibility: "unknown",
-      cachedProducts: [],
-    },
     checkedAtUtc: new Date().toISOString(),
     detail: "当前没有可用于账号预检的登录缓存。",
     ...overrides,
@@ -384,28 +374,11 @@ let previewProfiles: Sv2ProfilesState = {
     },
     accountProbe: previewAccountProbe({
       sessionStatus: "ready",
-      remoteUse: "clear",
-      authorizationStatus: "verified",
-      authorizedVoiceCount: 2,
-      authorizedVoices: ["Mai 2", "SOLARIA"],
-      authorizedVoiceProducts: [{ id: "00000000-0000-4000-8000-000000000002", name: "SOLARIA", isTrial: true, expiresAtUtc: "2099-12-31T23:59:59Z" }],
-      offlineLicense: {
-        cacheStatus: "inactive",
-        eligibility: "eligible",
-        cachedProducts: [],
-      },
-      accountDisplayName: "Vocal Editor",
-      accountEmail: "editor@example.com",
-      detail: "官方服务已接受无踢出设备登录事件，并返回 2 个可匹配的官方声库授权。",
+      detail: "登录缓存存在。",
     }),
     concurrentAccountProbe: previewAccountProbe({
       sessionStatus: "ready",
-      remoteUse: "clear",
-      authorizationStatus: "verified",
-      authorizedVoiceCount: 2,
-      authorizedVoices: ["Mai 2", "SOLARIA"],
-      authorizedVoiceProducts: [{ id: "00000000-0000-4000-8000-000000000002", name: "SOLARIA", isTrial: true, expiresAtUtc: "2099-12-31T23:59:59Z" }],
-      detail: "官方服务已接受隔离副本的无踢出设备登录事件，并返回 2 个可匹配的官方声库授权。",
+      detail: "隔离副本的登录缓存存在。",
     }),
     concurrent: {
       ready: true,
@@ -545,19 +518,14 @@ function previewAccountPrecheck(): Sv2AccountPrecheck {
     localUse,
     localProcesses: previewProfiles.blockers,
     concurrentPids: slot?.concurrent.runningPids ?? [],
-    remoteUse: probe.remoteUse,
     sessionStatus: probe.sessionStatus,
-    authorizationStatus: probe.authorizationStatus,
-    authorizedVoiceCount: probe.authorizedVoiceCount,
     sessionCached: Boolean(slot?.sessionCached),
     recoveryPending,
     summary: localUse
       ? "当前账号正在本机使用。"
-      : probe.remoteUse === "clear" && probe.sessionStatus === "ready"
-        ? "官方服务已接受无踢出设备登录事件。"
-        : probe.remoteUse === "detected"
-          ? "账号服务报告当前账号正在使用。"
-          : "当前账号的服务端占用状态未知。",
+      : probe.sessionStatus === "ready"
+        ? "登录缓存存在。"
+        : "没有登录缓存。",
     detail: probe.detail,
   };
 }
@@ -1085,19 +1053,12 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     return previewProfiles as T;
   }
 
-  if (command === "sv2_web_account_login") return undefined as T;
-  if (command === "sv2_web_account_query") return {
-    status: "ready", use: "available", offlineDevices: [],
-    licenses: [{ name: "Synthesizer V Studio 2 Pro", status: "active", type: "permanent" }],
-    checkedAtUtc: new Date().toISOString(),
-  } as T;
   if (command === "accept_sv2_concurrent_disclaimer") {
     previewConcurrentDisclaimerAccepted = true;
     return previewState() as T;
   }
   if (command === "preview_svp_route") {
     const projectPath = String(args?.projectPath ?? "C:\\Projects\\demo.svp");
-    const requiredVoiceNames = ["Mai 2", "SOLARIA"];
     return {
       projectPath,
       requiredVoices: [
@@ -1106,28 +1067,20 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       ],
       candidates: previewProfiles.slots.map((slot, index) => {
         const probe = index > 0 ? slot.concurrentAccountProbe : slot.accountProbe;
-        const verified = probe.authorizationStatus === "verified";
-        const matchedVoices = verified ? requiredVoiceNames.filter((voice) => probe.authorizedVoices.includes(voice)) : [];
-        const missingOrUnknownVoices = requiredVoiceNames.filter((voice) => !matchedVoices.includes(voice));
         return {
           slotId: slot.id,
           displayName: slot.displayName,
           idle: index > 0,
           launchMode: index > 0 ? "concurrent" as const : undefined,
-          remoteUse: probe.remoteUse,
           sessionStatus: probe.sessionStatus,
-          authorizationSource: verified ? "session" as const : "unknown" as const,
-          matchedVoices,
-          missingOrUnknownVoices,
-          exactAuthorizationMatch: verified && missingOrUnknownVoices.length === 0,
-          reason: verified ? "已根据官方授权匹配工程声库。" : "账号授权未知，需要确认后启动。",
+          reason: probe.sessionStatus === "ready" ? "登录缓存存在，可以直接启动。" : "没有登录缓存，需要先登录。",
         };
       }),
       selectedSlotId: previewProfiles.slots[1]?.id,
       selectedLaunchMode: "concurrent",
       requiresConfirmation: false,
       summary: "将使用账号“备用账号”打开工程。",
-      detail: "官方服务已接受无踢出设备登录事件，并匹配工程所需的官方声库授权。",
+      detail: "登录缓存存在。",
     } as SvpRoutePlan as T;
   }
   if (command === "launch_svp_route") {
@@ -1527,8 +1480,6 @@ export const api = {
   sv2CachedProfileState: () => call<Sv2ProfilesState>("sv2_cached_profile_state"),
   sv2VoiceCatalog: () => call<import("./types").Sv2CachedVoice[]>("sv2_voice_catalog"),
   sv2AccountPrecheck: () => call<Sv2AccountPrecheck>("sv2_account_precheck"),
-  sv2WebAccountLogin: (slotId: string) => call<void>("sv2_web_account_login", { slotId }),
-  sv2WebAccountQuery: (slotId: string) => call<import("./types").Sv2WebAccountSnapshot>("sv2_web_account_query", { slotId }),
   sv2AccountUsageSnapshot: () => call<Sv2AccountUsageSnapshot>("sv2_account_usage_snapshot"),
   sv2AccountUsageSnapshotForSlot: (slotId: string) =>
     call<Sv2AccountUsageSnapshot>("sv2_account_usage_snapshot_for_slot", { slotId }),

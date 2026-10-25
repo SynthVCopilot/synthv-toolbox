@@ -1,13 +1,9 @@
 export type AccountSessionStatus = "ready" | "missing" | "inUse" | "expired" | "loginRequired" | "invalid" | "syncFailed" | "accountMismatch" | "unsupported" | "offline";
-export type AccountRemoteUse = "clear" | "detected" | "unknown";
-export type AccountAuthorization = "verified" | "unknown";
 
 export interface AccountEnvironmentInput {
   launchEnabled: boolean;
   localBlocked: boolean;
   sessionStatus: AccountSessionStatus;
-  remoteUse: AccountRemoteUse;
-  authorizationStatus: AccountAuthorization;
 }
 
 export interface AccountEnvironmentAvailability {
@@ -24,16 +20,13 @@ export interface AccountAvailabilitySummary {
 
 export function evaluateAccountEnvironment(input: AccountEnvironmentInput): AccountEnvironmentAvailability {
   const sessionReady = input.sessionStatus === "ready" || input.sessionStatus === "inUse";
-  const remoteBlocked = input.remoteUse === "detected";
   const available = input.launchEnabled
     && !input.localBlocked
-    && !remoteBlocked
-    && sessionReady
-    && input.authorizationStatus === "verified";
+    && sessionReady;
   return {
     available,
-    busy: input.sessionStatus === "inUse" || remoteBlocked || input.localBlocked,
-    unavailable: !available && (!input.launchEnabled || input.localBlocked || remoteBlocked || !sessionReady || input.authorizationStatus !== "verified"),
+    busy: input.sessionStatus === "inUse" || input.localBlocked,
+    unavailable: !available && (!input.launchEnabled || input.localBlocked || !sessionReady),
   };
 }
 

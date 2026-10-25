@@ -25,7 +25,7 @@ export const TOOLBOX_OPERATIONS: Readonly<Record<ToolboxMcpToolName, Readonly<Re
     filesystem: { read: "path", write: "path, content", mkdir: "path", delete: "path" },
     sandbox: { add: "name, root", delete: "name" },
     authorization: { remove: "provider, credentialId", enable: "provider, credentialId, enabled, weight", "add-api-key": "provider, label, apiKey" },
-    synthv: { "activate-profile": "slotId", "web-account-query": "slotId" },
+    synthv: { "activate-profile": "slotId" },
   },
 };
 

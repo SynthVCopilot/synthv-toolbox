@@ -18,7 +18,6 @@ import { mountModelAuthDialog, type ModelAuthAction } from "./modelAuthDialog";
 import { api } from "./api";
 import { evaluateAccountEnvironment } from "./accountStatus";
 import { instanceAccount, instanceProjectTitle } from "./sv2Instances";
-import { findVoiceMetadata } from "./voiceCatalog";
 import { icon } from "./icons";
 import { renderAboutPage } from "./about";
 import { guiFeatureCatalog, toolGroups, type FeatureCatalogItem, type ToolGroup } from "./featureCatalog";
@@ -95,10 +94,7 @@ import type {
   ProjectBackupState,
   RhymeMatchMode,
   Sv2AccountProbe,
-  Sv2AuthorizedVoiceProduct,
-  Sv2CachedVoice,
   Sv2ProfileSlot,
-  Sv2WebAccountSnapshot,
   Sv2ProfilesState,
   Sv2SyncCategory,
   Sv2SyncCategoryId,
@@ -296,9 +292,7 @@ let sidebarCollapsed = (() => {
 let accountManagerOpen = false;
 let accountManagerSection: AccountManagerSection = "global";
 let managedProfileSlotId: string | undefined;
-let sv2VoiceCatalog: Sv2CachedVoice[] | undefined;
 
-let sv2VoiceCatalogLoading = false;
 let shellController: ShellController | undefined;
 const fluentSelectApps = new Map<string, App>();
 let lastWiredMarkup = "";
@@ -964,7 +958,6 @@ async function refreshVisibleSynthvInstances(): Promise<void> {
     bridgeSession = nextBridgeSession;
     if (nextProfiles) {
       profiles = nextProfiles;
-      refreshAuthorizedVoiceEntries();
     }
     const nextRows = refreshPage === "accounts" ? renderSv2InstanceRows() : renderBridgeProcessRows();
     if (bridgeSessionChanged) {
@@ -1197,7 +1190,6 @@ function renderAccountIndicatorConsent(): string {
       <p>${t("accounts.consentDescription")}</p>
       <ul>
         <li>${t("accountUi.theCheckReadsOfficialAuthorizationsIfTheSessionHas")}</li>
-        <li>${t("accountUi.accountSettingsShowTheOfficialNameAndEmailAs")}</li>
       </ul>
       <p class="dialog-choice-note">${t("accountUi.toolboxWillNotLaunchTheClientModifySvOr")}</p>
       <div class="dialog-actions"><button class="secondary" data-cancel-account-indicator>${t("accounts.cancel")}</button><button class="primary" data-confirm-account-indicator>${icon("check", 16)} ${t("accounts.consentConfirm")}</button></div>
@@ -1300,30 +1292,19 @@ function renderSvpRouteDialog(): string {
 }
 
 function renderSvpRouteCandidate(candidate: SvpRouteCandidate, plan: SvpRoutePlan): string {
-  const selectable = candidate.idle && candidate.remoteUse !== "detected" && Boolean(candidate.launchMode);
+  const selectable = candidate.idle && Boolean(candidate.launchMode);
   const selected = candidate.slotId === plan.selectedSlotId && candidate.launchMode === plan.selectedLaunchMode;
   const hostLabel = candidate.hostProfile === "sv1" ? "SynthV Studio 1" : candidate.hostProfile === "sv2" ? "SynthV Studio 2" : candidate.hostProfile === "flat" ? "Flat" : "";
   const modeLabel = hostLabel || (candidate.launchMode === "concurrent" ? t("accountUi.sandboxieConcurrent") : candidate.launchMode === "normal" ? t("accountUi.standardSwitch") : t("accountUi.cannotLaunch"));
   const standalone = Boolean(candidate.hostProfile);
-  const sessionLabel = standalone ? t("settings.hostInstallation") : candidate.remoteUse === "detected"
-    ? t("accountUi.theAccountServiceReportsThisAccountIsInUse")
-    : candidate.remoteUse === "clear" && candidate.sessionStatus === "ready"
-      ? t("accountUi.theAccountServiceReportsNoRemoteUsage")
-      : candidate.sessionStatus === "inUse"
-        ? t("accountUi.cachedSessionIsInUseOnThisComputer")
-        : t("accountUi.usageUnknown", { p0: accountProbeSessionLabel(candidate.sessionStatus) });
-  const authorizationLabel = candidate.authorizationSource === "session" ? t("accountUi.officialAuthorization") : t("accountUi.authorizationUnknown");
-  const matchLabel = candidate.exactAuthorizationMatch
-    ? t("accountUi.matchesAllRequiredVoices", { p0: icon("check", 14), p1: authorizationLabel })
-    : candidate.matchedVoices.length
-      ? t("accountUi.matchedUnknown", { p0: authorizationLabel, p1: candidate.matchedVoices.length, p2: candidate.missingOrUnknownVoices.length })
-      : t("accountUi.authorizationUnknownManualConfirmationRequired");
-  const needsConfirmation = candidate.remoteUse === "unknown" || candidate.sessionStatus !== "ready" || !candidate.exactAuthorizationMatch;
+  const sessionLabel = standalone ? t("settings.hostInstallation") : candidate.sessionStatus === "inUse"
+    ? t("accountUi.cachedSessionIsInUseOnThisComputer")
+    : accountProbeSessionLabel(candidate.sessionStatus);
+  const needsConfirmation = candidate.sessionStatus !== "ready";
   const actionLabel = standalone ? t("settings.openWithHost") : plan.requiresConfirmation || needsConfirmation ? t("accountUi.confirmThisAccount") : t("accountUi.openWithThisAccount");
   return `<article class="svp-route-candidate ${selected ? "recommended" : ""} ${selectable ? "" : "disabled"}">
-    <div class="route-candidate-heading"><span class="profile-avatar compact">${escapeHtml(Array.from(candidate.displayName)[0] ?? "S")}</span><div><strong>${escapeHtml(candidate.displayName)}</strong><small>${escapeHtml(modeLabel)} · ${escapeHtml(sessionLabel)}${selected ? t("accountUi.recommended") : ""}</small></div>${standalone ? "" : `<span class="route-match ${candidate.exactAuthorizationMatch ? "exact" : "unknown"}">${matchLabel}</span>`}</div>
+    <div class="route-candidate-heading"><span class="profile-avatar compact">${escapeHtml(Array.from(candidate.displayName)[0] ?? "S")}</span><div><strong>${escapeHtml(candidate.displayName)}</strong><small>${escapeHtml(modeLabel)} · ${escapeHtml(sessionLabel)}${selected ? t("accountUi.recommended") : ""}</small></div></div>
     <p>${escapeHtml(candidate.reason)}</p>
-    ${candidate.missingOrUnknownVoices.length ? `<div class="route-missing" title="${t("accountUi.unmatchedOrUnknown")}">${candidate.missingOrUnknownVoices.map((voice) => `<span>${escapeHtml(voice)}</span>`).join("")}</div>` : ""}
     <button class="${selected ? "primary" : "secondary"}" data-launch-svp-route="${escapeHtml(candidate.slotId)}" data-svp-route-mode="${escapeHtml(candidate.launchMode ?? "normal")}" ${selectable ? "" : "disabled"}>${candidate.launchMode === "concurrent" ? icon("boxes", 16) : icon("play", 16)} ${actionLabel}</button>
   </article>`;
 }
@@ -1346,7 +1327,6 @@ function accountProbeSessionLabel(status: SvpRouteCandidate["sessionStatus"]): s
 
 interface AccountProbeIssuePresentation {
   cardLabel: string;
-  authorizationLabel: string;
   title: string;
   attention: boolean;
 }
@@ -1358,55 +1338,46 @@ function accountProbeIssueRules(): Array<[
   return [
     ["syncFailed", {
       cardLabel: t("accountUi.sessionSynchronizationFailedRepairRequired"),
-      authorizationLabel: t("accountUi.sessionSynchronizationFailedSlotAuthorizationsWereNotRead"),
       title: t("accountUi.accountCredentialsOrDeviceIdentityCouldNotBeSafely"),
       attention: true,
     }],
     ["accountMismatch", {
       cardLabel: t("accountUi.accountCopiesDoNotMatch"),
-      authorizationLabel: t("accountUi.accountIdentitiesDoNotMatchSlotAuthorizationsWereNot"),
       title: t("accountUi.theAccountIdentitiesReadFromThisSlotDoNot"),
       attention: true,
     }],
     ["inUse", {
       cardLabel: t("accountUi.accountInUseOnThisComputer"),
-      authorizationLabel: t("accountUi.accountInUseAuthorizationsWereNotReadThisTime"),
       title: t("accountUi.theClientIsUsingThisSessionTheLastRedacted"),
       attention: false,
     }],
     ["loginRequired", {
       cardLabel: t("accountUi.accountNeedsToSignInAgain"),
-      authorizationLabel: t("accountUi.noUsableSignInCredentialsAuthorizationsWereNotRead"),
       title: t("accountUi.signInToThisAccountInSynthvThenRefresh"),
       attention: true,
     }],
     ["expired", {
       cardLabel: t("accountUi.sessionExpiredAwaitingRenewal"),
-      authorizationLabel: t("accountUi.refreshTheAccountToReadAuthorizationsAgain"),
       title: t("accountUi.refreshTheAccountStatusToolboxWillRenewTheSession"),
       attention: true,
     }],
     ["invalid", {
       cardLabel: t("accountUi.signInCacheInvalid"),
-      authorizationLabel: t("accountUi.signInCacheInvalidAuthorizationsWereNotRead"),
       title: t("accountUi.theLocalSignInCacheCannotBeSafelyVerified"),
       attention: true,
     }],
     ["offline", {
       cardLabel: t("accountUi.accountServiceTemporarilyOffline"),
-      authorizationLabel: t("accountUi.accountServiceTemporarilyOfflineAuthorizationsUnavailable"),
       title: t("accountUi.theLocalSessionWasReadButTheAccountService"),
       attention: false,
     }],
     ["unsupported", {
       cardLabel: t("accountUi.sessionFormatNotSupportedYet"),
-      authorizationLabel: t("accountUi.sessionFormatUnsupportedAuthorizationsWereNotRead"),
       title: t("accountUi.thisVersionCannotSafelyParseTheSignInCache"),
       attention: false,
     }],
     ["missing", {
       cardLabel: t("accountUi.notSignedInYet"),
-      authorizationLabel: t("accountUi.noSignInCacheAuthorizationsWereNotRead"),
       title: t("accountUi.noSignInCacheFoundSignInToSv"),
       attention: false,
     }],
@@ -1461,8 +1432,6 @@ function accountProbeEnvironments(slot: Sv2ProfileSlot): AccountProbeEnvironment
       launchEnabled: environment.launchEnabled,
       localBlocked: environment.localBlocked,
       sessionStatus: environment.probe.sessionStatus,
-      remoteUse: environment.probe.remoteUse,
-      authorizationStatus: environment.probe.authorizationStatus,
     });
     environment.usable = availability.available;
     environment.busy = availability.busy;
@@ -1474,24 +1443,16 @@ function accountProbeEnvironmentSummary(environment: AccountProbeEnvironmentStat
   if (!environment.launchEnabled) return t("accountUi.cannotLaunchNowIsolationOrProviderUnavailable");
   if (environment.localBlocked) return environment.localBlockLabel;
   const probe = environment.probe;
-  const session = probe.remoteUse === "detected"
-    ? t("accountUi.inUseRemotely")
-    : probe.sessionStatus === "inUse"
-      ? t("accountUi.inUseLocally")
-    : probe.sessionStatus === "ready" && probe.authorizationStatus === "verified"
-        ? t("accountUi.readyToLaunch")
-        : probe.sessionStatus === "ready" && probe.remoteUse === "unknown"
-          ? t("accountUi.accountInformationNeedsRefresh")
-          : accountProbeSessionLabel(probe.sessionStatus);
-  const authorization = probe.authorizationStatus === "verified" ? t("accountUi.officialAuthorizationsConfirmed") : t("accountUi.officialAuthorizationsUnknown");
-  return `${session}；${authorization}`;
+  return probe.sessionStatus === "inUse"
+    ? t("accountUi.inUseLocally")
+    : probe.sessionStatus === "ready"
+      ? t("accountUi.readyToLaunch")
+      : accountProbeSessionLabel(probe.sessionStatus);
 }
 
 function environmentDefinitelyUnavailable(environment: AccountProbeEnvironmentState): boolean {
   return !environment.usable && (
     environment.localBlocked
-    || environment.probe.remoteUse === "detected"
-    || environment.probe.authorizationStatus !== "verified"
     || ["expired", "loginRequired", "invalid", "syncFailed", "accountMismatch", "missing", "unsupported", "offline"].includes(environment.probe.sessionStatus)
   );
 }
@@ -1507,7 +1468,6 @@ function accountProbeBadge(slot: Sv2ProfileSlot): string {
   const hasBusyEnvironment = launchable.some((environment) => environment.busy);
   const allUnavailable = launchable.length > 0 && launchable.every(environmentDefinitelyUnavailable);
   const probes = launchable.map((environment) => environment.probe);
-  const notYetChecked = probes.some((probe) => probe.sessionStatus === "ready" && probe.remoteUse === "unknown");
   const reportedIssue = accountProbeIssue(probes.filter((probe) => probe.sessionStatus !== "missing"))
     ?? (probes.length > 0 && probes.every((probe) => probe.sessionStatus === "missing")
       ? accountProbeIssue(probes)
@@ -1526,11 +1486,6 @@ function accountProbeBadge(slot: Sv2ProfileSlot): string {
     label = t("accountUi.noIdleLaunchEnvironmentForThisAccount");
     emphasis = " attention";
     iconName = "plug";
-  } else if (probes.some((probe) => probe.authorizationStatus === "verified")) {
-    label = t("accountUi.authorizationsConfirmed");
-    iconName = "check";
-  } else if (notYetChecked) {
-    label = t("accountUi.accountStatusNotCheckedYet");
   }
 
   const tooltip = [
@@ -1538,49 +1493,6 @@ function accountProbeBadge(slot: Sv2ProfileSlot): string {
     slot.accountProbe.detail.trim(),
   ].filter(Boolean).join("；");
   return `<span class="session-protection${emphasis}" title="${escapeHtml(tooltip)}">${icon(iconName, 14)} ${escapeHtml(label)}</span>`;
-}
-
-function officialAuthorizationBadge(slot: Sv2ProfileSlot): string {
-  if (profiles === cachedAccountProfiles) return "";
-  const probes = slot.concurrent.ready
-    ? [slot.accountProbe, slot.concurrentAccountProbe]
-    : [slot.accountProbe];
-  const verifiedCounts = probes
-    .filter((probe) => probe.authorizationStatus === "verified")
-    .map((probe) => probe.authorizedVoiceCount);
-  const reportedIssue = verifiedCounts.length ? undefined : accountProbeIssue(probes);
-  const unresolvedOfficial = reportedIssue
-    ? { label: reportedIssue.authorizationLabel, title: reportedIssue.title }
-    : { label: t("accountUi.officialAuthorizationsUncheckedOrUnknown"), title: t("accountUi.theAccountServiceHasNotReturnedAnyAuthorizationResults") };
-  const official = !app?.sv2AccountIndicatorEnabled
-    ? `<span class="voice-inventory unknown" title="${t("accountUi.theSignInIndicatorIsOffOfficialAuthorizationSummaries")}">${icon("shield", 13)} ${t("accountUi.officialAuthorizationChecksOff")}</span>`
-    : reportedIssue
-      ? `<span class="voice-inventory unknown" title="${escapeHtml(unresolvedOfficial.title)}">${icon("audio", 13)} ${escapeHtml(unresolvedOfficial.label)}</span>`
-      : verifiedCounts.length
-      ? `<span class="voice-inventory confirmed" title="${t("accountUi.theAccountServiceHasConfirmedVoiceAuthorizations")}">${icon("check", 13)} ${t("accountUi.officialAuthorizationCount", { count: Math.max(...verifiedCounts) })}</span>`
-      : `<span class="voice-inventory unknown" title="${escapeHtml(unresolvedOfficial.title)}">${icon("audio", 13)} ${escapeHtml(unresolvedOfficial.label)}</span>`;
-  return official;
-}
-
-function accountProbeIdentity(probe: Sv2AccountProbe): { name?: string; email?: string } {
-  return {
-    name: probe.accountDisplayName?.trim() || undefined,
-    email: probe.accountEmail?.trim() || undefined,
-  };
-}
-
-function officialAccountIdentity(slot: Sv2ProfileSlot): { name?: string; email?: string } {
-  if (!app?.sv2AccountIndicatorEnabled) return {};
-  const probes = slot.concurrent.ready
-    ? [slot.accountProbe, slot.concurrentAccountProbe]
-    : [slot.accountProbe];
-  const identities = probes
-    .filter((probe) => probe.sessionStatus !== "accountMismatch")
-    .map(accountProbeIdentity);
-  return {
-    name: identities.find((identity) => identity.name)?.name,
-    email: identities.find((identity) => identity.email)?.email,
-  };
 }
 
 type AccountUseTone = "clear" | "unknown" | "in-use";
@@ -1780,13 +1692,9 @@ function renderAccounts(): string {
   const providerDetail = profiles.concurrentProvider.detail;
   const cards = profiles.slots.map((slot) => {
     const lastUsed = slot.lastActivatedAtUtc ? new Date(slot.lastActivatedAtUtc).toLocaleString(locale()) : t("accounts.neverLaunched");
-    const officialIdentity = windowsExtensions ? officialAccountIdentity(slot) : {};
-    const accountTitle = officialIdentity.name ?? (slot.sessionCached ? t("accounts.pending") : t("accounts.signedOut"));
-    const initial = Array.from(officialIdentity.name ?? "?")[0] ?? "?";
+    const accountTitle = slot.sessionCached ? t("accounts.pending") : t("accounts.signedOut");
+    const initial = Array.from(slot.displayName.trim())[0] ?? "?";
     const color = /^#[0-9a-f]{6}$/i.test(slot.color) ? slot.color : "#6D5CE7";
-    const accountEmail = officialIdentity.email
-      ? `<span class="profile-identity">${escapeHtml(officialIdentity.email)}</span>`
-      : `<span class="profile-identity empty">${t("accounts.pending")}</span>`;
     const note = slot.displayName.trim()
       ? `<span class="profile-note">${t("accounts.note", { name: escapeHtml(slot.displayName) })}</span>`
       : `<span class="profile-note empty">${t("accounts.noNote")}</span>`;
@@ -1805,7 +1713,6 @@ function renderAccounts(): string {
       : !concurrentEnabled
         ? t("accountUi.isolationIsTurnedOffInGlobalSettings")
         : providerDetail;
-    const localVoiceFact = `<span class="voice-inventory unknown" title="${t("accountUi.macosVDoesNotReadOrDecryptSignIn")}">${icon("shield", 13)} ${t("accountUi.accountAuthorizationsNotRead")}</span>`;
     const normalLaunchAction = `<button class="primary" data-profile-launch="${slot.id}">${icon("play", 16)} ${slot.isActive ? t("accountUi.launchNormally") : t("accountUi.switchAndLaunch")}</button>`;
     const isolationAction = isolationStateLoading
       ? `<span class="isolation-read-status" role="status">${icon("sync", 16)} ${t("accountUi.readingIsolationState")}</span>`
@@ -1816,8 +1723,8 @@ function renderAccounts(): string {
       ? `${normalLaunchAction}${isolationAction}`
       : normalLaunchAction;
     return `<article class="account-launch-card ${slot.isActive ? "active" : ""}" style="--profile-color:${color}">
-      <div class="account-card-main"><span class="profile-avatar compact">${escapeHtml(initial)}</span><div class="account-card-identity"><div class="profile-title-line"><h2>${escapeHtml(accountTitle)}</h2>${accountUseDot(useState)}${renderSessionSizeIndicator(slot)}${slot.isActive ? `<span class="profile-active-badge">${t("accounts.default")}</span>` : ""}</div>${accountEmail}${note}</div><div class="account-card-actions">${windowsExtensions ? `<button class="icon-plain" data-profile-refresh-slot="${slot.id}" title="${t("accounts.refresh")}" aria-label="${t("accounts.refresh")}">${icon("refresh", 18)}</button>` : ""}<button class="icon-plain" data-manage-slot="${slot.id}" title="${t("accounts.configure")}" aria-label="${t("accounts.configure")}">${icon("settings", 18)}</button><button class="icon-plain danger" data-delete-profile="${slot.id}" title="${t("accounts.delete")}" aria-label="${t("accounts.delete")}">${icon("trash", 18)}</button><button class="icon-plain" data-profile-activate="${slot.id}" title="${t("accounts.switchDefault")}" aria-label="${t("accounts.switchDefault")}" ${slot.isActive ? "disabled" : ""}>${icon("check", 18)}</button></div></div>
-      <div class="account-card-facts">${windowsExtensions ? `${accountProbeBadge(slot)}${officialAuthorizationBadge(slot)}` : localVoiceFact}<span>${icon("sync", 13)} ${escapeHtml(lastUsed)}</span>${concurrentRunning ? `<span class="running">${icon("plug", 13)} ${t("accountUi.isolatedProcessCount", { count: slot.concurrent.runningPids.length })}</span>` : ""}</div>
+      <div class="account-card-main"><span class="profile-avatar compact">${escapeHtml(initial)}</span><div class="account-card-identity"><div class="profile-title-line"><h2>${escapeHtml(accountTitle)}</h2>${accountUseDot(useState)}${renderSessionSizeIndicator(slot)}${slot.isActive ? `<span class="profile-active-badge">${t("accounts.default")}</span>` : ""}</div>${note}</div><div class="account-card-actions">${windowsExtensions ? `<button class="icon-plain" data-profile-refresh-slot="${slot.id}" title="${t("accounts.refresh")}" aria-label="${t("accounts.refresh")}">${icon("refresh", 18)}</button>` : ""}<button class="icon-plain" data-manage-slot="${slot.id}" title="${t("accounts.configure")}" aria-label="${t("accounts.configure")}">${icon("settings", 18)}</button><button class="icon-plain danger" data-delete-profile="${slot.id}" title="${t("accounts.delete")}" aria-label="${t("accounts.delete")}">${icon("trash", 18)}</button><button class="icon-plain" data-profile-activate="${slot.id}" title="${t("accounts.switchDefault")}" aria-label="${t("accounts.switchDefault")}" ${slot.isActive ? "disabled" : ""}>${icon("check", 18)}</button></div></div>
+      <div class="account-card-facts">${windowsExtensions ? accountProbeBadge(slot) : ""}<span>${icon("sync", 13)} ${escapeHtml(lastUsed)}</span>${concurrentRunning ? `<span class="running">${icon("plug", 13)} ${t("accountUi.isolatedProcessCount", { count: slot.concurrent.runningPids.length })}</span>` : ""}</div>
       <div class="account-launch-actions">${launchActions}</div>
     </article>`;
   }).join("");
@@ -1845,55 +1752,6 @@ function supportsWindowsSv2Extensions(): boolean {
   return app?.platform === "windows" || app?.platform === "preview";
 }
 
-function renderAuthorizedVoice(voice: string, products: Sv2AuthorizedVoiceProduct[] = [], slotId = ""): string {
-  const productIds = products.map((product) => product.id).filter(Boolean);
-  const installedIds = new Set((profiles?.slots.find((slot) => slot.id === slotId)?.installedVoiceIds ?? []).map((id) => id.toLowerCase()));
-  const installed = productIds.some((id) => installedIds.has(id.toLowerCase()));
-  const installedBadge = installed ? `<span class="voice-installed-badge" role="img" aria-label="${t("accountUi.installed")}" title="${t("accountUi.installedForThisAccount")}">${icon("check", 10)}</span>` : "";
-  const catalogEntry = findVoiceMetadata(voice, productIds, sv2VoiceCatalog ?? []);
-  const cover = catalogEntry?.imageDataUrl
-    ? `<img class="voice-cover" src="${escapeHtml(catalogEntry.imageDataUrl)}" alt="" />`
-    : `<span class="voice-cover placeholder">${icon("audio", 14)}</span>`;
-  const vendor = catalogEntry?.vendor ? `<small>${escapeHtml(catalogEntry.vendor)}</small>` : "";
-  const isTrial = products.length > 0 && products.every((product) => product.isTrial);
-  const expirations = products.map((product) => product.expiresAtUtc ? Date.parse(product.expiresAtUtc) : NaN);
-  const expiresAt = expirations.length > 0 && expirations.every(Number.isFinite) ? Math.max(...expirations) : undefined;
-  const expired = expiresAt !== undefined && expiresAt <= Date.now();
-  const label = isTrial ? (expired ? t("accountUi.trialExpired") : t("accountUi.timeLimitedTrial")) : expiresAt !== undefined ? (expired ? t("accountUi.authorizationExpired") : t("accountUi.timeLimitedAuthorization")) : "";
-  const badge = label ? `<span class="voice-trial-badge">${label}</span>` : "";
-  const expiry = expiresAt !== undefined ? `<small class="voice-license-expiry">${t("accountUi.expiresAt", { date: escapeHtml(new Date(expiresAt).toLocaleString(locale())) })}</small>` : "";
-  return `<span class="authorized-voice" data-authorized-voice="${escapeHtml(voice)}" data-authorized-products="${escapeHtml(JSON.stringify(products))}" data-voice-slot-id="${escapeHtml(slotId)}"><span class="voice-cover-container">${cover}${installedBadge}</span><span><span class="voice-name">${escapeHtml(voice)}${badge}</span>${vendor}${expiry}</span></span>`;
-}
-
-function refreshAuthorizedVoiceEntries(): void {
-  document.querySelectorAll<HTMLElement>("[data-authorized-voice]").forEach((entry) => {
-    const updated = renderAuthorizedVoice(entry.dataset.authorizedVoice ?? "", JSON.parse(entry.dataset.authorizedProducts ?? "[]") as Sv2AuthorizedVoiceProduct[], entry.dataset.voiceSlotId);
-    if (entry.outerHTML !== updated) entry.outerHTML = updated;
-  });
-}
-
-function loadSv2VoiceCatalog(force = false): void {
-  if (sv2VoiceCatalogLoading || (!force && sv2VoiceCatalog)) return;
-  sv2VoiceCatalogLoading = true;
-  void api.sv2VoiceCatalog()
-    .then((catalog) => { sv2VoiceCatalog = catalog; })
-    .catch(() => undefined)
-    .finally(() => {
-      sv2VoiceCatalogLoading = false;
-      refreshAuthorizedVoiceEntries();
-    });
-}
-
-const sv2WebAccounts = new Map<string, Sv2WebAccountSnapshot>();
-
-function renderWebAccountQuery(slot: Sv2ProfileSlot): string {
-  const snapshot = sv2WebAccounts.get(slot.id);
-  const state = snapshot?.status === "loginRequired" ? "webLoginRequired" : snapshot?.status === "error" ? "webQueryFailed" : snapshot?.use === "available" ? "webAvailable" : snapshot?.use === "busy" ? "webBusy" : "webUnknown";
-  const licenses = snapshot?.licenses.map((license) => `<li>${escapeHtml(license.name)} · ${escapeHtml(license.status)}</li>`).join("") ?? "";
-  const devices = snapshot?.offlineDevices.filter((device) => device.enabled).map((device) => escapeHtml(device.name || t("accountUi.device"))).join(", ");
-  return `<section class="authorization-panel web-account-panel"><div class="authorization-heading"><strong>${t("accountUi.webQueryTitle")}</strong><span class="inventory-status ${snapshot?.status === "ready" && snapshot.use === "available" ? "verified" : "unknown"}">${t(`accountUi.${state}`)}</span></div><p>${t("accountUi.webQueryDescription")}</p>${licenses ? `<ul>${licenses}</ul>` : ""}${snapshot?.status === "ready" ? `<p>${devices ? t("accountUi.webOfflineDevices", { devices }) : t("accountUi.webNoOfflineDevices")}</p>` : ""}<div class="manager-action-row"><button class="secondary" data-web-account-login="${slot.id}" ${busy ? "disabled" : ""}>${t("accountUi.webLogin")}</button><button class="secondary" data-web-account-query="${slot.id}" ${busy ? "disabled" : ""}>${t("accountUi.webQuery")}</button></div></section>`;
-}
-
 function renderSessionSizeIndicator(slot: Sv2ProfileSlot): string {
   const inspection = slot.sessionSize ?? { status: "unknown" as const, sizeBytes: null };
   const statusLabel = inspection.status === "offline"
@@ -1916,7 +1774,6 @@ function renderAccountManager(): string {
   let body = "";
   if (accountManagerSection === "profile") {
     body = managedSlot ? `<div class="account-manager-pane"><div class="manager-pane-heading"><div><h3>${managedSlot.sessionCached ? t("accountUi.accountInformationNeedsRefresh") : t("accountUi.signedOut")}</h3><p>${renderSessionSizeIndicator(managedSlot)}</p></div>${managedSlot.isActive ? `<span class="profile-active-badge">${t("accountUi.currentDefault")}</span>` : ""}</div>
-      ${renderWebAccountQuery(managedSlot)}
       <form class="profile-rename compact-form" data-profile-rename-form="${managedSlot.id}"><label>${t("accounts.managerNote")}<input value="${escapeHtml(managedSlot.displayName)}" maxlength="64" placeholder="${t("accounts.notePlaceholder")}" /></label><button class="secondary">${t("accounts.saveNote")}</button></form>
       <div class="manager-action-row">${managedSlot.isActive ? "" : `<button class="secondary" data-profile-activate="${managedSlot.id}">${icon("check", 15)} ${t("accounts.setDefault")}</button>`}<button class="secondary" data-profile-folder="${managedSlot.id}">${icon("folder", 15)} ${t("accounts.openData")}</button><button class="secondary component-remove-action" data-delete-profile="${managedSlot.id}">${icon("trash", 15)} ${t("accounts.delete")}</button></div>
       <dl class="profile-storage-list compact"><div><dt>${t("accounts.data")}</dt><dd><code title="${escapeHtml(managedSlot.dataPath)}">${escapeHtml(managedSlot.dataPath)}</code></dd></div></dl></div>` : `<div class="empty-inline">${t("accounts.noAccounts")}</div>`;
@@ -4767,7 +4624,6 @@ document.addEventListener("click", (event) => {
     managedProfileSlotId = target.dataset.manageSlot;
     accountManagerSection = "profile";
     accountManagerOpen = true;
-    loadSv2VoiceCatalog(true);
     render();
     return;
   }
@@ -5024,16 +4880,6 @@ document.addEventListener("click", (event) => {
     });
     return;
   }
-  if (target.dataset.webAccountLogin) {
-    const slotId = target.dataset.webAccountLogin;
-    void run(async () => { await api.sv2WebAccountLogin(slotId); notice = t("accountUi.webLoginOpened"); });
-    return;
-  }
-  if (target.dataset.webAccountQuery) {
-    const slotId = target.dataset.webAccountQuery;
-    void run(async () => { sv2WebAccounts.set(slotId, await api.sv2WebAccountQuery(slotId)); });
-    return;
-  }
   if (target.dataset.autoConnectSynthv) {
     const processId = Number(target.dataset.autoConnectSynthv);
     const identity = target.dataset.processIdentity ?? "";
@@ -5064,7 +4910,6 @@ document.addEventListener("click", (event) => {
     } else {
       void run(async () => {
         await refreshAccountUsage();
-        loadSv2VoiceCatalog(true);
         notice = t("accountNotice.refreshed");
       });
     }
@@ -5078,14 +4923,7 @@ document.addEventListener("click", (event) => {
     } else {
       void run(async () => {
         await refreshAccountUsage(slotId);
-        loadSv2VoiceCatalog(true);
-        const slot = profiles?.slots.find((item) => item.id === slotId);
-        const probe = slot?.accountProbe;
-        if (probe && ["syncFailed", "offline", "expired", "invalid", "unsupported", "accountMismatch"].includes(probe.sessionStatus)) {
-          error = probe.detail || t("accountNotice.authorizationUnknown");
-        } else {
-          notice = t("accountNotice.checked");
-        }
+        notice = t("accountNotice.checked");
       });
     }
     return;

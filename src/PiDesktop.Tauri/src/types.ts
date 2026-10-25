@@ -247,55 +247,8 @@ export interface Sv2SessionProtection {
 }
 
 export type Sv2AccountProbeSessionStatus = "ready" | "missing" | "inUse" | "expired" | "loginRequired" | "invalid" | "syncFailed" | "accountMismatch" | "unsupported" | "offline";
-export type Sv2AuthorizationStatus = "verified" | "unknown";
-export type Sv2OfflineLicenseCacheStatus = "active" | "inactive" | "unknown";
-export interface Sv2WebAccountSnapshot {
-  status: "ready" | "loginRequired" | "error";
-  use: "available" | "busy" | "unknown";
-  offlineDevices: Array<{ name: string; enabled: boolean }>;
-  licenses: Array<{ name: string; status: string; type: string }>;
-  checkedAtUtc: string;
-}
-export type Sv2OfflineLicenseEligibility = "eligible" | "ineligible" | "unknown";
-
-export interface Sv2OfflineCachedField {
-  key: string;
-  value: string;
-}
-
-export interface Sv2OfflineCachedProduct {
-  databaseId: string;
-  productId: string;
-  name: string;
-  vendor: string;
-  category: string;
-  version: string;
-  attributes: Sv2OfflineCachedField[];
-}
-
-export interface Sv2OfflineLicense {
-  cacheStatus: Sv2OfflineLicenseCacheStatus;
-  eligibility: Sv2OfflineLicenseEligibility;
-  cachedProducts: Sv2OfflineCachedProduct[];
-}
-
-export interface Sv2AuthorizedVoiceProduct {
-  id: string;
-  name: string;
-  isTrial: boolean;
-  expiresAtUtc?: string | null;
-}
-
 export interface Sv2AccountProbe {
   sessionStatus: Sv2AccountProbeSessionStatus;
-  remoteUse: Sv2RemoteUseStatus;
-  authorizationStatus: Sv2AuthorizationStatus;
-  authorizedVoiceCount: number;
-  authorizedVoices: string[];
-  authorizedVoiceProducts: Sv2AuthorizedVoiceProduct[];
-  offlineLicense: Sv2OfflineLicense;
-  accountDisplayName?: string;
-  accountEmail?: string;
   checkedAtUtc: string;
   detail: string;
 }
@@ -333,8 +286,6 @@ export interface Sv2ProfilesState {
   concurrentDefaults: Sv2ConcurrentDefaults;
 }
 
-export type Sv2RemoteUseStatus = "clear" | "detected" | "unknown";
-
 export interface Sv2CachedVoice {
   id: string;
   name?: string | null;
@@ -350,10 +301,8 @@ export interface Sv2AccountPrecheck {
   localUse: boolean;
   localProcesses: Sv2ProcessBlocker[];
   concurrentPids: number[];
-  remoteUse: Sv2RemoteUseStatus;
   sessionStatus: Sv2AccountProbeSessionStatus;
-  authorizationStatus: Sv2AuthorizationStatus;
-  authorizedVoiceCount: number;
+  sessionSize?: { status: "offline" | "online" | "unknown"; sizeBytes: number | null };
   sessionCached: boolean;
   recoveryPending: boolean;
   summary: string;
@@ -366,7 +315,6 @@ export interface Sv2AccountUsageSnapshot {
 }
 
 export type SvpLaunchMode = "normal" | "concurrent";
-export type SvpAuthorizationSource = "session" | "unknown";
 
 export interface SvpVoiceRequirement {
   name: string;
@@ -379,12 +327,7 @@ export interface SvpRouteCandidate {
   displayName: string;
   idle: boolean;
   launchMode?: SvpLaunchMode | null;
-  remoteUse: Sv2RemoteUseStatus;
   sessionStatus: Sv2AccountProbeSessionStatus;
-  authorizationSource: SvpAuthorizationSource;
-  matchedVoices: string[];
-  missingOrUnknownVoices: string[];
-  exactAuthorizationMatch: boolean;
   reason: string;
   hostProfile?: "sv1" | "sv2" | "flat" | null;
 }
