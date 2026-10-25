@@ -30,10 +30,10 @@
     "test:cover": "node --experimental-transform-types --test ../../test/cover-host.mjs ../../test/cover-service.mjs && node --experimental-transform-types ../../test/cover-score.mjs && node --experimental-transform-types ../../test/media-importer.mjs && node --experimental-transform-types ../../test/creative-runtime.mjs && node ../../test/cover-ui-behavior.mjs && node ../../test/cover-agent-tools.mjs"
   },
   "dependencies": {
-    "@model-auth/core": "https://github.com/lsy-404/platform-kit/releases/download/model-auth-core-v0.9.0/model-auth-core-0.9.0.tgz",
-    "@model-auth/providers": "https://github.com/lsy-404/platform-kit/releases/download/model-auth-providers-v0.13.0/model-auth-providers-0.13.0.tgz",
-    "@model-auth/vue": "https://github.com/lsy-404/platform-kit/releases/download/model-auth-vue-v0.10.3/model-auth-vue-0.10.3.tgz",
-    "@platform-kit/fluent": "https://github.com/lsy-404/platform-kit/releases/download/fluent-v0.2.10/platform-kit-fluent-0.2.10.tgz",
+    "@model-auth/core": "https://github.com/lsy-404/platform-kit/releases/download/model-auth-core-v0.11.1/model-auth-core-0.11.1.tgz",
+    "@model-auth/providers": "https://github.com/lsy-404/platform-kit/releases/download/model-auth-providers-v0.20.0/model-auth-providers-0.20.0.tgz",
+    "@model-auth/vue": "https://github.com/lsy-404/platform-kit/releases/download/model-auth-vue-v0.14.0/model-auth-vue-0.14.0.tgz",
+    "@platform-kit/fluent": "https://github.com/lsy-404/platform-kit/releases/download/fluent-v0.2.11/platform-kit-fluent-0.2.11.tgz",
     "@synthv-toolbox/agent-runtime": "file:../../packages/agent-runtime",
     "@synthv-toolbox/runtime-protocol": "file:../../packages/runtime-protocol",
     "electron-updater": "^6.8.11",
