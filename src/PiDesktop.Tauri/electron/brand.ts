@@ -1,6 +1,6 @@
 /**
  * Product identity for the Electron host. The renderer mirrors these values in src/brand.ts and
- * test/toneshuttle-integrations.mjs keeps both in step with electron-builder.yml and electron/assets/installer.nsh.
+ * test/contract/services/toneshuttle-integrations.test.mjs keeps both in step with electron-builder.yml and electron/assets/installer.nsh.
  */
 export const BRAND = {
   productName: "Toneshuttle",
