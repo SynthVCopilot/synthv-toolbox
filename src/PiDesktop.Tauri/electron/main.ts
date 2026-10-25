@@ -115,7 +115,7 @@ function autostartController() {
   return {
     async set(enabled: boolean): Promise<boolean> {
       // `enabled` also clears a Task Manager "Disabled" mark (Windows), which the migration keeps from the old entry.
-      app.setLoginItemSettings({ openAtLogin: enabled, openAsHidden: enabled, args: enabled ? [AUTOSTART_ARGUMENT] : [], enabled });
+      app.setLoginItemSettings({ openAtLogin: enabled, args: enabled ? [AUTOSTART_ARGUMENT] : [], enabled });
       const actual = launchAtLogin();
       if (actual !== enabled) throw new Error("The operating system did not apply the launch-at-login setting.");
       return actual;
@@ -149,7 +149,7 @@ function migrateLegacyAutostart(): void {
       fileExists: existsSync,
       launchItems: path => app.getLoginItemSettings({ path: loginItemLookupPath(path), args: [AUTOSTART_ARGUMENT] }).launchItems,
       remove: name => app.setLoginItemSettings({ openAtLogin: false, name }),
-      register: enabled => app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true, args: [AUTOSTART_ARGUMENT], enabled }),
+      register: enabled => app.setLoginItemSettings({ openAtLogin: true, args: [AUTOSTART_ARGUMENT], enabled }),
     });
     if (replaced.length) console.info(`Launch at login now points at ${process.execPath} (replaced ${replaced.join(", ")}).`);
   } catch (reason) {
