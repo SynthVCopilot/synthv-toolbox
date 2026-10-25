@@ -22,6 +22,21 @@ type StoredLyricProject = Omit<LyricProject, "schemaVersion" | "createdAtUtc" | 
 const MAX_PROJECT_BYTES = 16 * 1024 * 1024;
 const MAX_PROJECTS_FILE_BYTES = 64 * 1024 * 1024;
 
+const removeToneMarks = (value: string) => value.normalize("NFD").replace(/u\u0308/giu, "v").replace(/[\u0300-\u036f]/gu, "").toLowerCase();
+const classifyFinal = (final: string) => {
+  const normalized = removeToneMarks(final);
+  const match = normalized.match(/(ang|eng|ong|an|en|un|in|ao|ou|ai|ei|ia|ie|iao|iu|ua|uo|uai|ui|ue|ve|a|o|e|i|u|v)$/u);
+  return match?.[1] ?? normalized;
+};
+
+/** Rhyme families of the last Chinese character in a line, across all of its readings; empty when the line has none. */
+export function endingRhymeFamilies(text: string): string[] {
+  const foot = Array.from(text).reverse().find((character) => /[\u3400-\u9fff]/u.test(character));
+  if (!foot) return [];
+  const readings = (polyphonic(foot, { type: "all", toneType: "none" }) as Array<Array<{ final: string; isZh: boolean }>>)[0] ?? [];
+  return [...new Set(readings.filter((item) => item.isZh).map((item) => classifyFinal(item.final)))].sort();
+}
+
 export const LYRIC_COMMANDS = [
   "create_lyric_project",
   "save_lyric_project",
@@ -328,13 +343,6 @@ export function createLyricService(dataRoot: string): LyricService {
       summary: `已建立《${title}》的歌词结构：${sections.length} 个段落，共 ${totalLines} 行。`,
       data: { language: "zh-CN", title, totalLines, rhymeTargets, sections: built },
     };
-  };
-
-  const removeToneMarks = (value: string) => value.normalize("NFD").replace(/u\u0308/giu, "v").replace(/[\u0300-\u036f]/gu, "").toLowerCase();
-  const classifyFinal = (final: string) => {
-    const normalized = removeToneMarks(final);
-    const match = normalized.match(/(ang|eng|ong|an|en|un|in|ao|ou|ai|ei|ia|ie|iao|iu|ua|uo|uai|ui|ue|ve|a|o|e|i|u|v)$/u);
-    return match?.[1] ?? normalized;
   };
 
   const getRhymeIndex = () => {

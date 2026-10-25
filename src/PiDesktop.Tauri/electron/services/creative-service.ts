@@ -4,6 +4,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { createHash, randomUUID } from "node:crypto";
 import { createLyricService, LYRIC_COMMANDS } from "./lyric-service.js";
 import { createCreativeBridge, CREATIVE_BRIDGE_COMMANDS } from "./creative-bridge.js";
+import { generateLyricCandidates, reviewWorkflow, type Completion, type CreativeAiDeps } from "./creative-ai.js";
 import { COVER_COMMANDS } from "./cover-service.js";
 import type { EmbeddedBridge } from "./synthv-bridge.js";
 
@@ -11,8 +12,12 @@ type Data = Record<string, any>;
 type TaskExecutor = (kind: string, args: Data, signal?: AbortSignal) => Promise<Data>;
 export interface CreativeService { invoke(command: string, args: Data, signal?: AbortSignal): Promise<unknown>; dispose?(): void; }
 
-export function createCreativeService(dataRoot: string, executeTask: TaskExecutor = async command => { throw new Error(`No component executor is configured for ${command}.`); }, bridge?: EmbeddedBridge, cover?: { invoke(command: string, args: Data): Promise<unknown> }, options: { backupsEnabled?: () => boolean; backupIntervalMs?: number } = {}): CreativeService {
+export function createCreativeService(dataRoot: string, executeTask: TaskExecutor = async command => { throw new Error(`No component executor is configured for ${command}.`); }, bridge?: EmbeddedBridge, cover?: { invoke(command: string, args: Data): Promise<unknown> }, options: { backupsEnabled?: () => boolean; backupIntervalMs?: number; complete?: Completion } = {}): CreativeService {
   const root = resolve(dataRoot), lyrics = createLyricService(root), connected = bridge ? createCreativeBridge(bridge) : undefined;
+  const aiDeps: CreativeAiDeps = {
+    complete: (system, input, signal) => options.complete ? options.complete(system, input, signal) : Promise.reject(new Error("The AI model is unavailable.")),
+    rhymeFamilies: async target => { try { return ((await lyrics.invoke("lookup_chinese_rhyme", { query: target, matchMode: "family" })) as { rhymeKeys: string[] }).rhymeKeys; } catch { return []; } },
+  };
   let queue: Promise<unknown> = Promise.resolve();
   const serialize = <T>(fn: () => Promise<T>) => { const next = queue.then(fn, fn); queue = next.catch(() => undefined); return next; };
   const now = () => new Date().toISOString();
@@ -139,8 +144,10 @@ export function createCreativeService(dataRoot: string, executeTask: TaskExecuto
       }
       return { recipeId: recipe.id, completed: items.filter(item => item.status === "completed").length, failed: items.filter(item => item.status === "failed").length, items };
     }
+    if (command === "generate_lyric_candidates") return generateLyricCandidates(args.request, aiDeps, signal);
+    if (command === "review_workflow") return reviewWorkflow(args.kind, args.data, aiDeps, signal);
     if (["media_tasks", "audio_tasks", "list_tuning_profiles"].includes(command)) return [];
-    if (["preview_media_source", "queue_media_import", "queue_media_separation", "queue_cover", "cancel_media_task", "retry_media_task", "learn_tuning_profile", "record_tuning_outcome", "apply_tuning_profile", "run_solo_tuning", "generate_lyric_candidates", "review_workflow"].includes(command)) throw new Error("This workflow is not available in this build. Use the local audio, score, lyric and project tools.");
+    if (["preview_media_source", "queue_media_import", "queue_media_separation", "queue_cover", "cancel_media_task", "retry_media_task", "learn_tuning_profile", "record_tuning_outcome", "apply_tuning_profile", "run_solo_tuning"].includes(command)) throw new Error("This workflow is not available in this build. Use the local audio, score, lyric and project tools.");
     return execute(command, args, signal);
   } };
 }

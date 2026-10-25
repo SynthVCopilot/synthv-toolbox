@@ -135,6 +135,12 @@ const defaultModels: Record<AiProviderId, string> = {
   traecode: "",
 };
 
+/** The runtime drives every request through its plan protocol; a completion has to finish it in one message that also carries the reply. */
+const COMPLETION_PROTOCOL = "This is a one-shot text task that needs no files or other tools. Call update_plan with a single done criterion (the reply is given), then write the complete reply as text in the same message in which you call complete_task, with one evidence entry.";
+const COMPLETION_SESSION_PREFIX = "completion-";
+/** Completion sessions get no host tools: the host registers no extensions for them. */
+export const isCompletionSession = (sessionId: string): boolean => sessionId.startsWith(COMPLETION_SESSION_PREFIX);
+
 export const nodeMetadataFiles: MetadataFilePort = {
   async read(path) {
     try {
@@ -515,6 +521,31 @@ export class AiService {
     if (!outcome) throw new Error("Agent Runtime returned an invalid run outcome.");
     const assistant = (typeof response.message === "string" ? response.message.trim() : "") || outcome.summary;
     return { assistant, outcome };
+  }
+
+  /** One model reply in a throwaway session without host tools; stops with the signal and when the app leaves AI mode. */
+  async complete(systemPrompt: string, input: string, signal?: AbortSignal): Promise<string> {
+    if (this.options.agentAllowed && !this.options.agentAllowed()) throw new Error("The internal agent is only available in AI mode. Switch the toolbox to AI mode in Settings first.");
+    signal?.throwIfAborted();
+    const sessionId = `${COMPLETION_SESSION_PREFIX}${this.id()}`;
+    const active: ActiveRun = { runId: this.id(), cancelRequested: false, sendIssued: false, steers: [] };
+    this.activeRuns.set(sessionId, active);
+    const stop = () => { void this.cancel_agent_run(sessionId).catch(() => undefined); };
+    signal?.addEventListener("abort", stop, { once: true });
+    try {
+      await this.load();
+      await this.options.runtime.request("session.initialize", { sessionId, systemPrompt: [systemPrompt, COMPLETION_PROTOCOL].join("\n") });
+      if (active.cancelRequested || signal?.aborted) throw new Error("The model request was cancelled.");
+      const { assistant, outcome } = await this.runSend(sessionId, input, DEFAULT_AGENT_EFFORT, active);
+      if (active.cancelRequested || signal?.aborted || outcome.status === "cancelled") throw new Error("The model request was cancelled.");
+      if (outcome.status === "error") throw new Error(outcome.summary);
+      if (!assistant.trim()) throw new Error("The model returned no message.");
+      return assistant;
+    } finally {
+      signal?.removeEventListener("abort", stop);
+      this.activeRuns.delete(sessionId);
+      await this.options.runtime.request("session.close", { sessionId }).catch(() => undefined);
+    }
   }
 
   /** Delivers a message to the conversation's in-flight run; rejects when no run has reached the runtime. */

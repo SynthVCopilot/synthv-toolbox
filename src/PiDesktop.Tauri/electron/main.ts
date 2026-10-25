@@ -7,7 +7,8 @@ import { BRAND, FILE_NAMES, LEGACY_FILE_NAMES, LEGACY_PRODUCT_NAME } from "./bra
 import { createUpdaterService } from "./updater.js";
 import { ElectronRuntimeHost } from "./services/runtime-host.js";
 import { ElectronCommandRegistry } from "./services/command-registry.js";
-import { AiService, agentRuntimePort, type AiProviderId } from "./services/ai-service.js";
+import { AiService, agentRuntimePort, isCompletionSession, type AiProviderId } from "./services/ai-service.js";
+import { createProviderUsage } from "./services/ai-usage.js";
 import { AgentApprovalBroker } from "./services/agent-approvals.js";
 import { createAgentTaskService } from "./services/agent-task-service.js";
 import { createCoverAgentToolsExtension } from "./services/cover-agent-tools.js";
@@ -297,7 +298,7 @@ async function initializeServices(): Promise<void> {
   const creative = createCreativeService(creativeRoot, async (command, args, signal) => {
     const runtime = await creativeRuntime.status();
     return createComponentExecutor(componentsRoot, runtime.ready ? runtime.pythonPath : undefined, undefined, { dataRoot: creativeRoot })(command, args, signal);
-  }, gatedSynthvBridge, cover, { backupsEnabled: () => desktop.synthvEnabled() });
+  }, gatedSynthvBridge, cover, { backupsEnabled: () => desktop.synthvEnabled(), complete: (system, input, signal) => ai.complete(system, input, signal) });
   const delivery = createSynthVDeliveryRegistry();
   // One process per enabled external server, shared by all sessions; nothing spawns until a session needs it.
   const externalMcp = new ExternalMcpPool({ clientVersion: app.getVersion() });
@@ -312,6 +313,7 @@ async function initializeServices(): Promise<void> {
     sessionFactory: createPiSessionFactory({
       credentialStore: model => ai.modelCredentialStore(model),
       extensions: ({ sessionId, guards, runState }) => {
+        if (isCompletionSession(sessionId)) return [];
         const bound = cover.session(sessionId);
         if (bound?.phase === "repair") return [createCoverScoreToolsExtension({ service: coverScore, jobForSession: () => bound.jobId, phaseForSession: () => bound.phase, guards })];
         if (bound?.phase === "tuning" && bound.target && bound.monitor) {
@@ -329,7 +331,7 @@ async function initializeServices(): Promise<void> {
     onAgentProgress: (progress) => { agentTasks?.recordProgress(progress); emitToRenderer("agent.run.progress", progress); },
   });
   await runtimeHost.load();
-  ai = new AiService({ metadataPath: join(userData, "ai", "metadata.json"), runtime: agentRuntimePort(runtimeHost.runtime), catalog: modelCatalog(), approvals, usage: { query: async (provider, credentialIds) => ({ queriedAt: new Date().toISOString(), accounts: credentialIds.map(credentialId => ({ providerId: provider, credentialId, status: "unknown", plan: null, windows: [], balance: null, error: null })) }) }, authorizer: { authorize: authorizeProvider }, agentAllowed: () => desktop.aiModeEnabled(), systemPrompt: () => agentSystemPrompt({ synthv: desktop.synthvEnabled(), mcpServers: desktop.aiModeEnabled() ? mcpServerConfigs(desktop.enabledMcpServers()) : [], mcpToolsRevision: externalMcp.revision }) });
+  ai = new AiService({ metadataPath: join(userData, "ai", "metadata.json"), runtime: agentRuntimePort(runtimeHost.runtime), catalog: modelCatalog(), approvals, usage: createProviderUsage({ credentialStore: (providerId, credentialId) => ai.modelCredentialStore({ providerId, modelId: "", apiKey: "", credentialId }) }), authorizer: { authorize: authorizeProvider }, agentAllowed: () => desktop.aiModeEnabled(), systemPrompt: () => agentSystemPrompt({ synthv: desktop.synthvEnabled(), mcpServers: desktop.aiModeEnabled() ? mcpServerConfigs(desktop.enabledMcpServers()) : [], mcpToolsRevision: externalMcp.revision }) });
   capabilities = new HostCapabilities(synthv, creative, ai, () => desktop.synthvEnabled(), () => desktop.aiModeEnabled());
   desktop = new DesktopStateService(userData, app.getVersion(), runtimeHost, ai, synthv, channel => { updateChannel = channel; updater.setChannel(channel); }, creativeRuntime, bridgeLoadError, () => {
     void externalMcp.reconcile(desktop.aiModeEnabled() ? mcpServerConfigs(desktop.enabledMcpServers()) : []);
