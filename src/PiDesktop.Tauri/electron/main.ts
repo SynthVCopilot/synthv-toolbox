@@ -19,6 +19,7 @@ import { createCreativeRuntime } from "./services/creative-runtime.js";
 import { createMediaImporter } from "./services/media-importer.js";
 import { createCoverAudio } from "./services/cover-audio.js";
 import { resolveFfmpegBinaries } from "./services/component-audio-commands.js";
+import { bridgeCaptureTransport, captureExecutablePath, createAudioCaptureService } from "./services/audio-capture.js";
 import { createCreativeService } from "./services/creative-service.js";
 import { createComponentExecutor } from "./services/component-executor.js";
 import { DesktopStateService, savedIntegrationPreference } from "./services/desktop-state.js";
@@ -377,6 +378,11 @@ async function initializeServices(): Promise<void> {
       for (const job of await coverChildren(conversationId)) if (["queued", "running", "cancelling"].includes(job.status)) await cover.invoke("cancel_media_task", { id: job.id });
     },
   });
+  const audioCapture = createAudioCaptureService({
+    platform: process.platform, systemVersion: process.getSystemVersion(),
+    executablePath: captureExecutablePath(componentsRoot), outputDirectory: join(creativeRoot, "ab-captures"),
+    transport: bridgeCaptureTransport(gatedSynthvBridge),
+  });
   const httpServer = new HttpMcpServer({
     mcpTools: async () => toolboxMcpTools(await runtimeHost.mcpTools()),
     callMcpTool: async (name, arguments_) => hostResultToToolResult(await runtimeHost.callMcpTool(name, arguments_ as JsonValue)),
@@ -384,7 +390,7 @@ async function initializeServices(): Promise<void> {
     agentChat: async (input, conversationId) => { requireAiMode(desktop); const conversation = conversationId ? await ai.open_conversation(conversationId) : await ai.new_conversation(); return ai.send_message(conversation.id, input, { effort: desktop.agentEffort() }); },
   }, { name: BRAND.slug, title: BRAND.productName, version: app.getVersion() });
   await runtimeHost.attachHttpServer(httpServer);
-  commandRegistry = new ElectronCommandRegistry(runtimeHost, { ai, creative, desktop, synthv, externalMcp, componentAudio: {
+  commandRegistry = new ElectronCommandRegistry(runtimeHost, { ai, creative, desktop, synthv, externalMcp, audioCapture, componentAudio: {
     dataRoot: join(userData, "components"),
     creativeRuntime,
     openExternal: url => shell.openExternal(url),

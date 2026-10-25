@@ -9,7 +9,7 @@ import type { EmbeddedBridge } from "./synthv-bridge.js";
 
 type Data = Record<string, any>;
 type TaskExecutor = (kind: string, args: Data, signal?: AbortSignal) => Promise<Data>;
-export interface CreativeService { invoke(command: string, args: Data, signal?: AbortSignal): Promise<unknown>; dispose?(): void; }
+export interface CreativeService { invoke(command: string, args: Data, signal?: AbortSignal): Promise<unknown>; record(kind: string, parameters: Data, result: Data): Promise<void>; dispose?(): void; }
 
 export function createCreativeService(dataRoot: string, executeTask: TaskExecutor = async command => { throw new Error(`No component executor is configured for ${command}.`); }, bridge?: EmbeddedBridge, cover?: { invoke(command: string, args: Data): Promise<unknown> }, options: { backupsEnabled?: () => boolean; backupIntervalMs?: number } = {}): CreativeService {
   const root = resolve(dataRoot), lyrics = createLyricService(root), connected = bridge ? createCreativeBridge(bridge) : undefined;
@@ -93,7 +93,7 @@ export function createCreativeService(dataRoot: string, executeTask: TaskExecuto
     signal?.throwIfAborted();
     await record(command, args, result); return result;
   };
-  return { dispose() { clearInterval(timer); }, async invoke(command, args, signal) {
+  return { dispose() { clearInterval(timer); }, record, async invoke(command, args, signal) {
     if (cover && COVER_COMMANDS.includes(command)) return cover.invoke(command, args);
     if ((LYRIC_COMMANDS as readonly string[]).includes(command)) {
       const result = await lyrics.invoke(command, args);
