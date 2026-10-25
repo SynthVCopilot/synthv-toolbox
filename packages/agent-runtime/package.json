@@ -20,7 +20,7 @@
     "check": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@earendil-works/pi-coding-agent": "1.4.0",
     "@model-auth/core": "https://github.com/lsy-404/platform-kit/releases/download/model-auth-core-v0.11.1/model-auth-core-0.11.1.tgz",
     "@synthv-toolbox/runtime-protocol": "file:../runtime-protocol",
     "typebox": "1.4.3"
