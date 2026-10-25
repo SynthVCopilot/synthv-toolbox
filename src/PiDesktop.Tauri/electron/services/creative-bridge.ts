@@ -60,6 +60,28 @@ export function createCreativeBridge(bridge: EmbeddedBridge) {
   };
   const publicSelection = (value: Selection) => ({ sessionToken: value.sessionToken, target: value.target, notes: value.notes, noteCount: value.notes.length });
   return {
+    async currentProject(): Promise<string> {
+      await session();
+      const projectFile = (await bridge.status()).status?.projectFile;
+      if (typeof projectFile !== "string" || !projectFile) throw new Error("Save the SynthV project to a local SVP first.");
+      return projectFile;
+    },
+    /** Writes the profile's voice parameters and per-note vibrato to one group through a fresh write context. */
+    async applyTuning(profile: { voiceName: string; parameters: Data }, trackIndex: number, groupIndex: number): Promise<Data> {
+      const sessionToken = await session();
+      const read = await call("sv_query", { action: "get_track_notes", contextMode: "writeIntent", dense: "never", args: { trackIndex: index(trackIndex), groupIndex: index(groupIndex), offset: 0, limit: 512 } });
+      const contextId = read.groups?.find((group: Data) => group.groupIndex === groupIndex)?.contextId;
+      if (typeof contextId !== "string") throw new Error("Bridge did not return a safe write context for the note group.");
+      const { loudness, tension, breathiness, gender, toneShift, vibratoStrength } = profile.parameters;
+      const noteIndices = [...new Set(groupNotes(read, groupIndex).map(note => note.noteIndex).filter((value): value is number => Number.isInteger(value)))].sort((a, b) => a - b).slice(0, 512);
+      if (await session() !== sessionToken) throw new Error("SynthV session changed before the tuning was applied.");
+      const applied = await call("sv_command", { action: "apply_group_tuning", contextId, expectedEffect: "allowAlreadySatisfied", args: {
+        trackIndex, groupIndex, summary: `Apply the locally learned tuning profile for ${profile.voiceName}`, requireCurrentEditorGroup: false,
+        voice: { parameters: { loudness, tension, breathiness, gender, toneShift } },
+        ...(noteIndices.length ? { noteEdits: noteIndices.map(noteIndex => ({ noteIndex, changes: { attributes: { dF0VbrMod: vibratoStrength } } })) } : {}),
+      } });
+      return { profile, contextId, applied, vibratoStrength, vibratoApplied: noteIndices.length > 0, vibratoNoteCount: noteIndices.length };
+    },
     async invoke(command: string, args: Data): Promise<Data> {
       for (const [key, value] of selections) if (value.expires < Date.now()) selections.delete(key);
       for (const [key, value] of previews) if (value.expires < Date.now()) previews.delete(key);

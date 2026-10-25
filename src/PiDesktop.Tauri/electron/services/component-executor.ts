@@ -26,6 +26,10 @@ export function createComponentExecutor(
       const result = await execute(python, [piAudio, "probe", await input(args.audioPath, "audioPath"), ...(args.advanced === true ? ["--notes"] : [])], env);
       return workflow(command, "audio-probe", result, "duration_sec", "Audio probe completed.");
     }
+    if (command === "run_source_style") {
+      const result = await execute(python, [piAudio, "source-style", await input(args.audioPath, "audioPath")], env);
+      return workflow(command, "source-style", result, "durationSec", "Reference vocal features extracted.");
+    }
     if (command === "run_game_to_midi" || command === "run_audio_to_project") {
       const vocal = await input(args.vocalPath, "vocalPath");
       const instrumental = args.instrumentalPath ? await input(args.instrumentalPath, "instrumentalPath") : undefined;

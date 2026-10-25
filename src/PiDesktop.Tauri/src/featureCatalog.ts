@@ -70,7 +70,7 @@ const groupDefinitions: ToolGroup[] = [
     description: "了解人声表现与音频结构，为下一步创作提供依据。",
     icon: "waveform",
     accent: "blue",
-    featureIds: ["audio-insight"],
+    featureIds: ["audio-insight", "tuning-learning"],
   },
   {
     id: "quality",
@@ -98,7 +98,7 @@ export const featureCatalog: FeatureCatalogItem[] = featureDefinitions.map((feat
 }));
 
 export const guiFeatureIds = new Set(groupDefinitions.flatMap((group) => group.featureIds));
-const pendingFeatures = new Set(["tuning-learning", "ab-audition"]);
+const pendingFeatures = new Set(["ab-audition"]);
 export const guiFeatureCatalog = featureCatalog.filter((feature) => guiFeatureIds.has(feature.id) && !pendingFeatures.has(feature.id));
 
 export const toolGroups: ToolGroup[] = groupDefinitions.map((group) => ({
