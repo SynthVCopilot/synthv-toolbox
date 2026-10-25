@@ -8,7 +8,7 @@ const appRoot = join(root, "src", "PiDesktop.Tauri");
 const packageJson = JSON.parse(readFileSync(join(appRoot, "package.json"), "utf8"));
 const main = readFileSync(join(appRoot, "src", "main.ts"), "utf8");
 
-assert.match(packageJson.dependencies["@platform-kit/fluent"], /platform-kit-fluent-0\.2\.10\.tgz$/);
+assert.match(packageJson.dependencies["@platform-kit/fluent"], /platform-kit-fluent-0\.2\.11\.tgz$/);
 assert.match(main, /import \{ FluentSelect \} from "@platform-kit\/fluent\/vue"/);
 assert.match(main, /import "@platform-kit\/fluent\/style\.css"/);
 assert.match(main, /mountFluentSelect\("language-select-host"/);

@@ -7,7 +7,7 @@ const synthv = readFileSync(new URL("../src/PiDesktop.Tauri/electron/services/sy
 
 test("Electron launch-at-login uses the operating system setting and starts hidden", () => {
   // `enabled` re-enables an entry the user disabled in Task Manager when the setting is turned on again.
-  assert.match(main, /app\.setLoginItemSettings\(\{ openAtLogin: enabled, openAsHidden: enabled, args: enabled \? \[AUTOSTART_ARGUMENT\] : \[\], enabled \}\)/);
+  assert.match(main, /app\.setLoginItemSettings\(\{ openAtLogin: enabled, args: enabled \? \[AUTOSTART_ARGUMENT\] : \[\], enabled \}\)/);
   // Windows only reports the entry as ours when the arguments it was written with are passed back.
   assert.match(main, /const settings = app\.getLoginItemSettings\(\{ args: \[AUTOSTART_ARGUMENT\] \}\);/);
   // A registered entry disabled in Task Manager will not launch, so it must not read as on.
