@@ -426,11 +426,6 @@ const previewAgentOutcome: import("./types").AgentRunOutcome = {
   budget: { ...previewAgentBudgets[previewAgentEffort], turns: 6, tokens: 42_000, uncachedInputTokens: 9_000, cacheReadTokens: 30_000 },
 };
 
-const previewSv2VoiceCatalog = [
-  { id: "preview-mai-2", name: "Mai 2", vendor: "Dreamtonics", imageDataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E%3Crect width='48' height='48' fill='%236d5ce7'/%3E%3C/svg%3E" },
-  { id: "00000000-0000-4000-8000-000000000002", name: null, imageDataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E%3Crect width='48' height='48' fill='%230ea5e9'/%3E%3C/svg%3E" },
-];
-
 /** Mirrors the host: with SynthV off its installations, bridge and components disappear from bootstrap. */
 const previewState = (): BootstrapState => {
   const state = previewBaseState();
@@ -928,7 +923,6 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   } as T;
   if (command === "sv2_profile_state") return previewProfiles as T;
   if (command === "sv2_cached_profile_state") return structuredClone(previewProfiles) as T;
-  if (command === "sv2_voice_catalog") return previewSv2VoiceCatalog as T;
   if (command === "sv2_account_usage_snapshot" || command === "sv2_account_usage_snapshot_for_slot") {
     if (!previewSv2AccountIndicatorEnabled) {
       throw new Error("账号登录指示器尚未开启；确认其敏感操作说明后才能执行登录预检。");
@@ -1478,7 +1472,6 @@ export const api = {
   installToolboxUpdate: () => call<OperationResult>("install_toolbox_update"),
   sv2ProfileState: () => call<Sv2ProfilesState>("sv2_profile_state"),
   sv2CachedProfileState: () => call<Sv2ProfilesState>("sv2_cached_profile_state"),
-  sv2VoiceCatalog: () => call<import("./types").Sv2CachedVoice[]>("sv2_voice_catalog"),
   sv2AccountPrecheck: () => call<Sv2AccountPrecheck>("sv2_account_precheck"),
   sv2AccountUsageSnapshot: () => call<Sv2AccountUsageSnapshot>("sv2_account_usage_snapshot"),
   sv2AccountUsageSnapshotForSlot: (slotId: string) =>

@@ -286,13 +286,6 @@ export interface Sv2ProfilesState {
   concurrentDefaults: Sv2ConcurrentDefaults;
 }
 
-export interface Sv2CachedVoice {
-  id: string;
-  name?: string | null;
-  vendor?: string;
-  imageDataUrl?: string;
-}
-
 export interface Sv2AccountPrecheck {
   supported: boolean;
   checkedAtUtc: string;
