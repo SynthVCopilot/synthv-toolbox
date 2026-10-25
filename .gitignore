@@ -12,6 +12,8 @@ agents/
 node_modules/
 dist/
 src/PiDesktop.Tauri/electron/dist/
+src/PiDesktop.Tauri/components/audio-capture/bin/
+src/PiDesktop.Tauri/components/audio-capture/build/
 release/
 release-assets/
 test/.tmp/

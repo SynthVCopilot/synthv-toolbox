@@ -27,4 +27,7 @@ test("every file the packaging config points at exists", () => {
   for (const relative of [builder.directories.app, builder.directories.buildResources, builder.win.icon, builder.mac.icon, builder.nsis.include]) assert.ok(exists(relative), relative);
   for (const asset of ["icon.ico", "icon.icns", "TERMS-OF-USE.txt"]) assert.ok(exists(path.posix.join(builder.directories.buildResources, asset)), asset);
   for (const resource of builder.extraResources) assert.ok(exists(resource.from), `${resource.from} must exist before packaging`);
+  // Platform resources are native build outputs, so only the host platform's can exist here.
+  const platformResources = { win32: builder.win.extraResources, darwin: builder.mac.extraResources }[process.platform] ?? [];
+  for (const resource of platformResources) assert.ok(exists(resource.from), `${resource.from} must exist before packaging`);
 });

@@ -32,6 +32,9 @@ extraResources:
     to: components/vocal-separation
 win:
   icon: src/PiDesktop.Tauri/electron/assets/icon.ico
+  extraResources:
+    - from: src/PiDesktop.Tauri/components/audio-capture/bin
+      to: components/audio-capture/bin
   target:
     - nsis
   artifactName: "Toneshuttle-${version}-setup.${ext}"
@@ -48,10 +51,16 @@ nsis:
   allowToChangeInstallationDirectory: false
 mac:
   icon: src/PiDesktop.Tauri/electron/assets/icon.icns
+  extraResources:
+    - from: src/PiDesktop.Tauri/components/audio-capture/bin
+      to: components/audio-capture/bin
   target:
     - dmg
   category: public.app-category.music
   hardenedRuntime: true
+  extendInfo:
+    # The capture executable runs as a child of the app, so macOS attributes its System Audio Recording permission to the app.
+    NSAudioCaptureUsageDescription: Toneshuttle records audio only from the Synthesizer V process you select, to compare short rendered clips.
   gatekeeperAssess: false
   identity: null
 dmg:
