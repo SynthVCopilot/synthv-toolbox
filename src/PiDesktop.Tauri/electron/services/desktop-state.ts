@@ -52,7 +52,8 @@ export class DesktopStateService {
     try {
       const parsed = JSON.parse(await readFile(this.path(), "utf8"));
       const integrations = parsed.integrations !== null && typeof parsed.integrations === "object" ? parsed.integrations : {};
-      this.settings = { ...defaults(), ...parsed, agentEffort: isAgentEffortLevel(parsed.agentEffort) ? parsed.agentEffort : DEFAULT_AGENT_EFFORT, integrations: { synthv: isIntegrationPreference(integrations.synthv) ? integrations.synthv : "auto" } };
+      const mcpServers = Array.isArray(parsed.mcpServers) ? parsed.mcpServers.filter((server: unknown) => server !== null && typeof server === "object" && !Array.isArray(server)) : [];
+      this.settings = { ...defaults(), ...parsed, agentEffort: isAgentEffortLevel(parsed.agentEffort) ? parsed.agentEffort : DEFAULT_AGENT_EFFORT, mcpServers, integrations: { synthv: isIntegrationPreference(integrations.synthv) ? integrations.synthv : "auto" } };
     }
     catch { this.settings = defaults(); }
     this.applyUpdateChannel?.(this.settings.updateChannel);
