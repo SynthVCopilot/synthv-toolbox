@@ -38,7 +38,7 @@ try {
   assert.match(await readFile(report.detail, "utf8"), /"tracks": 1/);
   await assert.rejects(service.invoke("run_audio_probe", {}), /Component failed/);
   assert.equal((await service.invoke("list_creative_history", {})).length, 1, "failed execution cannot append success history");
-  await assert.rejects(service.invoke("learn_tuning_profile", { voiceName: "Voice" }), /not available/);
+  await assert.rejects(service.invoke("queue_media_import", {}), /not available/);
   const batch = await service.invoke("run_batch_workflow", { recipeId: "project-probe", inputPaths: [source, join(root, "missing.svp")], options: {} });
   assert.equal(batch.completed, 1); assert.equal(batch.failed, 1);
   if (process.platform !== "win32") {

@@ -5,13 +5,14 @@ import { createHash, randomUUID } from "node:crypto";
 import { createLyricService, LYRIC_COMMANDS } from "./lyric-service.js";
 import { createCreativeBridge, CREATIVE_BRIDGE_COMMANDS } from "./creative-bridge.js";
 import { COVER_COMMANDS } from "./cover-service.js";
+import { createTuningService, TUNING_COMMANDS, type TuningServiceOptions } from "./tuning-service.js";
 import type { EmbeddedBridge } from "./synthv-bridge.js";
 
 type Data = Record<string, any>;
 type TaskExecutor = (kind: string, args: Data, signal?: AbortSignal) => Promise<Data>;
 export interface CreativeService { invoke(command: string, args: Data, signal?: AbortSignal): Promise<unknown>; dispose?(): void; }
 
-export function createCreativeService(dataRoot: string, executeTask: TaskExecutor = async command => { throw new Error(`No component executor is configured for ${command}.`); }, bridge?: EmbeddedBridge, cover?: { invoke(command: string, args: Data): Promise<unknown> }, options: { backupsEnabled?: () => boolean; backupIntervalMs?: number } = {}): CreativeService {
+export function createCreativeService(dataRoot: string, executeTask: TaskExecutor = async command => { throw new Error(`No component executor is configured for ${command}.`); }, bridge?: EmbeddedBridge, cover?: { invoke(command: string, args: Data): Promise<unknown> }, options: { backupsEnabled?: () => boolean; backupIntervalMs?: number; tuning?: Pick<TuningServiceOptions, "workMode" | "synthv" | "audio"> } = {}): CreativeService {
   const root = resolve(dataRoot), lyrics = createLyricService(root), connected = bridge ? createCreativeBridge(bridge) : undefined;
   let queue: Promise<unknown> = Promise.resolve();
   const serialize = <T>(fn: () => Promise<T>) => { const next = queue.then(fn, fn); queue = next.catch(() => undefined); return next; };
@@ -59,6 +60,7 @@ export function createCreativeService(dataRoot: string, executeTask: TaskExecuto
     const entry = { id, label, sourcePath: projectPath, snapshotPath, sourceSha256, sourceSize: bytes.length, createdAtUtc: now() };
     entries.unshift(entry); await writeJson(path, entries); return entry;
   });
+  const tuning = createTuningService({ ...options.tuning, dataRoot: root, sourceStyle: async (audioPath, signal) => (await executeTask("run_source_style", { audioPath }, signal)).data, checkpoint, bridge: connected });
   const tracked = new Map<string, Data>();
   const track = async (path: string) => {
     const state = tracked.get(path) ?? { sourcePath: path, lastSeenAtUtc: now(), lastBackupAtUtc: null, lastError: null, backupCount: 0 };
@@ -104,6 +106,11 @@ export function createCreativeService(dataRoot: string, executeTask: TaskExecuto
       if (!connected) throw new Error("SynthV Bridge is unavailable.");
       return connected.invoke(command, args);
     }
+    if ((TUNING_COMMANDS as readonly string[]).includes(command)) {
+      const result = await tuning.invoke(command, args, signal) as Data;
+      if (command === "apply_tuning_profile") await record(command, args, result);
+      return result;
+    }
     if (command === "list_workflow_recipes") return recipes;
     if (command === "list_creative_history") return (await readList(await managed("creative-history", "entries.json"))).slice(0, limit(args.limit));
     if (command === "get_project_backup_state") return { intervalSeconds: 60, projects: [...tracked.values()], lastError: null };
@@ -139,8 +146,8 @@ export function createCreativeService(dataRoot: string, executeTask: TaskExecuto
       }
       return { recipeId: recipe.id, completed: items.filter(item => item.status === "completed").length, failed: items.filter(item => item.status === "failed").length, items };
     }
-    if (["media_tasks", "audio_tasks", "list_tuning_profiles"].includes(command)) return [];
-    if (["preview_media_source", "queue_media_import", "queue_media_separation", "queue_cover", "cancel_media_task", "retry_media_task", "learn_tuning_profile", "record_tuning_outcome", "apply_tuning_profile", "run_solo_tuning", "generate_lyric_candidates", "review_workflow"].includes(command)) throw new Error("This workflow is not available in this build. Use the local audio, score, lyric and project tools.");
+    if (["media_tasks", "audio_tasks"].includes(command)) return [];
+    if (["preview_media_source", "queue_media_import", "queue_media_separation", "queue_cover", "cancel_media_task", "retry_media_task", "generate_lyric_candidates", "review_workflow"].includes(command)) throw new Error("This workflow is not available in this build. Use the local audio, score, lyric and project tools.");
     return execute(command, args, signal);
   } };
 }
