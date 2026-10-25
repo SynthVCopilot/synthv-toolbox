@@ -13,6 +13,7 @@ const toolInputs = {
   "transport.seek": { seconds: z.number().finite().min(0) },
   "track.list": {}, "track.get": { trackIndex: index }, "track.create": { name: text.optional() }, "track.update": { trackIndex: index, name: text }, "track.delete": { trackIndex: index },
   "part.list": { trackIndex: index }, "part.get": { trackIndex: index, partIndex: index },
+  "parameter.snapshot": { trackIndex: index, partIndex: index },
   "part.create": { trackIndex: index, name: text.optional(), timeOffset: blick.optional(), pitchOffset: pitchOffset.optional() },
   "part.update": { trackIndex: index, partIndex: index, changes: z.object({ name: text.optional(), timeOffset: blick.optional(), pitchOffset: pitchOffset.optional() }).refine((value) => value.name !== undefined || value.timeOffset !== undefined || value.pitchOffset !== undefined, "changes must include name, timeOffset, or pitchOffset") },
   "part.delete": { trackIndex: index, partIndex: index },

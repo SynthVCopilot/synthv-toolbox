@@ -21,7 +21,7 @@ test("the SynthV integration setting and the MCP endpoint work in the built app"
     await t.test("the integration preference is applied and persisted", async () => {
       const state = await invoke(page, "bootstrap");
       assert.ok(state.integrations?.synthv, "bootstrap must report the SynthV integration state");
-      assert.deepEqual(state.installations, [], "the isolated HOME has no SynthV installation");
+      assert.deepEqual(state.installations.filter((item) => item.source !== "Windows installed application"), [], "the isolated HOME has no SynthV scripts or standard installation; registry entries describe the machine");
       // "auto" resolves from detection, so start from explicit values.
       const on = await invoke(page, "set_integration", { integration: "synthv", preference: "on" });
       assert.equal(on.integrations.synthv.preference, "on");
