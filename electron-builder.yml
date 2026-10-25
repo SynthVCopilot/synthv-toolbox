@@ -1,6 +1,6 @@
 appId: com.synthvcopilot.toolbox
 productName: Toneshuttle
-electronVersion: 39.2.7
+electronVersion: 45.0.0
 directories:
   app: src/PiDesktop.Tauri
   output: release

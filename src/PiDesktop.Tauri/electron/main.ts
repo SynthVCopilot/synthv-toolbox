@@ -288,10 +288,15 @@ async function initializeServices(): Promise<void> {
     importer: async python => createMediaImporter({ dataRoot: creativeRoot, python, ffmpegPath: (await resolveFfmpegBinaries({ dataRoot: join(userData, "components") })).ffmpeg }),
     audio: async python => createCoverAudio({ dataRoot: creativeRoot, componentsRoot, python, ffmpegPath: (await resolveFfmpegBinaries({ dataRoot: join(userData, "components") })).ffmpeg }),
   });
+  const audioCapture = createAudioCaptureService({
+    platform: process.platform, systemVersion: process.getSystemVersion(),
+    executablePath: captureExecutablePath(componentsRoot), outputDirectory: join(creativeRoot, "ab-captures"),
+    transport: bridgeCaptureTransport(gatedSynthvBridge),
+  });
   const creative = createCreativeService(creativeRoot, async (command, args, signal) => {
     const runtime = await creativeRuntime.status();
     return createComponentExecutor(componentsRoot, runtime.ready ? runtime.pythonPath : undefined, undefined, { dataRoot: creativeRoot })(command, args, signal);
-  }, gatedSynthvBridge, cover, { backupsEnabled: () => desktop.synthvEnabled(), tuning: { workMode: () => desktop.agentWorkMode(), synthv }, complete: (system, input, signal) => ai.complete(system, input, signal) });
+  }, gatedSynthvBridge, cover, { backupsEnabled: () => desktop.synthvEnabled(), tuning: { workMode: () => desktop.agentWorkMode(), synthv, audio: audioCapture }, complete: (system, input, signal) => ai.complete(system, input, signal) });
   const delivery = createSynthVDeliveryRegistry();
   // One process per enabled external server, shared by all sessions; nothing spawns until a session needs it.
   const externalMcp = new ExternalMcpPool({ clientVersion: app.getVersion() });
@@ -371,11 +376,6 @@ async function initializeServices(): Promise<void> {
     cancelChildren: async conversationId => {
       for (const job of await coverChildren(conversationId)) if (["queued", "running", "cancelling"].includes(job.status)) await cover.invoke("cancel_media_task", { id: job.id });
     },
-  });
-  const audioCapture = createAudioCaptureService({
-    platform: process.platform, systemVersion: process.getSystemVersion(),
-    executablePath: captureExecutablePath(componentsRoot), outputDirectory: join(creativeRoot, "ab-captures"),
-    transport: bridgeCaptureTransport(gatedSynthvBridge),
   });
   const httpServer = new HttpMcpServer({
     mcpTools: async () => toolboxMcpTools(await runtimeHost.mcpTools()),

@@ -18,6 +18,12 @@ test("the application is packaged as asar with native modules unpacked, and ship
   assert.equal(builder.mac.hardenedRuntime, true);
 });
 
+test("installers ship the Electron version the app is built and tested against", () => {
+  // electron-builder runs from the repository root, which has no electron package, so the version is pinned in the config.
+  const installed = JSON.parse(readFileSync(path.join(root, builder.directories.app, "node_modules/electron/package.json"), "utf8")).version;
+  assert.equal(builder.electronVersion, installed);
+});
+
 test("updates are published as GitHub releases on the latest channel", () => {
   assert.equal(builder.publish.provider, "github");
   assert.equal(builder.publish.channel, "latest");
