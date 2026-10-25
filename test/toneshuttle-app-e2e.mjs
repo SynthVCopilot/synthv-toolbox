@@ -117,12 +117,15 @@ test("Toneshuttle app: branding, SynthV integration switch and authenticated MCP
     await t.test("Settings > Integrations > Off hides SynthV pages, persists, and On restores them", async () => {
       await click(page, "[data-page=\"settings\"]");
       await waitFor(() => evaluate(page, "!!document.querySelector('[data-set-integration=\"synthv:off\"]')"), { label: "integration switch" });
+      // "auto" resolves from detection and the isolated profile has no SynthV, so start from an explicit On.
+      await click(page, "[data-set-integration=\"synthv:on\"]");
+      await waitFor(async () => (await navPages(page)).includes("bridge"), { label: "Bridge nav to appear" });
       await click(page, "[data-set-integration=\"synthv:off\"]");
-      await waitFor(async () => !(await navPages(page)).includes("bridge"), { label: "Bridge nav to disappear" });
+      await waitFor(() => evaluate(page, "document.querySelector('[data-set-integration=\"synthv:off\"]')?.getAttribute('aria-pressed') === 'true'"), { label: "Off to apply" });
+      assert.ok(!(await navPages(page)).includes("bridge"));
       assert.ok(!(await navPages(page)).includes("accounts"));
       const saved = JSON.parse(await readFile(join(profileDir, "desktop-settings.json"), "utf8"));
       assert.equal(saved.integrations.synthv, "off");
-      assert.equal(await evaluate(page, "document.querySelector('[data-set-integration=\"synthv:off\"]').getAttribute('aria-pressed')"), "true");
       await shot("03-settings-integration-off");
       await click(page, "[data-page=\"home\"]");
       await waitFor(() => evaluate(page, "!!document.querySelector('.quick-card')"), { label: "home quick start" });

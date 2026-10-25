@@ -23,7 +23,7 @@ for (const workflow of [release, windows, development]) {
   assert.doesNotMatch(workflow, /cargo |tauri |tauri-action|nightly-release\.mjs/);
 }
 assert.doesNotMatch(development, /download-artifact/);
-assert.deepEqual([...release.matchAll(/download-artifact@v4\n\s+with:\n\s+name: (\S+)/g)].map((match) => match[1]), ["signing-source"]);
+assert.doesNotMatch(release, /download-artifact/);
 assert.doesNotMatch(release, /gh release/);
 
 assert.match(release, /tags: \["v\*"\]/);
