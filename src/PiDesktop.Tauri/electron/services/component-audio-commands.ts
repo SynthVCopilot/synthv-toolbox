@@ -91,8 +91,6 @@ export function registerComponentAudioCommands(registry: CommandRegistry, option
   registry.register("audio_artifact_info", async args => artifactInfo(artifacts, text(args.artifactId, "artifactId")));
   registry.register("reveal_audio_artifact", async args => { const artifact = getArtifact(artifacts, text(args.artifactId, "artifactId")); if (!options.reveal) throw new Error("File reveal is unavailable."); await options.reveal(artifact.path); return null; });
   registry.register("save_audio_artifact", async args => { const artifact = getArtifact(artifacts, text(args.artifactId, "artifactId")); const destination = await options.saveFile?.(basename(artifact.path)); if (!destination) return { saved: false }; await copyFile(artifact.path, destination); return { saved: true, fileName: basename(destination) }; });
-  registry.register("audio_capture_capability", async () => ({ available: false, platform: process.platform, reason: "System audio capture requires a platform capture component." })); registry.register("list_synthv_capture_targets", async () => []);
-  for (const command of ["capture_synthv_clip", "compare_synthv_clips"]) registry.register(command, async () => { throw new Error(`${command} requires the platform audio capture component.`); });
   const tasks: Args[] = [];
   const attempts = new Map<string, AbortController>();
   const generations = new Map<string, number>();

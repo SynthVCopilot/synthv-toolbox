@@ -1,0 +1,33 @@
+import { existsSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+import process from "node:process";
+
+const componentDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "../components/audio-capture");
+const buildDirectory = resolve(componentDirectory, "build");
+const executable = resolve(componentDirectory, "bin", process.platform === "win32" ? "audio-capture.exe" : "audio-capture");
+
+if (process.platform !== "win32" && process.platform !== "darwin") {
+  console.log(`Process audio capture has no ${process.platform} backend; skipping its native build.`);
+  process.exit(0);
+}
+
+function cmake(args) {
+  const result = spawnSync("cmake", args, { stdio: "inherit" });
+  if (result.error) throw new Error(`CMake is required to build the audio capture executable: ${result.error.message}`);
+  if (result.status !== 0) process.exit(result.status ?? 1);
+}
+
+// Named explicitly because some CMake distributions on Windows default to Ninja with whatever compiler is first on PATH.
+function visualStudioGenerator() {
+  const vswhere = join(process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)", "Microsoft Visual Studio", "Installer", "vswhere.exe");
+  const property = name => spawnSync(vswhere, ["-latest", "-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", name], { encoding: "utf8" }).stdout?.trim();
+  const version = property("installationVersion"), year = property("catalog_productLineVersion");
+  if (!version || !year) throw new Error("Visual Studio with the MSVC x64 build tools is required to build the audio capture executable.");
+  return ["-G", `Visual Studio ${version.split(".")[0]} ${year}`, "-A", "x64"];
+}
+
+cmake(["-S", componentDirectory, "-B", buildDirectory, ...(process.platform === "win32" ? visualStudioGenerator() : ["-DCMAKE_BUILD_TYPE=Release"])]);
+cmake(["--build", buildDirectory, "--config", "Release"]);
+if (!existsSync(executable)) throw new Error(`The audio capture build finished without producing ${executable}.`);

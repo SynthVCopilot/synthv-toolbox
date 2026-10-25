@@ -8,11 +8,14 @@
 
 ## 实现边界
 
-- 当前捕获后端为 Windows WASAPI Application Loopback，目标是所选 SynthV standalone PID 及其子进程；不录制系统混音，也不捕获 DAW 中的 SynthV 插件。
-- 需要 Windows 10 build 20348 或更高版本。其他平台会返回明确的 capability 不可用状态；A/B WAV 比较逻辑本身仍是跨平台的。
-- Bridge 的公共 MCP 表面仍保持六工具不变。片段捕获通过 Toneshuttle 的统一 SynthV 宿主层控制播放，不把任何宿主原始工具暴露给内置 Agent。
+- 捕获只录所选 SynthV standalone 进程（Windows 含其子进程）的输出，不录系统混音，也不捕获 DAW 中的 SynthV 插件：
+  - Windows 使用 WASAPI 进程回环，需要 Windows 10 build 20348 或更高版本；不会弹出权限请求。
+  - macOS 使用 Core Audio Process Tap，需要 macOS 14.2 或更高版本；首次捕获时系统会请求“系统音频录制”权限，权限记在 Toneshuttle 应用名下。
+  - 其他平台、版本过低或安装包缺少捕获组件时，capability 返回明确的不可用原因；A/B WAV 比较本身跨平台可用。
+- 捕获由安装包内的独立可执行文件 `components/audio-capture/bin/audio-capture(.exe)` 完成，主程序通过标准输入输出控制它：启动参数为 `--pid <PID> --output <新 WAV 路径>`；它在标准输出逐行写 JSON 事件（`ready` 表示已开始收帧，之后是 `finished`（含采样率、声道、帧数、数据中断次数）或 `error`（含阶段、错误码、说明））；标准输入收到一行或被关闭即停止并写完 WAV。
+- 播放控制经已连接的 SynthV Bridge（`sv_ui` 的 `playback` 动作）完成。Bridge 只连接一个 SynthV 实例且不报告其 PID：多个实例并存时必须选择 PID，并确保 Bridge 运行在同一实例中；若该 PID 在播放期间没有任何声音，本次捕获会被拒绝。
 - 单次目标片段最长 30 秒，前后保护区各最多 2 秒。捕获开始前 SynthV 必须处于 stopped 状态，避免中断用户正在进行的试听。
-- 输出写入 `~/.SynthVcopilot/output/ab-captures/`。最终片段是 48 kHz 单声道 PCM16 WAV，并带有 JSON 元数据、SHA-256、边界不确定度与快速电平指标。
+- 输出写入应用数据目录的 `creative/ab-captures/`。最终片段是单声道 PCM16 WAV（Windows 为 48 kHz，macOS 为 tap 的原生采样率），并带有 JSON 元数据、SHA-256、边界不确定度与快速电平指标；捕获与比较结果记入创作历史。
 
 ## 捕获时序
 
@@ -23,7 +26,7 @@
 5. 恢复原播放头，检查捕获中断和宿主 Session（若有）是否变化。
 6. 根据播放命令往返时间估计真实起播边界，裁出用户请求的精确范围，原始保护区文件随即删除。
 
-任何捕获数据中断、提前停止、超时、进程消失或 Session 切换都会让本次结果失败，避免用不可信的片段产生 A/B 结论。
+任何捕获数据中断、提前停止、超时、进程消失、Session 切换或整段无声都会让本次结果失败，避免用不可信的片段产生 A/B 结论。
 
 ## 快速比较
 
@@ -39,13 +42,11 @@
 
 在“工具箱 → 片段 A/B 检查”中：
 
-1. 使用 `synthv_connect` 连接官方 SV1 或 SV2，并让 SynthV 停止播放。Flat 当前缺少安全定位播放头的能力，因此不提供定点片段捕获。
+1. 在 SynthV 中运行 Bridge 脚本完成连接，并让 SynthV 停止播放。
 2. 选择 standalone 实例，填写起点和终点，捕获 A 基线。
 3. 在 SynthV 中修改目标片段，捕获 B 候选。
 4. 运行“对齐并比较 A/B”。后续迭代可以继续保留 A，只替换 B。
 
-Copilot 模式也会获得本地 `capture_synthv_clip` 和 `compare_audio_clips` 工具；播放控制按 `processId` 路由到统一宿主连接。
-
 ## 验证
 
-自动化测试覆盖参数上限、WAV 读写、完全一致片段比较和已知延迟恢复。Windows 构建会同时编译原生回环后端。真实设备联调仍需要在 Windows 10/11 上运行 Synthesizer V Studio 2 Pro standalone，并确认所用音频驱动能够正常播放。
+合同测试覆盖 WAV 解析与写出、指标、裁切、已知延迟恢复、能力门控、参数上限与进程识别，并以性质测试检查：自比较恒为零偏移的完全一致、对齐偏移不越界、限带信号的延迟被精确找回。流程测试经命令注册表驱动真实内嵌 Bridge、假 SynthV 宿主与遵循同一标准输入输出协议的假捕获程序，覆盖捕获、恢复播放头、元数据、A/B 分级与各类拒绝路径。Windows 与 macOS 构建会用 CMake 编译捕获可执行文件。真实设备联调仍需要在对应系统上运行 Synthesizer V Studio standalone。
