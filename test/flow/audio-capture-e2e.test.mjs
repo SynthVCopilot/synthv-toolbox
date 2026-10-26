@@ -26,7 +26,15 @@ test("capture and compare commands run end to end against a fake SynthV and capt
   const ipcDirectory = join(root, "ipc"), outputDirectory = join(root, "ab-captures"), transportFile = join(root, "transport.json"), log = join(root, "capture-log.jsonl");
   const playback = { status: "stopped", head: ORIGINAL_PLAYHEAD, playFrom: 0, startedAt: null };
   const calls = [];
-  const publish = async (stoppedAt = null) => { const temporary = `${transportFile}.tmp`; await writeFile(temporary, JSON.stringify({ playFrom: playback.playFrom, startedAt: playback.startedAt, stoppedAt })); await rename(temporary, transportFile); };
+  const publish = async (stoppedAt = null) => {
+    const temporary = `${transportFile}.tmp`;
+    await writeFile(temporary, JSON.stringify({ playFrom: playback.playFrom, startedAt: playback.startedAt, stoppedAt }));
+    // Windows refuses to replace a file the stand-in capture process is reading at that instant.
+    for (let attempt = 0; ; attempt++) {
+      try { await rename(temporary, transportFile); return; }
+      catch (error) { if (attempt >= 20 || !["EPERM", "EBUSY", "EACCES"].includes(error.code)) throw error; await new Promise((resolve) => setTimeout(resolve, 5)); }
+    }
+  };
   const playhead = () => playback.status === "playing" ? playback.playFrom + (now() - playback.startedAt) / 1000 : playback.head;
   const host = await startFakeHost({ ipcDirectory, handler: async (action, payload) => {
     if (action !== "playback") return { e: { code: "UNSUPPORTED", message: action } };
