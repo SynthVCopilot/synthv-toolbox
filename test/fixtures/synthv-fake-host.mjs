@@ -21,13 +21,18 @@ function paths(ipcDirectory) {
   };
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Windows refuses to rename onto, or away from, a file another process has open at that instant.
+const busy = (error) => ["EPERM", "EBUSY", "EACCES"].includes(error?.code);
+
 async function writeJsonAtomically(filePath, value) {
   const temporary = `${filePath}.${randomUUID()}.tmp`;
   await writeFile(temporary, `${JSON.stringify(value)}\n`, "utf8");
-  await rename(temporary, filePath);
+  for (let attempt = 0; ; attempt++) {
+    try { await rename(temporary, filePath); return; }
+    catch (error) { if (attempt >= 20 || !busy(error)) throw error; await sleep(5); }
+  }
 }
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Stands in for the real SynthV Lua executor: writes a status heartbeat, claims request -> processing,
@@ -59,7 +64,7 @@ export async function startFakeHost({ ipcDirectory, handler, claimOnly = false }
       try {
         await rename(filePaths.requestFile, filePaths.processingFile);
       } catch (error) {
-        if (error?.code !== "ENOENT") throw error;
+        if (error?.code !== "ENOENT" && !busy(error)) throw error;
         await sleep(POLL_INTERVAL_MS);
         continue;
       }
