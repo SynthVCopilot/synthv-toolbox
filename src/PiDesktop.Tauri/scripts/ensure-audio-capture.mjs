@@ -23,9 +23,13 @@ function cmake(args) {
 function visualStudioGenerator() {
   const vswhere = join(process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)", "Microsoft Visual Studio", "Installer", "vswhere.exe");
   const property = name => spawnSync(vswhere, ["-latest", "-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", name], { encoding: "utf8" }).stdout?.trim();
-  const version = property("installationVersion"), year = property("catalog_productLineVersion");
-  if (!version || !year) throw new Error("Visual Studio with the MSVC x64 build tools is required to build the audio capture executable.");
-  return ["-G", `Visual Studio ${version.split(".")[0]} ${year}`, "-A", "x64"];
+  const version = property("installationVersion"), installation = property("installationPath");
+  if (!version || !installation) throw new Error("Visual Studio with the MSVC x64 build tools is required to build the audio capture executable.");
+  // vswhere's product line is a year up to VS 2022 but "18" for VS 2026, so take the generator name from CMake itself.
+  const major = version.split(".")[0];
+  const generator = (spawnSync("cmake", ["--help"], { encoding: "utf8" }).stdout ?? "").split(/\r?\n/).map(line => /^\*?\s*(Visual Studio (\d+) \d{4})\b/.exec(line)).find(match => match?.[2] === major)?.[1];
+  if (!generator) throw new Error(`This CMake has no generator for Visual Studio ${major}; update CMake to build the audio capture executable.`);
+  return ["-G", generator, "-A", "x64", `-DCMAKE_GENERATOR_INSTANCE=${installation}`];
 }
 
 cmake(["-S", componentDirectory, "-B", buildDirectory, ...(process.platform === "win32" ? visualStudioGenerator() : ["-DCMAKE_BUILD_TYPE=Release"])]);

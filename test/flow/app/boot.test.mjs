@@ -71,6 +71,8 @@ test("the built app boots, serves IPC, persists settings and quits cleanly", asy
     assert.ok(exit, "the app must exit rather than be force-killed");
     assert.equal(exit.code, 0);
     assert.equal(exit.signal, null);
-    assert.deepEqual(app.stderr().split("\n").filter((line) => /error/i.test(line)), []);
+    // macOS Chromium helper processes write their own NSLog lines (e.g. XPC errors) to this stream; they are not main-process logs.
+    const helperLog = /^\d{4}-\d{2}-\d{2} [\d:.]+ Electron Helper( \([A-Za-z]+\))?\[\d+:\d+\]/;
+    assert.deepEqual(app.stderr().split("\n").filter((line) => /error/i.test(line) && !helperLog.test(line)), []);
   });
 });

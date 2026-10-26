@@ -1,7 +1,7 @@
 // Launches the built Electron app with isolated profiles and drives it only through window.toolboxDesktop.invoke over CDP.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
@@ -74,7 +74,8 @@ export function isolatedEnv(homeDir, extra = {}) {
 }
 
 export async function makeTemporaryDirectory(prefix, cleanups) {
-  const directory = await mkdtemp(join(tmpdir(), prefix));
+  // The app reports resolved paths, and macOS's temporary directory sits behind the /var -> /private/var link.
+  const directory = realpathSync(await mkdtemp(join(tmpdir(), prefix)));
   cleanups.push(() => rm(directory, { recursive: true, force: true }).catch(() => {}));
   return directory;
 }
