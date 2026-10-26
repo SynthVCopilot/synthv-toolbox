@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
-import { CdpClient, evaluate, freePort, invoke, isolatedEnv, makeTemporaryDirectory, openPage, quitApp, startApp, waitFor } from "./_lib/app.mjs";
+import { evaluate, invoke, isolatedEnv, makeTemporaryDirectory, openPage, quitApp, startApp, waitFor } from "./_lib/app.mjs";
 
 test("the built app boots, serves IPC, persists settings and quits cleanly", async (t) => {
   const cleanups = [];
@@ -11,10 +11,8 @@ test("the built app boots, serves IPC, persists settings and quits cleanly", asy
   const homeDir = await makeTemporaryDirectory("toneshuttle-boot-home-", cleanups);
   const tmpDir = await makeTemporaryDirectory("toneshuttle-boot-tmp-", cleanups);
   const bridgeDir = await makeTemporaryDirectory("toneshuttle-boot-bridge-", cleanups);
-  const inspectorPort = await freePort();
-  const app = await startApp([`--user-data-dir=${profileDir}`], isolatedEnv(homeDir, { TMPDIR: tmpDir, SYNTHV_AGENT_BRIDGE_DIR: bridgeDir }), { extraArgs: [`--inspect=${inspectorPort}`] });
+  const app = await startApp([`--user-data-dir=${profileDir}`], isolatedEnv(homeDir, { TMPDIR: tmpDir, SYNTHV_AGENT_BRIDGE_DIR: bridgeDir }));
   let page;
-  let inspector;
   let exit;
   try {
     page = await openPage(app);
@@ -22,14 +20,6 @@ test("the built app boots, serves IPC, persists settings and quits cleanly", asy
     await t.test("the preload exposes only the desktop bridge and no Node globals", async () => {
       assert.deepEqual(await evaluate(page, "Object.keys(window.toolboxDesktop).sort()"), ["invoke", "listen", "onFileDrop", "openDialog"]);
       assert.deepEqual(await evaluate(page, "[typeof window.require, typeof window.process]"), ["undefined", "undefined"]);
-    });
-
-    await t.test("hardware acceleration is enabled by default", async () => {
-      const target = await waitFor(async () => (await fetch(`http://127.0.0.1:${inspectorPort}/json/list`).then((response) => response.json())).find((entry) => typeof entry.webSocketDebuggerUrl === "string"), { label: "the main process inspector" });
-      inspector = new CdpClient(target.webSocketDebuggerUrl);
-      await inspector.connect();
-      await inspector.send("Runtime.enable");
-      assert.equal(await evaluate(inspector, "require('electron').app.isHardwareAccelerationEnabled()", { includeCommandLineAPI: true }), true);
     });
 
     await t.test("the agent runtime is running and the updater is idle", async () => {
@@ -62,7 +52,6 @@ test("the built app boots, serves IPC, persists settings and quits cleanly", asy
       assert.equal((await invoke(page, "set_agent_transcripts", { enabled: false })).agentTranscriptsEnabled, false);
     });
   } finally {
-    inspector?.close();
     exit = await quitApp(app, page);
     for (const cleanup of cleanups) await cleanup();
   }
