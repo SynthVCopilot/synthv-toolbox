@@ -79,7 +79,6 @@ export interface AiProviderSummary {
   accounts: AiProviderAccountSummary[];
   apiKeys: AiApiKeySummary[];
   authMethods: AiAuthMethod[];
-  oauthEnabled: boolean;
   loadStrategy: AiLoadStrategy;
   available: boolean;
   unavailableReason: string | null;

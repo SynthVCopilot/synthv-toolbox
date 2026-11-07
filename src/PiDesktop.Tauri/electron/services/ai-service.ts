@@ -75,7 +75,6 @@ export interface StoredCredential {
 
 export interface ProviderSettings {
   model: string;
-  oauthEnabled: boolean;
   strategy: AiLoadStrategy;
 }
 
@@ -221,7 +220,6 @@ export class AiService {
         description: `${providerDisplayName(provider)} model access`,
         active: metadata.activeProvider === provider,
         model: settings.model,
-        oauthEnabled: settings.oauthEnabled,
         loadStrategy: settings.strategy,
         models,
         oauthModels: models,
@@ -406,13 +404,6 @@ export class AiService {
     group.sort((left, right) => ordered.get(left.id)! - ordered.get(right.id)!);
     let index = 0;
     metadata.credentials = metadata.credentials.map(item => matches(item) ? group[index++]! : item);
-    await this.persist();
-    return this.ai_provider_state(false);
-  }
-
-  async update_ai_provider(provider: AiProviderId, oauthEnabled: boolean): Promise<Record<string, unknown>> {
-    const metadata = await this.load();
-    metadata.providers[provider].oauthEnabled = oauthEnabled;
     await this.persist();
     return this.ai_provider_state(false);
   }
@@ -668,7 +659,7 @@ function createMetadata(): AiServiceMetadata {
   return {
     version: 1,
     activeProvider: "anthropic",
-    providers: Object.fromEntries(providers.map((provider) => [provider, { model: defaultModels[provider], oauthEnabled: true, strategy: "round-robin" }])) as AiServiceMetadata["providers"],
+    providers: Object.fromEntries(providers.map((provider) => [provider, { model: defaultModels[provider], strategy: "round-robin" }])) as AiServiceMetadata["providers"],
     credentials: [],
     conversations: [],
   };

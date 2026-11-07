@@ -3063,7 +3063,7 @@ function activeAiProvider(): AiProviderSummary | undefined {
 
 function hasSelectableAiConnection(provider: AiProviderSummary): boolean {
   return provider.connected && (
-    provider.oauthEnabled && provider.accounts.some((account) => account.authorized && account.enabled)
+    provider.accounts.some((account) => account.authorized && account.enabled)
       || provider.apiKeys.some((key) => key.enabled)
   );
 }
@@ -3125,7 +3125,7 @@ function modelAuthProviders() {
   const usageByCredential = new Map((aiUsage?.accounts ?? []).filter((account) => account.channel === "oauth" && account.credentialId).map((account) => [account.credentialId!, account.usage]));
   return aiProviders().map((provider) => ({
     id: provider.id, name: provider.displayName, description: provider.description, authMethods: provider.authMethods,
-    available: provider.available, unavailableReason: provider.unavailableReason, oauthEnabled: provider.oauthEnabled,
+    available: provider.available, unavailableReason: provider.unavailableReason,
     loadStrategy: provider.loadStrategy, mark: aiProviderMark(provider),
     authorizeLabel: t("accountUi.authorizeInBrowser"),
     usageEnabled: provider.id === "anthropic" || provider.id === "openai-codex",
@@ -3216,11 +3216,6 @@ async function executeModelAuthAction(action: ModelAuthAction, detail: unknown[]
     case "reorder-credentials": {
       const [payload] = detail as [{ providerId: AiProviderId; method: "oauth" | "api-key"; credentialIds: string[] }];
       app = await api.reorderAiCredentials(payload.providerId, payload.method, payload.credentialIds);
-      break;
-    }
-    case "update-provider": {
-      const [payload] = detail as [{ providerId: AiProviderId; oauthEnabled: boolean }];
-      app = await api.updateAiProvider(payload.providerId, payload.oauthEnabled);
       break;
     }
     case "select-model": {

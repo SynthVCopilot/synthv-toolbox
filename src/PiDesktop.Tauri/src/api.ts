@@ -159,7 +159,6 @@ let previewAiProviders: AiProviderSummary[] = [{
   apiKeys: [],
   authMethods: ["oauth", "api-key"],
   available: true,
-  oauthEnabled: true,
   loadStrategy: "round-robin",
   unavailableReason: null,
 }, {
@@ -185,7 +184,6 @@ let previewAiProviders: AiProviderSummary[] = [{
   apiKeys: [],
   authMethods: ["oauth", "api-key"],
   available: true,
-  oauthEnabled: true,
   loadStrategy: "round-robin",
   unavailableReason: null,
 }, {
@@ -204,7 +202,6 @@ let previewAiProviders: AiProviderSummary[] = [{
   apiKeys: [],
   authMethods: ["oauth"],
   available: true,
-  oauthEnabled: true,
   loadStrategy: "round-robin",
   unavailableReason: null,
 }, {
@@ -223,7 +220,6 @@ let previewAiProviders: AiProviderSummary[] = [{
   apiKeys: [],
   authMethods: ["oauth"],
   available: true,
-  oauthEnabled: true,
   loadStrategy: "round-robin",
   unavailableReason: null,
 }];
@@ -703,12 +699,6 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     const credentials = args?.method === "oauth" ? provider.accounts : provider.apiKeys;
     if (ids.length !== credentials.length || new Set(ids).size !== ids.length || ids.some(id => !credentials.some(item => item.id === id))) throw new Error("凭据排序无效。");
     credentials.sort((left, right) => ids.indexOf(left.id) - ids.indexOf(right.id));
-    return previewState() as T;
-  }
-  if (command === "update_ai_provider") {
-    const provider = previewAiProvider(args?.provider);
-    if (!provider) throw new Error("未知的 AI 提供商。");
-    provider.oauthEnabled = Boolean(args?.oauthEnabled);
     return previewState() as T;
   }
   if (command === "update_ai_provider_strategy") {
@@ -1458,8 +1448,6 @@ export const api = {
     call<BootstrapState>("update_ai_credential", { provider, credentialId, enabled, weight, label, extend }),
   reorderAiCredentials: (provider: AiProviderId, method: "oauth" | "api-key", credentialIds: string[]) =>
     call<BootstrapState>("reorder_ai_credentials", { provider, method, credentialIds }),
-  updateAiProvider: (provider: AiProviderId, oauthEnabled: boolean) =>
-    call<BootstrapState>("update_ai_provider", { provider, oauthEnabled }),
   updateAiProviderStrategy: (provider: AiProviderId, strategy: import("./types").AiLoadStrategy) =>
     call<BootstrapState>("update_ai_provider_strategy", { provider, strategy }),
   scanSynthV: () => call<SynthVInstallation[]>("scan_synthv"),

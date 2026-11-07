@@ -83,7 +83,6 @@ await service.update_ai_credential("anthropic", credentialId, true);
 await service.reorder_ai_credentials("anthropic", "api-key", [credentialId]);
 await assert.rejects(service.reorder_ai_credentials("anthropic", "api-key", [credentialId, credentialId]));
 await assert.rejects(service.reorder_ai_credentials("openai-codex", "api-key", [credentialId]));
-await service.update_ai_provider("anthropic", false);
 await service.update_ai_provider_strategy("anthropic", "weighted-round-robin");
 const selected = await service.select_ai_provider("anthropic", ["cla", "ude-opus-4-8"].join(""));
 assert.equal(selected.activeProvider, "anthropic");
@@ -198,7 +197,7 @@ const droppedPath = join(directory, "dropped-outcome.json");
 await writeFile(droppedPath, JSON.stringify({
   version: 1,
   activeProvider: "anthropic",
-  providers: { anthropic: { model: "m", oauthEnabled: true, strategy: "round-robin" }, "openai-codex": { model: "", oauthEnabled: true, strategy: "round-robin" }, workbuddy: { model: "", oauthEnabled: true, strategy: "round-robin" }, traecode: { model: "", oauthEnabled: true, strategy: "round-robin" } },
+  providers: { anthropic: { model: "m", strategy: "round-robin" }, "openai-codex": { model: "", strategy: "round-robin" }, workbuddy: { model: "", strategy: "round-robin" }, traecode: { model: "", strategy: "round-robin" } },
   credentials: [],
   conversations: [{
     id: "conv-dropped", title: "Dropped", createdAt: "2026-09-13T00:00:00.000Z", updatedAt: "2026-09-13T00:00:00.000Z",
