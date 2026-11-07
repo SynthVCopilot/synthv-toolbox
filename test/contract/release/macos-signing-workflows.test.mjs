@@ -64,7 +64,7 @@ describe("Desktop Release workflow", () => {
   });
 
   test("macos-build builds unsigned and hands over the source bundle", () => {
-    assert.equal(build["runs-on"], "macos-14");
+    assert.equal(build["runs-on"], "macos-15");
     assert.deepEqual(build.permissions, { contents: "read" });
     const steps = stepsOf(build);
     const find = (pattern) => steps.find((step) => pattern.test(runs(step)) || pattern.test(step.uses ?? ""));
@@ -261,7 +261,7 @@ describe("Desktop macOS Publish workflow", () => {
 
   test("the notarization wait runs on a Linux runner and the verification on macOS", () => {
     assert.equal(publish.jobs["await-signing"]["runs-on"], "ubuntu-latest");
-    assert.equal(publish.jobs.publish["runs-on"], "macos-14");
+    assert.equal(publish.jobs.publish["runs-on"], "macos-15");
     assert.deepEqual(publish.jobs.publish.needs, ["resolve", "await-signing"]);
     assert.ok(publish.jobs["await-signing"]["timeout-minutes"] >= 180);
   });
