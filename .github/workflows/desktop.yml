@@ -9,7 +9,7 @@ permissions: {}
 jobs:
   macos-build:
     name: macos-build
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     outputs:
       source_artifact_id: ${{ steps.upload.outputs.artifact-id }}

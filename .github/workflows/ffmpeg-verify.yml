@@ -21,7 +21,7 @@ jobs:
             target: --win
             artifact: release/*.exe
           - name: macOS
-            os: macos-14
+            os: macos-15
             target: --mac
             artifact: release/*.dmg
     runs-on: ${{ matrix.os }}
@@ -86,7 +86,7 @@ jobs:
             target: --win
             asset_suffix: -setup.exe
             update_metadata: nightly.yml
-          - os: macos-14
+          - os: macos-15
             target: --mac
             asset_suffix: .dmg
             update_metadata: nightly-mac.yml
