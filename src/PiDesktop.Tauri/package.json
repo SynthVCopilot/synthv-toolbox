@@ -23,9 +23,9 @@
   },
   "dependencies": {
     "@model-auth/core": "https://github.com/lsy-404/platform-kit/releases/download/model-auth-core-v0.11.1/model-auth-core-0.11.1.tgz",
-    "@model-auth/providers": "https://github.com/lsy-404/platform-kit/releases/download/model-auth-providers-v0.20.0/model-auth-providers-0.20.0.tgz",
-    "@model-auth/vue": "https://github.com/lsy-404/platform-kit/releases/download/model-auth-vue-v0.14.0/model-auth-vue-0.14.0.tgz",
-    "@platform-kit/fluent": "https://github.com/lsy-404/platform-kit/releases/download/fluent-v0.2.11/platform-kit-fluent-0.2.11.tgz",
+    "@model-auth/providers": "https://github.com/lsy-404/platform-kit/releases/download/model-auth-providers-v0.24.3/model-auth-providers-0.24.3.tgz",
+    "@model-auth/vue": "https://github.com/lsy-404/platform-kit/releases/download/model-auth-vue-v0.14.2/model-auth-vue-0.14.2.tgz",
+    "@platform-kit/fluent": "https://github.com/lsy-404/platform-kit/releases/download/fluent-v0.3.2/platform-kit-fluent-0.3.2.tgz",
     "@synthv-toolbox/agent-runtime": "file:../../packages/agent-runtime",
     "@synthv-toolbox/runtime-protocol": "file:../../packages/runtime-protocol",
     "electron-updater": "^6.8.11",
