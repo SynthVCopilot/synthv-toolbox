@@ -55,7 +55,7 @@ export interface McpServerIdentity {
 export interface RuntimeMcpHost {
   mcpTools(authorization: McpAuthorization): Promise<McpTool[]>;
   callMcpTool(name: string, arguments_: Record<string, unknown>, authorization: McpAuthorization): Promise<{ content: unknown; structuredContent?: unknown; isError?: boolean }>;
-  agentChat?(input: string, conversationId?: string): Promise<unknown>;
+  agentChat?(input: string, conversationId?: string): Promise<{ conversationId: string; messages: unknown }>;
   agentTask?(args: Record<string, unknown>): Promise<unknown>;
 }
 
@@ -206,7 +206,7 @@ export class HttpMcpServer {
     const value = parseJson(body)?.value;
     if (!isRecord(value) || typeof value.input !== "string") return send(response, 400, { error: "Agent input is required." });
     try {
-      return send(response, 200, { messages: await this.host.agentChat(value.input, typeof value.conversationId === "string" ? value.conversationId : undefined) });
+      return send(response, 200, await this.host.agentChat(value.input, typeof value.conversationId === "string" ? value.conversationId : undefined));
     } catch (error) {
       if (isClientError(error)) return send(response, 409, { error: error.message });
       console.error("Agent request failed:", error);

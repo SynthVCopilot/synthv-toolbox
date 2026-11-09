@@ -381,7 +381,12 @@ async function initializeServices(): Promise<void> {
     mcpTools: async () => toolboxMcpTools(await runtimeHost.mcpTools()),
     callMcpTool: async (name, arguments_) => hostResultToToolResult(await runtimeHost.callMcpTool(name, arguments_ as JsonValue)),
     agentTask: args => { requireAiMode(desktop); return agentTasks!.invoke(args); },
-    agentChat: async (input, conversationId) => { requireAiMode(desktop); const conversation = conversationId ? await ai.open_conversation(conversationId) : await ai.new_conversation(); return ai.send_message(conversation.id, input, { effort: desktop.agentEffort() }); },
+    agentChat: async (input, conversationId) => {
+      requireAiMode(desktop);
+      const conversation = conversationId ? await ai.open_conversation(conversationId) : await ai.new_conversation();
+      const messages = await ai.send_message(conversation.id, input, { effort: desktop.agentEffort() });
+      return { conversationId: conversation.id, messages };
+    },
   }, { name: BRAND.slug, title: BRAND.productName, version: app.getVersion() });
   await runtimeHost.attachHttpServer(httpServer);
   commandRegistry = new ElectronCommandRegistry(runtimeHost, { ai, creative, desktop, synthv, externalMcp, audioCapture, componentAudio: {

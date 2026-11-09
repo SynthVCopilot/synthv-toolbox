@@ -24,7 +24,7 @@ const host = {
     return hostResultToToolResult(args.operation === "processes" ? [{ pid: 101, name: "synthv-studio" }] : { tool: name, operation: args.operation });
   },
   async agentTask(args) { return args.action === "list" ? { tasks: [{ taskId: "task-1", conversationId: "conversation-1", status: "completed" }] } : { taskId: "task-2", conversationId: "conversation-2", status: "running" }; },
-  async agentChat() { return []; },
+  async agentChat() { return { conversationId: "conversation-1", messages: [] }; },
 };
 
 async function startServer(t) {

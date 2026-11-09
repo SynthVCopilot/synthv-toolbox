@@ -30,7 +30,8 @@ const host = {
     return { content: `${name}:ok` };
   },
   async agentChat(input, conversationId) {
-    return [{ role: "assistant", content: `${conversationId}:${input}` }];
+    const id = conversationId ?? "new-conversation";
+    return { conversationId: id, messages: [{ role: "assistant", content: `${id}:${input}` }] };
   },
   async agentTask(args) { agentTasks.push(args); const task = { taskId: "task-1", status: "running", ...args }; return args.action === "list" ? { tasks: [task] } : task; },
 };
@@ -107,7 +108,15 @@ response = await rpc(status.endpoint, 7, "tools/call", { name: "missing_tool", a
 assert.equal(response.body.error.code, -32602);
 
 const agent = await post(status.agentEndpoint, { input: "hello", conversationId: "conversation-1" });
-assert.deepEqual(await agent.json(), { messages: [{ role: "assistant", content: "conversation-1:hello" }] });
+assert.deepEqual(await agent.json(), { conversationId: "conversation-1", messages: [{ role: "assistant", content: "conversation-1:hello" }] });
+const createdChat = await post(status.agentEndpoint, { input: "first" });
+const createdConversation = await createdChat.json();
+assert.equal(createdConversation.conversationId, "new-conversation");
+const continuedChat = await post(status.agentEndpoint, { input: "second", conversationId: createdConversation.conversationId });
+assert.deepEqual(await continuedChat.json(), {
+  conversationId: "new-conversation",
+  messages: [{ role: "assistant", content: "new-conversation:second" }],
+});
 const crossOrigin = await fetch(status.endpoint, { method: "POST", headers: { "content-type": "application/json", origin: "http://evil.example" }, body: JSON.stringify({ jsonrpc: "2.0", id: 41, method: "tools/list" }) });
 assert.equal(crossOrigin.status, 403, "loopback checks run before authentication");
 const formPost = await post(status.endpoint, JSON.stringify({ jsonrpc: "2.0", id: 42, method: "tools/list" }), { "content-type": "text/plain" });
