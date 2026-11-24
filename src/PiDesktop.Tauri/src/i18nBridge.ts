@@ -51,6 +51,8 @@ addMessages("zh-CN", {
     sessionDisconnected: "Bridge 会话未连接",
     sessionOwnershipUnknown: "当前协议不提供宿主 PID；不会将会话归属到某个实例。",
     requestedInstance: "已请求此实例启动；归属未验证",
+    accessibilityRequired: "需要 macOS 辅助功能权限",
+    requestAccessibility: "请求辅助功能权限",
   },
 });
 
@@ -105,5 +107,7 @@ addMessages("en", {
     sessionDisconnected: "Bridge session is disconnected",
     sessionOwnershipUnknown: "The current protocol does not expose a host PID, so this session is not attributed to an instance.",
     requestedInstance: "Activation requested for this instance; ownership is unverified",
+    accessibilityRequired: "macOS Accessibility permission is required",
+    requestAccessibility: "Request Accessibility permission",
   },
 });

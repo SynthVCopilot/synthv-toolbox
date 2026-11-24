@@ -24,7 +24,6 @@ export interface ShellState {
 
 export interface ShellController {
   update(next: ShellState): void;
-  updateToast(noticeHtml: string, errorHtml: string): void;
   afterUpdate(callback: () => void): void;
 }
 
@@ -33,9 +32,6 @@ export function mountShell(element: HTMLElement, initial: ShellState): ShellCont
   createApp(AppShell, { state }).use(i18n).mount(element);
   return {
     update(next) { Object.assign(state, next); },
-    // Patches only the toast, so an approval decision or Stop can surface it without a
-    // full-page re-render resetting conversation scroll, open <details> and selection.
-    updateToast(noticeHtml, errorHtml) { Object.assign(state, { noticeHtml, errorHtml }); },
     afterUpdate(callback) { void nextTick(callback); },
   };
 }

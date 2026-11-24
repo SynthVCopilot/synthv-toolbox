@@ -29,7 +29,6 @@ import {
   ShieldCheck,
   Sparkles,
   Speech,
-  Square,
   Stethoscope,
   Trash2,
   TriangleAlert,
@@ -75,7 +74,6 @@ const icons = {
   waveform: AudioWaveform,
   recipe: ClipboardList,
   shield: ShieldCheck,
-  stop: Square,
 } satisfies Record<string, IconNode>;
 
 export type IconName = keyof typeof icons;

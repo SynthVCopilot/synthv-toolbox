@@ -1,29 +1,14 @@
 import { CredentialRouter, createCredentialMetadata, type CredentialMetadata, type ProviderAdapterHost, type ProviderRequest, type ProviderRequestContext, type ProviderResponse, type ProviderStreamEvent } from "@model-auth/core";
-import { createHash } from "node:crypto";
+import { InMemoryCredentialStore, type Credential } from "@earendil-works/pi-ai";
 import { fileURLToPath } from "node:url";
 import {
-  AGENT_INPUT_MAX_LENGTH,
-  AGENT_RUN_ID_MAX_LENGTH,
-  AGENT_RUN_PROGRESS_EVENT,
-  DEFAULT_AGENT_EFFORT,
   HOST_API_VERSION,
   HOST_HELLO_METHOD,
   PROTOCOL_VERSION_RANGE,
-  AGENT_SESSION_HISTORY_MAX_MESSAGES,
-  AGENT_SESSION_HISTORY_MAX_TEXT_LENGTH,
   encodeJsonl,
-  estimateAgentRunBudget,
   isHostApiCompatible,
   negotiateProtocolVersion,
   parseJsonl,
-  validateAgentRunBudget,
-  validateAgentRunOutcome,
-  validateAgentSessionSteerParams,
-  type AgentEffortProfile,
-  type AgentRunBudget,
-  type AgentRunOutcome,
-  type AgentSessionHistoryMessage,
-  type AgentSessionSendResult,
   type ApiVersion,
   type CapabilityDescriptor,
   type HostHello,
@@ -31,76 +16,29 @@ import {
   type PluginManifest,
   type PluginPermission,
   pluginPermissionLevel,
-  type RpcNotification,
   type RpcRequest,
   type RpcResponseFailure,
   type RpcResponseSuccess,
   type RuntimeHello,
   validatePluginManifest,
 } from "@synthv-toolbox/runtime-protocol";
-import {
-  buildOutcome,
-  createCompletionGuardRegistry,
-  createTaskLoopExtension,
-  createTaskLoopState,
-  isBudgetExhausted,
-  effortProfileFor,
-  resetRun,
-  runTaskLoop,
-  TASK_LOOP_TOOL_NAMES,
-  type AgentToolDetails,
-  type PiExtensionApi,
-  type PiToolDefinition,
-  type PiToolResult,
-  type TaskLoopPendingInput,
-} from "./task-loop.js";
-import { createRunProgress, type AgentRunView } from "./progress.js";
-
-export type { AgentToolDetails, PiExtensionApi, PiToolDefinition, PiToolResult };
-export type { AgentRunView } from "./progress.js";
-export { TASK_LOOP_TOOL_NAMES };
+import { createToolboxTools } from "./toolbox-tools.js";
 
 export const AGENT_RUNTIME_ID = "synthv-toolbox.agent-runtime";
 
 export const AGENT_RUNTIME_CAPABILITIES: CapabilityDescriptor[] = [
-  { id: "agent.sessions", version: "1.0", operations: ["initialize", "send", "close", "cancel", "steer"] },
+  { id: "agent.sessions", version: "1.0", operations: ["initialize", "send", "close"] },
   { id: "host.capabilities", version: "1.0", operations: ["invoke"] },
   { id: "runtime.plugins", version: "1.0", operations: ["discover", "invoke"] },
-  { id: "agent.progress", version: "1.0", operations: ["session.progress"] },
 ];
 
 export interface PiSession {
-  /** runId is stamped on every progress notification for this run; runState() exposes the same value. */
-  prompt(input: string, budget: AgentRunBudget, report: (view: AgentRunView) => void, runId: string): Promise<{ message: string; outcome: AgentRunOutcome }>;
-  cancel(): Promise<boolean>;
-  /** Queues a message for the in-flight run `runId`; the model sees it before its next request. */
-  steer(input: string, runId: string): Promise<AgentSteerResult>;
+  prompt(input: string): Promise<string>;
   dispose(): void | Promise<void>;
-  readonly running: boolean;
 }
-
-export type AgentSteerResult = "steered" | "no-active-run" | "run-mismatch";
 
 export interface PiSessionFactory {
-  create(input: { sessionId: string; cwd?: string; systemPrompt?: string; model?: PiModelSelection; outcome?: AgentRunOutcome; history?: readonly AgentSessionHistoryMessage[] }): Promise<PiSession>;
-  /** API key changes rebuild a session; live OAuth token rotation keeps it. */
-  credentialFingerprint?(model: PiModelSelection): string;
-}
-
-/** Registers a check the completion tool consults; a non-null return is the reason it fails. */
-export interface AgentSessionGuards {
-  completion(check: () => string | null): void;
-}
-
-/** Whether this session currently has a run in flight, and that run's id. */
-export type AgentRunStateAccessor = () => { active: boolean; runId: string | null };
-
-export type PiCredential = { type: "api_key"; key: string } | { type: "oauth"; access: string; refresh: string; expires: number; [key: string]: unknown };
-export interface PiCredentialStore {
-  read(providerId: string, options?: { signal?: AbortSignal }): Promise<PiCredential | undefined>;
-  list(options?: { signal?: AbortSignal }): Promise<Array<{ providerId: string; type: PiCredential["type"] }>>;
-  modify(providerId: string, update: (current: PiCredential | undefined) => Promise<PiCredential | undefined>, options?: { signal?: AbortSignal }): Promise<PiCredential | undefined>;
-  delete(providerId: string, options?: { signal?: AbortSignal }): Promise<void>;
+  create(input: { sessionId: string; cwd?: string; systemPrompt?: string; model?: PiModelSelection }): Promise<PiSession>;
 }
 
 export interface PiModelSelection {
@@ -108,10 +46,12 @@ export interface PiModelSelection {
   modelId: string;
   apiKey: string;
   credentialId?: string;
-  authMethod?: "api-key" | "oauth";
+  authMethod: "api-key" | "oauth";
+  expiresAt?: number;
+  accountId?: string;
 }
 
-interface HostModelCredential extends PiModelSelection { id: string; authMethod: "api-key" | "oauth"; }
+interface HostModelCredential extends PiModelSelection { id: string; }
 
 export interface HostCapabilityTransport {
   request(method: string, params: JsonValue): Promise<JsonValue>;
@@ -158,60 +98,11 @@ export interface PiResourceLoader {
   reload(): Promise<void>;
 }
 
-export interface PiSettingsManager {
-  applyOverrides(overrides: { compaction?: { enabled?: boolean; reserveTokens?: number; keepRecentTokens?: number } }): void;
-}
-
-export interface PiInlineExtension {
-  name: string;
-  factory: (pi: PiExtensionApi) => void | Promise<void>;
-}
-
-export interface PiAgentSession {
-  prompt(input: string, options?: { expandPromptTemplates?: boolean }): Promise<void>;
-  /** Queues a message delivered after the current turn's tool calls, before the next model request. */
-  steer(input: string): Promise<void>;
-  abort(): Promise<void>;
-  dispose(): void | Promise<void>;
-  setThinkingLevel(level: string): void;
-  /** Drops any steering/follow-up messages queued through sendMessage, so a message queued just before cancel never starts a new turn. */
-  clearQueue(): { steering: unknown[]; followUp: unknown[] };
-  /** Fires after extensions for every raw agent event; returns an unsubscribe function. */
-  subscribe(listener: (event: unknown) => void): () => void;
-}
-
-/** The part of Pi's SessionManager used to seed a new session; createAgentSession loads the messages it holds. */
-export interface PiSessionManager {
-  appendMessage(message: unknown): string;
-}
-
 export interface PiSdk {
   getAgentDir(): string;
-  DefaultResourceLoader: new (options: {
-    cwd: string;
-    agentDir: string;
-    additionalExtensionPaths: string[];
-    extensionFactories?: PiInlineExtension[];
-    settingsManager?: PiSettingsManager;
-    systemPrompt?: string;
-    noExtensions?: boolean;
-    noSkills?: boolean;
-    noPromptTemplates?: boolean;
-    noThemes?: boolean;
-    noContextFiles?: boolean;
-  }) => PiResourceLoader;
-  ModelRuntime: { create(options: { refreshOnCreate: boolean; credentials?: PiCredentialStore }): Promise<{ setRuntimeApiKey(providerId: string, apiKey: string): Promise<void>; getModel(providerId: string, modelId: string): unknown }> };
-  SettingsManager: { create(cwd: string, agentDir?: string): PiSettingsManager };
-  SessionManager: { inMemory(cwd: string): PiSessionManager; create(cwd: string): PiSessionManager };
-  createAgentSession(options: {
-    cwd: string;
-    noTools: "builtin";
-    resourceLoader: PiResourceLoader;
-    settingsManager?: PiSettingsManager;
-    modelRuntime?: unknown;
-    model?: unknown;
-    sessionManager?: unknown;
-  }): Promise<{ session: PiAgentSession }>;
+  DefaultResourceLoader: new (options: { cwd: string; agentDir: string; additionalExtensionPaths: string[]; systemPrompt?: string }) => PiResourceLoader;
+  ModelRuntime: { create(options: { refreshOnCreate: false; credentials: InMemoryCredentialStore }): Promise<{ getModel(providerId: string, modelId: string): unknown }> };
+  createAgentSession(options: { cwd: string; noTools: "builtin"; resourceLoader: PiResourceLoader; modelRuntime?: unknown; model?: unknown; customTools?: unknown[] }): Promise<{ session: { prompt(input: string): Promise<void>; dispose(): void | Promise<void>; agent?: { state?: { messages?: unknown[] } } } }>;
 }
 
 export class ModelAuthGateway {
@@ -258,194 +149,60 @@ export class ModelAuthGateway {
 
 export type ModelAuthResult<T> = { kind: "ok"; value: T } | { kind: "unsupported"; reason: string };
 
-export interface PiSessionFactoryOptions {
-  credentialStore?: (model: PiModelSelection) => PiCredentialStore;
-  extensionPaths?: () => readonly string[];
-  extensions?: (session: { sessionId: string; guards: AgentSessionGuards; runState: AgentRunStateAccessor }) => readonly PiInlineExtension[];
-  loadSdk?: () => Promise<PiSdk>;
-  /** false (the default) keeps transcripts in memory; true persists them under the Pi agent directory. Read once per session creation. */
-  persistTranscripts?: () => boolean;
-}
-
-export function createPiSessionFactory(options: PiSessionFactoryOptions = {}): PiSessionFactory {
-  const loadSdk = options.loadSdk ?? loadPiSdk;
+export function createPiSessionFactory(
+  additionalExtensionPaths: () => readonly string[] = () => [],
+  loadSdk: () => Promise<PiSdk> = loadPiSdk,
+  customTools: () => unknown[] = () => [],
+): PiSessionFactory {
   return {
-    credentialFingerprint: (model) => (options.credentialStore && model.authMethod === "oauth" ? "" : createHash("sha256").update(model.apiKey).digest("hex")),
     async create(input) {
       const sdk = await loadSdk();
       const cwd = input.cwd ?? process.cwd();
-      const settingsManager = sdk.SettingsManager.create(cwd, sdk.getAgentDir());
-      const seededPlan = input.outcome && input.outcome.status !== "completed" ? input.outcome.plan : null;
-      const pendingInput = pendingInputFrom(input.outcome);
-      const state = createTaskLoopState(seededPlan, estimateAgentRunBudget(DEFAULT_AGENT_EFFORT, []), pendingInput);
-      let running = false;
-      let currentRunId: string | null = null;
-      let currentProjector: ReturnType<typeof createRunProgress> | null = null;
-      const completionGuards = createCompletionGuardRegistry();
-      const guards: AgentSessionGuards = { completion: completionGuards.register };
-      // False once cancel() has been requested, even while abort() is still winding down, so deliver() queues instead of steering.
-      const runState: AgentRunStateAccessor = () => ({ active: running && !state.cancelled, runId: currentRunId });
       const resourceLoader = new sdk.DefaultResourceLoader({
         cwd,
         agentDir: sdk.getAgentDir(),
-        additionalExtensionPaths: [...(options.extensionPaths?.() ?? [])],
-        extensionFactories: [createTaskLoopExtension(state, completionGuards.run), ...(options.extensions?.({ sessionId: input.sessionId, guards, runState }) ?? [])],
-        settingsManager,
-        noExtensions: true,
-        noSkills: true,
-        noPromptTemplates: true,
-        noThemes: true,
-        noContextFiles: true,
+        additionalExtensionPaths: [...additionalExtensionPaths()],
         ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
       });
       await resourceLoader.reload();
       if (!input.model) throw new Error("A host-selected model is required to create a Pi session.");
-      const credentials = options.credentialStore?.(input.model);
-      const modelRuntime = await sdk.ModelRuntime.create({ refreshOnCreate: Boolean(credentials), ...(credentials ? { credentials } : {}) });
-      if (!credentials) await modelRuntime.setRuntimeApiKey(input.model.providerId, input.model.apiKey);
+      const credentials = new InMemoryCredentialStore();
+      await credentials.modify(input.model.providerId, async () => runtimeCredential(input.model!));
+      const modelRuntime = await sdk.ModelRuntime.create({ refreshOnCreate: false, credentials });
       const model = modelRuntime.getModel(input.model.providerId, input.model.modelId);
       if (!model) throw new Error(`Pi does not support ${input.model.providerId}/${input.model.modelId}.`);
-      const contextWindow = getContextWindow(model);
-      // Omitting sessionDir lets Pi resolve its own default under the agent dir (sessions/<encoded-cwd>/);
-      // passing agentDir there would write transcripts flat into the agent dir root instead.
-      const sessionManager = options.persistTranscripts?.() ? sdk.SessionManager.create(cwd) : sdk.SessionManager.inMemory(cwd);
-      // A session is recreated whenever its prompt or model changes (an integration or MCP server toggled, a restart);
-      // without this, a continued conversation would lose the turns the user still sees.
-      if (input.history?.length) seedHistory(sessionManager, input.history, model as PiModelIdentity);
       const result = await sdk.createAgentSession({
         cwd,
         noTools: "builtin",
         resourceLoader,
-        settingsManager,
         modelRuntime,
         model,
-        sessionManager,
+        customTools: customTools(),
       });
-      const unsubscribe = result.session.subscribe((event) => currentProjector?.handle(event));
       return {
-        prompt: async (text, budget, report = () => {}, runId) => {
-          if (running) throw new Error("A run is already in progress for this session.");
-          running = true;
-          currentRunId = runId;
-          resetRun(state, budget);
-          const projector = createRunProgress(state, report);
-          currentProjector = projector;
-          projector.start();
-          try {
-            applyEffortProfile(result.session, settingsManager, effortProfileFor(budget.level), contextWindow);
-            const { status } = await runTaskLoop(state, effortProfileFor(budget.level), text, (round) => {
-              projector.round();
-              return result.session.prompt(round, { expandPromptTemplates: false });
-            });
-            const outcome = buildOutcome(state, status);
-            if (status === "completed") state.plan = null;
-            const validated = validateAgentRunOutcome(outcome);
-            if (!validated) throw new Error("Produced an invalid run outcome.");
-            const message = state.lastAssistantText || validated.summary || "";
-            return { message, outcome: validated };
-          } finally {
-            projector.end();
-            // A steer accepted during wind-down must not leak into the next run's first request.
-            result.session.clearQueue();
-            currentProjector = null;
-            running = false;
-            currentRunId = null;
-          }
+        prompt: async (text) => {
+          await result.session.prompt(text);
+          return assistantText(result.session.agent?.state?.messages);
         },
-        cancel: async () => {
-          if (!running) return false;
-          // Order matters: flip cancelled before anything else can steer a queued resolution into a new turn.
-          state.cancelled = true;
-          currentProjector?.cancelling();
-          result.session.clearQueue();
-          await result.session.abort();
-          return true;
-        },
-        steer: async (text, runId) => {
-          if (!running || state.cancelled || state.signal || isBudgetExhausted(state)) return "no-active-run";
-          if (runId !== currentRunId) return "run-mismatch";
-          await result.session.steer(text);
-          // A user message is progress, so the idle streak cannot end the run right after it.
-          state.roundProgress += 1;
-          return "steered";
-        },
-        dispose: () => { unsubscribe(); return result.session.dispose(); },
-        get running() { return running; },
+        dispose: () => result.session.dispose(),
       };
     },
   };
-}
-
-interface PiModelIdentity { api: string; provider: string; id: string }
-
-const EMPTY_USAGE = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
-
-/**
- * Model APIs expect non-empty turns that alternate between user and assistant and end before the next user prompt, so empty
- * turns are dropped, neighbours with the same role are joined, and a trailing user turn (a run that produced no reply) is left out.
- */
-export function normalizeSessionHistory(history: readonly AgentSessionHistoryMessage[]): AgentSessionHistoryMessage[] {
-  const turns: AgentSessionHistoryMessage[] = [];
-  for (const message of history) {
-    const text = message.text.trim();
-    if (!text) continue;
-    const last = turns.at(-1);
-    if (last?.role === message.role) last.text = `${last.text}\n\n${text}`;
-    else turns.push({ role: message.role, text });
-  }
-  while (turns[0]?.role === "assistant") turns.shift();
-  while (turns.at(-1)?.role === "user") turns.pop();
-  return turns;
-}
-
-function seedHistory(sessionManager: PiSessionManager, history: readonly AgentSessionHistoryMessage[], model: PiModelIdentity): void {
-  const timestamp = Date.now();
-  for (const turn of normalizeSessionHistory(history)) {
-    sessionManager.appendMessage(turn.role === "user"
-      ? { role: "user", content: turn.text, timestamp }
-      : { role: "assistant", content: [{ type: "text", text: turn.text }], api: model.api, provider: model.provider, model: model.id, usage: EMPTY_USAGE, stopReason: "stop", timestamp });
-  }
-}
-
-function readSessionHistory(value: JsonValue | undefined): AgentSessionHistoryMessage[] | undefined {
-  if (value === undefined) return [];
-  if (!Array.isArray(value) || value.length > AGENT_SESSION_HISTORY_MAX_MESSAGES) return undefined;
-  const history: AgentSessionHistoryMessage[] = [];
-  for (const item of value) {
-    if (!isRecord(item) || (item.role !== "user" && item.role !== "assistant") || typeof item.text !== "string" || item.text.length > AGENT_SESSION_HISTORY_MAX_TEXT_LENGTH) return undefined;
-    history.push({ role: item.role, text: item.text });
-  }
-  return history;
-}
-
-function pendingInputFrom(outcome: AgentRunOutcome | undefined): TaskLoopPendingInput | null {
-  if (!outcome || outcome.status !== "needs_input") return null;
-  return { question: outcome.summary, missing: outcome.missing };
-}
-
-function getContextWindow(model: unknown): number {
-  const contextWindow = isRecord(model) ? model.contextWindow : undefined;
-  return typeof contextWindow === "number" && contextWindow > 0 ? contextWindow : 200_000;
-}
-
-/** Applies the level's thinking level and compaction overrides for this run's prompt(); see AGENT_EFFORT_PROFILES. */
-function applyEffortProfile(session: PiAgentSession, settingsManager: PiSettingsManager, profile: AgentEffortProfile, contextWindow: number): void {
-  session.setThinkingLevel(profile.thinking);
-  const reserveTokens = profile.compactionTrigger === null ? 16_384 : Math.max(16_384, Math.round(contextWindow * (1 - profile.compactionTrigger)));
-  const keepRecentTokens = Math.min(profile.keepRecentTokens, Math.floor((contextWindow - reserveTokens) / 2));
-  settingsManager.applyOverrides({ compaction: { enabled: true, reserveTokens, keepRecentTokens } });
 }
 
 export class AgentRuntimeWorker {
   private negotiatedVersion: ApiVersion | undefined;
   private readonly sessions = new Map<string, { session: PiSession; signature: string }>();
 
+  private readonly sessionsFactory: PiSessionFactory;
+
   constructor(
-    private readonly sessionsFactory: PiSessionFactory = createPiSessionFactory(),
+    sessionsFactory?: PiSessionFactory,
     private readonly hostCapabilities?: HostCapabilityTransport,
     private readonly pluginDiscovery?: PluginDiscovery,
-    private readonly notify: (notification: RpcNotification) => void = () => {},
-  ) {}
+  ) {
+    this.sessionsFactory = sessionsFactory ?? createPiSessionFactory(() => [], loadPiSdk, () => createToolboxTools(hostCapabilities));
+  }
 
   async handleJsonl(line: string): Promise<string[]> {
     const message = parseJsonl(line);
@@ -471,8 +228,6 @@ export class AgentRuntimeWorker {
       if (request.protocolVersion !== this.negotiatedVersion) return this.failure(request, "protocol.version-mismatch", "The request uses an unnegotiated protocol version.");
       if (request.method === "session.initialize") return await this.initializeSession(request);
       if (request.method === "session.send") return await this.sendToSession(request);
-      if (request.method === "session.cancel") return await this.cancelSession(request);
-      if (request.method === "session.steer") return await this.steerSession(request);
       if (request.method === "session.close") return await this.closeSession(request);
       if (request.method === "runtime.plugins.discover") return await this.discoverPlugins(request);
       if (request.method === "runtime.plugin.invoke") return await this.invokePlugin(request);
@@ -499,20 +254,12 @@ export class AgentRuntimeWorker {
   private async initializeSession(request: RpcRequest): Promise<RpcResponseSuccess | RpcResponseFailure> {
     const params = readSessionParams(request.params, false);
     if (!params) return this.failure(request, "session.invalid", "session.initialize requires sessionId and an optional cwd.");
-    let outcome: AgentRunOutcome | undefined;
-    if (params.outcome !== undefined) {
-      outcome = validateAgentRunOutcome(params.outcome);
-      if (!outcome) return this.failure(request, "session.invalid", "session.initialize outcome is invalid.");
-    }
-    const history = readSessionHistory(params.history);
-    if (!history) return this.failure(request, "session.invalid", "session.initialize history is invalid.");
     const model = await this.hostModelSelection();
-    const signature = JSON.stringify([params.cwd ?? "", params.systemPrompt ?? "", model.providerId, model.modelId, model.credentialId ?? "", this.sessionsFactory.credentialFingerprint?.(model) ?? ""]);
+    const signature = JSON.stringify([params.cwd ?? "", params.systemPrompt ?? "", model.providerId, model.modelId, model.credentialId ?? ""]);
     const existing = this.sessions.get(params.sessionId);
     if (existing?.signature === signature) return this.success(request, { sessionId: params.sessionId, reused: true });
-    if (existing?.session.running) return this.failure(request, "session.busy", "The session has a run in progress; wait for it to finish or cancel it first.");
     if (existing) await existing.session.dispose();
-    const session = await this.sessionsFactory.create({ sessionId: params.sessionId, cwd: params.cwd, systemPrompt: params.systemPrompt, model, ...(outcome ? { outcome } : {}), ...(history.length ? { history } : {}) });
+    const session = await this.sessionsFactory.create({ ...params, model });
     this.sessions.set(params.sessionId, { session, signature });
     return this.success(request, { sessionId: params.sessionId });
   }
@@ -520,55 +267,10 @@ export class AgentRuntimeWorker {
   private async sendToSession(request: RpcRequest): Promise<RpcResponseSuccess | RpcResponseFailure> {
     const params = readSessionParams(request.params, true);
     if (!params) return this.failure(request, "session.invalid", "session.send requires sessionId and input.");
-    const runId = params.runId;
-    if (!isValidRunId(runId)) return this.failure(request, "session.invalid", `session.send requires a non-empty runId of at most ${AGENT_RUN_ID_MAX_LENGTH} characters.`);
     const record = this.sessions.get(params.sessionId);
     if (!record) return this.failure(request, "session.not-found", "The session is not initialized.");
-    let budget: AgentRunBudget;
-    if (params.budget !== undefined) {
-      const validated = validateAgentRunBudget(params.budget);
-      if (!validated) return this.failure(request, "session.invalid", "session.send budget is invalid.");
-      budget = validated;
-    } else {
-      budget = estimateAgentRunBudget(DEFAULT_AGENT_EFFORT, []);
-    }
-    const sessionId = params.sessionId;
-    const protocolVersion = this.negotiatedVersion ?? request.protocolVersion;
-    const report = (view: AgentRunView): void => {
-      const notification: RpcNotification = { kind: "notification", protocolVersion, event: AGENT_RUN_PROGRESS_EVENT, params: { sessionId, runId, ...view } as unknown as JsonValue };
-      this.safeNotify(notification);
-    };
-    const { message, outcome } = await record.session.prompt(params.input, budget, report, runId);
-    const result: AgentSessionSendResult = { sessionId: params.sessionId, accepted: true, message, outcome };
-    return this.success(request, result as unknown as JsonValue);
-  }
-
-  private safeNotify(notification: RpcNotification): void {
-    try {
-      this.notify(notification);
-    } catch {
-      // A misbehaving notification sink must never fail the run.
-    }
-  }
-
-  private async cancelSession(request: RpcRequest): Promise<RpcResponseSuccess | RpcResponseFailure> {
-    const params = readSessionParams(request.params, false);
-    if (!params) return this.failure(request, "session.invalid", "session.cancel requires sessionId.");
-    const record = this.sessions.get(params.sessionId);
-    if (!record) return this.success(request, { sessionId: params.sessionId, cancelled: false });
-    const cancelled = await record.session.cancel();
-    return this.success(request, { sessionId: params.sessionId, cancelled });
-  }
-
-  private async steerSession(request: RpcRequest): Promise<RpcResponseSuccess | RpcResponseFailure> {
-    const params = validateAgentSessionSteerParams(request.params);
-    if (!params) return this.failure(request, "session.invalid", `session.steer requires sessionId, runId and a non-empty input of at most ${AGENT_INPUT_MAX_LENGTH} characters.`);
-    const record = this.sessions.get(params.sessionId);
-    if (!record) return this.failure(request, "session.not-found", "The session is not initialized.");
-    const steered = await record.session.steer(params.input, params.runId);
-    if (steered === "no-active-run") return this.failure(request, "session.no-active-run", "The session has no run in progress.");
-    if (steered === "run-mismatch") return this.failure(request, "session.run-mismatch", "The run id does not match the session's active run.");
-    return this.success(request, { sessionId: params.sessionId, runId: params.runId, steered: true });
+    const message = await record.session.prompt(params.input);
+    return this.success(request, { sessionId: params.sessionId, accepted: true, message });
   }
 
   private async hostModelSelection(): Promise<PiModelSelection> {
@@ -601,7 +303,15 @@ export class AgentRuntimeWorker {
     const routed = await gateway.request(value.providerId, { modelId: value.modelId, input: null });
     if (routed.kind !== "ok" || !isHostModelCredential(routed.value.output)) throw new Error("The selected model is unsupported.");
     const selected = routed.value.output;
-    return { providerId: selected.providerId, modelId: selected.modelId, apiKey: selected.apiKey, credentialId: selected.id, authMethod: selected.authMethod };
+    return {
+      providerId: selected.providerId,
+      modelId: selected.modelId,
+      apiKey: selected.apiKey,
+      credentialId: selected.id,
+      authMethod: selected.authMethod,
+      ...(typeof selected.expiresAt === "number" ? { expiresAt: selected.expiresAt } : {}),
+      ...(typeof selected.accountId === "string" && selected.accountId ? { accountId: selected.accountId } : {}),
+    };
   }
 
   private async closeSession(request: RpcRequest): Promise<RpcResponseSuccess | RpcResponseFailure> {
@@ -690,25 +400,12 @@ function parseHostHello(value: JsonValue): HostHello | undefined {
   return { hostId: value.hostId, protocol: value.protocol, capabilities };
 }
 
-function readSessionParams(value: JsonValue, requiresInput: boolean): { sessionId: string; cwd?: string; systemPrompt?: string; input: string; outcome?: JsonValue; history?: JsonValue; budget?: JsonValue; runId?: JsonValue } | undefined {
+function readSessionParams(value: JsonValue, requiresInput: boolean): { sessionId: string; cwd?: string; systemPrompt?: string; input: string } | undefined {
   if (!isRecord(value) || typeof value.sessionId !== "string" || value.sessionId.length === 0) return undefined;
   if (value.cwd !== undefined && typeof value.cwd !== "string") return undefined;
   if (value.systemPrompt !== undefined && (typeof value.systemPrompt !== "string" || value.systemPrompt.length === 0)) return undefined;
   if (requiresInput && (typeof value.input !== "string" || value.input.length === 0)) return undefined;
-  return {
-    sessionId: value.sessionId,
-    ...(typeof value.cwd === "string" ? { cwd: value.cwd } : {}),
-    ...(typeof value.systemPrompt === "string" ? { systemPrompt: value.systemPrompt } : {}),
-    input: typeof value.input === "string" ? value.input : "",
-    ...(value.outcome !== undefined ? { outcome: value.outcome } : {}),
-    ...(value.history !== undefined ? { history: value.history } : {}),
-    ...(value.budget !== undefined ? { budget: value.budget } : {}),
-    ...(value.runId !== undefined ? { runId: value.runId } : {}),
-  };
-}
-
-function isValidRunId(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0 && value.length <= AGENT_RUN_ID_MAX_LENGTH;
+  return { sessionId: value.sessionId, ...(typeof value.cwd === "string" ? { cwd: value.cwd } : {}), ...(typeof value.systemPrompt === "string" ? { systemPrompt: value.systemPrompt } : {}), input: typeof value.input === "string" ? value.input : "" };
 }
 
 function isCapabilityDescriptor(value: unknown): value is CapabilityDescriptor {
@@ -744,8 +441,32 @@ function toRouteError(error: unknown): { kind: "http"; status: number } | { kind
   return { kind: "transport" };
 }
 
+function assistantText(messages: unknown[] | undefined): string {
+  if (!messages) return "";
+  for (const message of [...messages].reverse()) {
+    if (!isRecord(message) || message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    const text = message.content
+      .filter((part): part is Record<string, unknown> => isRecord(part) && part.type === "text" && typeof part.text === "string")
+      .map((part) => part.text as string)
+      .join("");
+    if (text) return text;
+    const error = typeof message.errorMessage === "string" ? message.errorMessage.trim().slice(0, 2_000) : "";
+    if (error) throw new Error(`Agent model response failed: ${error}`);
+    if (message.stopReason === "error" || message.stopReason === "aborted") throw new Error(`Agent model response stopped with ${message.stopReason}.`);
+  }
+  return "";
+}
+
 function isHostModelCredential(value: unknown): value is HostModelCredential {
   return isRecord(value) && typeof value.id === "string" && typeof value.providerId === "string" && typeof value.modelId === "string"
     && typeof value.apiKey === "string" && (value.authMethod === "api-key" || value.authMethod === "oauth")
     && value.id.length > 0 && value.providerId.length > 0 && value.modelId.length > 0 && value.apiKey.length > 0;
+}
+
+function runtimeCredential(model: PiModelSelection): Credential {
+  if (model.authMethod === "api-key") return { type: "api_key", key: model.apiKey };
+  const expires = typeof model.expiresAt === "number" && Number.isFinite(model.expiresAt) && model.expiresAt > Date.now()
+    ? model.expiresAt
+    : Date.now() + 10 * 60_000;
+  return { type: "oauth", access: model.apiKey, refresh: "", expires, ...(model.accountId ? { accountId: model.accountId } : {}) };
 }
