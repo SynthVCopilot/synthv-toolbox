@@ -6,7 +6,6 @@ import { PROTOCOL_VERSION } from "../config.js";
 import { EXECUTOR_BUILD_ID } from "../build-info.js";
 import {
   BridgeBusyError,
-  BridgeNotConnectedError,
   BridgeProtocolError,
   BridgeRemoteError,
   BridgeTimeoutError,
@@ -68,10 +67,7 @@ async function fileAgeMs(filePath: string): Promise<number | null> {
 export class FileIpcClient {
   private readonly serialExecutor = new SerialExecutor();
 
-  public constructor(
-    private readonly config: BridgeConfig,
-    private readonly clientLabel: () => string = () => "mcp-client",
-  ) {}
+  public constructor(private readonly config: BridgeConfig) {}
 
   public get paths(): BridgeConfig["paths"] {
     return this.config.paths;
@@ -139,14 +135,6 @@ export class FileIpcClient {
     action: BridgeAction,
     payload: Record<string, unknown>,
   ): Promise<T> {
-    const status = await this.getStatus();
-    if (!status.connected) {
-      throw new BridgeNotConnectedError(
-        status.reason ?? "SynthV Agent Bridge is not connected.",
-        { reason: status.reason, ipcDirectory: status.ipcDirectory },
-      );
-    }
-
     await fs.mkdir(this.config.paths.directory, { recursive: true });
 
     const requestId = randomBytes(12).toString("base64url");
@@ -187,7 +175,6 @@ export class FileIpcClient {
     const lockData = JSON.stringify({
       requestId,
       pid: process.pid,
-      client: this.clientLabel(),
       createdAtEpochMs: Date.now(),
     });
 
@@ -374,7 +361,6 @@ export class FileIpcClient {
     }
 
     const status = await this.getStatus();
-    const claimed = !(await this.requestStillOwnedByUs(request.requestId));
     throw new BridgeTimeoutError(
       `Timed out after ${this.config.timeoutMs} ms waiting for Synthesizer V Studio.`,
       {
@@ -382,23 +368,9 @@ export class FileIpcClient {
         requestId: request.requestId,
         requestFile: this.config.paths.requestFile,
         responseFile: this.config.paths.responseFile,
-        claimed,
         bridgeStatus: status,
       },
     );
-  }
-
-  private async requestStillOwnedByUs(requestId: string): Promise<boolean> {
-    try {
-      const raw = await fs.readFile(this.config.paths.requestFile, "utf8");
-      const parsed = safeParseBridgeRequest(JSON.parse(raw));
-      return parsed.success && parsed.data.requestId === requestId;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return false;
-      }
-      return false;
-    }
   }
 
   private async removeOwnRequest(requestId: string): Promise<void> {

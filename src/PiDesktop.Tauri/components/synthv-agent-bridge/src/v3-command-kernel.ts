@@ -391,10 +391,7 @@ function redactValue(value: unknown, depth = 0): unknown {
       continue;
     }
     if (
-      (key === "issues" ||
-        key === "warnings" ||
-        key === "path" ||
-        key === "suggestions") &&
+      (key === "issues" || key === "warnings" || key === "path") &&
       Array.isArray(child)
     ) {
       result[key] = child
@@ -429,26 +426,19 @@ export function failedOutcome(
     !Array.isArray(publicError.details)
       ? (publicError.details as JsonRecord)
       : undefined;
-  const claimedTimeout =
-    publicError.code === "BRIDGE_TIMEOUT" && details?.claimed === true;
   const result: JsonRecord = {
     outcome: "failed",
     traceId: traceIdForCurrentOperation(),
     phase,
-    wrote: details?.partialWritePossible === true || claimedTimeout,
+    wrote: details?.partialWritePossible === true,
     undoRequired: details?.undoRequired === true,
     retry:
       details?.undoRequired === true
         ? "undo_once_then_query_again"
         : publicError.code === "SYNTHV_SESSION_CHANGED" ||
-            publicError.code.startsWith("STALE_") ||
-            publicError.code === "BRIDGE_TIMEOUT"
+            publicError.code.startsWith("STALE_")
           ? "query_again"
-          : publicError.code === "BRIDGE_BUSY"
-            ? "retry_later"
-            : publicError.code === "BRIDGE_NOT_CONNECTED"
-              ? "start_bridge"
-              : "correct_request",
+          : "correct_request",
     error: publicError,
   };
   if (

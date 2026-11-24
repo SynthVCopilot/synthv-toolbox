@@ -108,13 +108,7 @@ async function readPluginState(root: string): Promise<{ enabled: boolean }> {
 export async function runStdioWorker(): Promise<void> {
   const hostTransport = new StdioHostTransport((line) => stdout.write(line));
   const pluginDiscovery = new FilePluginDiscovery(hostTransport);
-  // No SynthV tools here: the stdio runtime has no approval channel, so createPiSessionFactory gets no extensions.
-  const worker = new AgentRuntimeWorker(
-    createPiSessionFactory({ extensionPaths: () => pluginDiscovery.extensionPaths() }),
-    hostTransport,
-    pluginDiscovery,
-    (notification) => stdout.write(encodeJsonl(notification)),
-  );
+  const worker = new AgentRuntimeWorker(createPiSessionFactory(() => pluginDiscovery.extensionPaths()), hostTransport, pluginDiscovery);
   const lines = createInterface({ input: stdin, crlfDelay: Infinity });
   let queue = Promise.resolve();
   let shuttingDown = false;
@@ -129,29 +123,20 @@ export async function runStdioWorker(): Promise<void> {
     await pluginDiscovery.dispose();
   };
 
-  const dispatch = async (line: string): Promise<void> => {
-    try {
-      const responses = await worker.handleJsonl(line);
-      for (const response of responses) stdout.write(response);
-    } catch (error) {
-      stderr.write(`agent-runtime: ${error instanceof Error ? error.message : "invalid worker input"}\n`);
-    }
-  };
-
   lines.on("line", (line) => {
-    let message: ReturnType<typeof parseJsonl> | undefined;
     try {
-      message = parseJsonl(line);
+      if (hostTransport.accept(parseJsonl(line))) return;
     } catch {
       // Let the worker report malformed input on stderr.
     }
-    if (message && hostTransport.accept(message)) return;
-    // session.cancel and session.steer must reach an in-flight run immediately, not wait behind the serialized request queue.
-    if (message?.kind === "request" && (message.method === "session.cancel" || message.method === "session.steer")) {
-      void dispatch(line);
-      return;
-    }
-    queue = queue.then(() => dispatch(line));
+    queue = queue.then(async () => {
+      try {
+        const responses = await worker.handleJsonl(line);
+        for (const response of responses) stdout.write(response);
+      } catch (error) {
+        stderr.write(`agent-runtime: ${error instanceof Error ? error.message : "invalid worker input"}\n`);
+      }
+    });
   });
   lines.on("close", () => { void shutdown(); });
   process.once("SIGINT", () => { void shutdown(); });
