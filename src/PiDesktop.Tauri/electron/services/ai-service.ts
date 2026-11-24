@@ -1,27 +1,17 @@
 import { CredentialRouter, createCredentialMetadata } from "@model-auth/core";
-import { createLocalCredentialStore, type CredentialStore } from "./local-credential-store.js";
 import { dirname } from "node:path";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { AgentRuntimeWorker } from "@synthv-toolbox/agent-runtime";
-import type { PiCredential, PiCredentialStore, PiModelSelection } from "@synthv-toolbox/agent-runtime";
-import {
-  AGENT_EFFORT_LEVELS,
-  AGENT_INPUT_MAX_LENGTH,
-  DEFAULT_AGENT_EFFORT,
-  estimateAgentRunBudget,
-  validateAgentRunOutcome,
-  AGENT_SESSION_HISTORY_MAX_MESSAGES,
-  AGENT_SESSION_HISTORY_MAX_TEXT_LENGTH,
-  type AgentSessionHistoryMessage,
-  type AgentEffortLevel,
-  type AgentRunBudget,
-  type AgentRunOutcome,
-  type AgentUsageSample,
-} from "@synthv-toolbox/runtime-protocol";
 
 export type AiProviderId = "anthropic" | "openai-codex" | "workbuddy" | "traecode";
 export type AiLoadStrategy = "round-robin" | "weighted-round-robin" | "failover";
 export type CredentialKind = "api-key" | "oauth";
+
+export interface SafeStoragePort {
+  isEncryptionAvailable(): boolean;
+  encryptString(value: string): Buffer;
+  decryptString(value: Buffer): string;
+}
 
 export interface MetadataFilePort {
   read(path: string): Promise<string | undefined>;
@@ -34,17 +24,13 @@ export interface AgentRuntimePort {
   request(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>>;
 }
 
-export interface AgentApprovalCancellationPort {
-  cancelConversation(conversationId: string): void;
-}
-
 export interface ProviderCatalogPort {
   models(provider: AiProviderId, force: boolean): Promise<string[]>;
   opencode(force: boolean): Promise<Record<string, unknown>>;
 }
 
 export interface ProviderUsagePort {
-  query(provider: AiProviderId, credentialIds: readonly string[]): Promise<{ accounts: Array<{ credentialId: string; [key: string]: unknown }> }>;
+  query(provider: AiProviderId, credentialIds: readonly string[]): Promise<Record<string, unknown>>;
 }
 
 export interface AuthorizationResult {
@@ -70,27 +56,18 @@ export interface StoredCredential {
   createdAt: string;
   expiresAt?: number;
   sealed: string;
-  extend?: Record<string, unknown>;
 }
 
 export interface ProviderSettings {
   model: string;
+  oauthEnabled: boolean;
   strategy: AiLoadStrategy;
-}
-
-export interface HostModelCredential {
-  id: string;
-  providerId: string;
-  modelId: string;
-  authMethod: CredentialKind;
-  apiKey: string;
 }
 
 export interface ConversationMessage {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
-  outcome?: AgentRunOutcome;
 }
 
 export interface ConversationSnapshot {
@@ -111,19 +88,14 @@ interface AiServiceMetadata {
 
 export interface AiServiceOptions {
   metadataPath: string;
-  credentials?: CredentialStore;
+  safeStorage: SafeStoragePort;
   runtime: AgentRuntimePort;
   catalog: ProviderCatalogPort;
-  approvals: AgentApprovalCancellationPort;
   usage?: ProviderUsagePort;
   authorizer?: ProviderAuthorizer;
   files?: MetadataFilePort;
   now?: () => Date;
   id?: () => string;
-  /** Base agent prompt; a changed value recreates the Pi session, so it can carry the active integrations. */
-  systemPrompt?: () => string;
-  /** False in toolbox-only mode, which promises no model requests; checked before every run. */
-  agentAllowed?: () => boolean;
 }
 
 const providers: readonly AiProviderId[] = ["anthropic", "openai-codex", "workbuddy", "traecode"];
@@ -133,12 +105,6 @@ const defaultModels: Record<AiProviderId, string> = {
   workbuddy: "glm-5.2",
   traecode: "",
 };
-
-/** The runtime drives every request through its plan protocol; a completion has to finish it in one message that also carries the reply. */
-const COMPLETION_PROTOCOL = "This is a one-shot text task that needs no files or other tools. Call update_plan with a single done criterion (the reply is given), then write the complete reply as text in the same message in which you call complete_task, with one evidence entry.";
-const COMPLETION_SESSION_PREFIX = "completion-";
-/** Completion sessions get no host tools: the host registers no extensions for them. */
-export const isCompletionSession = (sessionId: string): boolean => sessionId.startsWith(COMPLETION_SESSION_PREFIX);
 
 export const nodeMetadataFiles: MetadataFilePort = {
   async read(path) {
@@ -175,39 +141,23 @@ export function agentRuntimePort(worker: Pick<AgentRuntimeWorker, "handleJsonl">
   };
 }
 
-interface ActiveRun {
-  runId: string;
-  cancelRequested: boolean;
-  sendIssued: boolean;
-  /** Await acknowledgements before persisting so accepted steers retain their submission order. */
-  steers: Array<Promise<ConversationMessage>>;
-}
-
 /** Stores encrypted credential material locally and delegates model requests to the shared Agent Runtime. */
 export class AiService {
   private readonly files: MetadataFilePort;
-  private readonly credentials: CredentialStore;
-  private persistence: Promise<void> = Promise.resolve();
-  private readonly credentialWrites = new Map<string, Promise<unknown>>();
   private readonly now: () => Date;
   private readonly id: () => string;
   private readonly operations = new Map<string, AbortController>();
-  private readonly activeRuns = new Map<string, ActiveRun>();
   private metadata?: AiServiceMetadata;
 
   constructor(private readonly options: AiServiceOptions) {
     this.files = options.files ?? nodeMetadataFiles;
-    this.credentials = options.credentials ?? createLocalCredentialStore(dirname(options.metadataPath));
     this.now = options.now ?? (() => new Date());
     this.id = options.id ?? (() => crypto.randomUUID());
+    if (!options.safeStorage.isEncryptionAvailable()) throw new Error("Electron safeStorage encryption is unavailable.");
   }
 
   async ai_provider_state(forceCatalog = false): Promise<Record<string, unknown>> {
     const metadata = await this.load();
-    const readable = new Set<string>();
-    await Promise.all(metadata.credentials.map(async credential => {
-      try { await this.credentials.unseal(credential.sealed); readable.add(credential.id); } catch {}
-    }));
     const providersState = await Promise.all(providers.map(async (provider) => {
       const settings = metadata.providers[provider];
       const credentials = metadata.credentials.filter((credential) => credential.provider === provider);
@@ -220,97 +170,44 @@ export class AiService {
         description: `${providerDisplayName(provider)} model access`,
         active: metadata.activeProvider === provider,
         model: settings.model,
+        oauthEnabled: settings.oauthEnabled,
         loadStrategy: settings.strategy,
         models,
         oauthModels: models,
         apiKeyModels: models,
-        connected: credentials.some(credential => credential.enabled && readable.has(credential.id)),
-        healthyAccounts: oauth.filter(credential => credential.enabled && readable.has(credential.id)).length,
+        connected: credentials.some((credential) => credential.enabled),
+        healthyAccounts: oauth.filter((credential) => credential.enabled).length,
         totalAccounts: oauth.length,
-        accounts: oauth.map((credential) => ({ id: credential.id, label: credential.label, expiresAt: credential.expiresAt ?? 0, authorized: readable.has(credential.id), healthy: readable.has(credential.id) && credential.enabled, enabled: credential.enabled, weight: credential.weight, extend: credential.extend })),
-        apiKeys: apiKeys.map((credential) => ({ id: credential.id, label: credential.label, models: credential.models, healthy: readable.has(credential.id) && credential.enabled, enabled: credential.enabled, weight: credential.weight, extend: credential.extend, cooldownUntilUtc: null, createdAtUtc: credential.createdAt })),
+        accounts: oauth.map((credential) => ({ id: credential.id, label: credential.label, expiresAt: credential.expiresAt ?? 0, authorized: true, healthy: credential.enabled, enabled: credential.enabled, weight: credential.weight })),
+        apiKeys: apiKeys.map((credential) => ({ id: credential.id, label: credential.label, models: credential.models, healthy: credential.enabled, enabled: credential.enabled, weight: credential.weight, cooldownUntilUtc: null, createdAtUtc: credential.createdAt })),
         authMethods: ["oauth", "api-key"],
         available: true,
-        unavailableReason: credentials.some(credential => credential.enabled && !readable.has(credential.id)) ? "Local login data cannot be read. Sign in again to replace this credential." : null,
+        unavailableReason: null,
       };
     }));
     this.createCredentialRouter(metadata);
     return { activeProvider: metadata.activeProvider, legacyConfigured: false, providers: providersState, catalogSource: "models-dev", catalogGeneratedAt: this.now().getTime(), catalogError: null };
   }
 
-  async resolveModelSelection(): Promise<{ providerId: string; modelId: string; credentials: HostModelCredential[] }> {
+  async resolveModelSelection(): Promise<{ providerId: string; modelId: string; apiKey: string; credentialId: string }> {
     const metadata = await this.load();
     const providerId = metadata.activeProvider;
     const modelId = metadata.providers[providerId].model;
     if (!modelId) throw new Error("No model is selected.");
     const router = this.createCredentialRouter(metadata);
-    const candidates = router.candidates({ providerId, modelId });
-    if (!candidates.length) throw new Error(`No eligible credential is configured for ${providerId}/${modelId}.`);
-    const credentials: HostModelCredential[] = [];
-    for (const candidate of candidates) {
-      const stored = metadata.credentials.find((credential) => credential.id === candidate.id);
-      if (!stored) continue;
-      let apiKey: string;
-      try {
-        const decrypted = await this.credentials.unseal(stored.sealed);
-        if (stored.kind === "oauth") {
-          const credential = JSON.parse(decrypted) as { access?: unknown; accessToken?: unknown };
-          const access = credential.access ?? credential.accessToken;
-          if (typeof access !== "string" || !access) continue;
-          apiKey = access;
-        } else {
-          apiKey = decrypted;
-        }
-      } catch {
-        continue;
-      }
-      credentials.push({ id: stored.id, providerId, modelId, authMethod: stored.kind, apiKey });
+    const candidate = router.candidates({ providerId, modelId })[0];
+    if (!candidate) throw new Error(`No eligible credential is configured for ${providerId}/${modelId}.`);
+    const stored = metadata.credentials.find((credential) => credential.id === candidate.id);
+    if (!stored) throw new Error("The selected credential is unavailable.");
+    const decrypted = this.options.safeStorage.decryptString(Buffer.from(stored.sealed, "base64"));
+    let apiKey = decrypted;
+    if (stored.kind === "oauth") {
+      const credential = JSON.parse(decrypted) as { access?: unknown; accessToken?: unknown };
+      const access = credential.access ?? credential.accessToken;
+      if (typeof access !== "string" || !access) throw new Error("The OAuth credential has no access token.");
+      apiKey = access;
     }
-    if (!credentials.length) throw new Error(`No readable local credential is configured for ${providerId}/${modelId}. Sign in again.`);
-    return { providerId, modelId, credentials };
-  }
-
-  modelCredentialStore(model: PiModelSelection): PiCredentialStore {
-    if (!model.credentialId) throw new Error("A host-selected credential is required.");
-    const id = model.credentialId, provider = model.providerId;
-    const stored = async () => {
-      const metadata = await this.load();
-      const credential = metadata.credentials.find(item => item.id === id && item.provider === provider && item.enabled);
-      if (!credential) throw new Error("The selected account was removed or disabled.");
-      return credential;
-    };
-    const read = async (): Promise<PiCredential> => {
-      const credential = await stored(), secret = await this.credentials.unseal(credential.sealed);
-      if (credential.kind === "api-key") return { type: "api_key", key: secret };
-      const oauth = JSON.parse(secret);
-      if (!oauth || typeof oauth.access !== "string" || typeof oauth.refresh !== "string" || typeof oauth.expires !== "number") throw new Error("The OAuth login is incomplete. Sign in again.");
-      return { ...oauth, type: "oauth" };
-    };
-    return {
-      read: async (providerId, options) => { options?.signal?.throwIfAborted(); return providerId === provider ? read() : undefined; },
-      list: async options => { options?.signal?.throwIfAborted(); return [{ providerId: provider, type: (await stored()).kind === "oauth" ? "oauth" : "api_key" }]; },
-      modify: async (providerId, update, options) => {
-        if (providerId !== provider) throw new Error("Cannot update another provider's credentials.");
-        const operation = (this.credentialWrites.get(id) ?? Promise.resolve()).catch(() => {}).then(async () => {
-          options?.signal?.throwIfAborted();
-          const before = (await stored()).sealed, current = await read(), next = await update(current);
-          options?.signal?.throwIfAborted();
-          if (!next || JSON.stringify(next) === JSON.stringify(current)) return current;
-          const sealed = await this.credentials.seal(next.type === "oauth" ? JSON.stringify(next) : next.key);
-          const credential = await stored();
-          if (credential.sealed !== before) throw new Error("The account changed during token refresh; retry with the current login.");
-          if (next.type !== current.type) throw new Error("Credential refresh cannot change authentication method.");
-          credential.sealed = sealed;
-          if (next.type === "oauth") credential.expiresAt = next.expires;
-          await this.persist();
-          return next;
-        });
-        const tail = operation.catch(() => {}); this.credentialWrites.set(id, tail);
-        void tail.then(() => { if (this.credentialWrites.get(id) === tail) this.credentialWrites.delete(id); });
-        return operation;
-      },
-      delete: async () => { throw new Error("Remove accounts through Toolbox settings."); },
-    };
+    return { providerId, modelId, apiKey, credentialId: stored.id };
   }
 
   async authorize_ai_provider(provider: AiProviderId, operationId = this.id()): Promise<Record<string, unknown>> {
@@ -363,14 +260,12 @@ export class AiService {
     const metadata = await this.load();
     const credential = metadata.credentials.find((item) => item.provider === provider && item.id === credentialId && item.kind === "api-key");
     if (!credential) throw new Error("API key credential was not found.");
-    let sealed: string | undefined;
-    if (input.apiKey !== undefined) {
-      if (!input.apiKey.trim()) throw new Error("API key is required.");
-      sealed = await this.credentials.seal(input.apiKey);
-    }
     if (input.label !== undefined) credential.label = sanitizeLabel(input.label, input.apiKey ?? "");
     if (input.models !== undefined) credential.models = [...new Set(input.models)].sort();
-    if (sealed !== undefined) credential.sealed = sealed;
+    if (input.apiKey !== undefined) {
+      if (!input.apiKey.trim()) throw new Error("API key is required.");
+      credential.sealed = this.options.safeStorage.encryptString(input.apiKey).toString("base64");
+    }
     await this.persist();
     return this.ai_provider_state(false);
   }
@@ -379,31 +274,20 @@ export class AiService {
     return this.removeCredential(provider, credentialId, "oauth");
   }
 
-  async update_ai_credential(provider: AiProviderId, credentialId: string, enabled: boolean, weight?: number, label?: string, extend?: Record<string, unknown>): Promise<Record<string, unknown>> {
-    if (weight !== undefined && (!Number.isInteger(weight) || weight < 1 || weight > 100)) throw new Error("Credential weight must be between 1 and 100.");
+  async update_ai_credential(provider: AiProviderId, credentialId: string, enabled: boolean, weight: number): Promise<Record<string, unknown>> {
+    if (!Number.isInteger(weight) || weight < 1 || weight > 100) throw new Error("Credential weight must be between 1 and 100.");
     const metadata = await this.load();
     const credential = metadata.credentials.find((item) => item.provider === provider && item.id === credentialId);
     if (!credential) throw new Error("Credential was not found.");
     credential.enabled = enabled;
-    if (label !== undefined && (!label.trim() || label.trim().length > 80)) throw new Error("Credential label must contain 1 to 80 characters.");
-    if (extend && Object.values(extend).some(value => value !== null && !["string", "number", "boolean"].includes(typeof value))) throw new Error("Credential metadata must contain scalar values.");
-    if (weight !== undefined) credential.weight = weight;
-    if (label !== undefined) credential.label = label.trim();
-    if (extend !== undefined) credential.extend = extend;
+    credential.weight = weight;
     await this.persist();
     return this.ai_provider_state(false);
   }
 
-  async reorder_ai_credentials(provider: AiProviderId, method: string, credentialIds: string[]): Promise<Record<string, unknown>> {
-    if (method !== "oauth" && method !== "api-key") throw new Error("Invalid authentication method.");
+  async update_ai_provider(provider: AiProviderId, oauthEnabled: boolean): Promise<Record<string, unknown>> {
     const metadata = await this.load();
-    const matches = (item: StoredCredential) => item.provider === provider && item.kind === method;
-    const group = metadata.credentials.filter(matches);
-    if (group.length !== credentialIds.length || new Set(credentialIds).size !== group.length || credentialIds.some(id => !group.some(item => item.id === id))) throw new Error("Credential order must include every credential exactly once.");
-    const ordered = new Map(credentialIds.map((id, index) => [id, index]));
-    group.sort((left, right) => ordered.get(left.id)! - ordered.get(right.id)!);
-    let index = 0;
-    metadata.credentials = metadata.credentials.map(item => matches(item) ? group[index++]! : item);
+    metadata.providers[provider].oauthEnabled = oauthEnabled;
     await this.persist();
     return this.ai_provider_state(false);
   }
@@ -430,15 +314,13 @@ export class AiService {
 
   async ai_provider_usage(): Promise<Record<string, unknown>> {
     const metadata = await this.load();
-    const accounts: Array<Record<string, unknown>> = [];
+    const result: Record<string, unknown> = { queriedAt: this.now().toISOString(), providers: {} };
+    if (!this.options.usage) return result;
     for (const provider of providers) {
-      const credentials = metadata.credentials.filter(item => item.provider === provider && item.kind === "oauth");
-      const queried = this.options.usage ? await this.options.usage.query(provider, credentials.filter(item => item.enabled).map(item => item.id)) : { accounts: [] };
-      for (const credential of credentials) {
-        accounts.push({ provider, channel: "oauth", credentialId: credential.id, label: credential.label, usage: queried.accounts.find(item => item.credentialId === credential.id) ?? null });
-      }
+      const ids = metadata.credentials.filter((item) => item.provider === provider && item.enabled).map((item) => item.id);
+      result.providers = { ...(result.providers as Record<string, unknown>), [provider]: await this.options.usage.query(provider, ids) };
     }
-    return { queriedAt: this.now().toISOString(), accounts };
+    return result;
   }
 
   async opencode_provider_catalog(force = false): Promise<Record<string, unknown>> {
@@ -467,129 +349,26 @@ export class AiService {
     return cloneConversation(conversation);
   }
 
-  async send_message(conversationId: string, input: string, options: { cwd?: string; effort?: AgentEffortLevel; runId?: string } = {}): Promise<ConversationMessage[]> {
+  async send_message(conversationId: string, input: string, cwd?: string): Promise<ConversationMessage[]> {
     const text = input.trim();
     if (!text) throw new Error("Message is required.");
-    if (text.length > AGENT_INPUT_MAX_LENGTH) throw new Error("Message exceeds the 32,000 character limit.");
-    if (this.activeRuns.has(conversationId)) throw new Error("A run is already in progress.");
-    if (this.options.agentAllowed && !this.options.agentAllowed()) throw new Error("The internal agent is only available in AI mode. Switch the toolbox to AI mode in Settings first.");
-    const effort = options.effort ?? DEFAULT_AGENT_EFFORT;
-    const active: ActiveRun = { runId: options.runId ?? this.id(), cancelRequested: false, sendIssued: false, steers: [] };
-    this.activeRuns.set(conversationId, active);
-    try {
-      const metadata = await this.load();
-      const conversation = metadata.conversations.find((item) => item.id === conversationId);
-      if (!conversation) throw new Error("Conversation was not found.");
-      const seedOutcome = latestOutcome(conversation);
-      const systemPrompt = this.options.systemPrompt?.();
-      const history = sessionHistory(conversation.messages);
-      await this.options.runtime.request("session.initialize", { sessionId: conversation.id, ...(options.cwd ? { cwd: options.cwd } : {}), ...(systemPrompt ? { systemPrompt } : {}), ...(seedOutcome ? { outcome: seedOutcome } : {}), ...(history.length ? { history } : {}) });
-      const { assistant, outcome } = active.cancelRequested
-        ? { assistant: "", outcome: cancelledOutcome(effort, this.agentUsageSamples()) }
-        : await this.runSend(conversation.id, text, effort, active);
-      const steers = await Promise.allSettled(active.steers);
-      const now = this.now().toISOString();
-      const messages: ConversationMessage[] = [
-        { role: "user", content: text, createdAt: now },
-        ...steers.flatMap((result) => result.status === "fulfilled" ? [result.value] : []),
-        { role: "assistant", content: assistant, createdAt: now, outcome },
-      ];
-      conversation.messages.push(...messages);
-      conversation.updatedAt = now;
-      if (conversation.title === "New conversation") conversation.title = text.slice(0, 28);
-      await this.persist();
-      return messages.map((message) => ({ ...message }));
-    } finally {
-      this.activeRuns.delete(conversationId);
-    }
-  }
-
-  private async runSend(sessionId: string, text: string, effort: AgentEffortLevel, active: ActiveRun): Promise<{ assistant: string; outcome: AgentRunOutcome }> {
-    active.sendIssued = true;
-    const budget = estimateAgentRunBudget(effort, this.agentUsageSamples());
-    const response = await this.options.runtime.request("session.send", { sessionId, input: text, runId: active.runId, budget });
-    const outcome = validateAgentRunOutcome(response.outcome);
-    if (!outcome) throw new Error("Agent Runtime returned an invalid run outcome.");
-    const assistant = (typeof response.message === "string" ? response.message.trim() : "") || outcome.summary;
-    return { assistant, outcome };
-  }
-
-  /** One model reply in a throwaway session without host tools; stops with the signal and when the app leaves AI mode. */
-  async complete(systemPrompt: string, input: string, signal?: AbortSignal): Promise<string> {
-    if (this.options.agentAllowed && !this.options.agentAllowed()) throw new Error("The internal agent is only available in AI mode. Switch the toolbox to AI mode in Settings first.");
-    signal?.throwIfAborted();
-    const sessionId = `${COMPLETION_SESSION_PREFIX}${this.id()}`;
-    const active: ActiveRun = { runId: this.id(), cancelRequested: false, sendIssued: false, steers: [] };
-    this.activeRuns.set(sessionId, active);
-    const stop = () => { void this.cancel_agent_run(sessionId).catch(() => undefined); };
-    signal?.addEventListener("abort", stop, { once: true });
-    try {
-      await this.load();
-      await this.options.runtime.request("session.initialize", { sessionId, systemPrompt: [systemPrompt, COMPLETION_PROTOCOL].join("\n") });
-      if (active.cancelRequested || signal?.aborted) throw new Error("The model request was cancelled.");
-      const { assistant, outcome } = await this.runSend(sessionId, input, DEFAULT_AGENT_EFFORT, active);
-      if (active.cancelRequested || signal?.aborted || outcome.status === "cancelled") throw new Error("The model request was cancelled.");
-      if (outcome.status === "error") throw new Error(outcome.summary);
-      if (!assistant.trim()) throw new Error("The model returned no message.");
-      return assistant;
-    } finally {
-      signal?.removeEventListener("abort", stop);
-      this.activeRuns.delete(sessionId);
-      await this.options.runtime.request("session.close", { sessionId }).catch(() => undefined);
-    }
-  }
-
-  /** Delivers a message to the conversation's in-flight run; rejects when no run has reached the runtime. */
-  async steer_agent_run(conversationId: string, input: string): Promise<ConversationMessage> {
-    const text = input.trim();
-    if (!text) throw new Error("Message is required.");
-    if (text.length > AGENT_INPUT_MAX_LENGTH) throw new Error("Message exceeds the 32,000 character limit.");
-    const active = this.activeRuns.get(conversationId);
-    if (!active?.sendIssued || active.cancelRequested) throw new Error("No agent run is in progress.");
-    const pending: Promise<ConversationMessage> = this.options.runtime.request("session.steer", { sessionId: conversationId, runId: active.runId, input: text })
-      .then(() => ({ role: "user", content: text, createdAt: this.now().toISOString() }));
-    active.steers.push(pending);
-    return { ...await pending };
-  }
-
-  /** Stops every run in progress (chat, toolbox_agent tasks, Cover phases); used when the app leaves AI mode. */
-  async cancel_all_agent_runs(): Promise<string[]> {
-    const conversations = [...this.activeRuns.keys()];
-    await Promise.allSettled(conversations.map(conversationId => this.cancel_agent_run(conversationId)));
-    return conversations;
-  }
-
-  async cancel_agent_run(conversationId: string): Promise<void> {
-    const active = this.activeRuns.get(conversationId);
-    if (active && !active.sendIssued) {
-      active.cancelRequested = true;
-      this.options.approvals.cancelConversation(conversationId);
-      return;
-    }
-    // Cancel the run first so deliver() sees runState().active === false and queues rather than steers.
-    await this.options.runtime.request("session.cancel", { sessionId: conversationId });
-    this.options.approvals.cancelConversation(conversationId);
-  }
-
-  agentUsageSamples(): AgentUsageSample[] {
-    if (!this.metadata) throw new Error("AI metadata has not been loaded yet.");
-    const finished = this.metadata.conversations
-      .flatMap((conversation) => conversation.messages)
-      .filter((message): message is ConversationMessage & { outcome: AgentRunOutcome } => message.role === "assistant" && message.outcome !== undefined)
-      .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
-    const samples: AgentUsageSample[] = [];
-    for (const message of finished) {
-      const { status, budget } = message.outcome;
-      if (status === "incomplete" || status === "cancelled" || status === "error") continue;
-      samples.push({ level: budget.level, turns: budget.turns, tokens: budget.tokens, censored: status === "budget_exhausted" });
-    }
-    return samples;
-  }
-
-  async agent_budgets(): Promise<Record<AgentEffortLevel, AgentRunBudget>> {
-    await this.load();
-    const samples = this.agentUsageSamples();
-    return Object.fromEntries(AGENT_EFFORT_LEVELS.map((level) => [level, estimateAgentRunBudget(level, samples)])) as Record<AgentEffortLevel, AgentRunBudget>;
+    if (text.length > 32_000) throw new Error("Message exceeds the 32,000 character limit.");
+    const metadata = await this.load();
+    const conversation = metadata.conversations.find((item) => item.id === conversationId);
+    if (!conversation) throw new Error("Conversation was not found.");
+    const provider = metadata.activeProvider;
+    const model = metadata.providers[provider].model;
+    await this.options.runtime.request("session.initialize", { sessionId: conversation.id, ...(cwd ? { cwd } : {}), model: { provider, model } });
+    const response = await this.options.runtime.request("session.send", { sessionId: conversation.id, input: text });
+    const assistant = typeof response.message === "string" ? response.message.trim() : "";
+    if (!assistant) throw new Error("Agent Runtime did not return an assistant message.");
+    const now = this.now().toISOString();
+    const messages: ConversationMessage[] = [{ role: "user", content: text, createdAt: now }, { role: "assistant", content: assistant, createdAt: now }];
+    conversation.messages.push(...messages);
+    conversation.updatedAt = now;
+    if (conversation.title === "New conversation") conversation.title = text.slice(0, 28);
+    await this.persist();
+    return messages.map((message) => ({ ...message }));
   }
 
   private async removeCredential(provider: AiProviderId, credentialId: string, kind: CredentialKind): Promise<Record<string, unknown>> {
@@ -614,7 +393,7 @@ export class AiService {
       weight: 1,
       createdAt: this.now().toISOString(),
       ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
-      sealed: await this.credentials.seal(input.secret),
+      sealed: this.options.safeStorage.encryptString(input.secret).toString("base64"),
     };
     if (existing >= 0) metadata.credentials.splice(existing, 1, credential);
     else metadata.credentials.push(credential);
@@ -629,18 +408,13 @@ export class AiService {
     return this.metadata;
   }
 
-  private persist(): Promise<void> {
-    const write = async () => {
-      const metadata = await this.load();
-      const target = this.options.metadataPath;
-      const temporary = `${target}.${this.id()}.tmp`;
-      await this.files.mkdir(dirname(target));
-      await this.files.write(temporary, `${JSON.stringify(metadata)}\n`);
-      await this.files.rename(temporary, target);
-    };
-    const pending = this.persistence.then(write, write);
-    this.persistence = pending.catch(() => {});
-    return pending;
+  private async persist(): Promise<void> {
+    const metadata = await this.load();
+    const target = this.options.metadataPath;
+    const temporary = `${target}.${this.id()}.tmp`;
+    await this.files.mkdir(dirname(target));
+    await this.files.write(temporary, `${JSON.stringify(metadata)}\n`);
+    await this.files.rename(temporary, target);
   }
 
   private createCredentialRouter(metadata: AiServiceMetadata): CredentialRouter {
@@ -649,6 +423,7 @@ export class AiService {
       providerId: credential.provider,
       authMethod: credential.kind,
       enabled: credential.enabled,
+      weight: credential.weight,
       modelIds: credential.models,
       extend: { label: credential.label },
     })));
@@ -659,7 +434,7 @@ function createMetadata(): AiServiceMetadata {
   return {
     version: 1,
     activeProvider: "anthropic",
-    providers: Object.fromEntries(providers.map((provider) => [provider, { model: defaultModels[provider], strategy: "round-robin" }])) as AiServiceMetadata["providers"],
+    providers: Object.fromEntries(providers.map((provider) => [provider, { model: defaultModels[provider], oauthEnabled: true, strategy: "round-robin" }])) as AiServiceMetadata["providers"],
     credentials: [],
     conversations: [],
   };
@@ -670,47 +445,7 @@ function parseMetadata(raw: string): AiServiceMetadata {
   if (value.version !== 1 || !isProvider(value.activeProvider) || !Array.isArray(value.credentials) || !Array.isArray(value.conversations) || !value.providers) {
     throw new Error("AI metadata is invalid.");
   }
-  for (const conversation of value.conversations) {
-    for (const message of conversation.messages) {
-      if (message.role === "assistant" && message.outcome !== undefined && !validateAgentRunOutcome(message.outcome)) delete message.outcome;
-    }
-  }
   return value as AiServiceMetadata;
-}
-
-function cancelledOutcome(effort: AgentEffortLevel, samples: AgentUsageSample[]): AgentRunOutcome {
-  const budget = estimateAgentRunBudget(effort, samples);
-  return { status: "cancelled", summary: "", evidence: [], missing: [], plan: null, budget: { ...budget, turns: 0, tokens: 0, uncachedInputTokens: 0, cacheReadTokens: 0 } };
-}
-
-/** Characters of earlier turns replayed into a recreated session; older turns are dropped first. */
-const SESSION_HISTORY_BUDGET = 60_000;
-/** No single turn may take more than this, so one long reply cannot crowd out every turn before it. */
-const SESSION_HISTORY_TURN_LIMIT = 20_000;
-const TRUNCATED = "\n[… shortened]";
-
-/** The most recent turns that fit the budget, oldest first, for a session the runtime has to create again. */
-function sessionHistory(messages: readonly ConversationMessage[]): AgentSessionHistoryMessage[] {
-  const history: AgentSessionHistoryMessage[] = [];
-  let used = 0;
-  for (let index = messages.length - 1; index >= 0 && history.length < AGENT_SESSION_HISTORY_MAX_MESSAGES; index--) {
-    const limit = Math.min(SESSION_HISTORY_TURN_LIMIT, SESSION_HISTORY_BUDGET - used);
-    if (limit <= TRUNCATED.length) break;
-    const content = messages[index].content;
-    if (!content.trim()) continue;
-    const text = content.length > limit ? `${content.slice(0, limit - TRUNCATED.length)}${TRUNCATED}` : content;
-    used += text.length;
-    history.unshift({ role: messages[index].role, text });
-  }
-  return history;
-}
-
-function latestOutcome(conversation: ConversationSnapshot): AgentRunOutcome | undefined {
-  for (let index = conversation.messages.length - 1; index >= 0; index--) {
-    const message = conversation.messages[index];
-    if (message.role === "assistant" && message.outcome) return message.outcome;
-  }
-  return undefined;
 }
 
 function publicCredential(credential: StoredCredential): Omit<StoredCredential, "sealed"> {

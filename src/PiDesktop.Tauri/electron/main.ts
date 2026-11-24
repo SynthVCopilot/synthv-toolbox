@@ -1,62 +1,31 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
-import { existsSync } from "node:fs";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, protocol, safeStorage, shell, Tray } from "electron";
 import { dirname, join, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import type { OpenDialogOptions } from "./bridge.js";
-import { BRAND, FILE_NAMES, LEGACY_FILE_NAMES, LEGACY_PRODUCT_NAME } from "./brand.js";
 import { createUpdaterService } from "./updater.js";
 import { ElectronRuntimeHost } from "./services/runtime-host.js";
 import { ElectronCommandRegistry } from "./services/command-registry.js";
-import { AiService, agentRuntimePort, isCompletionSession, type AiProviderId } from "./services/ai-service.js";
-import { createProviderUsage } from "./services/ai-usage.js";
-import { AgentApprovalBroker } from "./services/agent-approvals.js";
-import { createAgentTaskService } from "./services/agent-task-service.js";
-import { createCoverAgentToolsExtension } from "./services/cover-agent-tools.js";
-import { createCoverService } from "./services/cover-service.js";
-import { createCoverHost } from "./services/cover-host.js";
-import { createCoverScoreService } from "./services/cover-score.js";
-import { createCoverScoreToolsExtension } from "./services/cover-score-tools.js";
-import { createCreativeRuntime } from "./services/creative-runtime.js";
-import { createMediaImporter } from "./services/media-importer.js";
-import { createCoverAudio } from "./services/cover-audio.js";
-import { resolveFfmpegBinaries } from "./services/component-audio-commands.js";
-import { bridgeCaptureTransport, captureExecutablePath, createAudioCaptureService } from "./services/audio-capture.js";
+import { AiService, agentRuntimePort, type AiProviderId } from "./services/ai-service.js";
 import { createCreativeService } from "./services/creative-service.js";
 import { createComponentExecutor } from "./services/component-executor.js";
-import { DesktopStateService, savedIntegrationPreference } from "./services/desktop-state.js";
+import { ComponentService } from "./services/component-service.js";
+import { MediaTaskService } from "./services/media-task-service.js";
+import { createMediaWorkflowPort } from "./services/media-workflow-port.js";
+import { SynthVCoverService } from "./services/synthv-cover-service.js";
+import { DesktopStateService } from "./services/desktop-state.js";
+import { FileApprovalManager } from "./services/file-approval-manager.js";
 import { HostCapabilities } from "./services/host-capabilities.js";
-import { ClientError, HttpMcpServer } from "./services/http-mcp-server.js";
-import { agentSystemPrompt } from "./services/agent-identity.js";
-import { hostResultToToolResult, toolboxMcpTools } from "./services/mcp-tools.js";
-import { AUTOSTART_ARGUMENT, legacyExecutableCandidates, loginItemLookupPath, migrateAutostart } from "./services/autostart-migration.js";
-import { resolveUserDataDirectory, type DataDirectoryDecision } from "./services/user-data-migration.js";
-import { gatedBridge, loadEmbeddedBridge, SwitchableBridge, SYNTHV_OFF_MESSAGE, unavailableBridge } from "./services/synthv-bridge.js";
-import { createSynthVDeliveryRegistry, createSynthVToolsExtension } from "./services/synthv-agent-tools.js";
-import { createToolboxAgentToolsExtension } from "./services/toolbox-agent-tools.js";
-import { createExternalMcpToolsExtension, ExternalMcpPool, mcpServerConfigs } from "./services/external-mcp-tools.js";
+import { HttpMcpServer } from "./services/http-mcp-server.js";
 import { SynthVService } from "./services/synthv-service.js";
-import { createPiSessionFactory } from "@synthv-toolbox/agent-runtime";
-import type { JsonValue } from "@synthv-toolbox/runtime-protocol";
+import { routeSvpActivation } from "./services/desktop-activation.js";
+import { resolveAudioResource, resolvePluginResource } from "./services/resource-protocol.js";
 import { authorizeAnthropic } from "@model-auth/providers/anthropic";
 import { authorizeOpenAI } from "@model-auth/providers/openai";
 import { authorizeTrae } from "@model-auth/providers/trae";
 import { authorizeWorkBuddy } from "@model-auth/providers/workbuddy";
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
-// The data folder is named explicitly so it does not follow the package name, and a folder left under the old product
-// name is moved here first. This must finish before anything reads userData: Chromium creates the folder for the
-// single-instance lock. An explicit --user-data-dir (tests, side-by-side runs) still wins and is never migrated;
-// --toolbox-app-data-dir stands in for the OS app-data folder so tests can exercise the migration.
-const dataDirectory: DataDirectoryDecision | undefined = app.commandLine.hasSwitch("user-data-dir") ? undefined : resolveUserDataDirectory({
-  appData: app.commandLine.getSwitchValue("toolbox-app-data-dir") || app.getPath("appData"),
-  name: FILE_NAMES.userDataDirectory,
-  legacyNames: [LEGACY_FILE_NAMES.userDataDirectory],
-  migrate: app.isPackaged || app.commandLine.hasSwitch("toolbox-app-data-dir"),
-  appVersion: app.getVersion(),
-});
-if (dataDirectory) app.setPath("userData", dataDirectory.path);
-if (dataDirectory?.migratedFrom) console.info(`Moved the data folder from ${dataDirectory.migratedFrom} to ${dataDirectory.path}.`);
-if (dataDirectory?.deferred) console.warn(`The data folder stays at ${dataDirectory.path} for now: ${dataDirectory.deferred.detail}`);
 const developmentUrl = process.env.ELECTRON_RENDERER_URL ?? process.argv.find((argument) => argument.startsWith("--dev-server-url="))?.slice("--dev-server-url=".length);
 let mainWindow: BrowserWindow | undefined;
 let tray: Tray | undefined;
@@ -87,24 +56,30 @@ handlers.register("updater.restart", async () => updater.restart());
 handlers.register("updater.state", async () => updater.state());
 handlers.register("check_toolbox_update", async () => {
   const state = await updater.check();
-  return { channel: updateChannel, currentVersion: app.getVersion(), latestVersion: state.version ?? app.getVersion(), updateAvailable: state.phase !== "idle" && state.phase !== "error", releaseName: state.version ? `Version ${state.version}` : "", releaseUrl: `${BRAND.repositoryUrl}/releases`, releaseNotes: "", checkedAtUtc: new Date().toISOString(), installer: null };
+  return { channel: updateChannel, currentVersion: app.getVersion(), latestVersion: state.version ?? app.getVersion(), updateAvailable: state.phase !== "idle" && state.phase !== "error", releaseName: state.version ? `Version ${state.version}` : "", releaseUrl: "https://github.com/SynthVCopilot/synthv-toolbox/releases", releaseNotes: "", checkedAtUtc: new Date().toISOString(), installer: null };
 });
 handlers.register("get_toolbox_update_download", async () => updaterDownloadState());
-handlers.register("download_toolbox_update", async () => { await updater.check(); return updaterDownloadState(); });
-handlers.register("cancel_toolbox_update_download", async () => updaterDownloadState());
+handlers.register("download_toolbox_update", async () => { await updater.download(); return updaterDownloadState(); });
+handlers.register("cancel_toolbox_update_download", async () => updater.cancel() && updaterDownloadState());
 handlers.register("install_toolbox_update", async () => { await updater.restart(); return { succeeded: true, summary: "Installing update.", detail: "" }; });
-handlers.register("open_toolbox_releases", async args => openExternal(optionalUrl(args.releaseUrl, `${BRAND.repositoryUrl}/releases`)));
+handlers.register("open_toolbox_releases", async args => openExternal(optionalUrl(args.releaseUrl, "https://github.com/SynthVCopilot/synthv-toolbox/releases")));
 handlers.register("open_toolbox_project", async args => openExternal(projectUrl(args.target)));
 let commandRegistry: ElectronCommandRegistry | undefined;
+let synthvService: SynthVService | undefined;
+const pendingOpenFiles: string[] = [];
+const audioArtifacts = new Map<string, string>();
 
-function emitToRenderer(event: string, payload: unknown): void {
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("toolbox:event", { event, payload });
-}
+protocol.registerSchemesAsPrivileged([
+  { scheme: "toolbox-plugin", privileges: { standard: true, secure: true, supportFetchAPI: true } },
+  { scheme: "toolbox-audio", privileges: { standard: true, secure: true, supportFetchAPI: true } },
+]);
 
-updater.onState((state) => { emitToRenderer("updater.state", state); });
+updater.onState((state) => {
+  mainWindow?.webContents.send("toolbox:event", { event: "updater.state", payload: state });
+});
 
 function isLoginLaunch(): boolean {
-  return process.argv.includes(AUTOSTART_ARGUMENT) || app.getLoginItemSettings().wasOpenedAtLogin;
+  return process.argv.includes("--toolbox-autostart") || app.getLoginItemSettings().wasOpenedAtLogin;
 }
 
 function desktopIconPath(): string {
@@ -114,47 +89,19 @@ function desktopIconPath(): string {
 function autostartController() {
   return {
     async set(enabled: boolean): Promise<boolean> {
-      // `enabled` also clears a Task Manager "Disabled" mark (Windows), which the migration keeps from the old entry.
-      app.setLoginItemSettings({ openAtLogin: enabled, args: enabled ? [AUTOSTART_ARGUMENT] : [], enabled });
-      const actual = launchAtLogin();
+      app.setLoginItemSettings({ openAtLogin: enabled, openAsHidden: enabled, args: enabled ? ["--toolbox-autostart"] : [] });
+      const actual = app.getLoginItemSettings().openAtLogin;
       if (actual !== enabled) throw new Error("The operating system did not apply the launch-at-login setting.");
       return actual;
     },
     async get(): Promise<{ enabled: boolean; error: string | null }> {
       try {
-        return { enabled: launchAtLogin(), error: null };
+        return { enabled: app.getLoginItemSettings().openAtLogin, error: null };
       } catch (reason) {
         return { enabled: false, error: reason instanceof Error ? reason.message : String(reason) };
       }
     },
   };
-}
-
-/**
- * On Windows the entry only counts as ours when its arguments match too, so they must be passed when reading it back. An
- * entry disabled in Task Manager is still registered (openAtLogin) but will not run; executableWillLaunchAtLogin says so.
- */
-function launchAtLogin(): boolean {
-  const settings = app.getLoginItemSettings({ args: [AUTOSTART_ARGUMENT] });
-  return settings.openAtLogin && (process.platform !== "win32" || settings.executableWillLaunchAtLogin);
-}
-
-/** Windows only: the rename of the executable leaves the old login entry behind (see autostart-migration.ts). */
-function migrateLegacyAutostart(): void {
-  if (process.platform !== "win32" || !app.isPackaged) return;
-  try {
-    const replaced = migrateAutostart({
-      execPath: process.execPath,
-      legacyExecutables: legacyExecutableCandidates(process.execPath, LEGACY_FILE_NAMES, process.env.LOCALAPPDATA),
-      fileExists: existsSync,
-      launchItems: path => app.getLoginItemSettings({ path: loginItemLookupPath(path), args: [AUTOSTART_ARGUMENT] }).launchItems,
-      remove: name => app.setLoginItemSettings({ openAtLogin: false, name }),
-      register: enabled => app.setLoginItemSettings({ openAtLogin: true, args: [AUTOSTART_ARGUMENT], enabled }),
-    });
-    if (replaced.length) console.info(`Launch at login now points at ${process.execPath} (replaced ${replaced.join(", ")}).`);
-  } catch (reason) {
-    console.error("Unable to migrate the launch-at-login entry", reason);
-  }
 }
 
 async function showMainWindow(): Promise<void> {
@@ -172,12 +119,11 @@ function createTray(): void {
   if (tray) return;
   const image = nativeImage.createFromPath(desktopIconPath());
   tray = new Tray(image);
-  const chinese = app.getLocale().startsWith("zh");
-  tray.setToolTip(BRAND.productName);
+  tray.setToolTip("Synthesizer V Toolbox");
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: chinese ? `打开${BRAND.productNameZh}` : `Open ${BRAND.productName}`, click: () => void showMainWindow() },
+    { label: "打开 Toolbox", click: () => void showMainWindow() },
     { type: "separator" },
-    { label: chinese ? "退出" : "Quit", click: () => { quitting = true; app.quit(); } },
+    { label: "退出", click: () => { quitting = true; app.quit(); } },
   ]));
   tray.on("click", () => void showMainWindow());
 }
@@ -257,141 +203,37 @@ async function createMainWindow(startHidden: boolean): Promise<void> {
 async function initializeServices(): Promise<void> {
   const userData = app.getPath("userData");
   const bridgeDirectory = app.isPackaged ? join(process.resourcesPath, "components", "synthv-agent-bridge") : resolve(currentDirectory, "../../components/synthv-agent-bridge");
-  // The bridge only serves the optional SynthV integration; a broken component must not stop the whole app.
-  let bridgeLoadError: string | undefined;
-  const loadBridge = () => loadEmbeddedBridge(bridgeDirectory, BRAND.slug).catch((reason: unknown) => {
-    bridgeLoadError = `The Synthesizer V bridge component could not be loaded: ${reason instanceof Error ? reason.message : String(reason)}`;
-    console.error(bridgeLoadError);
-    return unavailableBridge(bridgeLoadError);
-  });
-  // Off means no probing: with the integration saved as Off the component (which watches SynthV's status files) is not loaded
-  // at all, and followIntegration() loads or closes it as the setting changes. Auto needs it: a connected Bridge is evidence.
-  const bridgeOff = () => unavailableBridge(SYNTHV_OFF_MESSAGE);
-  const startOff = await savedIntegrationPreference(userData, "synthv") === "off";
-  const bridge = startOff ? new SwitchableBridge(bridgeOff(), false) : new SwitchableBridge(await loadBridge(), bridgeLoadError === undefined);
-  const bridgeIpcDirectory = (await bridge.status()).ipcDirectory;
-  const synthv = new SynthVService(join(userData, "synthv"), bridgeDirectory, bridge, bridgeIpcDirectory, undefined, autostartController(), undefined, process.env);
+  const synthv = new SynthVService(join(userData, "synthv"), bridgeDirectory, undefined, autostartController());
+  synthvService = synthv;
   const componentsRoot = app.isPackaged ? join(process.resourcesPath, "components") : resolve(currentDirectory, "../../components");
-  let capabilities: HostCapabilities;
-  let desktop: DesktopStateService;
-  // Work that writes to SynthV (agent tools, approvals, Cover, creative workflows) goes through this, so switching the
-  // integration off also stops a run, an approval or a long workflow already in progress at its next Bridge call.
-  const gatedSynthvBridge = gatedBridge(bridge, () => desktop.synthvEnabled());
+  const components = new ComponentService(join(userData, "components"), componentsRoot);
+  await components.load();
+  const componentExecutor = createComponentExecutor(componentsRoot, undefined, undefined, components);
+  const coverHost = new SynthVCoverService(synthv, bridgeDirectory);
+  const mediaRoot = join(userData, "creative", "media");
+  const mediaWorkflow = createMediaWorkflowPort({ dataRoot: mediaRoot, componentStateRoot: join(userData, "components"), components, execute: componentExecutor, synthv: coverHost });
+  const mediaTasks = new MediaTaskService(mediaRoot, mediaWorkflow, { emit: (event, payload) => mainWindow?.webContents.send("toolbox:event", { event, payload }) });
+  const creative = createCreativeService(join(userData, "creative"), componentExecutor, { mediaTasks });
   let ai: AiService;
-  let agentTasks: ReturnType<typeof createAgentTaskService> | undefined;
-  const creativeRoot = join(userData, "creative");
-  const creativeRuntime = createCreativeRuntime({ dataRoot: creativeRoot, componentsRoot });
-  const coverScore = createCoverScoreService(creativeRoot);
-  const coverHost = createCoverHost(gatedSynthvBridge, synthv);
-  const cover = createCoverService({
-    dataRoot: creativeRoot, runtime: creativeRuntime, score: coverScore, host: coverHost, ai: () => ai,
-    importer: async python => createMediaImporter({ dataRoot: creativeRoot, python, ffmpegPath: (await resolveFfmpegBinaries({ dataRoot: join(userData, "components") })).ffmpeg }),
-    audio: async python => createCoverAudio({ dataRoot: creativeRoot, componentsRoot, python, ffmpegPath: (await resolveFfmpegBinaries({ dataRoot: join(userData, "components") })).ffmpeg }),
-  });
-  const audioCapture = createAudioCaptureService({
-    platform: process.platform, systemVersion: process.getSystemVersion(),
-    executablePath: captureExecutablePath(componentsRoot), outputDirectory: join(creativeRoot, "ab-captures"),
-    transport: bridgeCaptureTransport(gatedSynthvBridge),
-  });
-  const creative = createCreativeService(creativeRoot, async (command, args, signal) => {
-    const runtime = await creativeRuntime.status();
-    return createComponentExecutor(componentsRoot, runtime.ready ? runtime.pythonPath : undefined, undefined, { dataRoot: creativeRoot })(command, args, signal);
-  }, gatedSynthvBridge, cover, { backupsEnabled: () => desktop.synthvEnabled(), tuning: { workMode: () => desktop.agentWorkMode(), synthv, audio: audioCapture }, complete: (system, input, signal) => ai.complete(system, input, signal) });
-  const delivery = createSynthVDeliveryRegistry();
-  // One process per enabled external server, shared by all sessions; nothing spawns until a session needs it.
-  const externalMcp = new ExternalMcpPool({ clientVersion: app.getVersion() });
-  const approvals = new AgentApprovalBroker(
-    (snapshot) => emitToRenderer("agent.approvals.changed", snapshot),
-    { execute: async (item) => gatedSynthvBridge.tools.find(tool => tool.name === item.tool)?.call(item.params) ?? { text: "", isError: true }, deliver: (resolution) => delivery.deliver(resolution) },
-  );
+  let capabilities: HostCapabilities;
   const runtimeHost = new ElectronRuntimeHost(join(userData, "runtime"), {
     invoke: (permission, capability, operation, params) => capabilities.invoke(permission, capability, operation, params),
-    resolveModel: () => ai.resolveModelSelection() as unknown as Promise<JsonValue>,
-  }, {
-    sessionFactory: createPiSessionFactory({
-      credentialStore: model => ai.modelCredentialStore(model),
-      extensions: ({ sessionId, guards, runState }) => {
-        if (isCompletionSession(sessionId)) return [];
-        const bound = cover.session(sessionId);
-        if (bound?.phase === "repair") return [createCoverScoreToolsExtension({ service: coverScore, jobForSession: () => bound.jobId, phaseForSession: () => bound.phase, guards })];
-        if (bound?.phase === "tuning" && bound.target && bound.monitor) {
-          const target = bound.target, monitor = bound.monitor;
-          guards.completion(() => monitor.readNotes.size !== target.notes.length ? `Read the entire Cover group: ${monitor.readNotes.size}/${target.notes.length} notes inspected.` : monitor.writes < 1 ? "Apply and verify real tuning changes before completing the Cover." : null);
-          return [createSynthVToolsExtension({ bridge: coverHost.forTuning(target, monitor), approvals, sessionId, guards, runState, registry: delivery, workMode: () => "solo" })];
-        }
-        const toolbox = createToolboxAgentToolsExtension({ invoke: (command, args, signal) => { if (!commandRegistry) throw new Error("Electron services are not ready."); return commandRegistry.invoke(command, args, signal); } });
-        const external = desktop.aiModeEnabled() && desktop.enabledMcpServers().length > 0 ? [createExternalMcpToolsExtension({ pool: externalMcp, servers: () => desktop.aiModeEnabled() ? mcpServerConfigs(desktop.enabledMcpServers()) : [], workMode: () => desktop.agentWorkMode() })] : [];
-        if (!desktop.synthvEnabled()) return [toolbox, ...external];
-        return [toolbox, ...external, createSynthVToolsExtension({ bridge: gatedSynthvBridge, approvals, sessionId, guards, runState, registry: delivery, workMode: () => desktop.agentWorkMode() }), createCoverAgentToolsExtension({ sessionId, guards, runState, invoke: (command, args) => desktop.synthvEnabled() ? cover.invoke(command, args) : Promise.reject(new Error(SYNTHV_OFF_MESSAGE)) })];
-      },
-      persistTranscripts: () => desktop.agentTranscriptsEnabled(),
-    }),
-    onAgentProgress: (progress) => { agentTasks?.recordProgress(progress); emitToRenderer("agent.run.progress", progress); },
+    resolveModel: () => ai.resolveModelSelection(),
   });
   await runtimeHost.load();
-  ai = new AiService({ metadataPath: join(userData, "ai", "metadata.json"), runtime: agentRuntimePort(runtimeHost.runtime), catalog: modelCatalog(), approvals, usage: createProviderUsage({ credentialStore: (providerId, credentialId) => ai.modelCredentialStore({ providerId, modelId: "", apiKey: "", credentialId }) }), authorizer: { authorize: authorizeProvider }, agentAllowed: () => desktop.aiModeEnabled(), systemPrompt: () => agentSystemPrompt({ synthv: desktop.synthvEnabled(), mcpServers: desktop.aiModeEnabled() ? mcpServerConfigs(desktop.enabledMcpServers()) : [], mcpToolsRevision: externalMcp.revision }) });
-  capabilities = new HostCapabilities(synthv, creative, ai, () => desktop.synthvEnabled(), () => desktop.aiModeEnabled());
-  desktop = new DesktopStateService(userData, app.getVersion(), runtimeHost, ai, synthv, channel => { updateChannel = channel; updater.setChannel(channel); }, creativeRuntime, bridgeLoadError, () => {
-    void externalMcp.reconcile(desktop.aiModeEnabled() ? mcpServerConfigs(desktop.enabledMcpServers()) : []);
-    // Toolbox-only mode promises no model requests, so runs already going (including toolbox_agent tasks) stop now.
-    if (!desktop.aiModeEnabled()) void ai.cancel_all_agent_runs().catch((reason: unknown) => console.error("Unable to stop agent runs", reason));
-    followIntegration();
-  }, dataDirectory);
-  // Loads the bridge component when the integration stops being Off and closes it when it becomes Off, one change at a time.
-  let bridgeChange: Promise<void> = Promise.resolve();
-  function followIntegration(): void {
-    bridgeChange = bridgeChange.then(async () => {
-      const wanted = desktop.synthvPreference() !== "off";
-      if (wanted && !bridge.loaded) {
-        bridgeLoadError = undefined;
-        const loaded = await loadBridge();
-        bridge.replace(loaded, bridgeLoadError === undefined);
-        desktop.bridgeLoaded(bridgeLoadError);
-      } else if (!wanted && bridge.loaded) await bridge.replace(bridgeOff(), false).close();
-      else return;
-      // The settings reply went out before this finished; Settings shows the load result (or failure) only after a refresh.
-      emitToRenderer("integrations.changed", null);
-    }).catch((reason: unknown) => { console.error("Unable to switch the SynthV bridge", reason); });
-  }
-  await desktop.load();
-  // "auto" follows what is installed and running: look again when a window gains focus (which also catches a Bridge started
-  // while the integration was on) and, while it resolves to off, every few seconds, so a Bridge started with the window
-  // hidden (or an MCP client waiting on it) needs no visit to Settings.
-  let synthvRefresh: Promise<void> | undefined;
-  const refreshSynthV = () => synthvRefresh ??= desktop.refreshSynthV()
-    .then((changed) => { if (changed) emitToRenderer("integrations.changed", null); })
-    .catch((reason: unknown) => { console.error("SynthV detection failed:", reason); })
-    .finally(() => { synthvRefresh = undefined; });
-  app.on("browser-window-focus", () => { void refreshSynthV(); });
-  setInterval(() => { if (!desktop.synthvEnabled()) void refreshSynthV(); }, 10_000).unref();
-  const coverChildren = async (conversationId: string) => (await cover.invoke("media_tasks", {}) as Array<Record<string, any>>).filter(job => job.parentConversationId === conversationId);
-  agentTasks = createAgentTaskService({
-    dataRoot: join(userData, "ai"), ai: () => ai, effort: () => desktop.agentEffort(),
-    approvals: conversationId => approvals.list().filter(item => item.conversationId === conversationId),
-    children: async conversationId => (await coverChildren(conversationId)).map(job => ({
-      ...job,
-      repair: job.repairConversationId ? agentTasks?.sessionProgress(job.repairConversationId) ?? null : null,
-      tuning: job.tuningConversationId ? agentTasks?.sessionProgress(job.tuningConversationId) ?? null : null,
-    })),
-    cancelChildren: async conversationId => {
-      for (const job of await coverChildren(conversationId)) if (["queued", "running", "cancelling"].includes(job.status)) await cover.invoke("cancel_media_task", { id: job.id });
-    },
-  });
+  ai = new AiService({ metadataPath: join(userData, "ai", "metadata.json"), safeStorage, runtime: agentRuntimePort(runtimeHost.runtime), catalog: modelCatalog(), usage: { query: async (provider, credentialIds) => ({ queriedAt: new Date().toISOString(), accounts: credentialIds.map(credentialId => ({ provider, credentialId, status: "unknown", plan: null, windows: [], balance: null, error: null })) }) }, authorizer: { authorize: authorizeProvider } });
+  capabilities = new HostCapabilities(synthv, creative, ai);
   const httpServer = new HttpMcpServer({
-    mcpTools: async () => toolboxMcpTools(await runtimeHost.mcpTools()),
-    callMcpTool: async (name, arguments_) => hostResultToToolResult(await runtimeHost.callMcpTool(name, arguments_ as JsonValue)),
-    agentTask: args => { requireAiMode(desktop); return agentTasks!.invoke(args); },
-    agentChat: async (input, conversationId) => {
-      requireAiMode(desktop);
-      const conversation = conversationId ? await ai.open_conversation(conversationId) : await ai.new_conversation();
-      const messages = await ai.send_message(conversation.id, input, { effort: desktop.agentEffort() });
-      return { conversationId: conversation.id, messages };
-    },
-  }, { name: BRAND.slug, title: BRAND.productName, version: app.getVersion() });
+    mcpTools: async () => (await runtimeHost.mcpTools()).map(name => ({ name, description: name === "toolbox_internal" ? "Invoke an authorized internal Toolbox operation." : "Invoke an authorized advanced Toolbox operation.", inputSchema: { type: "object", properties: { capability: { type: "string" }, operation: { type: "string" }, params: { type: "object" } }, required: ["capability", "operation", "params"], additionalProperties: false }, permission: name === "toolbox_internal" ? "internal" : "advanced" })),
+    callMcpTool: async (name, arguments_) => ({ content: await runtimeHost.callMcpTool(name, arguments_ as never) }),
+    agentChat: async (input, conversationId) => { const conversation = conversationId ? await ai.open_conversation(conversationId) : await ai.new_conversation(); return ai.send_message(conversation.id, input); },
+  });
   await runtimeHost.attachHttpServer(httpServer);
-  commandRegistry = new ElectronCommandRegistry(runtimeHost, { ai, creative, desktop, synthv, externalMcp, audioCapture, componentAudio: {
+  const desktop = new DesktopStateService(userData, app.getVersion(), runtimeHost, ai, synthv, channel => { updateChannel = channel; updater.setChannel(channel); }, () => components.catalog());
+  await desktop.load();
+  commandRegistry = new ElectronCommandRegistry(runtimeHost, { ai, creative, desktop, synthv, fileApprovals: new FileApprovalManager({ managedCreativeRoot: join(userData, "creative") }), componentAudio: {
     dataRoot: join(userData, "components"),
-    creativeRuntime,
+    components,
     openExternal: url => shell.openExternal(url),
     reveal: async path => { shell.showItemInFolder(path); },
     saveFile: async defaultName => {
@@ -400,41 +242,63 @@ async function initializeServices(): Promise<void> {
         : await dialog.showSaveDialog({ defaultPath: defaultName });
       return result.canceled ? undefined : result.filePath;
     },
-  }, approvals }, emitToRenderer);
-  registerQuitCleanup(async () => { approvals.dispose(); creative.dispose?.(); await cover.dispose(); await runtimeHost.runtime.dispose(); await externalMcp.dispose(); await agentTasks?.dispose(); await httpServer.stop(); await bridge.close(); });
+    onArtifactCreated: (id, path) => audioArtifacts.set(id, path),
+  } }, (event, payload) => {
+    mainWindow?.webContents.send("toolbox:event", { event, payload });
+  });
+  runtimeHost.attachToolboxCommandInvoker((command, params) => commandRegistry!.invoke(command, params));
 }
 
-let quitCleanupDone = false;
-let quitCleanup: (() => Promise<void>) | undefined;
-function registerQuitCleanup(cleanup: () => Promise<void>): void { quitCleanup = cleanup; }
+function registerManagedProtocols(): void {
+  const userData = app.getPath("userData");
+  const pluginsRoot = join(userData, "runtime", "plugins");
+  const audioRoot = join(userData, "components", "audio-output");
+  protocol.handle("toolbox-plugin", async request => protocolResponse(await resolvePluginResource(pluginsRoot, request.url)));
+  protocol.handle("toolbox-audio", async request => protocolResponse(await resolveAudioResource(audioRoot, request.url, id => audioArtifacts.get(id))));
+}
 
-function updaterDownloadState(): Record<string, unknown> { const state = updater.state(); return { status: state.phase === "ready" ? "ready" : state.phase === "error" ? "failed" : state.phase === "idle" ? "idle" : "downloading", downloadedBytes: 0, totalBytes: null, error: state.error ?? null, fileName: state.version ? `${BRAND.productName} ${state.version}` : null }; }
-/** The UI promises that toolbox mode makes no model requests; external MCP/HTTP callers must honour that too. */
-function requireAiMode(desktop: DesktopStateService): void { if (!desktop.aiModeEnabled()) throw new ClientError("The internal agent is only available in AI mode. Switch the toolbox to AI mode in Settings first."); }
+async function protocolResponse(path: string | undefined): Promise<Response> {
+  if (!path) return new Response(null, { status: 404 });
+  try {
+    return new Response(await readFile(path), { headers: { "Content-Type": mimeType(path), "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store" } });
+  } catch { return new Response(null, { status: 404 }); }
+}
+
+function mimeType(path: string): string {
+  const extension = path.split(".").pop()?.toLowerCase();
+  return ({ html: "text/html; charset=utf-8", js: "text/javascript; charset=utf-8", mjs: "text/javascript; charset=utf-8", css: "text/css; charset=utf-8", json: "application/json; charset=utf-8", svg: "image/svg+xml", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", woff: "font/woff", woff2: "font/woff2", wav: "audio/wav" } as Record<string, string>)[extension ?? ""] ?? "application/octet-stream";
+}
+
+async function handleSvpActivation(argv: readonly string[], cwd?: string): Promise<void> {
+  if (!synthvService) return;
+  const routed = await routeSvpActivation(synthvService, argv, cwd, (event, payload) => mainWindow?.webContents.send("toolbox:event", { event, payload }));
+  if (routed) await showMainWindow();
+}
+
+function updaterDownloadState(): Record<string, unknown> { const state = updater.state(); return { status: state.phase === "ready" ? "ready" : state.phase === "error" ? "failed" : state.phase === "idle" || state.phase === "available" ? "idle" : "downloading", downloadedBytes: state.downloadedBytes ?? 0, totalBytes: state.totalBytes ?? null, error: state.error ?? null, fileName: state.version ? `Synthesizer V Toolbox ${state.version}` : null }; }
 async function openExternal(url: string): Promise<Record<string, unknown>> { await shell.openExternal(url); return { succeeded: true, summary: "Opened in browser.", detail: url }; }
 function optionalUrl(value: unknown, fallback: string): string { return typeof value === "string" && /^https:\/\//.test(value) ? value : fallback; }
-function projectUrl(value: unknown): string { const base = BRAND.repositoryUrl; return value === "issues" ? `${base}/issues` : value === "guide" ? `${base}#readme` : value === "terms" ? `${base}/blob/main/src/PiDesktop.Tauri/electron/assets/TERMS-OF-USE.txt` : base; }
+function projectUrl(value: unknown): string { const base = "https://github.com/SynthVCopilot/synthv-toolbox"; return value === "issues" ? `${base}/issues` : value === "guide" ? `${base}#readme` : base; }
 function modelCatalog() { const values: Record<AiProviderId, string[]> = { anthropic: [["cla", "ude-sonnet-4-6"].join(""), ["cla", "ude-opus-4-6"].join("")], "openai-codex": [["g", "pt-5.6-terra"].join(""), ["g", "pt-6-astra"].join("")], workbuddy: ["glm-5.2"], traecode: [] }; return { models: async (provider: AiProviderId) => values[provider], opencode: async () => ({ generatedAt: Date.now(), providers: Object.entries(values).map(([id, models]) => ({ id, name: id, modelCount: models.length, package: "@model-auth/providers", models })) }) }; }
 async function authorizeProvider(provider: AiProviderId, signal: AbortSignal) { const options = { openExternal: (url: string) => shell.openExternal(url), signal }; const credential = provider === "anthropic" ? await authorizeAnthropic(options) : provider === "openai-codex" ? await authorizeOpenAI(options) : provider === "workbuddy" ? await authorizeWorkBuddy(options) : await authorizeTrae(options); const value = credential as { accountId?: string; label?: string; expires?: number }; return { id: value.accountId, label: value.label ?? provider, secret: JSON.stringify(credential), expiresAt: value.expires }; }
 
-// A start still blocked after waiting two minutes for another one's migration leaves; normally it waited for the move and then
-// reaches the lock below, which hands its window to the first instance as for any second launch.
-if (dataDirectory?.busy || !app.requestSingleInstanceLock()) {
-  // While the move is deferred this start shares the old folder, so the instance holding the lock is most likely the
-  // previous version. It only brings its own window forward and cannot say why, so say it here. Tests run unpackaged.
-  if (dataDirectory?.deferred && !dataDirectory.busy && app.isPackaged) dialog.showErrorBox(`${BRAND.productNameZh} ${BRAND.productName}`, [
-    `旧版本（${LEGACY_PRODUCT_NAME}）仍在运行，数据目录暂时无法迁移。请从托盘图标退出旧版本，然后重新启动${BRAND.productNameZh}。`,
-    `The previous version (${LEGACY_PRODUCT_NAME}) is still running, so the data folder cannot be moved yet. Quit it from its tray icon, then start ${BRAND.productName} again.`,
-  ].join("\n\n"));
+if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on("second-instance", () => void showMainWindow());
+  app.on("second-instance", (_event, argv, cwd) => void handleSvpActivation(argv, cwd));
+  app.on("open-file", (event, path) => {
+    event.preventDefault();
+    if (synthvService) void handleSvpActivation([path]);
+    else pendingOpenFiles.push(path);
+  });
   app.whenReady().then(async () => {
     Menu.setApplicationMenu(null);
-    migrateLegacyAutostart();
     await initializeServices();
+    registerManagedProtocols();
     createTray();
     await createMainWindow(isLoginLaunch());
+    await handleSvpActivation(process.argv);
+    if (pendingOpenFiles.length) await handleSvpActivation(pendingOpenFiles.splice(0));
   }).catch((reason: unknown) => {
     console.error("Unable to create Electron window", reason);
     app.quit();
@@ -442,11 +306,5 @@ if (dataDirectory?.busy || !app.requestSingleInstanceLock()) {
   app.on("activate", () => {
     void showMainWindow();
   });
-  app.on("before-quit", (event) => {
-    quitting = true;
-    if (quitCleanupDone || !quitCleanup) return;
-    event.preventDefault();
-    quitCleanupDone = true;
-    void quitCleanup().finally(() => app.quit());
-  });
+  app.on("before-quit", () => { quitting = true; });
 }

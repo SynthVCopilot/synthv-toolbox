@@ -9,11 +9,15 @@ export interface UpdaterState {
   phase: UpdaterPhase;
   version?: string;
   progress?: number;
+  downloadedBytes?: number;
+  totalBytes?: number;
   error?: string;
 }
 
 export interface UpdaterService {
   check(): Promise<UpdaterState>;
+  download(): Promise<UpdaterState>;
+  cancel(): UpdaterState;
   setChannel(channel: "stable" | "nightly"): void;
   restart(): Promise<UpdaterState>;
   state(): UpdaterState;
@@ -29,15 +33,14 @@ export function createUpdaterService(client: AppUpdater = autoUpdater): UpdaterS
   };
   const version = (info: UpdateInfo) => info.version;
 
-  client.autoDownload = true;
-  client.autoInstallOnAppQuit = true;
+  client.autoDownload = false;
+  client.autoInstallOnAppQuit = false;
   client.on("checking-for-update", () => setState({ phase: "checking" }));
   client.on("update-available", (info) => setState({ phase: "available", version: version(info) }));
   client.on("update-not-available", () => setState({ phase: "idle" }));
-  client.on("download-progress", (progress: ProgressInfo) => setState({ phase: "downloading", progress: progress.percent }));
+  client.on("download-progress", (progress: ProgressInfo) => setState({ phase: "downloading", progress: progress.percent, downloadedBytes: progress.transferred, totalBytes: progress.total }));
   client.on("update-downloaded", (info) => {
     setState({ phase: "ready", version: version(info) });
-    client.quitAndInstall(false, true);
   });
   client.on("error", (error) => setState({ phase: "error", error: error.message }));
 
@@ -49,6 +52,19 @@ export function createUpdaterService(client: AppUpdater = autoUpdater): UpdaterS
     async check() {
       setState({ phase: "checking" });
       await client.checkForUpdates();
+      return state;
+    },
+    async download() {
+      if (state.phase !== "available") throw new Error("No update is available to download.");
+      setState({ ...state, phase: "downloading", progress: 0, downloadedBytes: 0 });
+      await client.downloadUpdate();
+      return state;
+    },
+    cancel() {
+      if (state.phase === "downloading") {
+        (client as AppUpdater & { cancelDownload(): void }).cancelDownload();
+        setState({ phase: "available", version: state.version });
+      }
       return state;
     },
     async restart() {

@@ -5,14 +5,15 @@ addMessages("en", { header: { processing: "Working", allSettings: "All settings"
 addMessages("zh-CN", { accounts: { profile: "账号设置", manager: "账号管理", managerNote: "备注", availableAuthorizations: "可用授权", unread: "未读取", data: "账号数据", macScope: "macOS 槽位范围", importDescription: "把现有官方数据目录纳入槽位，不移动账号文件。", emptyDescription: "首次启动后，在 SV2 官方登录页面完成登录。", safety: "账号数据保持原样", safetyDescription: "工具箱不会伪造登录或绕过联网验证。" } });
 addMessages("en", { accounts: { profile: "Account settings", manager: "Account manager", managerNote: "Note", availableAuthorizations: "Available authorizations", unread: "Not read", data: "Account data", macScope: "macOS slot scope", importDescription: "Bring the existing official data directory into a slot without moving account files.", emptyDescription: "Complete sign-in on the official SV2 page after first launch.", safety: "Account data stays unchanged", safetyDescription: "Toolbox does not fabricate sign-in or bypass online verification." } });
 
-addMessages("zh-CN", { accounts: { unsupported: "当前平台不支持账号槽位", blocked: "普通槽位暂时不能切换", recovery: "槽位需要人工恢复", recheck: "重新检查", officialPath: "官方路径", vault: "保管区", neverLaunched: "尚未启动", pending: "账号信息待刷新", signedOut: "未登录", note: "备注：{name}", noNote: "未设置备注", default: "默认", addFirst: "添加第一个账号", addFirstDescription: "导入当前环境或创建空槽位", settings: "账号设置", manager: "账号管理", close: "关闭", saveNote: "保存备注", setDefault: "设为默认账号", openData: "打开账号数据目录", delete: "删除账号", noAccounts: "尚无账号，请先添加一个槽位。", global: "全局设置", saveGlobal: "保存全局设置", enableIndicator: "启用账号登录指示器", enableIsolation: "启用隔离功能", importCurrent: "导入当前环境", createEmpty: "创建空槽位", import: "导入", create: "创建", notePlaceholder: "备注（可留空）", consentTitle: "开启账号登录指示器？", consentConfirm: "同意并开启", cancel: "取消", deleteTitle: "删除“{name}”？", deleteConfirm: "删除账号", switchDefault: "切换默认账户", refresh: "刷新此账号状态", configure: "设置", concurrentTitle: "并发隔离未被官方承认", concurrentContinue: "已知晓风险，继续启动", consentDescription: "开启后账号页面会显示本地登录缓存状态。", deleteDescription: "这会删除该账号的数据、隔离环境配置和登录态恢复快照，无法撤销。" } });
-addMessages("en", { accounts: { unsupported: "Account slots are unavailable on this platform", blocked: "Standard slots cannot be switched right now", recovery: "This slot needs manual recovery", recheck: "Check again", officialPath: "Official path", vault: "Vault", neverLaunched: "Not launched yet", pending: "Account information needs refresh", signedOut: "Signed out", note: "Note: {name}", noNote: "No note", default: "Default", addFirst: "Add your first account", addFirstDescription: "Import the current environment or create an empty slot", settings: "Account settings", manager: "Account manager", close: "Close", saveNote: "Save note", setDefault: "Make default", openData: "Open account data folder", delete: "Delete account", noAccounts: "No accounts yet. Add a slot first.", global: "Global settings", saveGlobal: "Save global settings", enableIndicator: "Enable account sign-in indicator", enableIsolation: "Enable isolation", importCurrent: "Import current environment", createEmpty: "Create empty slot", import: "Import", create: "Create", notePlaceholder: "Note (optional)", consentTitle: "Enable the account sign-in indicator?", consentConfirm: "Accept and enable", cancel: "Cancel", deleteTitle: "Delete {name}?", deleteConfirm: "Delete account", switchDefault: "Switch default account", refresh: "Refresh account status", configure: "Settings", concurrentTitle: "Concurrent isolation is not officially supported", concurrentContinue: "I understand the risk and want to continue", consentDescription: "When enabled, the accounts page shows the local sign-in cache status.", deleteDescription: "This permanently removes the account data, isolated-environment configuration, and sign-in recovery snapshot." } });
+addMessages("zh-CN", { accounts: { unsupported: "当前平台不支持账号槽位", blocked: "普通槽位暂时不能切换", recovery: "槽位需要人工恢复", recheck: "重新检查", officialPath: "官方路径", vault: "保管区", neverLaunched: "尚未启动", pending: "账号信息待刷新", signedOut: "未登录", note: "备注：{name}", noNote: "未设置备注", default: "默认", addFirst: "添加第一个账号", addFirstDescription: "导入当前环境或创建空槽位", settings: "账号设置", manager: "账号管理", close: "关闭", saveNote: "保存备注", setDefault: "设为默认账号", openData: "打开账号数据目录", delete: "删除账号", noAccounts: "尚无账号，请先添加一个槽位。", global: "全局设置", saveGlobal: "保存全局设置", enableIndicator: "启用账号登录指示器", enableIsolation: "启用隔离功能", importCurrent: "导入当前环境", createEmpty: "创建空槽位", import: "导入", create: "创建", notePlaceholder: "备注（可留空）", consentTitle: "开启账号登录指示器？", consentConfirm: "同意并开启", cancel: "取消", deleteTitle: "删除“{name}”？", deleteConfirm: "删除账号", switchDefault: "切换默认账户", refresh: "刷新此账号状态", configure: "设置", concurrentTitle: "并发隔离未被官方承认", concurrentContinue: "已知晓风险，继续启动", consentDescription: "开启后可在账号页面或手动刷新时查询账号授权状态。", deleteDescription: "这会删除该账号的数据、隔离环境配置和登录态恢复快照，无法撤销。" } });
+addMessages("en", { accounts: { unsupported: "Account slots are unavailable on this platform", blocked: "Standard slots cannot be switched right now", recovery: "This slot needs manual recovery", recheck: "Check again", officialPath: "Official path", vault: "Vault", neverLaunched: "Not launched yet", pending: "Account information needs refresh", signedOut: "Signed out", note: "Note: {name}", noNote: "No note", default: "Default", addFirst: "Add your first account", addFirstDescription: "Import the current environment or create an empty slot", settings: "Account settings", manager: "Account manager", close: "Close", saveNote: "Save note", setDefault: "Make default", openData: "Open account data folder", delete: "Delete account", noAccounts: "No accounts yet. Add a slot first.", global: "Global settings", saveGlobal: "Save global settings", enableIndicator: "Enable account sign-in indicator", enableIsolation: "Enable isolation", importCurrent: "Import current environment", createEmpty: "Create empty slot", import: "Import", create: "Create", notePlaceholder: "Note (optional)", consentTitle: "Enable the account sign-in indicator?", consentConfirm: "Accept and enable", cancel: "Cancel", deleteTitle: "Delete {name}?", deleteConfirm: "Delete account", switchDefault: "Switch default account", refresh: "Refresh account status", configure: "Settings", concurrentTitle: "Concurrent isolation is not officially supported", concurrentContinue: "I understand the risk and want to continue", consentDescription: "When enabled, account authorization can be checked from the accounts page or manually.", deleteDescription: "This permanently removes the account data, isolated-environment configuration, and sign-in recovery snapshot." } });
 
 addMessages("zh-CN", { accountUi: {
   addConnection: "添加连接", noConnectedProvider: "尚未连接模型提供商", chooseModel: "请选择模型。", addCredentialsFirst: "添加 OAuth 订阅或 API Key 后即可选择模型。",
   "toolboxDoesNotModifySvBypassAccountRestrictionsOr": "工具箱不会修改 SV2、绕过账号限制或代为踢出其他会话。继续即表示你已知晓并自行承担这一使用风险。",
   "thisSlot": "此槽位",
-  "theCheckReadsOfficialAuthorizationsIfTheSessionHas": "指示器只读取本地登录缓存文件的大小，用来区分在线授权与离线授权。",
+  "theCheckReadsOfficialAuthorizationsIfTheSessionHas": "查询会读取官方授权；如果会话过期，工具箱会续期并保存更新后的会话。",
+  "accountSettingsShowTheOfficialNameAndEmailAs": "账号设置只读显示官方姓名和邮箱，并可保存本地备注。声库按账号独立保存，不跨账号同步。",
   "toolboxWillNotLaunchTheClientModifySvOr": "工具箱不会启动客户端、修改 SV2 或替你处理其他会话。你可以随时关闭此功能。",
   "thisIsTheDefaultAccountAnotherAccountWillBecome": "该账号目前是默认账号；删除后会自动切换到另一个账号。",
   "thisIsTheLastAccountDesktopShortcutsAndSvp": "这是最后一个账号；删除后桌面快捷方式和 .svp 文件不再有默认账号。",
@@ -37,15 +38,24 @@ addMessages("zh-CN", { accountUi: {
   "voicesRequiredByTheProject": "工程所需声库",
   "cancelOpening": "取消打开",
   "yourConfirmationIsRequired": "需要你的确认",
-  "toolboxWillNotSilentlyChooseAnAccountWhenAccount": "账号会话状态未确认时，工具箱不会静默选择账号。",
+  "toolboxWillNotSilentlyChooseAnAccountWhenAccount": "账号占用或授权仍有未知项时，工具箱不会静默选择账号。最终结果仍由 SV2 官方服务验证。",
   "noAccountsAreAvailableCloseRunningSvInstancesOr": "没有可用账号。请关闭正在运行的 SV2，或先准备隔离槽位。",
   "sandboxieConcurrent": "Sandboxie 并发",
   "standardSwitch": "普通切换",
   "cannotLaunch": "不可启动",
+  "theAccountServiceReportsThisAccountIsInUse": "账号服务报告正在使用",
+  "theAccountServiceReportsNoRemoteUsage": "账号服务未报告远端占用",
   "cachedSessionIsInUseOnThisComputer": "缓存会话正由本机使用",
+  "usageUnknown": "{p0} · 占用未知",
+  "officialAuthorization": "官方授权",
+  "authorizationUnknown": "授权未知",
+  "matchesAllRequiredVoices": "{p0} {p1}已匹配全部声库",
+  "matchedUnknown": "{p0}已匹配 {p1}，另有 {p2} 个未知",
+  "authorizationUnknownManualConfirmationRequired": "授权未知，需人工确认",
   "confirmThisAccount": "确认使用此账号",
   "openWithThisAccount": "使用此账号打开",
   "recommended": " · 推荐",
+  "unmatchedOrUnknown": "未匹配或未知",
   "cachedSessionAvailable": "缓存会话可用",
   "signInRequired": "需要登录",
   "accessCredentialsExpiredAwaitingRenewal": "访问凭据已过期，等待续期",
@@ -55,29 +65,41 @@ addMessages("zh-CN", { accountUi: {
   "accountCopiesDoNotMatch": "账号副本不一致",
   "sessionFormatNotSupportedYet": "暂不支持此会话格式",
   "accountServiceOffline": "账号服务离线",
+  "sessionSynchronizationFailedSlotAuthorizationsWereNotRead": "会话同步失败，未读取该槽位授权",
   "accountCredentialsOrDeviceIdentityCouldNotBeSafely": "账号凭据刷新或设备身份写回后未能安全同步；该槽位已被隔离，不能当作尚未预检。",
+  "accountIdentitiesDoNotMatchSlotAuthorizationsWereNot": "账号主体不一致，未读取该槽位授权",
   "theAccountIdentitiesReadFromThisSlotDoNot": "账号槽位读取到的账号主体不一致；工具箱没有覆盖账号缓存。",
   "accountInUseOnThisComputer": "账号正在本机使用",
+  "accountInUseAuthorizationsWereNotReadThisTime": "账号正在使用，本次未读取授权",
   "theClientIsUsingThisSessionTheLastRedacted": "会话正在被客户端使用；姓名与邮箱可沿用上次脱敏结果，授权与占用结论不会沿用。",
   "accountNeedsToSignInAgain": "账号需要重新登录",
-  "signInToThisAccountInSynthvThenRefresh": "请在 SynthV 中登录此账号，再刷新状态。",
+  "noUsableSignInCredentialsAuthorizationsWereNotRead": "没有可用登录凭据，未读取授权",
+  "signInToThisAccountInSynthvThenRefresh": "请在 SynthV 中登录此账号，再刷新授权状态。",
   "sessionExpiredAwaitingRenewal": "会话已过期，等待续期",
-  "refreshTheAccountStatusToolboxWillRenewTheSession": "点击刷新账号状态。",
+  "refreshTheAccountToReadAuthorizationsAgain": "刷新账号后重新读取授权",
+  "refreshTheAccountStatusToolboxWillRenewTheSession": "点击刷新账号状态，工具箱会先续期，再查询授权。",
   "signInCacheInvalid": "登录缓存无效",
+  "signInCacheInvalidAuthorizationsWereNotRead": "登录缓存无效，未读取授权",
   "theLocalSignInCacheCannotBeSafelyVerified": "本地登录缓存无法安全验证。",
   "accountServiceTemporarilyOffline": "账号服务暂时离线",
+  "accountServiceTemporarilyOfflineAuthorizationsUnavailable": "账号服务暂时离线，授权当前不可用",
   "theLocalSessionWasReadButTheAccountService": "本地会话已读取，但账号服务暂时不可达；不要把它解释为尚未预检或需要重新登录。",
+  "sessionFormatUnsupportedAuthorizationsWereNotRead": "会话格式暂不支持，未读取授权",
   "thisVersionCannotSafelyParseTheSignInCache": "当前版本无法安全解析此登录缓存。",
   "notSignedInYet": "尚未登录",
+  "noSignInCacheAuthorizationsWereNotRead": "尚无登录缓存，未读取授权",
   "noSignInCacheFoundSignInToSv": "未发现登录缓存；请先在 SV2 中完成登录。",
   "standard": "普通",
   "signInCacheAwaitingRecovery": "登录缓存等待恢复",
   "closeStandardInstancesBeforeSwitchingTheAccountPath": "切换账号路径前需要关闭普通实例",
   "isolated": "隔离",
   "cannotLaunchNowIsolationOrProviderUnavailable": "当前不可启动（隔离功能或提供方不可用）",
+  "inUseRemotely": "远端占用",
   "inUseLocally": "本机使用中",
   "readyToLaunch": "可启动",
   "accountInformationNeedsRefresh": "账号信息待刷新",
+  "officialAuthorizationsConfirmed": "官方授权已确认",
+  "officialAuthorizationsUnknown": "官方授权未知",
   "showingLocalCache": "已显示本地缓存",
   "theSignInIndicatorIsOffThisSlotS": "账号登录指示器已关闭；未读取或解密此槽位的登录缓存。",
   "signInIndicatorOff": "登录指示器已关闭",
@@ -85,6 +107,13 @@ addMessages("zh-CN", { accountUi: {
   "accountAvailableInUseLocally": "账号可用（本机使用中）",
   "accountAvailable": "账号可用",
   "noIdleLaunchEnvironmentForThisAccount": "账号当前无空闲启动环境",
+  "authorizationsConfirmed": "授权已确认",
+  "accountStatusNotCheckedYet": "账号状态尚未预检",
+  "officialAuthorizationsUncheckedOrUnknown": "官方授权尚未预检/未知",
+  "theAccountServiceHasNotReturnedAnyAuthorizationResults": "尚无账号服务返回的授权结果。",
+  "theSignInIndicatorIsOffOfficialAuthorizationSummaries": "账号登录指示器已关闭；官方授权摘要不会继续显示。",
+  "officialAuthorizationChecksOff": "官方授权探测已关闭",
+  "theAccountServiceHasConfirmedVoiceAuthorizations": "账号服务已确认声库授权。",
   "accountStatusNeedsUpdating": "账号状态待更新",
   "allLaunchEnvironmentsAreCurrentlyOccupiedLocally": "所有可启动环境当前均被本机占用",
   "accountSignInIndicatorOff": "账号登录指示器已关闭",
@@ -101,22 +130,34 @@ addMessages("zh-CN", { accountUi: {
   "readingIsolationState": "正在读取隔离状态…",
   "anIsolatedInstanceIsAlreadyRunningMoreInstancesOf": "已有隔离实例运行中，仍可继续启动同账号实例",
   "isolationIsTurnedOffInGlobalSettings": "隔离功能已在全局设置中关闭",
+  "macosVDoesNotReadOrDecryptSignIn": "macOS v1 不读取或解密登录缓存。",
+  "accountAuthorizationsNotRead": "未读取账号授权",
   "launchNormally": "普通启动",
   "switchAndLaunch": "切换并启动",
   "installed": "已安装",
+  "installedForThisAccount": "此账号已安装",
+  "trialExpired": "试用已到期",
+  "timeLimitedTrial": "限时试用",
+  "authorizationExpired": "授权已到期",
+  "timeLimitedAuthorization": "限时授权",
   "signedOut": "未登录",
   "currentDefault": "当前默认",
+  "authorizationsUncheckedOrUnknown": "授权尚未预检或结果未知",
+  "theAccountServiceHasConfirmedVoiceAuthorizationsDetail": "账号服务已确认 {p0} 个声库授权。",
+  "thisAccountHasNoAvailableVoiceAuthorizations": "当前账号没有可用声库授权。",
   "note": "备注",
   "eGProductionAccount": "例如：制作账号",
   "saveNote": "保存备注",
+  "availableAuthorizations": "可用授权",
   "openAccountDataFolder": "打开账号数据目录",
   "deleteAccount": "删除账号",
   "accountData": "账号数据",
+  "authorizationsDetail": "{p0} 个授权",
   "notRead": "未读取",
   "makeDefault": "设为默认账号",
   "noAccountsYetAddASlotFirst": "尚无账号，请先添加一个槽位。",
   "macosSlotScope": "macOS 槽位范围",
-  "thisVersionSupportsSequentialDataSlotSwitchingOnlySign": "当前版本只支持顺序切换数据槽位。账号登录预检和并发隔离仍仅在 Windows 提供。",
+  "thisVersionSupportsSequentialDataSlotSwitchingOnlySign": "当前版本只支持顺序切换数据槽位。账号登录预检、授权读取和并发隔离仍仅在 Windows 提供。",
   "globalSettings": "全局设置",
   "onlyAllowlistedFilesSuchAsSettingsAndScriptsAre": "默认只同步设置、脚本等白名单文件；声库按账号独立保存，同账号实例共用槽位数据。",
   "enableAccountSignInIndicator": "启用账号登录指示器",
@@ -154,26 +195,12 @@ addMessages("zh-CN", { accountUi: {
   "smartRoutingWorksOnlyWhileToolboxIsAlreadyRunning": "智能路由只在工具箱已经运行时生效",
   "onAColdStartOrWhenThisFeatureIs": "冷启动或关闭此功能时，工具箱会把工程透明转交给原始 .svp 处理程序；不会监控、终止或劫持已经启动的 SV2。路由优先采用账号服务返回的授权摘要，并以你的确认记录作为补充；任何未知结果都必须由你选择账号。"
 } });
-
-addMessages("zh-CN", { accountUi: {
-  "sessionSizeOffline": "离线",
-  "sessionSizeOnline": "在线",
-  "sessionSizeUnknown": "未知",
-  "sessionSizeUnavailable": "大小不可用",
-  "sessionSizeBytes": "{size} 字节"
-} });
-addMessages("en", { accountUi: {
-  "sessionSizeOffline": "Offline",
-  "sessionSizeOnline": "Online",
-  "sessionSizeUnknown": "Unknown",
-  "sessionSizeUnavailable": "Size unavailable",
-  "sessionSizeBytes": "{size} bytes"
-} });
 addMessages("en", { accountUi: {
   addConnection: "Add connection", noConnectedProvider: "No model provider connected", chooseModel: "Choose a model.", addCredentialsFirst: "Add an OAuth subscription or API key to choose a model.",
   "toolboxDoesNotModifySvBypassAccountRestrictionsOr": "Toolbox does not modify SV2, bypass account restrictions, or disconnect other sessions. Continuing means you understand and accept this risk.",
   "thisSlot": "this slot",
-  "theCheckReadsOfficialAuthorizationsIfTheSessionHas": "The indicator only reads the size of the local sign-in cache file to tell online from offline authorization.",
+  "theCheckReadsOfficialAuthorizationsIfTheSessionHas": "The check reads official authorizations. If the session has expired, Toolbox renews it and saves the updated session.",
+  "accountSettingsShowTheOfficialNameAndEmailAs": "Account settings show the official name and email as read-only fields and let you save a local note. Voice libraries are stored separately for each account and are not synchronized between accounts.",
   "toolboxWillNotLaunchTheClientModifySvOr": "Toolbox will not launch the client, modify SV2, or manage other sessions for you. You can turn this feature off at any time.",
   "thisIsTheDefaultAccountAnotherAccountWillBecome": "This is the default account. Another account will become the default after deletion.",
   "thisIsTheLastAccountDesktopShortcutsAndSvp": "This is the last account. Desktop shortcuts and .svp files will no longer have a default account after deletion.",
@@ -198,15 +225,24 @@ addMessages("en", { accountUi: {
   "voicesRequiredByTheProject": "Voices required by the project",
   "cancelOpening": "Cancel opening",
   "yourConfirmationIsRequired": "Confirm the launch choice",
-  "toolboxWillNotSilentlyChooseAnAccountWhenAccount": "Toolbox will not silently choose an account when the session state is unconfirmed.",
+  "toolboxWillNotSilentlyChooseAnAccountWhenAccount": "Toolbox will not silently choose an account when account usage or authorization is unknown. The official SV2 service still verifies the final result.",
   "noAccountsAreAvailableCloseRunningSvInstancesOr": "No accounts are available. Close running SV2 instances or prepare an isolated slot first.",
   "sandboxieConcurrent": "Sandboxie concurrent",
   "standardSwitch": "Standard switch",
   "cannotLaunch": "Cannot launch",
+  "theAccountServiceReportsThisAccountIsInUse": "The account service reports this account is in use",
+  "theAccountServiceReportsNoRemoteUsage": "The account service reports no remote usage",
   "cachedSessionIsInUseOnThisComputer": "Cached session is in use on this computer",
+  "usageUnknown": "{p0} · Usage unknown",
+  "officialAuthorization": "Official authorization",
+  "authorizationUnknown": "Authorization unknown",
+  "matchesAllRequiredVoices": "{p0} {p1} matches all required voices",
+  "matchedUnknown": "{p0}: {p1} matched, {p2} unknown",
+  "authorizationUnknownManualConfirmationRequired": "Authorization unknown; manual confirmation required",
   "confirmThisAccount": "Confirm this account",
   "openWithThisAccount": "Open with this account",
   "recommended": " · Recommended",
+  "unmatchedOrUnknown": "Unmatched or unknown",
   "cachedSessionAvailable": "Cached session available",
   "signInRequired": "Sign-in required",
   "accessCredentialsExpiredAwaitingRenewal": "Access credentials expired; awaiting renewal",
@@ -216,29 +252,41 @@ addMessages("en", { accountUi: {
   "accountCopiesDoNotMatch": "Account copies do not match",
   "sessionFormatNotSupportedYet": "Session format not supported yet",
   "accountServiceOffline": "Account service offline",
+  "sessionSynchronizationFailedSlotAuthorizationsWereNotRead": "Session synchronization failed; slot authorizations were not read",
   "accountCredentialsOrDeviceIdentityCouldNotBeSafely": "Account credentials or device identity could not be safely synchronized after updating. This slot is isolated and must not be treated as unchecked.",
+  "accountIdentitiesDoNotMatchSlotAuthorizationsWereNot": "Account identities do not match; slot authorizations were not read",
   "theAccountIdentitiesReadFromThisSlotDoNot": "The account identities read from this slot do not match. Toolbox has not overwritten the account cache.",
   "accountInUseOnThisComputer": "Account in use on this computer",
+  "accountInUseAuthorizationsWereNotReadThisTime": "Account in use; authorizations were not read this time",
   "theClientIsUsingThisSessionTheLastRedacted": "The client is using this session. The last redacted name and email may be retained, but authorization and usage conclusions are not reused.",
   "accountNeedsToSignInAgain": "Account needs to sign in again",
-  "signInToThisAccountInSynthvThenRefresh": "Sign in to this account in SynthV, then refresh its status.",
+  "noUsableSignInCredentialsAuthorizationsWereNotRead": "No usable sign-in credentials; authorizations were not read",
+  "signInToThisAccountInSynthvThenRefresh": "Sign in to this account in SynthV, then refresh its authorization status.",
   "sessionExpiredAwaitingRenewal": "Session expired; awaiting renewal",
-  "refreshTheAccountStatusToolboxWillRenewTheSession": "Refresh the account status.",
+  "refreshTheAccountToReadAuthorizationsAgain": "Refresh the account to read authorizations again",
+  "refreshTheAccountStatusToolboxWillRenewTheSession": "Refresh the account status. Toolbox will renew the session before checking authorizations.",
   "signInCacheInvalid": "Sign-in cache invalid",
+  "signInCacheInvalidAuthorizationsWereNotRead": "Sign-in cache invalid; authorizations were not read",
   "theLocalSignInCacheCannotBeSafelyVerified": "The local sign-in cache cannot be safely verified.",
   "accountServiceTemporarilyOffline": "Account service temporarily offline",
+  "accountServiceTemporarilyOfflineAuthorizationsUnavailable": "Account service temporarily offline; authorizations unavailable",
   "theLocalSessionWasReadButTheAccountService": "The local session was read, but the account service is unreachable. This does not mean the account is unchecked or needs to sign in again.",
+  "sessionFormatUnsupportedAuthorizationsWereNotRead": "Session format unsupported; authorizations were not read",
   "thisVersionCannotSafelyParseTheSignInCache": "This version cannot safely parse the sign-in cache.",
   "notSignedInYet": "Not signed in yet",
+  "noSignInCacheAuthorizationsWereNotRead": "No sign-in cache; authorizations were not read",
   "noSignInCacheFoundSignInToSv": "No sign-in cache found. Sign in to SV2 first.",
   "standard": "Standard",
   "signInCacheAwaitingRecovery": "Sign-in cache awaiting recovery",
   "closeStandardInstancesBeforeSwitchingTheAccountPath": "Close standard instances before switching the account path",
   "isolated": "Isolated",
   "cannotLaunchNowIsolationOrProviderUnavailable": "Cannot launch now (isolation or provider unavailable)",
+  "inUseRemotely": "In use remotely",
   "inUseLocally": "In use locally",
   "readyToLaunch": "Ready to launch",
   "accountInformationNeedsRefresh": "Account information needs refresh",
+  "officialAuthorizationsConfirmed": "Official authorizations confirmed",
+  "officialAuthorizationsUnknown": "Official authorizations unknown",
   "showingLocalCache": "Showing local cache",
   "theSignInIndicatorIsOffThisSlotS": "The sign-in indicator is off. This slot's sign-in cache has not been read or decrypted.",
   "signInIndicatorOff": "Sign-in indicator off",
@@ -246,6 +294,13 @@ addMessages("en", { accountUi: {
   "accountAvailableInUseLocally": "Account available (in use locally)",
   "accountAvailable": "Account available",
   "noIdleLaunchEnvironmentForThisAccount": "No idle launch environment for this account",
+  "authorizationsConfirmed": "Authorizations confirmed",
+  "accountStatusNotCheckedYet": "Account status not checked yet",
+  "officialAuthorizationsUncheckedOrUnknown": "Official authorizations unchecked or unknown",
+  "theAccountServiceHasNotReturnedAnyAuthorizationResults": "The account service has not returned any authorization results yet.",
+  "theSignInIndicatorIsOffOfficialAuthorizationSummaries": "The sign-in indicator is off. Official authorization summaries are no longer displayed.",
+  "officialAuthorizationChecksOff": "Official authorization checks off",
+  "theAccountServiceHasConfirmedVoiceAuthorizations": "The account service has confirmed voice authorizations.",
   "accountStatusNeedsUpdating": "Account status needs updating",
   "allLaunchEnvironmentsAreCurrentlyOccupiedLocally": "All launch environments are currently occupied locally",
   "accountSignInIndicatorOff": "Account sign-in indicator off",
@@ -262,22 +317,34 @@ addMessages("en", { accountUi: {
   "readingIsolationState": "Reading isolation status…",
   "anIsolatedInstanceIsAlreadyRunningMoreInstancesOf": "An isolated instance is already running; more instances of this account can still be launched",
   "isolationIsTurnedOffInGlobalSettings": "Isolation is turned off in global settings",
+  "macosVDoesNotReadOrDecryptSignIn": "macOS v1 does not read or decrypt sign-in caches.",
+  "accountAuthorizationsNotRead": "Account authorizations not read",
   "launchNormally": "Launch normally",
   "switchAndLaunch": "Switch and launch",
   "installed": "Installed",
+  "installedForThisAccount": "Installed for this account",
+  "trialExpired": "Trial expired",
+  "timeLimitedTrial": "Time-limited trial",
+  "authorizationExpired": "Authorization expired",
+  "timeLimitedAuthorization": "Time-limited authorization",
   "signedOut": "Signed out",
   "currentDefault": "Current default",
+  "authorizationsUncheckedOrUnknown": "Authorizations unchecked or unknown",
+  "theAccountServiceHasConfirmedVoiceAuthorizationsDetail": "The account service has confirmed {p0} voice authorizations.",
+  "thisAccountHasNoAvailableVoiceAuthorizations": "This account has no available voice authorizations.",
   "note": "Note",
   "eGProductionAccount": "e.g. Production account",
   "saveNote": "Save note",
+  "availableAuthorizations": "Available authorizations",
   "openAccountDataFolder": "Open account data folder",
   "deleteAccount": "Delete account",
   "accountData": "Account data",
+  "authorizationsDetail": "{p0} authorizations",
   "notRead": "Not read",
   "makeDefault": "Make default",
   "noAccountsYetAddASlotFirst": "No accounts yet. Add a slot first.",
   "macosSlotScope": "macOS slot scope",
-  "thisVersionSupportsSequentialDataSlotSwitchingOnlySign": "This version supports sequential data-slot switching only. Sign-in checks and concurrent isolation are available on Windows only.",
+  "thisVersionSupportsSequentialDataSlotSwitchingOnlySign": "This version supports sequential data-slot switching only. Sign-in checks, authorization reading, and concurrent isolation are available on Windows only.",
   "globalSettings": "Global settings",
   "onlyAllowlistedFilesSuchAsSettingsAndScriptsAre": "Only allowlisted files such as settings and scripts are synchronized by default. Voice libraries are stored per account, and instances of the same account share slot data.",
   "enableAccountSignInIndicator": "Enable account sign-in indicator",
@@ -319,6 +386,7 @@ addMessages("en", { accountUi: {
 addMessages("zh-CN", { accountUi: {
   "concurrentLaunchDescription": "将为“{name}”启动独立的 SV2 实例。Dreamtonics 尚未公开确认多实例使用方式。",
   "blockedSwitchTitle": "无法安全切换到“{name}”",
+  "officialAuthorizationCount": "官方授权 {count} 个",
   "isolatedProcessCount": "{count} 个隔离进程",
   "expiresAt": "{date} 到期",
   "signInIndicator": "SV2 账号登录指示器",
@@ -332,6 +400,7 @@ addMessages("zh-CN", { accountUi: {
 addMessages("en", { accountUi: {
   "concurrentLaunchDescription": "An independent SV2 instance will start for “{name}”. Dreamtonics has not publicly confirmed support for multiple instances.",
   "blockedSwitchTitle": "Cannot safely switch to “{name}”",
+  "officialAuthorizationCount": "Official authorizations: {count}",
   "isolatedProcessCount": "Isolated processes: {count}",
   "expiresAt": "Expires {date}",
   "signInIndicator": "SV2 account sign-in indicator",
@@ -343,7 +412,6 @@ addMessages("en", { accountUi: {
 } });
 
 addMessages("zh-CN", { accountNotice: {
-  "authorizationUnknown": "当前无法确认该账号的登录缓存状态。",
   "imported": "已导入账号槽位。",
   "importedPrepared": "已导入账号槽位。已自动准备隔离环境。",
   "created": "已创建账号槽位。",
@@ -352,15 +420,18 @@ addMessages("zh-CN", { accountNotice: {
   "noteCleared": "备注已清除。",
   "globalSaved": "全局设置已保存。",
   "globalSavedPrepared": "全局设置已保存。已自动准备 {count} 个隔离环境。",
-  "routingEnabled": "智能 .svp 启动已开启。请确认 Windows 已将@:{'brand.name'}设为 .svp 默认应用。",
+  "fileApproved": "文件访问已批准。",
+  "fileDenied": "文件访问已拒绝。",
+  "routingEnabled": "智能 .svp 启动已开启。请确认 Windows 已将 Synthesizer V Toolbox 设为 .svp 默认应用。",
   "routingDisabled": "智能 .svp 启动已关闭；工程会透明转交给原始处理程序。",
   "autostartEnabled": "开机启动已开启。",
   "autostartDisabled": "开机启动已关闭。",
-  "indicatorEnabled": "账号登录指示器已开启。",
+  "indicatorEnabled": "账号登录指示器已开启，并已完成首次授权查询。",
   "indicatorDisabled": "账号登录指示器已关闭；之后进入账号页不会探测官方登录接口。",
   "deleted": "账号槽位及其本机数据已删除。",
-  "refreshed": "账号槽位与状态已刷新。",
-  "checked": "此账号的会话状态已检查。",
+  "refreshed": "账号槽位与授权状态已刷新。",
+  "authorizationUnknown": "当前无法确认该账号的授权状态。",
+  "checked": "此账号的会话与授权状态已检查。",
   "activated": "默认账号槽位已切换。",
   "isolationPrepared": "隔离环境已准备，可以并发启动。",
   "invalidRouteRequest": "收到的 .svp 智能路由请求格式无效。",
@@ -369,7 +440,6 @@ addMessages("zh-CN", { accountNotice: {
 } });
 
 addMessages("en", { accountNotice: {
-  "authorizationUnknown": "The sign-in cache status of this account cannot be confirmed right now.",
   "imported": "Account slot imported.",
   "importedPrepared": "Account slot imported and isolation prepared automatically.",
   "created": "Account slot created.",
@@ -378,14 +448,17 @@ addMessages("en", { accountNotice: {
   "noteCleared": "Note cleared.",
   "globalSaved": "Global settings saved.",
   "globalSavedPrepared": "Global settings saved. Isolated environments prepared automatically: {count}.",
-  "routingEnabled": "Smart .svp launch is enabled. Make sure @:{'brand.name'} is the default .svp app in Windows.",
+  "fileApproved": "File access approved.",
+  "fileDenied": "File access denied.",
+  "routingEnabled": "Smart .svp launch is enabled. Make sure Synthesizer V Toolbox is the default .svp app in Windows.",
   "routingDisabled": "Smart .svp launch is off. Projects will be passed to the original handler.",
   "autostartEnabled": "Launch at login is enabled.",
   "autostartDisabled": "Launch at login is disabled.",
-  "indicatorEnabled": "Account sign-in indicator enabled.",
+  "indicatorEnabled": "Account sign-in indicator enabled; the first authorization check is complete.",
   "indicatorDisabled": "Account sign-in indicator disabled. Opening the accounts page will no longer query the official sign-in service.",
   "deleted": "Account slot and its local data deleted.",
   "refreshed": "Account slots and authorization status refreshed.",
+  "authorizationUnknown": "The authorization status of this account cannot be confirmed right now.",
   "checked": "This account’s session and authorization status have been checked.",
   "activated": "Default account slot switched.",
   "isolationPrepared": "Isolation is prepared and ready for concurrent launch.",
@@ -394,3 +467,128 @@ addMessages("en", { accountNotice: {
   "routingAlwaysAskDisabled": "Smart .svp launch will choose automatically when the format is unambiguous."
 } });
 
+addMessages("zh-CN", { accountUi: {
+  "offlineLicense": "离线授权",
+  "offlineLicenseActive": "本机离线缓存已启用",
+  "offlineLicenseInactive": "本机离线缓存未启用",
+  "offlineLicenseUnknown": "本机离线缓存无法确认",
+  "offlineLicenseEligible": "离线资格：持有有效永久 SV2 Pro（设备额度待官方检查）",
+  "offlineLicenseIneligible": "离线资格：未发现有效永久 SV2 Pro",
+  "offlineLicenseEligibilityUnknown": "离线资格：尚未确认",
+  "offlineLicenseNoCachedProducts": "没有可显示的本机离线产品缓存。",
+  "offlineLicenseDirectGuard": "操作前只备份当前槽位的加密 session 文件，且必须关闭 SV2；启用会覆盖本机永久授权缓存。",
+  "enableOfflineLicense": "启用离线授权",
+  "disableOfflineLicense": "停用离线授权",
+  "offlineRemoteStatus": "{state} · {device} · 检查于 {checkedAt}",
+  "offlineOperationResult": "备份：{backupPath}；access：{accessChanged}；refresh：{refreshChanged}",
+  "offlineRemoteEnabled": "服务端离线授权已启用",
+  "offlineRemoteDisabled": "服务端离线授权未启用",
+  "offlineCurrentDevice": "当前设备",
+  "offlineOtherDevice": "离线授权属于其他设备，请在原设备上停用。",
+  "offlineCheckFirst": "正在读取服务端离线授权状态…",
+  "offlineCheck": "重新读取离线状态",
+  "offlineChanged": "已变化",
+  "offlineUnchanged": "未变化",
+  "offlineLicenseId": "授权 ID",
+  "offlineProductId": "产品 ID",
+  "restoreOfflineSession": "从已验证 session 恢复",
+  "restoreOfflineSessionTitle": "确认恢复加密 session",
+  "restoreOfflineSessionChoose": "选择加密 session 文件",
+  "restoreOfflineSessionSource": "选定来源",
+  "restoreOfflineSessionDestination": "当前槽位",
+  "restoreOfflineSessionCredentials": "凭据元数据（已脱敏）",
+  "restoreOfflineSessionProducts": "本地缓存产品原始字段",
+  "restoreOfflineSessionNoProducts": "没有本地离线产品缓存记录。",
+  "restoreOfflineSessionGuard": "确认后 Toolbox 会退出。独立助手会在 SV2 和其它 Toolbox 实例均关闭后重新验证两个 SHA-256、校验来源可解密、创建并校验备份，再原子替换整个 session。access、refresh、设备和用户标识不会显示，也不能逐字段修改。",
+  "restoreOfflineSessionConfirm": "退出 Toolbox 并恢复",
+  "vendor": "供应商",
+  "category": "类别"
+  ,"sessionDetails": "Session 授权明细"
+  ,"sessionDetailsDescription": "按需读取完整 session，包含当前授权字段和原始内容。"
+  ,"showSessionDetails": "显示完整授权明细"
+  ,"refreshSessionDetails": "重新读取 session"
+  ,"rawSessionData": "原始 session 数据"
+  ,"sessionPath": "session 路径"
+  ,"accessExpiry": "access 到期时间"
+  ,"sessionWrittenAt": "写入时间"
+  ,"device": "设备字段"
+  ,"user": "用户字段"
+  ,"notAvailable": "未找到"
+  ,"sessionDetailsLoaded": "已读取完整 session 授权明细。"
+  ,"copyAccess": "复制 access"
+  ,"copyRefresh": "复制 refresh"
+  ,"copied": "已复制"
+  ,"editFullSession": "编辑完整明文"
+  ,"saveSession": "保存 session"
+  ,"sessionSaved": "session 已保存，备份与新哈希："
+  ,"sessionProductRow": "产品行"
+  ,"offlineProgressDescription": "操作正在执行，当前步骤会持续更新；失败会停在出错步骤。"
+  ,"offlineStepPreflight": "预检 SV2 与当前授权状态"
+  ,"offlineStepBackup": "备份当前槽位的加密 session"
+  ,"offlineStepRemote": "提交远程离线授权请求"
+  ,"offlineStepLocal": "写入或清理本地离线缓存"
+  ,"offlineStepRead": "重新读取并核验结果"
+} });
+
+addMessages("en", { accountUi: {
+  "offlineLicense": "Offline license",
+  "offlineLicenseActive": "Local offline cache is active",
+  "offlineLicenseInactive": "Local offline cache is inactive",
+  "offlineLicenseUnknown": "Local offline cache cannot be confirmed",
+  "offlineLicenseEligible": "License eligibility: active permanent SV2 Pro found (device allowance is checked by SV2)",
+  "offlineLicenseIneligible": "License eligibility: no active permanent SV2 Pro found",
+  "offlineLicenseEligibilityUnknown": "License eligibility: not checked",
+  "offlineLicenseNoCachedProducts": "No local offline product cache is available to display.",
+  "offlineLicenseDirectGuard": "The operation backs up only the current slot's encrypted session file and requires SV2 to be closed. Enabling overwrites the local permanent-license cache.",
+  "enableOfflineLicense": "Enable offline license",
+  "disableOfflineLicense": "Disable offline license",
+  "offlineRemoteStatus": "{state} · {device} · checked {checkedAt}",
+  "offlineOperationResult": "Backup: {backupPath}; access: {accessChanged}; refresh: {refreshChanged}",
+  "offlineRemoteEnabled": "Server offline authorization is enabled",
+  "offlineRemoteDisabled": "Server offline authorization is disabled",
+  "offlineCurrentDevice": "Current device",
+  "offlineOtherDevice": "Offline authorization belongs to another device. Disable it on that device first.",
+  "offlineCheckFirst": "Reading the server offline authorization status…",
+  "offlineCheck": "Read offline status again",
+  "offlineChanged": "changed",
+  "offlineUnchanged": "unchanged",
+  "offlineLicenseId": "License ID",
+  "offlineProductId": "Product ID",
+  "restoreOfflineSession": "Restore from a verified session",
+  "restoreOfflineSessionTitle": "Confirm encrypted session restore",
+  "restoreOfflineSessionChoose": "Choose encrypted session file",
+  "restoreOfflineSessionSource": "Selected source",
+  "restoreOfflineSessionDestination": "Current slot",
+  "restoreOfflineSessionCredentials": "Credential metadata (redacted)",
+  "restoreOfflineSessionProducts": "Raw local cached-product fields",
+  "restoreOfflineSessionNoProducts": "No local offline product cache is present.",
+  "restoreOfflineSessionGuard": "After confirmation Toolbox exits. A separate helper waits for SV2 and any other Toolbox instance to close, revalidates both SHA-256 values and decryptability, creates and verifies a backup, then atomically replaces the whole session. Access, refresh, device, and user identifiers are never shown and cannot be changed field by field.",
+  "restoreOfflineSessionConfirm": "Exit Toolbox and restore",
+  "vendor": "Vendor",
+  "category": "Category"
+  ,"sessionDetails": "Session authorization details"
+  ,"sessionDetailsDescription": "Read the complete session on demand, including authorization fields and raw content."
+  ,"showSessionDetails": "Show full authorization details"
+  ,"refreshSessionDetails": "Read session again"
+  ,"rawSessionData": "Raw session data"
+  ,"sessionPath": "Session path"
+  ,"accessExpiry": "Access expiry"
+  ,"sessionWrittenAt": "Written at"
+  ,"device": "Device field"
+  ,"user": "User field"
+  ,"notAvailable": "Not found"
+  ,"sessionDetailsLoaded": "Complete session authorization details loaded."
+  ,"copyAccess": "Copy access"
+  ,"copyRefresh": "Copy refresh"
+  ,"copied": "Copied"
+  ,"editFullSession": "Edit complete plaintext"
+  ,"saveSession": "Save session"
+  ,"sessionSaved": "Session saved. Backup and new hash:"
+  ,"sessionProductRow": "Product row"
+  ,"offlineProgressDescription": "The operation is running. The current step will update continuously; failures stay on the failed step."
+  ,"offlineStepPreflight": "Preflight SV2 and authorization state"
+  ,"offlineStepBackup": "Back up the current slot's encrypted session"
+  ,"offlineStepRemote": "Submit remote offline authorization request"
+  ,"offlineStepLocal": "Write or clear the local offline cache"
+  ,"offlineStepRead": "Read back and verify the result"
+} });

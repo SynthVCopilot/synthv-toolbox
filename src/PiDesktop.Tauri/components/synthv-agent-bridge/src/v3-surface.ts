@@ -1,7 +1,8 @@
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type {
-  CallToolResult,
-  ToolAnnotations,
-} from "@modelcontextprotocol/sdk/types.js";
+  McpServer,
+  RegisteredTool,
+} from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import { BridgeError, BridgeProtocolError, toPublicError } from "./errors.js";
@@ -36,40 +37,9 @@ import {
 } from "./v3-query-projector.js";
 
 type JsonRecord = Record<string, unknown>;
+type RegisterTool = McpServer["registerTool"];
 
-export interface ActionTool {
-  readonly title: string;
-  readonly description: string;
-  readonly inputSchema: unknown;
-  readonly annotations?: ToolAnnotations;
-  readonly handler: (
-    input: unknown,
-    extra?: unknown,
-  ) => CallToolResult | Promise<CallToolResult>;
-}
-
-export type ActionToolDefinitions = ReadonlyMap<string, ActionTool>;
-
-type InferToolInput<Shape> = Shape extends z.ZodType
-  ? z.infer<Shape>
-  : Shape extends z.ZodRawShape
-    ? z.infer<z.ZodObject<Shape>>
-    : unknown;
-
-export interface RegisterTool {
-  <Shape extends z.ZodRawShape | z.ZodType>(
-    name: string,
-    config: {
-      readonly title: string;
-      readonly description: string;
-      readonly inputSchema: Shape;
-      readonly annotations?: ToolAnnotations;
-    },
-    handler: (
-      input: InferToolInput<Shape>,
-    ) => CallToolResult | Promise<CallToolResult>,
-  ): void;
-}
+export type ActionToolDefinitions = ReadonlyMap<string, RegisteredTool>;
 
 const V3_INCLUDE_VALUES = [
   "notes",
@@ -156,51 +126,8 @@ function readJsonResult(result: CallToolResult): unknown {
   }
 }
 
-function editDistance(a: string, b: string): number {
-  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
-  for (let i = 1; i <= a.length; i += 1) {
-    const current = [i];
-    for (let j = 1; j <= b.length; j += 1) {
-      current.push(
-        Math.min(
-          (previous[j] ?? 0) + 1,
-          (current[j - 1] ?? 0) + 1,
-          (previous[j - 1] ?? 0) + (a[i - 1] === b[j - 1] ? 0 : 1),
-        ),
-      );
-    }
-    previous = current;
-  }
-  return previous[b.length] ?? 0;
-}
-
-function actionNotFoundDetails(
-  definitions: ActionToolDefinitions,
-  action: string,
-): { suggestions: string[]; next?: string } {
-  const lowered = action.toLowerCase();
-  const suggestions = [...definitions.keys()]
-    .map((name) => ({ name, distance: editDistance(lowered, name.toLowerCase()) }))
-    .sort((left, right) => left.distance - right.distance || left.name.localeCompare(right.name))
-    .slice(0, 3)
-    .map((entry) => entry.name);
-  return suggestions.length === 0
-    ? { suggestions }
-    : { suggestions, next: `call sv_describe with action=${suggestions[0]}` };
-}
-
-function unknownActionError(
-  definitions: ActionToolDefinitions,
-  action: string,
-): BridgeProtocolError {
-  return new BridgeProtocolError(
-    `Unknown SynthV action: ${action}`,
-    actionNotFoundDetails(definitions, action),
-  );
-}
-
 function parseActionInput(
-  tool: ActionTool,
+  tool: RegisteredTool,
   action: string,
   args: JsonRecord,
 ): unknown {
@@ -282,7 +209,7 @@ async function invokeActionTool(
 ): Promise<CallToolResult> {
   const tool = definitions.get(action);
   if (tool === undefined) {
-    throw unknownActionError(definitions, action);
+    throw new BridgeProtocolError(`Unknown SynthV action: ${action}`);
   }
   if (typeof tool.handler !== "function") {
     throw new BridgeProtocolError(`SynthV action ${action} is not directly callable`);
@@ -295,7 +222,7 @@ async function invokeActionTool(
   return handler(parsed);
 }
 
-function isReadAction(tool: ActionTool): boolean {
+function isReadAction(tool: RegisteredTool): boolean {
   return tool.annotations?.readOnlyHint === true;
 }
 
@@ -306,7 +233,7 @@ function assertActionCategory(
 ): void {
   const tool = definitions.get(action);
   if (tool === undefined) {
-    throw unknownActionError(definitions, action);
+    throw new BridgeProtocolError(`Unknown SynthV action: ${action}`);
   }
   const policy = optionalCommandPolicy(action);
   const accepted =
@@ -316,7 +243,6 @@ function assertActionCategory(
   if (!accepted) {
     throw new BridgeProtocolError(
       `${action} is not available through sv_${category}`,
-      { next: `call sv_describe with action=${action}` },
     );
   }
 }
@@ -1286,7 +1212,7 @@ function minimalWriteResult(
   return commandOutcome(action, root);
 }
 
-function describeActionTool(name: string, tool: ActionTool): JsonRecord {
+function describeActionTool(name: string, tool: RegisteredTool): JsonRecord {
   const commandPolicy = optionalCommandPolicy(name);
   const stability = describeV3CapabilityStability(name);
   const schema = tool.inputSchema;
@@ -1654,7 +1580,7 @@ export function registerV3InternalAdapters(
           actions: input.actions.map((action) => {
             const tool = definitions.get(action);
             if (tool === undefined) {
-              throw unknownActionError(definitions, action);
+              throw new BridgeProtocolError(`Unknown SynthV action: ${action}`);
             }
             return describeActionTool(action, tool);
           }),
