@@ -1,40 +1,7 @@
-import type {
-  AgentEffortLevel,
-  AgentPlan,
-  AgentRunBudget,
-  AgentRunOutcome,
-  AgentRunPhase,
-  AgentRunProgress,
-  AgentTodo,
-  AgentToolActivity,
-  AgentApproval,
-  AgentApprovalTool,
-  AgentApprovalCategory,
-  AgentApprovalOutcome,
-  AgentApprovalResolution,
-  AgentApprovalsSnapshot,
-} from "@synthv-toolbox/runtime-protocol";
-
-export type {
-  AgentEffortLevel,
-  AgentPlan,
-  AgentRunBudget,
-  AgentRunOutcome,
-  AgentRunPhase,
-  AgentRunProgress,
-  AgentTodo,
-  AgentToolActivity,
-  AgentApproval,
-  AgentApprovalTool,
-  AgentApprovalCategory,
-  AgentApprovalOutcome,
-  AgentApprovalResolution,
-  AgentApprovalsSnapshot,
-};
-
 export type AppMode = "toolbox" | "ai";
 export type AgentWorkMode = "edit" | "solo";
 export type UpdateChannel = "stable" | "nightly";
+export interface AgentFileApproval { id: string; path: string; purpose: string; createdAtUtc: string; }
 
 export type AiProviderId = "anthropic" | "openai-codex" | "workbuddy" | "traecode";
 export type AiAuthMethod = "oauth" | "api-key";
@@ -48,7 +15,6 @@ export interface AiApiKeySummary {
   healthy: boolean;
   enabled: boolean;
   weight: number;
-  extend?: Record<string, unknown>;
   cooldownUntilUtc: string | null;
   createdAtUtc: string;
 }
@@ -61,7 +27,6 @@ export interface AiProviderAccountSummary {
   healthy: boolean;
   enabled: boolean;
   weight: number;
-  extend?: Record<string, unknown>;
 }
 
 export interface AiProviderSummary {
@@ -79,6 +44,7 @@ export interface AiProviderSummary {
   accounts: AiProviderAccountSummary[];
   apiKeys: AiApiKeySummary[];
   authMethods: AiAuthMethod[];
+  oauthEnabled: boolean;
   loadStrategy: AiLoadStrategy;
   available: boolean;
   unavailableReason: string | null;
@@ -166,27 +132,6 @@ export interface HttpApiStatus {
   endpoint: string | null;
   agentEndpoint: string | null;
   lastError: string | null;
-  /** Present once the host enforces bearer authentication; shown so users can configure clients. */
-  token?: string;
-  authRequired?: boolean;
-  serverName?: string;
-  protocolVersions?: string[];
-  tools?: string[];
-}
-
-export type IntegrationPreference = "auto" | "on" | "off";
-
-export interface IntegrationState {
-  preference: IntegrationPreference;
-  enabled: boolean;
-  detected: boolean;
-  bridgeLoaded: boolean;
-  errors: string[];
-}
-
-export interface McpProbeResult extends OperationResult {
-  tools?: string[];
-  serverInfo?: { name: string; version?: string };
 }
 
 export interface SynthVInstallation {
@@ -246,8 +191,112 @@ export interface Sv2SessionProtection {
 }
 
 export type Sv2AccountProbeSessionStatus = "ready" | "missing" | "inUse" | "expired" | "loginRequired" | "invalid" | "syncFailed" | "accountMismatch" | "unsupported" | "offline";
+export type Sv2AuthorizationStatus = "verified" | "unknown";
+export type Sv2OfflineLicenseCacheStatus = "active" | "inactive" | "unknown";
+export type Sv2OfflineLicenseEligibility = "eligible" | "ineligible" | "unknown";
+
+export interface Sv2OfflineCachedField {
+  key: string;
+  value: string;
+}
+
+export interface Sv2OfflineCachedProduct {
+  databaseId: string;
+  productId: string;
+  name: string;
+  vendor: string;
+  category: string;
+  version: string;
+  attributes: Sv2OfflineCachedField[];
+}
+
+export interface Sv2OfflineLicense {
+  cacheStatus: Sv2OfflineLicenseCacheStatus;
+  eligibility: Sv2OfflineLicenseEligibility;
+  cachedProducts: Sv2OfflineCachedProduct[];
+}
+
+export interface Sv2OfflineLicenseStatus {
+  enabled: boolean;
+  eligible: boolean;
+  localCacheStatus: Sv2OfflineLicenseCacheStatus;
+  currentDevice: boolean;
+  deviceName?: string | null;
+  checkedAtUtc: string;
+  cachedProducts: Sv2OfflineCachedProduct[];
+}
+
+export interface Sv2OfflineLicenseOperation {
+  status: Sv2OfflineLicenseStatus;
+  backupPath: string;
+  accessChanged: boolean;
+  refreshChanged: boolean;
+  detail: string;
+}
+
+export interface Sv2SessionCredentialMetadata {
+  accessTokenLength: number;
+  refreshTokenLength: number;
+  accessExpiry: string;
+  writtenAt: string;
+  deviceIdentifierLength: number;
+  userIdentifierLength?: number | null;
+}
+
+export interface Sv2SessionCachedField {
+  key: string;
+  value: string;
+}
+
+export interface Sv2SessionCachedProduct {
+  fields: Sv2SessionCachedField[];
+}
+
+export interface Sv2SessionInspection {
+  path: string;
+  sha256: string;
+  encryptedBytes: number;
+  plaintextLines: number;
+  credentials: Sv2SessionCredentialMetadata;
+  cachedProducts: Sv2SessionCachedProduct[];
+}
+
+export interface Sv2SessionReplacementPreview {
+  source: Sv2SessionInspection;
+  destination: Sv2SessionInspection;
+}
+
+export interface Sv2SessionDocument {
+  path: string;
+  encryptedSha256: string;
+  encryptedBytes: number;
+  plaintext: string;
+}
+
+export interface Sv2SessionDocumentWriteResult {
+  path: string;
+  backupPath: string;
+  encryptedSha256: string;
+  encryptedBytes: number;
+}
+
+export interface Sv2AuthorizedVoiceProduct {
+  id: string;
+  name: string;
+  isTrial: boolean;
+  expiresAtUtc?: string | null;
+}
+
 export interface Sv2AccountProbe {
   sessionStatus: Sv2AccountProbeSessionStatus;
+  remoteUse: Sv2RemoteUseStatus;
+  authorizationStatus: Sv2AuthorizationStatus;
+  authorizedVoiceCount: number;
+  authorizedVoices: string[];
+  authorizedVoiceProducts: Sv2AuthorizedVoiceProduct[];
+  offlineLicense: Sv2OfflineLicense;
+  accountDisplayName?: string;
+  accountEmail?: string;
   checkedAtUtc: string;
   detail: string;
 }
@@ -260,7 +309,6 @@ export interface Sv2ProfileSlot {
   lastActivatedAtUtc?: string;
   isActive: boolean;
   sessionCached: boolean;
-  sessionSize?: { status: "offline" | "online" | "unknown"; sizeBytes: number | null };
   installedVoiceIds: string[];
   dataPath: string;
   sessionProtection: Sv2SessionProtection;
@@ -285,6 +333,15 @@ export interface Sv2ProfilesState {
   concurrentDefaults: Sv2ConcurrentDefaults;
 }
 
+export type Sv2RemoteUseStatus = "clear" | "detected" | "unknown";
+
+export interface Sv2CachedVoice {
+  id: string;
+  name?: string | null;
+  vendor?: string;
+  imageDataUrl?: string;
+}
+
 export interface Sv2AccountPrecheck {
   supported: boolean;
   checkedAtUtc: string;
@@ -293,8 +350,10 @@ export interface Sv2AccountPrecheck {
   localUse: boolean;
   localProcesses: Sv2ProcessBlocker[];
   concurrentPids: number[];
+  remoteUse: Sv2RemoteUseStatus;
   sessionStatus: Sv2AccountProbeSessionStatus;
-  sessionSize?: { status: "offline" | "online" | "unknown"; sizeBytes: number | null };
+  authorizationStatus: Sv2AuthorizationStatus;
+  authorizedVoiceCount: number;
   sessionCached: boolean;
   recoveryPending: boolean;
   summary: string;
@@ -307,6 +366,7 @@ export interface Sv2AccountUsageSnapshot {
 }
 
 export type SvpLaunchMode = "normal" | "concurrent";
+export type SvpAuthorizationSource = "session" | "unknown";
 
 export interface SvpVoiceRequirement {
   name: string;
@@ -319,7 +379,12 @@ export interface SvpRouteCandidate {
   displayName: string;
   idle: boolean;
   launchMode?: SvpLaunchMode | null;
+  remoteUse: Sv2RemoteUseStatus;
   sessionStatus: Sv2AccountProbeSessionStatus;
+  authorizationSource: SvpAuthorizationSource;
+  matchedVoices: string[];
+  missingOrUnknownVoices: string[];
+  exactAuthorizationMatch: boolean;
   reason: string;
   hostProfile?: "sv1" | "sv2" | "flat" | null;
 }
@@ -402,28 +467,14 @@ export interface InstalledPlugin {
   advancedFunctionsEnabled: boolean;
 }
 
-export interface DataDirectoryState {
-  path: string;
-  migratedFrom: string | null;
-  deferred: { reason: "running" | "in-use" | "error"; detail: string } | null;
-  legacyRemaining: string | null;
-  setAside: string | null;
-  fixupErrors: string[];
-}
-
 export interface BootstrapState {
   onboardingCompleted: boolean;
   mode: AppMode;
   agentWorkMode: AgentWorkMode;
-  agentEffort: AgentEffortLevel;
-  agentBudgets: Record<AgentEffortLevel, AgentRunBudget>;
-  agentTranscriptsEnabled: boolean;
   updateChannel: UpdateChannel;
   platform: string;
   appVersion: string;
   configPath: string;
-  /** Where the data folder is and whether this launch moved it from the pre-Toneshuttle name. */
-  dataDirectory?: DataDirectoryState;
   settingsLoadError?: string | null;
   model?: ModelSummary;
   scriptsPath?: string;
@@ -443,8 +494,6 @@ export interface BootstrapState {
   autostartEnabled?: boolean | null;
   autostartError?: string | null;
   svpAssociation: SvpAssociationState;
-  /** Older hosts omit this; treat a missing value as SynthV enabled, which was the only behavior then. */
-  integrations?: { synthv: IntegrationState };
 }
 
 export interface ConversationSummary {
@@ -457,7 +506,6 @@ export interface ConversationSummary {
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
-  outcome?: AgentRunOutcome;
 }
 
 export interface ConversationSnapshot {
@@ -628,10 +676,6 @@ export interface MediaTaskSnapshot {
   status: MediaTaskStatus;
   progress: number;
   detail: string;
-  stage?: string;
-  retryable?: boolean;
-  repairConversationId?: string | null;
-  tuningConversationId?: string | null;
   result?: Record<string, unknown> | null;
   error?: string | null;
   createdAt: string;

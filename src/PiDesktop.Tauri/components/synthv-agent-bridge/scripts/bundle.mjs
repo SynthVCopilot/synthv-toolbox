@@ -8,12 +8,7 @@ const nodeModules = join(repositoryRoot, "node_modules");
 const outputDirectory = join(repositoryRoot, "dist");
 
 const result = await build({
-  entryPoints: [
-    "src/cli.ts",
-    "legacy-sv1/src/cli.ts",
-    "src/score-import.ts",
-    "src/embedded.ts",
-  ],
+  entryPoints: ["src/cli.ts", "legacy-sv1/src/cli.ts", "src/score-import.ts"],
   absWorkingDir: repositoryRoot,
   bundle: true,
   format: "esm",

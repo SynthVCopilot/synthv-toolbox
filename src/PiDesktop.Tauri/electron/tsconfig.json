@@ -9,6 +9,5 @@
     "skipLibCheck": true,
     "types": ["node", "electron"]
   },
-  "include": ["**/*.ts"],
-  "exclude": ["preload.ts"]
+  "include": ["**/*.ts"]
 }
