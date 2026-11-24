@@ -6,15 +6,8 @@ if (!/^[0-9a-f]{7,40}$/i.test(commit)) {
   throw new Error(`Development build commit must be a Git SHA: ${commit}`);
 }
 
-const nextPatch = options.includes("--next-patch");
-const sequenceIndex = options.indexOf("--sequence");
-const sequence = sequenceIndex === -1 ? undefined : options[sequenceIndex + 1];
-if (sequenceIndex !== -1 && !/^[1-9]\d*$/.test(sequence ?? "")) {
-  throw new Error(`Development build sequence must be a positive integer: ${sequence ?? ""}`);
-}
-const optionValues = new Set(["--next-patch", "--sequence"]);
-if (sequenceIndex !== -1) optionValues.add(sequence);
-const repositoryOption = options.find((option) => !optionValues.has(option));
+const nextMinor = options.includes("--next-minor");
+const repositoryOption = options.find((option) => option !== "--next-minor");
 const repository = path.resolve(repositoryOption ?? path.join(import.meta.dirname, "../.."));
 const desktop = path.join(repository, "src/PiDesktop.Tauri");
 const hash = commit.slice(0, 7).toLowerCase();
@@ -29,27 +22,39 @@ const packageFile = path.join(desktop, "package.json");
 const packageJson = JSON.parse(fs.readFileSync(packageFile, "utf8"));
 const lockFile = path.join(desktop, "package-lock.json");
 const packageLock = JSON.parse(fs.readFileSync(lockFile, "utf8"));
+const tauriFile = path.join(desktop, "src-tauri/tauri.conf.json");
+const tauriConfig = JSON.parse(fs.readFileSync(tauriFile, "utf8"));
+const cargoFile = path.join(desktop, "src-tauri/Cargo.toml");
+const cargo = fs.readFileSync(cargoFile, "utf8");
+const packageVersion = /(\[package\][\s\S]*?\r?\nversion\s*=\s*)"([^"]+)"/;
+const cargoMatch = cargo.match(packageVersion);
+if (!cargoMatch) {
+  throw new Error("Could not locate the Cargo package version");
+}
+
 const versions = [
   packageJson.version,
   packageLock.version,
   packageLock.packages?.[""]?.version,
+  tauriConfig.version,
+  cargoMatch[2],
 ];
 if (versions.some((current) => current !== packageJson.version)) {
   throw new Error("Desktop manifests must use the same base version before a development build");
 }
 
-const baseVersion = packageJson.version.replace(/-dev(?:\.\d+)?\.[0-9a-f]+$/i, "");
+const baseVersion = packageJson.version.replace(/-dev\.[0-9a-f]+$/i, "");
 const baseVersionMatch = /^(\d+)\.(\d+)\.(\d+)$/.exec(baseVersion);
 if (!baseVersionMatch) {
   throw new Error(`Desktop manifests must use a stable semantic version: ${packageJson.version}`);
 }
-const developmentBaseVersion = nextPatch
-  ? `${baseVersionMatch[1]}.${baseVersionMatch[2]}.${Number(baseVersionMatch[3]) + 1}`
+const developmentBaseVersion = nextMinor
+  ? `${baseVersionMatch[1]}.${Number(baseVersionMatch[2]) + 1}.0`
   : baseVersion;
 
-const suffix = `-dev.${sequence ? `${sequence}.` : ""}${hash}`;
+const suffix = `-dev.${hash}`;
 let version;
-if (!nextPatch && packageJson.version.includes("-dev.")) {
+if (!nextMinor && packageJson.version.includes("-dev.")) {
   if (!packageJson.version.endsWith(suffix)) {
     throw new Error(`Desktop manifests already contain a different development version: ${packageJson.version}`);
   }
@@ -65,7 +70,13 @@ updateJson(lockFile, (value) => {
   value.version = version;
   if (value.packages?.[""]) value.packages[""].version = version;
 });
+updateJson(tauriFile, (value) => {
+  value.version = version;
+});
+
+fs.writeFileSync(cargoFile, cargo.replace(packageVersion, `$1"${version}"`));
+
 if (process.env.GITHUB_OUTPUT) {
   fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
 }
-process.stdout.write(`Toneshuttle development build version: ${version}\n`);
+process.stdout.write(`SynthV Toolbox development build version: ${version}\n`);
