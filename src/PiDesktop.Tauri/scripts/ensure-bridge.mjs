@@ -4,12 +4,11 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
-const componentDirectory = resolve(scriptDirectory, "../components/synthv-agent-bridge");
+const componentDirectory = resolve(scriptDirectory, "../src-tauri/components/synthv-agent-bridge");
 const bridgeEntries = [
   resolve(componentDirectory, "dist/src/cli.js"),
   resolve(componentDirectory, "dist/legacy-sv1/src/cli.js"),
   resolve(componentDirectory, "dist/src/score-import.js"),
-  resolve(componentDirectory, "dist/src/embedded.js"),
   resolve(componentDirectory, "dist/THIRD_PARTY_NOTICES.txt"),
 ];
 const buildDependencies = [

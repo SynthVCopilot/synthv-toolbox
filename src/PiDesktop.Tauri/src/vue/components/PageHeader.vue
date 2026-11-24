@@ -2,19 +2,18 @@
 import { icon } from "../../icons";
 import { useI18n } from "vue-i18n";
 
-defineProps<{ title: string; subtitle: string; page: string; busy: boolean; actionsHtml: string }>();
+defineProps<{ title: string; subtitle: string; page: string; busy: boolean }>();
 const refreshIcon = icon("sync", 17);
 const { t } = useI18n();
 </script>
 
 <template>
-  <header class="topbar">
+  <header class="topbar" data-tauri-drag-region>
     <div>
       <h1>{{ title }}</h1>
       <p>{{ subtitle }}</p>
     </div>
     <div class="topbar-status-group">
-      <div v-if="actionsHtml" class="topbar-plugin-actions" v-html="actionsHtml"></div>
       <Transition name="busy-chip">
         <div v-if="busy" class="top-actions operation-progress" role="status" aria-live="polite">
           <span class="mini-spinner"></span>
