@@ -1,13 +1,10 @@
 import packageJson from "../package.json";
-import { AGENT_EFFORT_LEVELS, DEFAULT_AGENT_EFFORT, estimateAgentRunBudget, type PluginManifest } from "@synthv-toolbox/runtime-protocol";
-import { hasDesktopBridge, invokeDesktop, openDesktopDialog } from "../electron/bridge";
-import { BRAND } from "./brand";
+import type { PluginManifest } from "@synthv-toolbox/runtime-protocol";
+import { hasDesktopBridge, invokeDesktop, listenDesktop, openDesktopDialog } from "../electron/bridge";
 import type {
   AiProviderId,
-  AgentApprovalsSnapshot,
-  AgentEffortLevel,
-  AgentRunBudget,
   AgentWorkMode,
+  AgentFileApproval,
   AiProviderSummary,
   AiProviderUsageSnapshot,
   AppMode,
@@ -48,8 +45,6 @@ import type {
   MediaSourcePreview,
   MediaTaskSnapshot,
   HttpApiStatus,
-  IntegrationPreference,
-  McpProbeResult,
   OperationResult,
   ProjectCheckpoint,
   ProjectBackupState,
@@ -58,6 +53,7 @@ import type {
   Sv2AccountUsageSnapshot,
   Sv2IsolationPreference,
   Sv2ProfilesState,
+  Sv2SessionReplacementPreview,
   Sv2SyncCategory,
   Sv2SyncCategoryId,
   Sv2SyncManifest,
@@ -81,11 +77,6 @@ const AUDIO_FILE_EXTENSIONS = ["wav", "flac", "mp3", "m4a", "aac", "ogg", "opus"
 let previewMode: AppMode = "toolbox";
 let previewUpdateChannel: "stable" | "nightly" = "stable";
 let previewAgentWorkMode: AgentWorkMode = "edit";
-let previewAgentEffort: AgentEffortLevel = DEFAULT_AGENT_EFFORT;
-let previewAgentTranscriptsEnabled = false;
-const previewAgentBudgets: Record<AgentEffortLevel, AgentRunBudget> = Object.fromEntries(
-  AGENT_EFFORT_LEVELS.map((level) => [level, estimateAgentRunBudget(level, [])]),
-) as Record<AgentEffortLevel, AgentRunBudget>;
 let previewOnboarding = false;
 let previewConcurrentDisclaimerAccepted = false;
 let previewSv2ConcurrentEnabled = true;
@@ -104,19 +95,22 @@ let previewHttpApiStatus: HttpApiStatus = {
   endpoint: null,
   agentEndpoint: null,
   lastError: null,
-  token: "preview-token-3f9c2a7d1b8e4c6a",
-  authRequired: true,
-  serverName: BRAND.slug,
-  protocolVersions: ["2025-11-25", "2025-06-18", "2025-03-26"],
-  tools: [],
 };
-let previewSynthvPreference: IntegrationPreference = "auto";
-let previewMcpServers: McpServerConfig[] = [{ id: "demo", name: "Demo tools", command: "node", args: ["server.mjs"], enabled: true }];
 let previewBridgeConnected = true;
 let previewBridgeRequestedProcessId: number | null = null;
 const previewBridgeTargets = new Set<string>();
 let previewSynthvPid = 4203;
-
+let previewOfflineLicenseEnabled = false;
+let previewSessionSha256 = "0".repeat(64);
+let previewSessionPlaintext = [
+  "preview.access.token",
+  "preview.refresh.token",
+  "2030-01-01T01:00:00Z",
+  "2030-01-01T00:00:00Z",
+  "preview-device",
+  "preview-user",
+  "K1=preview-license;K2=preview-product;K3=Synthesizer V Studio 2 Pro;K4=Dreamtonics;K5=editor;K6=2.3;K7=2;K8=0;K9=0",
+].join("\n");
 let previewSynthvProcesses: SynthVProcess[] = [
   { processId: 4201, processIdentity: "preview-4201", productName: "SVStudio2 Pro", version: "2.3.0", name: "Synthesizer V Studio 2 Pro", command: "/Applications/Synthesizer V Studio 2 Pro.app/Contents/MacOS/synthv-studio", windowTitle: "Project A.svp - Synthesizer V Studio 2 Pro", isSv2: true, sandboxed: false },
   { processId: 4202, processIdentity: "preview-4202", productName: "SVStudio2 Pro", version: "2.3.0", name: "Synthesizer V Studio 2 Pro", command: "C:\\Sandbox\\Synthesizer V Studio 2 Pro.exe", windowTitle: "Project B.svp - Synthesizer V Studio 2 Pro", isSv2: true, sandboxed: true },
@@ -159,6 +153,7 @@ let previewAiProviders: AiProviderSummary[] = [{
   apiKeys: [],
   authMethods: ["oauth", "api-key"],
   available: true,
+  oauthEnabled: true,
   loadStrategy: "round-robin",
   unavailableReason: null,
 }, {
@@ -184,6 +179,7 @@ let previewAiProviders: AiProviderSummary[] = [{
   apiKeys: [],
   authMethods: ["oauth", "api-key"],
   available: true,
+  oauthEnabled: true,
   loadStrategy: "round-robin",
   unavailableReason: null,
 }, {
@@ -202,6 +198,7 @@ let previewAiProviders: AiProviderSummary[] = [{
   apiKeys: [],
   authMethods: ["oauth"],
   available: true,
+  oauthEnabled: true,
   loadStrategy: "round-robin",
   unavailableReason: null,
 }, {
@@ -220,6 +217,7 @@ let previewAiProviders: AiProviderSummary[] = [{
   apiKeys: [],
   authMethods: ["oauth"],
   available: true,
+  oauthEnabled: true,
   loadStrategy: "round-robin",
   unavailableReason: null,
 }];
@@ -268,14 +266,23 @@ function previewAiProvider(providerId: unknown): AiProviderSummary | undefined {
 function refreshPreviewAiProvider(provider: AiProviderSummary): void {
   provider.totalAccounts = provider.accounts.length;
   provider.healthyAccounts = provider.accounts.filter((account) => account.healthy).length;
-  // Match the Electron host: any enabled credential counts, not only OAuth accounts.
-  provider.connected = provider.accounts.some((account) => account.authorized && account.enabled) || provider.apiKeys.some((key) => key.enabled);
+  provider.connected = provider.accounts.some((account) => account.authorized);
   provider.models = [...new Set([...provider.oauthModels, ...provider.apiKeys.flatMap((key) => key.models)])];
 }
 
 function previewAccountProbe(overrides: Partial<Sv2AccountProbe> = {}): Sv2AccountProbe {
   return {
     sessionStatus: "missing",
+    remoteUse: "unknown",
+    authorizationStatus: "unknown",
+    authorizedVoiceCount: 0,
+    authorizedVoices: [],
+    authorizedVoiceProducts: [],
+    offlineLicense: {
+      cacheStatus: "inactive",
+      eligibility: "unknown",
+      cachedProducts: [],
+    },
     checkedAtUtc: new Date().toISOString(),
     detail: "当前没有可用于账号预检的登录缓存。",
     ...overrides,
@@ -315,7 +322,6 @@ let previewProfiles: Sv2ProfilesState = {
     lastActivatedAtUtc: new Date().toISOString(),
     isActive: true,
     sessionCached: true,
-    sessionSize: { status: "offline", sizeBytes: 8192 },
     installedVoiceIds: [],
     dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\slots\\11111111-1111-4111-8111-111111111111",
     sessionProtection: {
@@ -355,7 +361,6 @@ let previewProfiles: Sv2ProfilesState = {
     createdAtUtc: new Date().toISOString(),
     isActive: false,
     sessionCached: true,
-    sessionSize: { status: "online", sizeBytes: 4096 },
     installedVoiceIds: ["00000000-0000-4000-8000-000000000002"],
     dataPath: "C:\\Users\\Demo\\AppData\\Roaming\\Dreamtonics\\Synthesizer V Studio 2.toolbox-slots\\slots\\22222222-2222-4222-8222-222222222222",
     sessionProtection: {
@@ -370,11 +375,28 @@ let previewProfiles: Sv2ProfilesState = {
     },
     accountProbe: previewAccountProbe({
       sessionStatus: "ready",
-      detail: "登录缓存存在。",
+      remoteUse: "clear",
+      authorizationStatus: "verified",
+      authorizedVoiceCount: 2,
+      authorizedVoices: ["Mai 2", "SOLARIA"],
+      authorizedVoiceProducts: [{ id: "00000000-0000-4000-8000-000000000002", name: "SOLARIA", isTrial: true, expiresAtUtc: "2099-12-31T23:59:59Z" }],
+      offlineLicense: {
+        cacheStatus: "inactive",
+        eligibility: "eligible",
+        cachedProducts: [],
+      },
+      accountDisplayName: "Vocal Editor",
+      accountEmail: "editor@example.com",
+      detail: "官方服务已接受无踢出设备登录事件，并返回 2 个可匹配的官方声库授权。",
     }),
     concurrentAccountProbe: previewAccountProbe({
       sessionStatus: "ready",
-      detail: "隔离副本的登录缓存存在。",
+      remoteUse: "clear",
+      authorizationStatus: "verified",
+      authorizedVoiceCount: 2,
+      authorizedVoices: ["Mai 2", "SOLARIA"],
+      authorizedVoiceProducts: [{ id: "00000000-0000-4000-8000-000000000002", name: "SOLARIA", isTrial: true, expiresAtUtc: "2099-12-31T23:59:59Z" }],
+      detail: "官方服务已接受隔离副本的无踢出设备登录事件，并返回 2 个可匹配的官方声库授权。",
     }),
     concurrent: {
       ready: true,
@@ -391,58 +413,19 @@ let previewProfiles: Sv2ProfilesState = {
   }],
 };
 
-const previewAgentOutcome: import("./types").AgentRunOutcome = {
-  status: "completed",
-  summary: "已完成翻唱工作流：分离人声、用 GAME 清理并核对音素后导入 SynthV，完成多轮参数微调。",
-  evidence: [
-    "已在下载目录定位到原曲音频文件。",
-    "人声与伴奏已通过本地分离组件拆分为独立轨道。",
-    "人声已用 GAME 降噪并去除气声残留。",
-    "音素核对通过，歌词与音节对齐无误。",
-    "已导入 SynthV 工程并完成三轮参数微调，音高与力度曲线自然。",
-  ],
-  missing: [],
-  plan: {
-    goal: "把这段翻唱音频制作成可用的 SynthV 工程。",
-    doneCriteria: [
-      "找到原曲音频来源",
-      "人声与伴奏分离完成",
-      "人声已用 GAME 清理",
-      "音素核对通过并导入 SynthV",
-      "完成多轮参数微调",
-    ],
-    todos: [
-      { id: "find-source", title: "找到原曲音频来源", status: "completed" },
-      { id: "separate", title: "分离人声与伴奏", status: "completed" },
-      { id: "clean-vocal", title: "用 GAME 清理人声", status: "completed" },
-      { id: "check-phonemes", title: "核对音素并导入 SynthV", status: "completed" },
-      { id: "tune", title: "多轮参数微调", status: "completed", note: "已完成 3 轮微调。" },
-    ],
-  },
-  budget: { ...previewAgentBudgets[previewAgentEffort], turns: 6, tokens: 42_000, uncachedInputTokens: 9_000, cacheReadTokens: 30_000 },
-};
+const previewSv2VoiceCatalog = [
+  { id: "preview-mai-2", name: "Mai 2", vendor: "Dreamtonics", imageDataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E%3Crect width='48' height='48' fill='%236d5ce7'/%3E%3C/svg%3E" },
+  { id: "00000000-0000-4000-8000-000000000002", name: null, imageDataUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E%3Crect width='48' height='48' fill='%230ea5e9'/%3E%3C/svg%3E" },
+];
 
-/** Mirrors the host: with SynthV off its installations, bridge and components disappear from bootstrap. */
-const previewState = (): BootstrapState => {
-  const state = previewBaseState();
-  const enabled = previewSynthvPreference !== "off";
-  const integrations = { synthv: { preference: previewSynthvPreference, enabled, detected: true, bridgeLoaded: true, errors: [] } };
-  if (enabled) return { ...state, integrations };
-  return { ...state, integrations, installations: [], bridgeConnected: false, components: state.components.filter((component) => component.id !== "cvrs" && component.id !== "sandboxie"), svpAssociation: { ...state.svpAssociation, supported: false } };
-};
-
-const previewBaseState = (): BootstrapState => ({
+const previewState = (): BootstrapState => ({
   onboardingCompleted: previewOnboarding,
   mode: previewMode,
   agentWorkMode: previewAgentWorkMode,
-  agentEffort: previewAgentEffort,
-  agentBudgets: previewAgentBudgets,
-  agentTranscriptsEnabled: previewAgentTranscriptsEnabled,
   updateChannel: previewUpdateChannel,
   platform: "preview",
   appVersion: packageJson.version,
-  configPath: "~/Library/Application Support/Toneshuttle/desktop-settings.json",
-  dataDirectory: { path: "~/Library/Application Support/Toneshuttle", migratedFrom: null, deferred: null, legacyRemaining: null, setAside: null, fixupErrors: [] },
+  configPath: "~/.SynthVcopilot/config.json",
   settingsLoadError: undefined,
   model: previewMode === "ai" ? previewAiModel() : undefined,
   scriptsPath: "/Library/Application Support/Dreamtonics/Synthesizer V Studio 2/scripts",
@@ -472,10 +455,10 @@ const previewBaseState = (): BootstrapState => ({
     { id: "cvrs", displayName: "CVRS 工程工具", description: "工程探测、安全副本、无参导出与 LRC。", audience: "AI 与人工", installed: previewInstalledManagedComponentIds.has("cvrs"), downloaded: false, installable: true, removable: previewInstalledManagedComponentIds.has("cvrs"), status: previewInstalledManagedComponentIds.has("cvrs") ? "已就绪" : "可由 Toolbox 内置下载器下载" },
     { id: "media-fetcher", displayName: "媒体导入器", description: "固定版本 yt-dlp，用于显式 Bilibili/YouTube URL 导入。", audience: "AI 与人工", installed: previewInstalledManagedComponentIds.has("media-fetcher"), downloaded: false, installable: true, removable: previewInstalledManagedComponentIds.has("media-fetcher"), status: previewInstalledManagedComponentIds.has("media-fetcher") ? "已就绪" : "可由 Toolbox 内置下载器下载" },
     { id: "vocal-separation", displayName: "人声伴奏分离", description: "使用 Demucs htdemucs 把单个混音分成 vocals 与 inst。", audience: "AI 与人工", installed: previewInstalledManagedComponentIds.has("vocal-separation"), downloaded: false, installable: true, removable: previewInstalledManagedComponentIds.has("vocal-separation"), status: previewInstalledManagedComponentIds.has("vocal-separation") ? "已就绪" : "可安装本地运行环境" },
-    { id: "sandboxie", displayName: "Sandboxie Plus 1.18.2", description: `${BRAND.productNameZh} 并发隔离提供方；下载官方安装包后由用户交互安装。`, audience: "Windows 并发隔离", installed: false, downloaded: false, installable: true, removable: false, status: "可由 Toolbox 内置下载器下载官方 x64 安装包" },
+    { id: "sandboxie", displayName: "Sandboxie Plus 1.18.2", description: "Synthesizer V Toolbox 并发隔离提供方；下载官方安装包后由用户交互安装。", audience: "Windows 并发隔离", installed: false, downloaded: false, installable: true, removable: false, status: "可由 Toolbox 内置下载器下载官方 x64 安装包" },
   ],
   downloads: previewDownloads,
-  mcpServers: previewMode === "ai" ? previewMcpServers : [],
+  mcpServers: previewMode === "ai" ? [{ id: "demo", name: "Demo tools", command: "node", args: ["server.mjs"], enabled: true }] : [],
   concurrentDisclaimerAccepted: previewConcurrentDisclaimerAccepted,
   sv2ConcurrentEnabled: previewSv2ConcurrentEnabled,
   sv2AccountIndicatorEnabled: previewSv2AccountIndicatorEnabled,
@@ -490,7 +473,7 @@ const previewBaseState = (): BootstrapState => ({
     registered: previewSmartSvpLaunchEnabled,
     isDefault: false,
     detail: previewSmartSvpLaunchEnabled
-      ? `已注册为 .svp 可选打开方式；请在 Windows 默认应用中选择${BRAND.productNameZh}。`
+      ? "已注册为 .svp 可选打开方式；请在 Windows 默认应用中选择 Synthesizer V Toolbox。"
       : "智能启动默认关闭，不会改变当前 .svp 打开方式。",
   },
 });
@@ -509,14 +492,19 @@ function previewAccountPrecheck(): Sv2AccountPrecheck {
     localUse,
     localProcesses: previewProfiles.blockers,
     concurrentPids: slot?.concurrent.runningPids ?? [],
+    remoteUse: probe.remoteUse,
     sessionStatus: probe.sessionStatus,
+    authorizationStatus: probe.authorizationStatus,
+    authorizedVoiceCount: probe.authorizedVoiceCount,
     sessionCached: Boolean(slot?.sessionCached),
     recoveryPending,
     summary: localUse
       ? "当前账号正在本机使用。"
-      : probe.sessionStatus === "ready"
-        ? "登录缓存存在。"
-        : "没有登录缓存。",
+      : probe.remoteUse === "clear" && probe.sessionStatus === "ready"
+        ? "官方服务已接受无踢出设备登录事件。"
+        : probe.remoteUse === "detected"
+          ? "账号服务报告当前账号正在使用。"
+          : "当前账号的服务端占用状态未知。",
     detail: probe.detail,
   };
 }
@@ -565,9 +553,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     const internalFunctionsEnabled = Boolean(args?.internalFunctionsEnabled);
     const advancedFunctionsEnabled = Boolean(args?.advancedFunctionsEnabled);
     const port = Number(args?.port);
-    if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error("端口必须是 1024 到 65535 之间的整数。");
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("端口必须是 1 到 65535 之间的整数。");
     previewHttpApiStatus = {
-      ...previewHttpApiStatus,
       enabled,
       agentEnabled,
       internalFunctionsEnabled,
@@ -575,36 +562,10 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       running: enabled || agentEnabled,
       port,
       endpoint: enabled ? `http://127.0.0.1:${port}/mcp` : null,
-      agentEndpoint: agentEnabled ? `http://127.0.0.1:${port}/agent` : null,
+      agentEndpoint: agentEnabled ? `http://127.0.0.1:${port}/agent/chat` : null,
       lastError: null,
-      tools: enabled ? [...(internalFunctionsEnabled ? ["toolbox_internal"] : []), ...(advancedFunctionsEnabled ? ["toolbox_advanced"] : []), ...(agentEnabled ? ["toolbox_agent"] : [])] : [],
     };
     return { ...previewHttpApiStatus } as T;
-  }
-  if (command === "rotate_http_api_token") {
-    previewHttpApiStatus = { ...previewHttpApiStatus, token: `preview-token-${Math.random().toString(16).slice(2, 18)}` };
-    return { ...previewHttpApiStatus } as T;
-  }
-  if (command === "set_integration") {
-    const preference = args?.preference;
-    if (args?.integration !== "synthv" || (preference !== "auto" && preference !== "on" && preference !== "off")) throw new Error("integration or preference is invalid.");
-    previewSynthvPreference = preference;
-    return previewState() as T;
-  }
-  if (command === "test_mcp_server") {
-    const server = previewMcpServers.find((item) => item.id === args?.id);
-    if (!server) return { succeeded: false, summary: "未找到该 MCP 服务器配置。", detail: String(args?.id ?? ""), tools: [] } as T;
-    return { succeeded: true, summary: `${server.name} 可用，提供 2 个工具。`, detail: `预览模式未启动 ${server.command}。`, tools: ["read_file", "list_directory"], serverInfo: { name: server.name, version: "preview" } } as T;
-  }
-  if (command === "save_mcp_server") {
-    const server = args?.server as McpServerConfig | undefined;
-    if (!server?.id) throw new Error("server.id must be a non-empty string.");
-    previewMcpServers = [...previewMcpServers.filter((item) => item.id !== server.id), server];
-    return previewState() as T;
-  }
-  if (command === "delete_mcp_server") {
-    previewMcpServers = previewMcpServers.filter((item) => item.id !== args?.id);
-    return previewState() as T;
   }
   if (command === "get_agent_runtime_status") {
     return { running: false, protocolVersion: "1.0" } as T;
@@ -624,7 +585,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     return previewState() as T;
   }
   if (command === "open_svp_default_apps_settings") {
-    return { succeeded: true, summary: "已打开 Windows 默认应用设置。", detail: `请为 .svp 选择${BRAND.productNameZh}。` } as T;
+    return { succeeded: true, summary: "已打开 Windows 默认应用设置。", detail: "请为 .svp 选择 Synthesizer V Toolbox。" } as T;
   }
   if (command === "authorize_ai_provider") {
     throw new Error("浏览器预览不执行 OAuth 授权。请在桌面应用中连接提供商，完成真实浏览器授权；此处不会创建模拟账号。");
@@ -679,26 +640,19 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     const provider = previewAiProvider(args?.provider);
     const credentialId = String(args?.credentialId ?? "");
     const enabled = Boolean(args?.enabled);
-    const weight = args?.weight === undefined ? undefined : Number(args.weight);
-    if (!provider || !credentialId || (weight !== undefined && (!Number.isInteger(weight) || weight < 1 || weight > 100))) throw new Error("凭据设置无效。");
+    const weight = Number(args?.weight);
+    if (!provider || !credentialId || !Number.isInteger(weight) || weight < 1 || weight > 100) throw new Error("凭据设置无效。");
     const account = provider.accounts.find((item) => item.id === credentialId);
     const key = provider.apiKeys.find((item) => item.id === credentialId);
     if (!account && !key) throw new Error("未找到凭据。");
-    const credential = account ?? key!;
-    credential.enabled = enabled;
-    if (weight !== undefined) credential.weight = weight;
-    if (typeof args?.label === "string") credential.label = args.label;
-    if (args?.extend && typeof args.extend === "object" && !Array.isArray(args.extend)) credential.extend = args.extend as Record<string, unknown>;
-    refreshPreviewAiProvider(provider);
+    if (account) { account.enabled = enabled; account.weight = weight; }
+    if (key) { key.enabled = enabled; key.weight = weight; }
     return previewState() as T;
   }
-  if (command === "reorder_ai_credentials") {
+  if (command === "update_ai_provider") {
     const provider = previewAiProvider(args?.provider);
-    const ids = args?.credentialIds;
-    if (!provider || !Array.isArray(ids) || !["oauth", "api-key"].includes(String(args?.method))) throw new Error("凭据排序无效。");
-    const credentials = args?.method === "oauth" ? provider.accounts : provider.apiKeys;
-    if (ids.length !== credentials.length || new Set(ids).size !== ids.length || ids.some(id => !credentials.some(item => item.id === id))) throw new Error("凭据排序无效。");
-    credentials.sort((left, right) => ids.indexOf(left.id) - ids.indexOf(right.id));
+    if (!provider) throw new Error("未知的 AI 提供商。");
+    provider.oauthEnabled = Boolean(args?.oauthEnabled);
     return previewState() as T;
   }
   if (command === "update_ai_provider_strategy") {
@@ -804,16 +758,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     previewAgentWorkMode = args?.mode === "solo" ? "solo" : "edit";
     return previewState() as T;
   }
-  if (command === "set_agent_effort") {
-    previewAgentEffort = AGENT_EFFORT_LEVELS.includes(args?.effort as AgentEffortLevel) ? (args?.effort as AgentEffortLevel) : DEFAULT_AGENT_EFFORT;
-    return previewState() as T;
-  }
   if (command === "set_update_channel") {
     previewUpdateChannel = args?.channel === "nightly" ? "nightly" : "stable";
-    return previewState() as T;
-  }
-  if (command === "set_agent_transcripts") {
-    previewAgentTranscriptsEnabled = Boolean(args?.enabled);
     return previewState() as T;
   }
   if (command === "scan_synthv") return previewState().installations as T;
@@ -895,7 +841,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       currentVersion: previewState().appVersion,
       latestVersion: previewVersion,
       updateAvailable: true,
-      releaseName: previewNightly ? `${BRAND.productName} v0.3.0 Pre-release` : `${BRAND.productName} v0.2.0`,
+      releaseName: previewNightly ? "SynthV Toolbox v0.3.0 Pre-release" : "Synthesizer V Toolbox v0.2.0",
       releaseUrl: `https://github.com/SynthVCopilot/synthv-toolbox/releases/tag/${previewTag}`,
       publishedAtUtc: new Date().toISOString(),
       releaseNotes: "## 更新内容\n\n- 新增更新检查工具\n- 修复若干问题",
@@ -908,11 +854,12 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "install_toolbox_update") return { succeeded: false, summary: "Preview cannot install updates.", detail: "" } as T;
   if (command === "open_toolbox_releases" || command === "open_toolbox_project") return {
     succeeded: true,
-    summary: `已打开${BRAND.productNameZh}发布页。`,
+    summary: "已打开 Synthesizer V Toolbox 发布页。",
     detail: "预览模式不会启动外部浏览器。",
   } as T;
   if (command === "sv2_profile_state") return previewProfiles as T;
   if (command === "sv2_cached_profile_state") return structuredClone(previewProfiles) as T;
+  if (command === "sv2_voice_catalog") return previewSv2VoiceCatalog as T;
   if (command === "sv2_account_usage_snapshot" || command === "sv2_account_usage_snapshot_for_slot") {
     if (!previewSv2AccountIndicatorEnabled) {
       throw new Error("账号登录指示器尚未开启；确认其敏感操作说明后才能执行登录预检。");
@@ -1036,13 +983,56 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     }
     return previewProfiles as T;
   }
-
+  if (command === "sv2_inspect_offline_license") return {
+    enabled: previewOfflineLicenseEnabled,
+    eligible: true,
+    localCacheStatus: previewOfflineLicenseEnabled ? "active" : "inactive",
+    currentDevice: true,
+    deviceName: "Preview device",
+    cachedProducts: previewOfflineLicenseEnabled ? [{
+      databaseId: "preview-license",
+      productId: "preview-product",
+      name: "Synthesizer V Studio 2 Pro",
+      vendor: "Dreamtonics",
+      category: "editor",
+      version: "2.3",
+      attributes: [{ key: "K7", value: "2" }, { key: "K8", value: "0" }, { key: "K9", value: "0" }],
+    }] : [],
+    checkedAtUtc: new Date().toISOString(),
+  } as T;
+  if (command === "sv2_set_offline_license") {
+    previewOfflineLicenseEnabled = Boolean(args?.enabled);
+    return {
+      status: await call<import("./types").Sv2OfflineLicenseStatus>("sv2_inspect_offline_license", args),
+      backupPath: "C:\\Preview\\sv2-data-backup",
+      accessChanged: false,
+      refreshChanged: false,
+      detail: previewOfflineLicenseEnabled ? "已启用预览离线授权。" : "已停用预览离线授权。",
+    } as T;
+  }
+  if (command === "read_sv2_session_document") return {
+    path: `C:\\Preview\\${String(args?.slotId ?? "slot")}\\license\\session`,
+    encryptedSha256: previewSessionSha256,
+    encryptedBytes: previewSessionPlaintext.length,
+    plaintext: previewSessionPlaintext,
+  } as T;
+  if (command === "write_sv2_session_document") {
+    previewSessionPlaintext = String(args?.plaintext ?? previewSessionPlaintext);
+    previewSessionSha256 = "1".repeat(64);
+    return {
+      path: `C:\\Preview\\${String(args?.slotId ?? "slot")}\\license\\session`,
+      backupPath: "C:\\Preview\\session.session-kit-backup.bin",
+      encryptedSha256: previewSessionSha256,
+      encryptedBytes: previewSessionPlaintext.length,
+    } as T;
+  }
   if (command === "accept_sv2_concurrent_disclaimer") {
     previewConcurrentDisclaimerAccepted = true;
     return previewState() as T;
   }
   if (command === "preview_svp_route") {
     const projectPath = String(args?.projectPath ?? "C:\\Projects\\demo.svp");
+    const requiredVoiceNames = ["Mai 2", "SOLARIA"];
     return {
       projectPath,
       requiredVoices: [
@@ -1051,20 +1041,28 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
       ],
       candidates: previewProfiles.slots.map((slot, index) => {
         const probe = index > 0 ? slot.concurrentAccountProbe : slot.accountProbe;
+        const verified = probe.authorizationStatus === "verified";
+        const matchedVoices = verified ? requiredVoiceNames.filter((voice) => probe.authorizedVoices.includes(voice)) : [];
+        const missingOrUnknownVoices = requiredVoiceNames.filter((voice) => !matchedVoices.includes(voice));
         return {
           slotId: slot.id,
           displayName: slot.displayName,
           idle: index > 0,
           launchMode: index > 0 ? "concurrent" as const : undefined,
+          remoteUse: probe.remoteUse,
           sessionStatus: probe.sessionStatus,
-          reason: probe.sessionStatus === "ready" ? "登录缓存存在，可以直接启动。" : "没有登录缓存，需要先登录。",
+          authorizationSource: verified ? "session" as const : "unknown" as const,
+          matchedVoices,
+          missingOrUnknownVoices,
+          exactAuthorizationMatch: verified && missingOrUnknownVoices.length === 0,
+          reason: verified ? "已根据官方授权匹配工程声库。" : "账号授权未知，需要确认后启动。",
         };
       }),
       selectedSlotId: previewProfiles.slots[1]?.id,
       selectedLaunchMode: "concurrent",
       requiresConfirmation: false,
       summary: "将使用账号“备用账号”打开工程。",
-      detail: "登录缓存存在。",
+      detail: "官方服务已接受无踢出设备登录事件，并匹配工程所需的官方声库授权。",
     } as SvpRoutePlan as T;
   }
   if (command === "launch_svp_route") {
@@ -1110,7 +1108,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "remove_local_component") {
     const componentId = String(args?.id ?? "");
     if (!previewManagedComponentIds.has(componentId)) {
-      return { succeeded: false, summary: `该组件不由${BRAND.productNameZh}管理。`, detail: "预览模式不会删除系统或外部安装的组件。" } as T;
+      return { succeeded: false, summary: "该组件不由 Synthesizer V Toolbox 管理。", detail: "预览模式不会删除系统或外部安装的组件。" } as T;
     }
     if (!previewInstalledManagedComponentIds.delete(componentId)) {
       return { succeeded: true, summary: "组件当前未安装。", detail: "预览状态中没有需要删除的工具箱运行环境或配置。" } as T;
@@ -1120,7 +1118,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "list_workflow_recipes") return [
     { id: "project-doctor", title: "工程医生", description: "只读检查工程风险。", kind: "project-doctor", inputKind: "svp", supportsBatch: true, requiresBridge: false, requiresAi: false, defaultParameters: {} },
     { id: "pronunciation-check", title: "发音诊断", description: "检查歌词和音素风险。", kind: "pronunciation-check", inputKind: "svpOrText", supportsBatch: true, requiresBridge: false, requiresAi: false, defaultParameters: {} },
-    { id: "render-review", title: "渲染复检", description: "检查渲染交付风险。", kind: "render-review", inputKind: "audio", supportsBatch: true, requiresBridge: false, requiresAi: false, defaultParameters: {} },
+    { id: "render-quality-check", title: "渲染复检", description: "检查渲染交付风险。", kind: "render-quality-check", inputKind: "audio", supportsBatch: true, requiresBridge: false, requiresAi: false, defaultParameters: {} },
     { id: "lyric-template", title: "作词", description: "歌词草稿、歌曲结构与可选韵脚辅助。", kind: "lyric-template", inputKind: "lyrics", supportsBatch: false, requiresBridge: false, requiresAi: false, defaultParameters: { language: "zh-CN", rhymeMode: "family" } },
   ] as T;
   if (command === "list_creative_history" || command === "list_project_checkpoints") return [] as T;
@@ -1390,12 +1388,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   if (command === "list_conversations") return [] as T;
   if (command === "new_conversation") return { id: "preview", title: "新对话", messages: [] } as T;
   if (command === "open_conversation") return { id: "preview", title: "预览对话", messages: [] } as T;
-  if (command === "agent_approvals") return { pending: [], recent: [] } as T;
-  if (command === "decide_agent_approval") return undefined as T;
-  if (command === "send_message") return [{ role: "assistant", content: previewAgentOutcome.summary, outcome: previewAgentOutcome }] as T;
-  if (command === "cancel_agent_run") return null as T;
-  if (command === "steer_agent_run") return { role: "user", content: String(args?.input ?? "") } as T;
-  if (command === "agent_budgets") return previewAgentBudgets as T;
+  if (command === "agent_file_approvals") return [] as T;
+  if (command === "send_message") return [{ role: "assistant", content: "这是本地视觉预览回复。" }] as T;
   if (command.startsWith("run_") || ["add_project_reference", "export_project_without_parameters", "export_project_lyrics"].includes(command)) return {
     kind: command.replace(/^run_/, "").replaceAll("_", "-"),
     summary: "预览工作流已完成。",
@@ -1425,7 +1419,6 @@ export const api = {
   completeOnboarding: (mode: AppMode) => call<BootstrapState>("complete_onboarding", { mode }),
   setMode: (mode: AppMode) => call<BootstrapState>("set_mode", { mode }),
   setAgentWorkMode: (mode: AgentWorkMode) => call<BootstrapState>("set_agent_work_mode", { mode }),
-  setAgentEffort: (effort: AgentEffortLevel) => call<BootstrapState>("set_agent_effort", { effort }),
   setUpdateChannel: (channel: import("./types").UpdateChannel) => call<BootstrapState>("set_update_channel", { channel }),
   authorizeAiProvider: (provider: AiProviderId, credentialId?: string, operationId?: string) =>
     call<BootstrapState>("authorize_ai_provider", { provider, credentialId, operationId }),
@@ -1444,23 +1437,46 @@ export const api = {
     call<OpenCodeCatalog>("opencode_provider_catalog", { force }),
   removeAiProviderAccount: (provider: AiProviderId, accountId: string) =>
     call<BootstrapState>("remove_ai_provider_account", { provider, accountId }),
-  updateAiCredential: (provider: AiProviderId, credentialId: string, enabled: boolean, weight?: number, label?: string, extend?: Record<string, unknown>) =>
-    call<BootstrapState>("update_ai_credential", { provider, credentialId, enabled, weight, label, extend }),
-  reorderAiCredentials: (provider: AiProviderId, method: "oauth" | "api-key", credentialIds: string[]) =>
-    call<BootstrapState>("reorder_ai_credentials", { provider, method, credentialIds }),
+  updateAiCredential: (provider: AiProviderId, credentialId: string, enabled: boolean, weight: number) =>
+    call<BootstrapState>("update_ai_credential", { provider, credentialId, enabled, weight }),
+  updateAiProvider: (provider: AiProviderId, oauthEnabled: boolean) =>
+    call<BootstrapState>("update_ai_provider", { provider, oauthEnabled }),
   updateAiProviderStrategy: (provider: AiProviderId, strategy: import("./types").AiLoadStrategy) =>
     call<BootstrapState>("update_ai_provider_strategy", { provider, strategy }),
   scanSynthV: () => call<SynthVInstallation[]>("scan_synthv"),
   checkToolboxUpdate: () => call<ToolboxUpdateCheck>("check_toolbox_update"),
   openToolboxReleases: (releaseUrl?: string) => call<OperationResult>("open_toolbox_releases", { releaseUrl }),
-  openToolboxProject: (target: "project" | "issues" | "guide" | "terms") => call<OperationResult>("open_toolbox_project", { target }),
+  openToolboxProject: (target: "project" | "issues" | "guide") => call<OperationResult>("open_toolbox_project", { target }),
   getToolboxUpdateDownload: () => call<import("./types").ToolboxUpdateDownload>("get_toolbox_update_download"),
   downloadToolboxUpdate: () => call<import("./types").ToolboxUpdateDownload>("download_toolbox_update"),
   cancelToolboxUpdateDownload: () => call<import("./types").ToolboxUpdateDownload>("cancel_toolbox_update_download"),
   installToolboxUpdate: () => call<OperationResult>("install_toolbox_update"),
   sv2ProfileState: () => call<Sv2ProfilesState>("sv2_profile_state"),
   sv2CachedProfileState: () => call<Sv2ProfilesState>("sv2_cached_profile_state"),
+  sv2VoiceCatalog: () => call<import("./types").Sv2CachedVoice[]>("sv2_voice_catalog"),
   sv2AccountPrecheck: () => call<Sv2AccountPrecheck>("sv2_account_precheck"),
+  sv2InspectOfflineLicense: (slotId: string) => call<import("./types").Sv2OfflineLicenseStatus>("sv2_inspect_offline_license", { slotId }),
+  sv2SetOfflineLicense: async (slotId: string, enabled: boolean, onProgress?: (step: string) => void) => {
+    if (preview) {
+      for (const step of ["preflight", "backup", "remote", "local", "read"]) {
+        onProgress?.(step);
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 120));
+      }
+      return call<import("./types").Sv2OfflineLicenseOperation>("sv2_set_offline_license", { slotId, enabled });
+    }
+    const unlisten = await listenDesktop<string>("sv2-offline-license-progress", (step) => onProgress?.(step));
+    try {
+      return await call<import("./types").Sv2OfflineLicenseOperation>("sv2_set_offline_license", { slotId, enabled });
+    } finally {
+      unlisten();
+    }
+  },
+  previewSv2OfflineSessionReplacement: (slotId: string, sourcePath: string) =>
+    call<Sv2SessionReplacementPreview>("preview_sv2_offline_session_replacement", { slotId, sourcePath }),
+  scheduleSv2OfflineSessionReplacement: (slotId: string, sourcePath: string, sourceSha256: string, destinationSha256: string) =>
+    call<OperationResult>("schedule_sv2_offline_session_replacement", { slotId, sourcePath, sourceSha256, destinationSha256 }),
+  readSv2SessionDocument: (slotId: string) => call<import("./types").Sv2SessionDocument>("read_sv2_session_document", { slotId }),
+  writeSv2SessionDocument: (slotId: string, expectedSha256: string, plaintext: string) => call<import("./types").Sv2SessionDocumentWriteResult>("write_sv2_session_document", { slotId, expectedSha256, plaintext }),
   sv2AccountUsageSnapshot: () => call<Sv2AccountUsageSnapshot>("sv2_account_usage_snapshot"),
   sv2AccountUsageSnapshotForSlot: (slotId: string) =>
     call<Sv2AccountUsageSnapshot>("sv2_account_usage_snapshot_for_slot", { slotId }),
@@ -1690,18 +1706,12 @@ export const api = {
   listConversations: () => call<ConversationSummary[]>("list_conversations"),
   newConversation: () => call<ConversationSnapshot>("new_conversation"),
   openConversation: (id: string) => call<ConversationSnapshot>("open_conversation", { id }),
-  sendMessage: (conversationId: string, input: string, runId: string) => call<ChatMessage[]>("send_message", { conversationId, input, runId }),
-  cancelAgentRun: (conversationId: string) => call<void>("cancel_agent_run", { conversationId }),
-  steerAgentRun: (conversationId: string, input: string) => call<ChatMessage>("steer_agent_run", { conversationId, input }),
-  agentBudgets: () => call<Record<AgentEffortLevel, AgentRunBudget>>("agent_budgets"),
-  agentApprovals: () => call<AgentApprovalsSnapshot>("agent_approvals"),
-  decideAgentApproval: (id: string, approve: boolean) => call<void>("decide_agent_approval", { id, approve }),
-  setAgentTranscriptsEnabled: (enabled: boolean) => call<BootstrapState>("set_agent_transcripts", { enabled }),
+  sendMessage: (input: string) => call<ChatMessage[]>("send_message", { input }),
+  agentFileApprovals: () => call<AgentFileApproval[]>("agent_file_approvals"),
+  decideAgentFileApproval: (id: string, approve: boolean) => call<void>("decide_agent_file_approval", { id, approve }),
   saveMcpServer: (server: McpServerConfig) => call<BootstrapState>("save_mcp_server", { server }),
   deleteMcpServer: (id: string) => call<BootstrapState>("delete_mcp_server", { id }),
-  testMcpServer: (id: string) => call<McpProbeResult>("test_mcp_server", { id }),
-  rotateHttpApiToken: () => call<HttpApiStatus>("rotate_http_api_token"),
-  setIntegration: (integration: "synthv", preference: IntegrationPreference) => call<BootstrapState>("set_integration", { integration, preference }),
+  testMcpServer: (id: string) => call<OperationResult>("test_mcp_server", { id }),
   getHttpApiStatus: () => call<HttpApiStatus>("get_http_api_status"),
   configureHttpApi: (enabled: boolean, agentEnabled: boolean, internalFunctionsEnabled: boolean, advancedFunctionsEnabled: boolean, port: number) =>
     call<HttpApiStatus>("configure_http_api", { enabled, agentEnabled, internalFunctionsEnabled, advancedFunctionsEnabled, port }),
